@@ -288,6 +288,14 @@ exact bytes after the ticket. It derives the puzzle parameters from
   (`--token-revocation-file`) and control the reload cadence with
   `--token-revocation-refresh-secs`.
 
+The service opens descriptor, secret-key, and revocation files as stable direct
+regular files and rejects symbolic links, replacement/growth races, and bytes
+beyond their first-release corridors before decoding. Descriptor JSON is
+lexically preflighted and decoded under explicit allocation limits. Revocation
+reloads retain at most 8,192 unique 32-byte identifiers from a file no larger
+than 4 MiB; ML-DSA key files admit exactly the configured suite width plus at
+most 256 bytes of surrounding UTF-8 whitespace.
+
 The issuance service is optional—clients can still mint locally—but it provides a
 deterministic way to pre-authorise uploads or seed tickets into orchestration pipelines.
 
@@ -405,6 +413,14 @@ revisions may extend the manifest with signed operator metadata or rotation
 hints, but the identity section above is required whenever the hot key is not
 embedded directly in the configuration.
 
+First-release relay admission limits this JSON manifest to 64 KiB, one decoded
+string to 8 KiB, one collection to 1,024 entries, the whole document to 4,096
+entries, and nesting to 16 levels. The loader performs an allocation-free JSON
+preflight before constructing an owned value. It opens only a direct regular
+file without following a final symbolic link or Windows reparse point, reads
+the opened file's reported length plus a one-byte growth probe, and rejects an
+identity, length, or metadata change during the read.
+
 Relays can also ingest the signed directory artefacts directly via the
 `handshake.certificate` section. Supplying a CBOR-encoded
 `RelayCertificateBundleV2` (`bundle_path`) alongside the governance issuer
@@ -416,6 +432,9 @@ ML-DSA-65 signature are mandatory, and omitting the ML-DSA issuer key fails
 configuration validation. Startup also fails if the local Ed25519 identity or
 ML-KEM public key diverge from the certificate, ensuring the manifest secrets,
 relay identity, and certificate snapshot remain in lock step.
+Certificate bundle files use the SRCv2 protocol maximum of 64 KiB and the same
+stable direct-file read rules; the bounded SRCv2 decoder then enforces its
+certificate, endpoint, tag, suite, and signature field limits.
 
 ## Salt Announcement Schema
 

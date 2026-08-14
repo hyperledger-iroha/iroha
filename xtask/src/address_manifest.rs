@@ -1,3 +1,7 @@
+use blake3::Hash;
+use hex::encode as hex_encode;
+use norito::json::{self, JsonDeserialize, Map, Value};
+use sha2::{Digest, Sha256};
 #[allow(unused_imports)]
 use std::fmt::Write as _;
 use std::{
@@ -6,20 +10,12 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-
-use blake3::Hash;
-use hex::encode as hex_encode;
-use norito::json::{self, JsonDeserialize, Map, Value};
-use sha2::{Digest, Sha256};
-
 const RUNBOOK_PATH: &str = "specs/runbooks/address_manifest_ops.md";
-
 #[derive(Clone)]
 pub struct VerifyOptions {
     pub bundle: PathBuf,
     pub previous_bundle: Option<PathBuf>,
 }
-
 #[derive(JsonDeserialize)]
 struct ManifestFile {
     version: u32,
@@ -30,12 +26,10 @@ struct ManifestFile {
     #[norito(default)]
     entries: Vec<Value>,
 }
-
 pub fn verify_manifest_bundle(opts: &VerifyOptions) -> Result<(), Box<dyn Error>> {
     let manifest_path = opts.bundle.join("manifest.json");
     let manifest_bytes = read_file_bytes(&manifest_path)?;
     let manifest: ManifestFile = parse_manifest(&manifest_path, &manifest_bytes)?;
-
     if manifest.version != 1 {
         return Err(format!(
             "address manifest {} uses unsupported version {}; update the tooling or regenerate the bundle",
@@ -60,10 +54,8 @@ pub fn verify_manifest_bundle(opts: &VerifyOptions) -> Result<(), Box<dyn Error>
         )
         .into());
     }
-
     validate_entries(&manifest.entries)?;
     verify_checksums(&opts.bundle)?;
-
     if let Some(previous_dir) = &opts.previous_bundle {
         verify_history(&manifest, previous_dir)?;
     } else if !manifest.previous_digest.is_empty() {
@@ -74,7 +66,6 @@ pub fn verify_manifest_bundle(opts: &VerifyOptions) -> Result<(), Box<dyn Error>
             None,
         )?;
     }
-
     println!(
         "address manifest {} verified (sequence {}, entries {}, ttl {}h)",
         manifest_path.display(),
@@ -84,16 +75,13 @@ pub fn verify_manifest_bundle(opts: &VerifyOptions) -> Result<(), Box<dyn Error>
     );
     Ok(())
 }
-
 fn read_file_bytes(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()).into())
 }
-
 fn parse_manifest(path: &Path, bytes: &[u8]) -> Result<ManifestFile, Box<dyn Error>> {
     json::from_slice(bytes)
         .map_err(|err| format!("failed to parse manifest {}: {err}", path.display()).into())
 }
-
 fn verify_history(manifest: &ManifestFile, previous_dir: &Path) -> Result<(), Box<dyn Error>> {
     let prev_manifest_path = previous_dir.join("manifest.json");
     let prev_bytes = read_file_bytes(&prev_manifest_path)?;
@@ -109,7 +97,6 @@ fn verify_history(manifest: &ManifestFile, previous_dir: &Path) -> Result<(), Bo
         )
         .into());
     }
-
     let expected_digest = blake3::hash(&prev_bytes);
     ensure_digest_matches(
         &manifest.previous_digest,
@@ -118,7 +105,6 @@ fn verify_history(manifest: &ManifestFile, previous_dir: &Path) -> Result<(), Bo
     )?;
     Ok(())
 }
-
 fn ensure_digest_matches(
     recorded: &str,
     expected: Hash,
@@ -137,7 +123,6 @@ fn ensure_digest_matches(
     }
     Ok(())
 }
-
 fn verify_checksums(bundle: &Path) -> Result<(), Box<dyn Error>> {
     let checksums_path = bundle.join("checksums.sha256");
     let body = fs::read_to_string(&checksums_path).map_err(|err| {
@@ -146,7 +131,6 @@ fn verify_checksums(bundle: &Path) -> Result<(), Box<dyn Error>> {
             checksums_path.display()
         )
     })?;
-
     let mut entries = Vec::new();
     for (line_number, raw_line) in body.lines().enumerate() {
         let trimmed = raw_line.trim();
@@ -171,7 +155,6 @@ fn verify_checksums(bundle: &Path) -> Result<(), Box<dyn Error>> {
             line_number + 1,
         ));
     }
-
     if entries.is_empty() {
         return Err(format!(
             "checksum file {} is empty; regenerate the bundle before publishing",
@@ -179,7 +162,6 @@ fn verify_checksums(bundle: &Path) -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-
     for (expected, relative_path, line_number) in entries {
         let file_path = bundle.join(&relative_path);
         let actual = sha256_hex(&file_path)?;
@@ -195,10 +177,8 @@ fn verify_checksums(bundle: &Path) -> Result<(), Box<dyn Error>> {
             .into());
         }
     }
-
     Ok(())
 }
-
 fn sha256_hex(path: &Path) -> Result<String, Box<dyn Error>> {
     let mut file =
         File::open(path).map_err(|err| format!("failed to open {}: {err}", path.display()))?;
@@ -215,7 +195,6 @@ fn sha256_hex(path: &Path) -> Result<String, Box<dyn Error>> {
     }
     Ok(hex_encode(hasher.finalize()))
 }
-
 fn validate_entries(entries: &[Value]) -> Result<(), Box<dyn Error>> {
     for (index, entry) in entries.iter().enumerate() {
         let Some(obj) = entry.as_object() else {
@@ -226,7 +205,6 @@ fn validate_entries(entries: &[Value]) -> Result<(), Box<dyn Error>> {
             )
             .into());
         };
-
         let entry_type = expect_string(obj, "type", index + 1)?;
         match entry_type {
             "global_domain" => validate_global_entry(obj, index + 1)?,
@@ -244,7 +222,6 @@ fn validate_entries(entries: &[Value]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn validate_global_entry(entry: &Map, entry_number: usize) -> Result<(), Box<dyn Error>> {
     expect_string(entry, "domain", entry_number)?;
     expect_string(entry, "chain", entry_number)?;
@@ -262,7 +239,6 @@ fn validate_global_entry(entry: &Map, entry_number: usize) -> Result<(), Box<dyn
     }
     Ok(())
 }
-
 fn validate_local_alias(entry: &Map, entry_number: usize) -> Result<(), Box<dyn Error>> {
     expect_string(entry, "domain", entry_number)?;
     let selector = expect_selector(entry, entry_number)?;
@@ -277,7 +253,6 @@ fn validate_local_alias(entry: &Map, entry_number: usize) -> Result<(), Box<dyn 
     ensure_hex_string(digest, 12, "selector.digest_hex", Some(entry_number))?;
     Ok(())
 }
-
 fn validate_tombstone(entry: &Map, entry_number: usize) -> Result<(), Box<dyn Error>> {
     let selector = expect_selector(entry, entry_number)?;
     let kind = expect_string(selector, "kind", entry_number)?;
@@ -289,7 +264,6 @@ fn validate_tombstone(entry: &Map, entry_number: usize) -> Result<(), Box<dyn Er
     }
     let digest = expect_string(selector, "digest_hex", entry_number)?;
     ensure_hex_string(digest, 12, "selector.digest_hex", Some(entry_number))?;
-
     let reason = expect_string(entry, "reason_code", entry_number)?;
     if reason.is_empty() {
         return Err(format!(
@@ -311,10 +285,8 @@ fn validate_tombstone(entry: &Map, entry_number: usize) -> Result<(), Box<dyn Er
                 "manifest entry #{entry_number} tombstone must include numeric replaces_sequence"
             )
         })?;
-
     Ok(())
 }
-
 fn expect_string<'a>(
     entry: &'a Map,
     key: &str,
@@ -328,7 +300,6 @@ fn expect_string<'a>(
         .into()
     })
 }
-
 fn expect_selector(entry: &Map, entry_number: usize) -> Result<&Map, Box<dyn Error>> {
     entry
         .get("selector")
@@ -337,7 +308,6 @@ fn expect_selector(entry: &Map, entry_number: usize) -> Result<&Map, Box<dyn Err
             format!("manifest entry #{entry_number} must include selector object").into()
         })
 }
-
 fn ensure_hex_string(
     value: &str,
     expected_bytes: usize,
@@ -359,37 +329,29 @@ fn ensure_hex_string(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
-
     use super::*;
-
+    use tempfile::tempdir;
     #[test]
     fn detects_sequence_gap() {
         let previous = tempdir().unwrap();
         write_manifest(&previous, 10, "").unwrap();
-
         let current = tempdir().unwrap();
         let prev_digest = digest_path(&previous.path().join("manifest.json"));
         write_manifest(&current, 12, &prev_digest).unwrap();
-
         let result = verify_manifest_bundle(&VerifyOptions {
             bundle: current.path().to_path_buf(),
             previous_bundle: Some(previous.path().to_path_buf()),
         });
         assert!(result.is_err(), "expected sequence gap error");
     }
-
     #[test]
     fn detects_digest_mismatch() {
         let previous = tempdir().unwrap();
         write_manifest(&previous, 3, "").unwrap();
-
         let current = tempdir().unwrap();
         write_manifest(&current, 4, "deadbeef").unwrap();
-
         let err = verify_manifest_bundle(&VerifyOptions {
             bundle: current.path().to_path_buf(),
             previous_bundle: Some(previous.path().to_path_buf()),
@@ -400,20 +362,16 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn detects_checksum_regression() {
         let previous = tempdir().unwrap();
         write_manifest(&previous, 1, "").unwrap();
         let prev_digest = digest_path(&previous.path().join("manifest.json"));
-
         let current = tempdir().unwrap();
         write_manifest(&current, 2, &prev_digest).unwrap();
-
         // Tamper with manifest after checksums were written.
         let manifest_path = current.path().join("manifest.json");
         fs::write(&manifest_path, br#"{"version":1,"sequence":2,"generated_ms":5,"ttl_hours":24,"previous_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","entries":[{"type":"local_alias","domain":"wonderland","selector":{"kind":"local","digest_hex":"0123456789abcdef01234567"}}]}"#).unwrap();
-
         let err = verify_manifest_bundle(&VerifyOptions {
             bundle: current.path().to_path_buf(),
             previous_bundle: Some(previous.path().to_path_buf()),
@@ -424,7 +382,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     fn write_manifest(
         dir: &tempfile::TempDir,
         sequence: u64,
@@ -432,7 +389,6 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         write_manifest_inner(dir.path(), sequence, previous_digest)
     }
-
     fn write_manifest_inner(
         dir: &Path,
         sequence: u64,
@@ -462,7 +418,6 @@ mod tests {
         write_checksums(dir)?;
         Ok(())
     }
-
     fn write_checksums(dir: &Path) -> Result<(), Box<dyn Error>> {
         let files = ["manifest.json", "manifest.sigstore", "notes.md"];
         let mut body = String::new();
@@ -473,7 +428,6 @@ mod tests {
         fs::write(dir.join("checksums.sha256"), body)?;
         Ok(())
     }
-
     fn digest_path(path: &Path) -> String {
         let bytes = fs::read(path).unwrap();
         blake3::hash(&bytes).to_hex().to_string()

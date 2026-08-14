@@ -144,7 +144,6 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
             },
         });
     };
-
     // All fallible parent, ledger, body, and registry checks precede this
     // transfer. From here the detached marker moves directly into the sealed
     // completion and no pre-join error can discard it.
@@ -187,7 +186,6 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
     debug_assert!(authority.concrete_pair_and_validation_are_exact());
     Ok((ledger, authority))
 }
-
 #[cfg(test)]
 fn recovered_next_vote_projection_for_scheduler_fixture(
     verified: &VerifiedHeightContext,
@@ -265,7 +263,6 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             })
             .count()
     }
-
     /// Add one exact standalone next-WAL-Vote Sign to an existing scheduler fixture.
     ///
     /// The candidate, WAL identity, pending binding, and body receipt never
@@ -303,12 +300,12 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         {
             return None;
         }
-        self.registry_for_test()
+        let _ = self
+            .registry_for_test()
             .attest_ready_recovered_lifecycle_sign(coordinator, ordinal)
             .ok()?;
         Some(ordinal)
     }
-
     /// Install one exact recovered Broadcast pair plus an unrelated Ready Sign.
     ///
     /// Only logical ordinals leave this helper. Every effect, WAL identity,
@@ -473,7 +470,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         assert!(entries.insert(broadcast_address, broadcast_work).is_none());
         assert!(entries.insert(paired_address, paired_work).is_none());
         assert!(entries.insert(unrelated_address, unrelated_work).is_none());
-        registry
+        let _ = registry
             .registry_for_test()
             .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
                 coordinator,
@@ -481,7 +478,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                 paired_ordinal,
             )
             .expect("exact scheduler fixture pair attests");
-        registry
+        let _ = registry
             .registry_for_test()
             .attest_ready_recovered_lifecycle_sign(coordinator, unrelated_ordinal)
             .expect("unrelated scheduler fixture Sign attests independently");
@@ -706,7 +703,6 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         };
         (lease, slot, coordinator_candidate)
     }
-
     /// Assemble and install a genuine validated completion fixture, then reach
     /// the recovered-WAL cut through the production Ready preparation and
     /// detachment path.

@@ -1,11 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    },
-};
-
+use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -18,12 +11,15 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     sorafs::pin_registry::{ProviderIngestCompletionAuthorityV1, ProviderIngestFinalizedAnchorV1},
 };
-
-use super::*;
-
+use std::{
+    collections::VecDeque,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+};
 #[derive(Debug, Clone, Copy)]
 struct FixedJournalTime(u64);
-
 impl MusubiProviderAttestationJournalTimeV1 for FixedJournalTime {
     fn now_unix_ms<'a>(
         &'a self,
@@ -37,11 +33,9 @@ impl MusubiProviderAttestationJournalTimeV1 for FixedJournalTime {
         })
     }
 }
-
 const fn clock_at(now_unix_ms: u64) -> FixedJournalTime {
     FixedJournalTime(now_unix_ms)
 }
-
 #[test]
 fn production_checkpoint_encoding_ignores_ambient_norito_flags() {
     let policy = MusubiProviderAttestationJournalPolicyV1::default();
@@ -59,7 +53,6 @@ fn production_checkpoint_encoding_ignores_ambient_norito_flags() {
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-
     assert_eq!(
         encode_checkpoint(&checkpoint, policy)
             .expect("ambient flags cannot change production checkpoint bytes"),
@@ -71,13 +64,11 @@ fn production_checkpoint_encoding_ignores_ambient_norito_flags() {
         expected_reserve
     );
 }
-
 #[derive(Debug)]
 struct SequenceJournalTime {
     samples: Mutex<VecDeque<u64>>,
     sealed_floor: AtomicU64,
 }
-
 impl SequenceJournalTime {
     fn new(samples: impl IntoIterator<Item = u64>) -> Self {
         Self {
@@ -85,12 +76,10 @@ impl SequenceJournalTime {
             sealed_floor: AtomicU64::new(0),
         }
     }
-
     fn sealed_floor(&self) -> u64 {
         self.sealed_floor.load(Ordering::SeqCst)
     }
 }
-
 impl MusubiProviderAttestationJournalTimeV1 for SequenceJournalTime {
     fn now_unix_ms<'a>(
         &'a self,
@@ -111,14 +100,12 @@ impl MusubiProviderAttestationJournalTimeV1 for SequenceJournalTime {
         })
     }
 }
-
 #[derive(Debug)]
 struct DelayedSecondJournalTime {
     samples: Mutex<VecDeque<u64>>,
     calls: AtomicUsize,
     delay_ms: u64,
 }
-
 impl DelayedSecondJournalTime {
     fn new(first: u64, second: u64, delay_ms: u64) -> Self {
         Self {
@@ -128,7 +115,6 @@ impl DelayedSecondJournalTime {
         }
     }
 }
-
 impl MusubiProviderAttestationJournalTimeV1 for DelayedSecondJournalTime {
     fn now_unix_ms<'a>(
         &'a self,
@@ -145,18 +131,15 @@ impl MusubiProviderAttestationJournalTimeV1 for DelayedSecondJournalTime {
         })
     }
 }
-
 #[derive(Default)]
 struct MemoryJournalStore {
     latest: Mutex<MusubiProviderAttestationJournalStoreSnapshotV1>,
 }
-
 impl Default for MusubiProviderAttestationJournalStoreSnapshotV1 {
     fn default() -> Self {
         Self::empty()
     }
 }
-
 impl MusubiProviderAttestationJournalStoreV1 for MemoryJournalStore {
     fn load<'a>(
         &'a self,
@@ -174,7 +157,6 @@ impl MusubiProviderAttestationJournalStoreV1 for MemoryJournalStore {
                 .map_err(|_| MusubiProviderAttestationJournalStoreErrorV1::Unavailable)
         })
     }
-
     fn compare_and_swap<'a>(
         &'a self,
         expected_revision: Option<[u8; 32]>,
@@ -209,7 +191,6 @@ impl MusubiProviderAttestationJournalStoreV1 for MemoryJournalStore {
         })
     }
 }
-
 struct MemoryInventory {
     entries: Mutex<Vec<(MusubiProviderAttestationInventoryItemV1, u64)>>,
     put_calls: AtomicUsize,
@@ -236,7 +217,6 @@ struct MemoryInventory {
     qualification_error: Mutex<Option<MusubiProviderAttestationInventoryRuntimeErrorV1>>,
     readiness_error: Mutex<Option<MusubiProviderAttestationInventoryRuntimeErrorV1>>,
 }
-
 impl Default for MemoryInventory {
     fn default() -> Self {
         Self {
@@ -267,7 +247,6 @@ impl Default for MemoryInventory {
         }
     }
 }
-
 impl MusubiProviderAttestationInventorySinkV1 for MemoryInventory {
     fn put<'a>(
         &'a self,
@@ -313,7 +292,6 @@ impl MusubiProviderAttestationInventorySinkV1 for MemoryInventory {
         })
     }
 }
-
 impl MusubiProviderAttestationInventoryReaderV1 for MemoryInventory {
     fn get<'a>(
         &'a self,
@@ -372,7 +350,6 @@ impl MusubiProviderAttestationInventoryReaderV1 for MemoryInventory {
             readback
         })
     }
-
     fn inventory<'a>(
         &'a self,
         scope: &'a MusubiProviderAttestationInventoryScopeV1,
@@ -403,7 +380,6 @@ impl MusubiProviderAttestationInventoryReaderV1 for MemoryInventory {
         })
     }
 }
-
 impl MusubiProviderAttestationInventoryRuntimeV1 for MemoryInventory {
     fn runtime_handle(&self) -> &str {
         self.runtime_handle_calls.fetch_add(1, Ordering::SeqCst);
@@ -417,7 +393,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for MemoryInventory {
             "inventory://sorafs/musubi/primary"
         }
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -440,7 +415,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for MemoryInventory {
                 .map_err(|_| MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable)?,
         ))
     }
-
     fn check_readiness<'a>(
         &'a self,
     ) -> ProviderIngestFutureV1<'a, Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>>
@@ -458,12 +432,10 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for MemoryInventory {
         })
     }
 }
-
 struct Fixture {
     request: ProviderIngestMusubiAttestationApprovalRequestV1,
     owner_key: KeyPair,
 }
-
 fn signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
     ProviderIngestCompletionSignerPolicyV1 {
         policy_id: [0x31; 32],
@@ -472,11 +444,9 @@ fn signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
         policy_digest: [u8::try_from(0x40 + revision).expect("small revision"); 32],
     }
 }
-
 fn fixture(provider_seed: u8, claim_seed: u8) -> Fixture {
     fixture_with_provider([provider_seed; 32], claim_seed)
 }
-
 fn fixture_with_provider(provider_id: [u8; 32], claim_seed: u8) -> Fixture {
     let owner_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
         .expect("provider owner fixture key");
@@ -519,7 +489,6 @@ fn fixture_with_provider(provider_id: [u8; 32], claim_seed: u8) -> Fixture {
     .expect("valid approval request fixture");
     Fixture { request, owner_key }
 }
-
 fn signed_attestation(fixture: &Fixture) -> MusubiProviderBundleVerificationAttestationV1 {
     let payload = fixture.request.payload().clone();
     let approval = MusubiProviderBundleVerificationApprovalV1 {
@@ -539,7 +508,6 @@ fn signed_attestation(fixture: &Fixture) -> MusubiProviderBundleVerificationAtte
         .expect("fixture attestation verifies");
     attestation
 }
-
 struct FakeApprovalSigner {
     handle: String,
     owner: AccountId,
@@ -552,7 +520,6 @@ struct FakeApprovalSigner {
     adapter_policy_digest: Mutex<[u8; 32]>,
     delay_ms: AtomicU64,
 }
-
 impl FakeApprovalSigner {
     fn new(fixture: &Fixture) -> Self {
         let owner = fixture.request.payload().binding.completed_by.clone();
@@ -572,21 +539,17 @@ impl FakeApprovalSigner {
             delay_ms: AtomicU64::new(0),
         }
     }
-
     fn policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         *self.policy.lock().expect("fake signer policy lock")
     }
 }
-
 impl MusubiProviderAttestationSignerV1 for FakeApprovalSigner {
     fn runtime_handle(&self) -> &str {
         &self.handle
     }
-
     fn authority(&self) -> &AccountId {
         &self.owner
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -604,18 +567,15 @@ impl MusubiProviderAttestationSignerV1 for FakeApprovalSigner {
             self.controller_policy_digest,
         ))
     }
-
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.policy()
     }
-
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>
     {
         Ok(self.policy())
     }
-
     fn approve<'a>(
         &'a self,
         request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -661,7 +621,6 @@ impl MusubiProviderAttestationSignerV1 for FakeApprovalSigner {
         })
     }
 }
-
 fn test_policy() -> MusubiProviderAttestationJournalPolicyV1 {
     MusubiProviderAttestationJournalPolicyV1 {
         max_entries: 16,
@@ -674,7 +633,6 @@ fn test_policy() -> MusubiProviderAttestationJournalPolicyV1 {
         max_cas_retries: 4,
     }
 }
-
 async fn prepare_handoff_claim(
     journal: &MusubiProviderAttestationJournalV1,
     fixture: &Fixture,
@@ -714,7 +672,6 @@ async fn prepare_handoff_claim(
         .expect("handoff work");
     (approval_id, handoff)
 }
-
 #[test]
 fn journal_policy_defaults_and_hard_limits_share_config_bounds() {
     let defaults = MusubiProviderAttestationJournalPolicyV1::default();
@@ -742,7 +699,6 @@ fn journal_policy_defaults_and_hard_limits_share_config_bounds() {
     exact_minimum
         .validate()
         .expect("exact shared checkpoint minimum is valid");
-
     let mutations: [fn(&mut MusubiProviderAttestationJournalPolicyV1); 7] = [
         |policy: &mut MusubiProviderAttestationJournalPolicyV1| {
             policy.max_attempts = provider_attestation_journal_defaults::MAX_ATTEMPTS_LIMIT + 1;
@@ -778,7 +734,6 @@ fn journal_policy_defaults_and_hard_limits_share_config_bounds() {
         );
     }
 }
-
 #[test]
 fn journal_policy_digest_is_stable_and_commits_every_bound() {
     let policy = test_policy();
@@ -793,7 +748,6 @@ fn journal_policy_digest_is_stable_and_commits_every_bound() {
         expected,
         "the same fixed-width policy must hash deterministically"
     );
-
     let mutations: [fn(&mut MusubiProviderAttestationJournalPolicyV1); 8] = [
         |value| value.max_entries += 1,
         |value| value.max_attempts += 1,
@@ -814,9 +768,7 @@ fn journal_policy_digest_is_stable_and_commits_every_bound() {
         );
     }
 }
-
 fn assert_send<T: Send>(_: &T) {}
-
 fn awaiting_checkpoint(fixture: &Fixture) -> StoredJournalCheckpointV1 {
     let intent = intent_from_request(&fixture.request, 1).expect("fixture intent");
     StoredJournalCheckpointV1 {
@@ -834,7 +786,6 @@ fn awaiting_checkpoint(fixture: &Fixture) -> StoredJournalCheckpointV1 {
         }],
     }
 }
-
 #[test]
 fn checkpoint_writer_roundtrips_private_receipt_and_rejects_byte_budget() {
     let fixture = fixture(0x11, 0x12);
@@ -851,7 +802,6 @@ fn checkpoint_writer_roundtrips_private_receipt_and_rejects_byte_budget() {
         attestation: Box::new(attestation),
         receipt: Box::new(StoredInventoryReceiptV1::from_public(&receipt)),
     };
-
     let policy = test_policy();
     let bytes = encode_checkpoint(&checkpoint, policy).expect("reloadable checkpoint");
     let snapshot =
@@ -875,7 +825,6 @@ fn checkpoint_writer_roundtrips_private_receipt_and_rejects_byte_budget() {
             checkpoint.last_observed_unix_ms
         )
     );
-
     let mut too_small = policy;
     too_small.checkpoint_max_bytes = bytes.len() - 1;
     assert_eq!(
@@ -883,7 +832,6 @@ fn checkpoint_writer_roundtrips_private_receipt_and_rejects_byte_budget() {
         Err(MusubiProviderAttestationJournalErrorV1::CapacityExceeded)
     );
 }
-
 #[test]
 fn corrupt_checkpoint_rejects_unmarked_network_identity() {
     let corrupt_identity_fixture = fixture(0x13, 0x14);
@@ -898,7 +846,6 @@ fn corrupt_checkpoint_rejects_unmarked_network_identity() {
         decode_checkpoint(&snapshot, test_policy()),
         Err(MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)
     );
-
     let impossible_deadline_fixture = fixture(0x15, 0x16);
     let mut impossible_deadline = awaiting_checkpoint(&impossible_deadline_fixture);
     impossible_deadline.checkpoint_sequence = 2;
@@ -917,7 +864,6 @@ fn corrupt_checkpoint_rejects_unmarked_network_identity() {
         decode_checkpoint(&snapshot, test_policy()),
         Err(MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)
     );
-
     let mut impossible_history = impossible_deadline;
     impossible_history.checkpoint_sequence = 1;
     impossible_history.entries[0].state = StoredJournalStateV1::ApprovalClaimed {
@@ -934,7 +880,6 @@ fn corrupt_checkpoint_rejects_unmarked_network_identity() {
         Err(MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)
     );
 }
-
 #[tokio::test]
 async fn abstract_store_exact_replay_is_idempotent_before_predecessor_check() {
     let store = MemoryJournalStore::default();
@@ -960,7 +905,6 @@ async fn abstract_store_exact_replay_is_idempotent_before_predecessor_check() {
             .expect("valid memory checkpoint")
     );
 }
-
 #[tokio::test]
 async fn exact_enqueue_replays_and_same_key_substitution_conflicts() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -982,7 +926,6 @@ async fn exact_enqueue_replays_and_same_key_substitution_conflicts() {
             .expect("replay intent"),
         MusubiProviderAttestationEnqueueOutcomeV1::Existing { .. }
     ));
-
     let later_request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
         initial_fixture.request.payload().clone(),
         initial_fixture.request.completion_claim_digest(),
@@ -1000,7 +943,6 @@ async fn exact_enqueue_replays_and_same_key_substitution_conflicts() {
             .expect("later cursor resumes exact intent"),
         MusubiProviderAttestationEnqueueOutcomeV1::Existing { .. }
     ));
-
     let lower_request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
         initial_fixture.request.payload().clone(),
         initial_fixture.request.completion_claim_digest(),
@@ -1015,7 +957,6 @@ async fn exact_enqueue_replays_and_same_key_substitution_conflicts() {
         journal.enqueue(&lower_request).await,
         Err(MusubiProviderAttestationJournalErrorV1::IntentConflict)
     );
-
     let forked_request = ProviderIngestMusubiAttestationApprovalRequestV1::test_fixture(
         initial_fixture.request.payload().clone(),
         initial_fixture.request.completion_claim_digest(),
@@ -1030,14 +971,12 @@ async fn exact_enqueue_replays_and_same_key_substitution_conflicts() {
         journal.enqueue(&forked_request).await,
         Err(MusubiProviderAttestationJournalErrorV1::IntentConflict)
     );
-
     let conflicting = fixture(0x41, 0x43);
     assert_eq!(
         journal.enqueue(&conflicting.request).await,
         Err(MusubiProviderAttestationJournalErrorV1::IntentConflict)
     );
 }
-
 #[tokio::test]
 async fn pre_enqueue_probe_checks_retained_key_before_inventory() {
     let journal = MusubiProviderAttestationJournalV1::new(
@@ -1053,7 +992,6 @@ async fn pre_enqueue_probe_checks_retained_key_before_inventory() {
     let inventory = MemoryInventory::default();
     *inventory.readiness_error.lock().expect("readiness lock") =
         Some(MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable);
-
     assert_eq!(
         journal
             .probe_pre_enqueue_with_inventory(&retained.request, &inventory)
@@ -1074,7 +1012,6 @@ async fn pre_enqueue_probe_checks_retained_key_before_inventory() {
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn pre_enqueue_probe_suppresses_only_an_exact_inventory_payload() {
     let journal = MusubiProviderAttestationJournalV1::new(
@@ -1084,7 +1021,6 @@ async fn pre_enqueue_probe_suppresses_only_an_exact_inventory_payload() {
     .expect("construct journal");
     let fixture = fixture(0x43, 0x54);
     let inventory = MemoryInventory::default();
-
     assert_eq!(
         journal
             .probe_pre_enqueue_with_inventory(&fixture.request, &inventory)
@@ -1093,7 +1029,6 @@ async fn pre_enqueue_probe_suppresses_only_an_exact_inventory_payload() {
     );
     assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 2);
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 1);
-
     let exact_item = MusubiProviderAttestationInventoryItemV1::new(signed_attestation(&fixture))
         .expect("exact inventory item");
     inventory
@@ -1107,7 +1042,6 @@ async fn pre_enqueue_probe_suppresses_only_an_exact_inventory_payload() {
             .await,
         Ok(MusubiProviderAttestationPreEnqueueProbeV1::InventoryExact)
     );
-
     let mut substituted_payload = fixture.request.payload().clone();
     substituted_payload.binding.bundle_digest = MusubiContentDigestV1::new([0xD4; 32]);
     let substituted_attestation = MusubiProviderBundleVerificationAttestationV1 {
@@ -1138,7 +1072,6 @@ async fn pre_enqueue_probe_suppresses_only_an_exact_inventory_payload() {
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn pre_enqueue_probe_bounds_inventory_readback_and_preserves_absence() {
     let mut policy = test_policy();
@@ -1149,7 +1082,6 @@ async fn pre_enqueue_probe_bounds_inventory_readback_and_preserves_absence() {
     let fixture = fixture(0x44, 0x55);
     let inventory = MemoryInventory::default();
     inventory.get_delay_ms.store(10, Ordering::SeqCst);
-
     assert_eq!(
         journal
             .probe_pre_enqueue_with_inventory(&fixture.request, &inventory)
@@ -1166,7 +1098,6 @@ async fn pre_enqueue_probe_bounds_inventory_readback_and_preserves_absence() {
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn pre_enqueue_probe_rejects_inventory_qualification_drift_after_get() {
     let journal = MusubiProviderAttestationJournalV1::new(
@@ -1186,7 +1117,6 @@ async fn pre_enqueue_probe_rejects_inventory_qualification_drift_after_get() {
     inventory
         .drift_qualification_after_get
         .store(true, Ordering::SeqCst);
-
     assert_eq!(
         journal
             .probe_pre_enqueue_with_inventory(&fixture.request, &inventory)
@@ -1197,7 +1127,6 @@ async fn pre_enqueue_probe_rejects_inventory_qualification_drift_after_get() {
     assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 2);
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn expired_reclaim_fences_the_stale_approval_claim() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -1239,7 +1168,6 @@ async fn expired_reclaim_fences_the_stale_approval_claim() {
         Err(MusubiProviderAttestationJournalErrorV1::StaleClaim)
     );
 }
-
 #[tokio::test]
 async fn durable_unix_floor_rejects_backward_clock_after_restart() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -1260,7 +1188,6 @@ async fn durable_unix_floor_rejects_backward_clock_after_restart() {
         .await
         .expect("claim");
     drop(journal);
-
     let restarted =
         MusubiProviderAttestationJournalV1::new(store, test_policy()).expect("restart journal");
     assert_eq!(
@@ -1276,7 +1203,6 @@ async fn durable_unix_floor_rejects_backward_clock_after_restart() {
         id
     );
 }
-
 #[tokio::test]
 async fn approved_state_survives_restart_and_hands_off_idempotently() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -1323,7 +1249,6 @@ async fn approved_state_survives_restart_and_hands_off_idempotently() {
         .await
         .expect("approve through qualified signer");
     drop(journal);
-
     let restarted =
         MusubiProviderAttestationJournalV1::new(store, test_policy()).expect("restart journal");
     assert_eq!(
@@ -1383,7 +1308,6 @@ async fn approved_state_survives_restart_and_hands_off_idempotently() {
         MusubiProviderAttestationJournalStageV1::Delivered
     );
 }
-
 #[tokio::test]
 async fn external_effect_completion_time_is_sealed_before_journal_commit_and_restart() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -1419,7 +1343,6 @@ async fn external_effect_completion_time_is_sealed_before_journal_commit_and_res
         clock.sealed_floor(),
         "journal floor must equal, never exceed, the external seal"
     );
-
     drop(journal);
     let restarted = MusubiProviderAttestationJournalV1::new(store.clone(), test_policy())
         .expect("restart after approval");
@@ -1454,7 +1377,6 @@ async fn external_effect_completion_time_is_sealed_before_journal_commit_and_res
         clock.sealed_floor(),
         "delivered journal floor must remain covered by the external seal"
     );
-
     drop(restarted);
     let restarted = MusubiProviderAttestationJournalV1::new(store, test_policy())
         .expect("restart after handoff");
@@ -1468,7 +1390,6 @@ async fn external_effect_completion_time_is_sealed_before_journal_commit_and_res
         MusubiProviderAttestationJournalStageV1::Delivered
     );
 }
-
 #[tokio::test]
 async fn handoff_dead_letter_retains_evidence_and_requeues_after_restart() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -1512,7 +1433,6 @@ async fn handoff_dead_letter_retains_evidence_and_requeues_after_restart() {
         .await
         .expect("dead-letter handoff");
     drop(journal);
-
     let restarted =
         MusubiProviderAttestationJournalV1::new(store, test_policy()).expect("restart journal");
     let status = restarted
@@ -1576,7 +1496,6 @@ async fn handoff_dead_letter_retains_evidence_and_requeues_after_restart() {
         .expect("explicitly acknowledge inspected dead letter");
     assert!(restarted.status(id).await.expect("status").is_none());
 }
-
 #[tokio::test]
 async fn stale_or_mismatched_claims_cause_no_external_calls() {
     let primary_fixture = fixture(0x48, 0x58);
@@ -1615,7 +1534,6 @@ async fn stale_or_mismatched_claims_cause_no_external_calls() {
         Err(MusubiProviderAttestationJournalErrorV1::StaleClaim)
     );
     assert_eq!(signer.approve_calls.load(Ordering::SeqCst), 0);
-
     let current = journal
         .claim_approval(
             id,
@@ -1633,7 +1551,6 @@ async fn stale_or_mismatched_claims_cause_no_external_calls() {
         Err(MusubiProviderAttestationJournalErrorV1::InvalidAttestation)
     );
     assert_eq!(signer.approve_calls.load(Ordering::SeqCst), 0);
-
     journal
         .approve_claim_with_signer(&current, &primary_fixture.request, &signer, &clock_at(107))
         .await
@@ -1668,7 +1585,6 @@ async fn stale_or_mismatched_claims_cause_no_external_calls() {
     assert_eq!(inventory.qualification_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn shared_deadline_prevents_late_external_results_from_becoming_durable() {
     let mut policy = test_policy();
@@ -1713,7 +1629,6 @@ async fn shared_deadline_prevents_late_external_results_from_becoming_durable() 
             .stage,
         MusubiProviderAttestationJournalStageV1::ApprovalClaimed
     );
-
     let signer = FakeApprovalSigner::new(&fixture);
     journal
         .approve_claim_with_signer(&approval, &fixture.request, &signer, &clock_at(106))
@@ -1746,7 +1661,6 @@ async fn shared_deadline_prevents_late_external_results_from_becoming_durable() 
         MusubiProviderAttestationJournalStageV1::HandoffClaimed
     );
 }
-
 #[tokio::test]
 async fn post_effect_clock_timeout_is_classified_as_clock_unavailable() {
     let mut policy = test_policy();
@@ -1791,7 +1705,6 @@ async fn post_effect_clock_timeout_is_classified_as_clock_unavailable() {
             .stage,
         MusubiProviderAttestationJournalStageV1::ApprovalClaimed
     );
-
     journal
         .approve_claim_with_signer(&approval, &fixture.request, &signer, &clock_at(106))
         .await
@@ -1823,7 +1736,6 @@ async fn post_effect_clock_timeout_is_classified_as_clock_unavailable() {
         MusubiProviderAttestationJournalStageV1::HandoffClaimed
     );
 }
-
 #[tokio::test]
 async fn capacity_prunes_only_oldest_delivered_entry() {
     let store = Arc::new(MemoryJournalStore::default());
@@ -1831,7 +1743,6 @@ async fn capacity_prunes_only_oldest_delivered_entry() {
     policy.max_entries = 3;
     let journal =
         MusubiProviderAttestationJournalV1::new(store, policy).expect("construct bounded journal");
-
     let delivered_fixture = fixture(0x31, 0x81);
     let delivered_id = journal
         .enqueue(&delivered_fixture.request)
@@ -1871,7 +1782,6 @@ async fn capacity_prunes_only_oldest_delivered_entry() {
         .mark_delivered(&handoff_claim, receipt, 103)
         .await
         .expect("deliver first entry");
-
     let dead_fixture = fixture(0x32, 0x82);
     let dead_id = journal
         .enqueue(&dead_fixture.request)
@@ -1895,7 +1805,6 @@ async fn capacity_prunes_only_oldest_delivered_entry() {
         )
         .await
         .expect("dead-letter exact entry");
-
     let active_fixture = fixture(0x33, 0x83);
     let active_id = journal
         .enqueue(&active_fixture.request)
@@ -1908,7 +1817,6 @@ async fn capacity_prunes_only_oldest_delivered_entry() {
         .await
         .expect("delivered tombstone makes room")
         .approval_id();
-
     assert!(
         journal
             .status(delivered_id)
@@ -1957,7 +1865,6 @@ async fn capacity_prunes_only_oldest_delivered_entry() {
         Ok(MusubiProviderAttestationPreEnqueueProbeV1::InventoryExact)
     );
 }
-
 #[tokio::test]
 async fn minimum_capacity_carries_one_entry_through_delivery() {
     let fixture = fixture(0x35, 0x85);
@@ -1968,7 +1875,6 @@ async fn minimum_capacity_carries_one_entry_through_delivery() {
     let required_capacity = encoded_len
         .checked_add(checkpoint_future_reserve_bytes(&checkpoint).expect("bounded future reserve"))
         .expect("fixture capacity");
-
     let mut accounting_policy = test_policy();
     accounting_policy.checkpoint_max_bytes = required_capacity;
     encode_checkpoint(&checkpoint, accounting_policy).expect("exact future reserve fits");
@@ -1981,7 +1887,6 @@ async fn minimum_capacity_carries_one_entry_through_delivery() {
         required_capacity <= provider_attestation_journal_defaults::CHECKPOINT_MIN_BYTES,
         "shared minimum must cover one fixture's complete future reserve"
     );
-
     let mut policy = test_policy();
     policy.checkpoint_max_bytes = provider_attestation_journal_defaults::CHECKPOINT_MIN_BYTES;
     let store = Arc::new(MemoryJournalStore::default());
@@ -2028,7 +1933,6 @@ async fn minimum_capacity_carries_one_entry_through_delivery() {
             .stage,
         MusubiProviderAttestationJournalStageV1::Delivered
     );
-
     let mut below_minimum_policy = policy;
     below_minimum_policy.checkpoint_max_bytes =
         provider_attestation_journal_defaults::CHECKPOINT_MIN_BYTES - 1;
@@ -2037,14 +1941,12 @@ async fn minimum_capacity_carries_one_entry_through_delivery() {
         Err(MusubiProviderAttestationJournalErrorV1::InvalidPolicy)
     );
 }
-
 #[tokio::test]
 async fn dead_letter_scan_pages_every_retained_identity_after_restart() {
     const ENTRY_COUNT: usize = MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1 + 1;
     let mut policy = test_policy();
     policy.max_entries = ENTRY_COUNT;
     policy.checkpoint_max_bytes = MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1;
-
     let mut entries = Vec::with_capacity(ENTRY_COUNT);
     for index in 0..ENTRY_COUNT {
         let mut provider_id = [0xA5; 32];
@@ -2087,7 +1989,6 @@ async fn dead_letter_scan_pages_every_retained_identity_after_restart() {
     *store.latest.lock().expect("journal store lock") =
         MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(bytes)
             .expect("persist checkpoint");
-
     let restarted =
         MusubiProviderAttestationJournalV1::new(store, policy).expect("restart journal");
     let mut after = None;
@@ -2114,7 +2015,6 @@ async fn dead_letter_scan_pages_every_retained_identity_after_restart() {
         ENTRY_COUNT
     );
 }
-
 #[tokio::test]
 async fn handoff_requires_exact_inventory_item_and_revision_readback() {
     let primary_fixture = fixture(0x65, 0x75);
@@ -2125,7 +2025,6 @@ async fn handoff_requires_exact_inventory_item_and_revision_readback() {
     .expect("construct journal");
     let (approval_id, handoff) = prepare_handoff_claim(&journal, &primary_fixture, 0xA3).await;
     let inventory = MemoryInventory::default();
-
     inventory.omit_readback.store(true, Ordering::SeqCst);
     assert_eq!(
         journal
@@ -2134,7 +2033,6 @@ async fn handoff_requires_exact_inventory_item_and_revision_readback() {
         Err(MusubiProviderAttestationJournalErrorV1::InvalidInventoryReceipt)
     );
     inventory.omit_readback.store(false, Ordering::SeqCst);
-
     inventory
         .readback_revision_override
         .store(2, Ordering::SeqCst);
@@ -2147,7 +2045,6 @@ async fn handoff_requires_exact_inventory_item_and_revision_readback() {
     inventory
         .readback_revision_override
         .store(0, Ordering::SeqCst);
-
     let substituted =
         MusubiProviderAttestationInventoryItemV1::new(signed_attestation(&fixture(0x66, 0x76)))
             .expect("valid substituted item");
@@ -2165,7 +2062,6 @@ async fn handoff_requires_exact_inventory_item_and_revision_readback() {
         .readback_item_override
         .lock()
         .expect("readback override lock") = None;
-
     assert_eq!(
         journal
             .status(approval_id)
@@ -2177,7 +2073,6 @@ async fn handoff_requires_exact_inventory_item_and_revision_readback() {
     );
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 3);
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 3);
-
     assert_eq!(
         journal
             .handoff_claim_with_inventory(&handoff, &inventory, &clock_at(105))
@@ -2194,7 +2089,6 @@ async fn handoff_requires_exact_inventory_item_and_revision_readback() {
         MusubiProviderAttestationJournalStageV1::Delivered
     );
 }
-
 #[tokio::test]
 async fn handoff_recovers_when_put_commits_before_unavailable_response() {
     let fixture = fixture(0x67, 0x77);
@@ -2206,7 +2100,6 @@ async fn handoff_recovers_when_put_commits_before_unavailable_response() {
     let (approval_id, handoff) = prepare_handoff_claim(&journal, &fixture, 0xA5).await;
     let inventory = MemoryInventory::default();
     inventory.fail_after_put_once.store(true, Ordering::SeqCst);
-
     assert_eq!(
         journal
             .handoff_claim_with_inventory(&handoff, &inventory, &clock_at(104))
@@ -2225,7 +2118,6 @@ async fn handoff_recovers_when_put_commits_before_unavailable_response() {
             .stage,
         MusubiProviderAttestationJournalStageV1::HandoffClaimed
     );
-
     assert_eq!(
         journal
             .handoff_claim_with_inventory(&handoff, &inventory, &clock_at(105))
@@ -2246,7 +2138,6 @@ async fn handoff_recovers_when_put_commits_before_unavailable_response() {
         MusubiProviderAttestationJournalStageV1::Delivered
     );
 }
-
 #[tokio::test]
 async fn handoff_readback_timeout_never_marks_delivery_and_retries_exactly() {
     let fixture = fixture(0x68, 0x78);
@@ -2258,7 +2149,6 @@ async fn handoff_readback_timeout_never_marks_delivery_and_retries_exactly() {
     let (approval_id, handoff) = prepare_handoff_claim(&journal, &fixture, 0xA7).await;
     let inventory = MemoryInventory::default();
     inventory.get_delay_ms.store(10, Ordering::SeqCst);
-
     assert_eq!(
         journal
             .handoff_claim_with_inventory(&handoff, &inventory, &clock_at(104))
@@ -2285,7 +2175,6 @@ async fn handoff_readback_timeout_never_marks_delivery_and_retries_exactly() {
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 2);
     assert_eq!(inventory.entries.lock().expect("entries lock").len(), 1);
 }
-
 #[test]
 fn inventory_runtime_binding_rejects_invalid_handles_and_inert_qualification() {
     let qualification = MusubiProviderAttestationInventoryQualificationV1::new(7, [0xC1; 32]);
@@ -2319,7 +2208,6 @@ fn inventory_runtime_binding_rejects_invalid_handles_and_inert_qualification() {
         Err(MusubiProviderAttestationInventoryBindingErrorV1::InvalidQualification)
     );
 }
-
 #[tokio::test]
 async fn handoff_rejects_unqualified_inventory_without_put_or_readback() {
     let fixture = fixture(0x69, 0x79);
@@ -2330,7 +2218,6 @@ async fn handoff_rejects_unqualified_inventory_without_put_or_readback() {
     .expect("construct journal");
     let (_, handoff) = prepare_handoff_claim(&journal, &fixture, 0xA9).await;
     let inventory = MemoryInventory::default();
-
     inventory
         .invalid_runtime_handle
         .store(true, Ordering::SeqCst);
@@ -2369,7 +2256,6 @@ async fn handoff_rejects_unqualified_inventory_without_put_or_readback() {
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn handoff_fails_closed_when_inventory_readiness_is_unavailable_or_rejected() {
     let fixture = fixture(0x6A, 0x7A);
@@ -2383,7 +2269,6 @@ async fn handoff_fails_closed_when_inventory_readiness_is_unavailable_or_rejecte
     let readiness = inventory.check_readiness();
     assert_send(&readiness);
     readiness.await.expect("default inventory is ready");
-
     *inventory.readiness_error.lock().expect("readiness lock") =
         Some(MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable);
     assert_eq!(
@@ -2403,7 +2288,6 @@ async fn handoff_fails_closed_when_inventory_readiness_is_unavailable_or_rejecte
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn handoff_rejects_inventory_identity_or_qualification_drift() {
     let fixture = fixture(0x6B, 0x7B);
@@ -2414,7 +2298,6 @@ async fn handoff_rejects_inventory_identity_or_qualification_drift() {
     .expect("construct journal");
     let (approval_id, handoff) = prepare_handoff_claim(&journal, &fixture, 0xAB).await;
     let inventory = MemoryInventory::default();
-
     inventory
         .drift_handle_after_put
         .store(true, Ordering::SeqCst);
@@ -2436,7 +2319,6 @@ async fn handoff_rejects_inventory_identity_or_qualification_drift() {
             .stage,
         MusubiProviderAttestationJournalStageV1::HandoffClaimed
     );
-
     inventory
         .drift_handle_after_put
         .store(false, Ordering::SeqCst);
@@ -2465,7 +2347,6 @@ async fn handoff_rejects_inventory_identity_or_qualification_drift() {
         MusubiProviderAttestationJournalStageV1::HandoffClaimed
     );
 }
-
 #[tokio::test]
 async fn inventory_replays_exact_item_and_rejects_same_key_different_digest() {
     let first_fixture = fixture(0x48, 0x49);
@@ -2494,7 +2375,6 @@ async fn inventory_replays_exact_item_and_rejects_same_key_different_digest() {
     let replayed_receipt = MusubiProviderAttestationInventoryReceiptV1::new(&first, replayed)
         .expect("journal reconstructs exact receipt");
     assert_eq!(inserted_receipt, replayed_receipt);
-
     let mut conflicting_attestation = signed_attestation(&first_fixture);
     conflicting_attestation.payload.binding.bundle_digest = MusubiContentDigestV1::new([0xEE; 32]);
     let payload = conflicting_attestation.payload.clone();
@@ -2515,7 +2395,6 @@ async fn inventory_replays_exact_item_and_rejects_same_key_different_digest() {
         Err(MusubiProviderAttestationInventoryErrorV1::Conflict)
     );
 }
-
 #[test]
 fn inventory_is_canonicalized_by_unique_provider_identity() {
     let item_three =
@@ -2540,7 +2419,6 @@ fn inventory_is_canonicalized_by_unique_provider_identity() {
         vec![[0x61; 32], [0x62; 32], [0x63; 32]]
     );
 }
-
 #[tokio::test]
 async fn signer_validation_rechecks_eligibility_after_approval() {
     let fixture = fixture(0x64, 0x74);
@@ -2587,14 +2465,12 @@ async fn signer_validation_rechecks_eligibility_after_approval() {
         approve_musubi_provider_attestation_v1(&signer, &fixture.request, u64::MAX).await,
         Err(MusubiProviderAttestationApprovalErrorV1::InvalidRequest)
     );
-
     let rotating = FakeApprovalSigner::new(&fixture);
     rotating.rotate_after_approval.store(true, Ordering::SeqCst);
     assert_eq!(
         approve_musubi_provider_attestation_v1(&rotating, &fixture.request, 5).await,
         Err(MusubiProviderAttestationApprovalErrorV1::EligibilityChanged)
     );
-
     let rotating_adapter = FakeApprovalSigner::new(&fixture);
     rotating_adapter
         .rotate_adapter_after_approval
@@ -2603,7 +2479,6 @@ async fn signer_validation_rechecks_eligibility_after_approval() {
         approve_musubi_provider_attestation_v1(&rotating_adapter, &fixture.request, 5).await,
         Err(MusubiProviderAttestationApprovalErrorV1::EligibilityChanged)
     );
-
     let invalid_adapter = FakeApprovalSigner::new(&fixture);
     *invalid_adapter
         .adapter_policy_digest
@@ -2614,7 +2489,6 @@ async fn signer_validation_rechecks_eligibility_after_approval() {
         Err(MusubiProviderAttestationApprovalErrorV1::InvalidSignerQualification)
     );
     assert_eq!(invalid_adapter.approve_calls.load(Ordering::SeqCst), 0);
-
     let mut substituted_controller = FakeApprovalSigner::new(&fixture);
     substituted_controller.controller_policy_digest = [0xFF; 32];
     assert_eq!(

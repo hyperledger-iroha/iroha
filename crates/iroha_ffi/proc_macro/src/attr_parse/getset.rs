@@ -1,14 +1,10 @@
 //! This module provides parsing of custom attributes from the [`getset`](https://docs.rs/getset/latest/getset/) crate
-
-use std::collections::hash_map::Entry;
-
+use crate::attr_parse::derive::{Derive, DeriveAttrs};
 use proc_macro2::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::hash_map::Entry;
 use strum::{Display, EnumString};
 use syn::{Attribute, Token, parse::ParseStream, punctuated::Punctuated};
-
-use crate::attr_parse::derive::{Derive, DeriveAttrs};
-
 /// Type of accessor method derived for a structure
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString)]
 pub enum GetSetDerive {
@@ -17,7 +13,6 @@ pub enum GetSetDerive {
     MutGetters,
     CopyGetters,
 }
-
 impl GetSetDerive {
     pub fn try_from_path(path: &syn::Path) -> Option<Self> {
         // try to be smart and handle two cases:
@@ -35,10 +30,8 @@ impl GetSetDerive {
                 return None;
             }
         };
-
         ident.to_string().parse().ok()
     }
-
     pub fn get_mode(self) -> GetSetGenMode {
         match self {
             Self::Setters => GetSetGenMode::Set,
@@ -48,18 +41,15 @@ impl GetSetDerive {
         }
     }
 }
-
 #[derive(Default, Debug, Eq, PartialEq, Clone)]
 pub struct GetSetOptions {
     pub visibility: Option<syn::Visibility>,
     pub with_prefix: bool,
 }
-
 struct SpannedGetSetOptions {
     span: Span,
     options: GetSetOptions,
 }
-
 impl syn::parse::Parse for SpannedGetSetOptions {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut result = GetSetOptions::default();
@@ -67,7 +57,6 @@ impl syn::parse::Parse for SpannedGetSetOptions {
         // this is getting out of hand...
         // we need an accumulator to rule them all!
         let mut errors = Vec::new();
-
         let lit = input.parse::<syn::LitStr>()?;
         for part in lit.value().split(' ') {
             if part == "with_prefix" {
@@ -85,7 +74,6 @@ impl syn::parse::Parse for SpannedGetSetOptions {
                 errors.push(syn::Error::new(lit.span(), format!("Failed to parse getset options at `{part}`: expected visibility or `with_prefix`")));
             }
         }
-
         if errors.is_empty() {
             Ok(SpannedGetSetOptions {
                 span: lit.span(),
@@ -94,16 +82,13 @@ impl syn::parse::Parse for SpannedGetSetOptions {
         } else {
             let mut errors = errors.into_iter();
             let mut error = errors.next().expect("darling::Error can never be empty");
-
             for next_error in errors {
                 error.combine(next_error);
             }
-
             Err(error)
         }
     }
 }
-
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Display, EnumString)]
 #[strum(serialize_all = "snake_case")]
 pub enum GetSetGenMode {
@@ -112,21 +97,17 @@ pub enum GetSetGenMode {
     Set,
     GetMut,
 }
-
 enum GetSetAttrToken {
     Skip,
     Gen(GetSetGenMode, GetSetOptions),
 }
-
 struct SpannedGetSetAttrToken {
     span: Span,
     token: GetSetAttrToken,
 }
-
 impl syn::parse::Parse for SpannedGetSetAttrToken {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let ident = input.parse::<syn::Ident>()?;
-
         match ident.to_string().as_str() {
             "skip" => Ok(SpannedGetSetAttrToken {
                 span: ident.span(),
@@ -134,7 +115,6 @@ impl syn::parse::Parse for SpannedGetSetAttrToken {
             }),
             s @ ("get" | "get_copy" | "set" | "get_mut") => {
                 let mode = s.parse().unwrap();
-
                 if input.peek(Token![=]) {
                     input.parse::<Token![=]>()?;
                     let options = input.parse::<SpannedGetSetOptions>()?;
@@ -142,7 +122,6 @@ impl syn::parse::Parse for SpannedGetSetAttrToken {
                         .span()
                         .join(options.span)
                         .unwrap_or_else(|| ident.span());
-
                     Ok(SpannedGetSetAttrToken {
                         span,
                         token: GetSetAttrToken::Gen(mode, options.options),
@@ -161,9 +140,7 @@ impl syn::parse::Parse for SpannedGetSetAttrToken {
         }
     }
 }
-
 type RequestedAccessors = FxHashMap<GetSetGenMode, GetSetOptions>;
-
 /// Insert an accessor into the map, emitting an error if such kind of accessor is already present in the map
 fn insert_gen_request(
     accumulator: &mut darling::error::Accumulator,
@@ -177,7 +154,6 @@ fn insert_gen_request(
             darling::Error::custom("`with_prefix` is not supported for `set`").with_span(&span),
         );
     }
-
     match gen_map.entry(mode) {
         Entry::Occupied(_) => accumulator.push(
             darling::Error::custom(format!("duplicate `getset({mode})` attribute"))
@@ -188,12 +164,10 @@ fn insert_gen_request(
         }
     }
 }
-
 struct GetSetRawFieldAttr {
     pub skip: bool,
     pub r#gen: RequestedAccessors,
 }
-
 impl GetSetRawFieldAttr {
     fn from_attributes(attrs: &[Attribute], allow_skip: bool) -> darling::Result<Self> {
         let mut accumulator = darling::error::Accumulator::default();
@@ -219,7 +193,6 @@ impl GetSetRawFieldAttr {
                 else {
                     continue;
                 };
-
                 for token in tokens {
                     match token.token {
                         GetSetAttrToken::Skip if allow_skip => {
@@ -255,7 +228,6 @@ impl GetSetRawFieldAttr {
                 );
             }
         }
-
         if result.skip && !result.r#gen.is_empty() {
             accumulator.push(
                 darling::Error::custom(
@@ -264,17 +236,14 @@ impl GetSetRawFieldAttr {
                 .with_span(&skip_span.unwrap()),
             );
         }
-
         accumulator.finish_with(result)
     }
 }
-
 #[derive(Default, Debug, Eq, PartialEq, Clone)]
 pub struct GetSetFieldAttrs {
     pub skip: bool,
     pub r#gen: RequestedAccessors,
 }
-
 impl darling::FromAttributes for GetSetFieldAttrs {
     fn from_attributes(attrs: &[Attribute]) -> darling::Result<Self> {
         GetSetRawFieldAttr::from_attributes(attrs, true).map(|raw| GetSetFieldAttrs {
@@ -283,19 +252,16 @@ impl darling::FromAttributes for GetSetFieldAttrs {
         })
     }
 }
-
 #[derive(Default, Debug, Eq, PartialEq, Clone)]
 pub struct GetSetStructAttrs {
     pub r#gen: FxHashMap<GetSetGenMode, GetSetOptions>,
 }
-
 impl darling::FromAttributes for GetSetStructAttrs {
     fn from_attributes(attrs: &[Attribute]) -> darling::Result<Self> {
         GetSetRawFieldAttr::from_attributes(attrs, false)
             .map(|raw| GetSetStructAttrs { r#gen: raw.r#gen })
     }
 }
-
 impl GetSetFieldAttrs {
     pub fn get_field_accessors(
         &self,
@@ -305,7 +271,6 @@ impl GetSetFieldAttrs {
         if self.skip {
             return FxHashMap::default();
         }
-
         let mut result = struct_attr.r#gen.clone();
         for (mode, options) in &self.r#gen {
             match result.entry(*mode) {
@@ -320,7 +285,6 @@ impl GetSetFieldAttrs {
                 }
             }
         }
-
         // filter out the modes that are not requested by the `#[derive(...)]` attribute
         let derived_modes = derives
             .derives
@@ -331,26 +295,21 @@ impl GetSetFieldAttrs {
             })
             .collect::<FxHashSet<_>>();
         result.retain(|&mode, _| derived_modes.contains(&mode));
-
         result
     }
 }
-
 #[cfg(test)]
 mod test {
     use super::{
         GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs, RequestedAccessors,
     };
-
     mod parse {
+        use super::{GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs};
+        use crate::parse_attributes;
         use darling::FromAttributes;
         use quote::quote;
         use rustc_hash::FxHashMap;
         use syn::parse_quote;
-
-        use super::{GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs};
-        use crate::parse_attributes;
-
         macro_rules! assert_getset_ok {
         ($( #[$meta:meta] )*,
             $ty:ident $body:tt
@@ -366,7 +325,6 @@ mod test {
             }
         };
     }
-
         #[test]
         fn field_empty() {
             assert_getset_ok!(
@@ -376,7 +334,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_empty() {
             assert_getset_ok!(
@@ -386,7 +343,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_skip() {
             assert_getset_ok!(
@@ -397,7 +353,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_get() {
             assert_getset_ok!(
@@ -410,7 +365,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_get_pub() {
             assert_getset_ok!(
@@ -426,7 +380,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_get_pub_with_prefix() {
             assert_getset_ok!(
@@ -454,7 +407,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_get() {
             assert_getset_ok!(
@@ -466,7 +418,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_get_pub() {
             assert_getset_ok!(
@@ -481,7 +432,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_get_pub_with_prefix() {
             assert_getset_ok!(
@@ -507,7 +457,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_get_copy() {
             assert_getset_ok!(
@@ -520,7 +469,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_set() {
             assert_getset_ok!(
@@ -533,7 +481,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn field_get_mut() {
             assert_getset_ok!(
@@ -546,7 +493,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_get_copy() {
             assert_getset_ok!(
@@ -558,7 +504,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_set() {
             assert_getset_ok!(
@@ -570,7 +515,6 @@ mod test {
                 }
             );
         }
-
         #[test]
         fn struct_get_mut() {
             assert_getset_ok!(
@@ -582,7 +526,6 @@ mod test {
                 }
             );
         }
-
         macro_rules! assert_getset_err {
         ($( #[$meta:meta] )*, $ty:ident, $error:expr) => {
             assert_eq!(
@@ -596,7 +539,6 @@ mod test {
             )
         };
     }
-
         #[test]
         fn err_unknown_token() {
             assert_getset_err!(
@@ -605,7 +547,6 @@ mod test {
                 "expected one of `get`, `get_copy`, `get_mut`, `set`, `skip`"
             );
         }
-
         #[test]
         fn err_skip_struct() {
             assert_getset_err!(
@@ -614,7 +555,6 @@ mod test {
                 "`skip` is not valid on a struct"
             );
         }
-
         #[test]
         fn err_duplicate_accessor() {
             assert_getset_err!(
@@ -623,7 +563,6 @@ mod test {
                 "duplicate `getset(get)` attribute"
             );
         }
-
         #[test]
         fn err_unknown_option() {
             assert_getset_err!(
@@ -634,16 +573,14 @@ mod test {
         }
     }
     mod inheritance {
-        use darling::FromAttributes;
-        use proc_macro2::TokenStream;
-        use quote::quote;
-        use syn::parse_quote;
-
         use super::{
             GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs, RequestedAccessors,
         };
         use crate::attr_parse::derive::DeriveAttrs;
-
+        use darling::FromAttributes;
+        use proc_macro2::TokenStream;
+        use quote::quote;
+        use syn::parse_quote;
         fn get_field_derives(
             derive: TokenStream,
             struct_attr: TokenStream,
@@ -653,14 +590,11 @@ mod test {
                 let attrs = crate::parse_attributes(ts);
                 T::from_attributes(&attrs).expect("Failed to parse attributes")
             }
-
             let derive = parse_attributes::<DeriveAttrs>(derive);
             let struct_attr = parse_attributes::<GetSetStructAttrs>(struct_attr);
             let field_attr = parse_attributes::<GetSetFieldAttrs>(field_attr);
-
             field_attr.get_field_accessors(&derive, &struct_attr)
         }
-
         macro_rules! assert_getset_ok {
             (
                 $( #[$derive:meta] )*,
@@ -678,7 +612,6 @@ mod test {
                 )
             };
         }
-
         #[test]
         fn getset_basic() {
             assert_getset_ok!(
@@ -691,7 +624,6 @@ mod test {
                 ])
             );
         }
-
         #[test]
         fn getset_derive_disabled() {
             // no Setters - no Set generated
@@ -704,7 +636,6 @@ mod test {
                 ])
             );
         }
-
         #[test]
         fn getset_inherit() {
             assert_getset_ok!(
@@ -717,7 +648,6 @@ mod test {
                 ])
             );
         }
-
         #[test]
         fn getset_overwrite_visibility() {
             assert_getset_ok!(
@@ -736,7 +666,6 @@ mod test {
                 ])
             );
         }
-
         #[test]
         fn inherit_with_prefix() {
             assert_getset_ok!(

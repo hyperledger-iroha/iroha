@@ -1,6 +1,5 @@
 //! Shared policy helpers for SoraFS orchestrator tooling.
 use std::fmt;
-
 /// Transport policy applied when selecting providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportPolicy {
@@ -14,7 +13,6 @@ pub enum TransportPolicy {
     /// unhealthy or a compliance policy mandates direct mode.
     DirectOnly,
 }
-
 impl TransportPolicy {
     /// Returns the canonical label for this policy.
     #[must_use]
@@ -25,7 +23,6 @@ impl TransportPolicy {
             Self::DirectOnly => "direct-only",
         }
     }
-
     /// Parses a [`TransportPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
         match label {
@@ -36,13 +33,11 @@ impl TransportPolicy {
         }
     }
 }
-
 impl fmt::Display for TransportPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 /// Staged anonymity policy enforced for SoraNet paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(clippy::enum_variant_names)]
@@ -55,7 +50,6 @@ pub enum AnonymityPolicy {
     /// Enforce PQ-only paths; fall back to direct transports otherwise (Stage C).
     StrictPq,
 }
-
 impl AnonymityPolicy {
     /// Returns the canonical label for this policy.
     #[must_use]
@@ -66,7 +60,6 @@ impl AnonymityPolicy {
             Self::StrictPq => "anon-strict-pq",
         }
     }
-
     /// Parses an [`AnonymityPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
         match label {
@@ -77,13 +70,11 @@ impl AnonymityPolicy {
         }
     }
 }
-
 impl fmt::Display for AnonymityPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 /// Summary describing effective and override policy labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PolicyLabelSummary {
@@ -94,7 +85,6 @@ pub struct PolicyLabelSummary {
     /// Label supplied by the override, if any.
     pub override_label: Option<&'static str>,
 }
-
 fn build_policy_labels<T: Copy + Default>(
     requested: Option<T>,
     override_policy: Option<T>,
@@ -109,7 +99,6 @@ fn build_policy_labels<T: Copy + Default>(
         override_label,
     }
 }
-
 /// Returns the label summary for a transport policy pair.
 #[must_use]
 pub fn transport_policy_labels(
@@ -118,7 +107,6 @@ pub fn transport_policy_labels(
 ) -> PolicyLabelSummary {
     build_policy_labels(requested, override_policy, TransportPolicy::label)
 }
-
 /// Returns the label summary for an anonymity policy pair.
 #[must_use]
 pub fn anonymity_policy_labels(
@@ -127,11 +115,9 @@ pub fn anonymity_policy_labels(
 ) -> PolicyLabelSummary {
     build_policy_labels(requested, override_policy, AnonymityPolicy::label)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn transport_policy_parse_accepts_only_exact_v1_labels() {
         assert_eq!(
@@ -167,7 +153,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn anonymity_policy_parse_accepts_only_exact_v1_labels() {
         assert_eq!(
@@ -210,14 +195,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn policy_label_summary_prefers_override() {
         let summary = transport_policy_labels(Some(TransportPolicy::SoranetPreferred), None);
         assert_eq!(summary.effective_label, "soranet-first");
         assert!(!summary.override_flag);
         assert!(summary.override_label.is_none());
-
         let summary = transport_policy_labels(
             Some(TransportPolicy::SoranetPreferred),
             Some(TransportPolicy::DirectOnly),
@@ -227,14 +210,8 @@ mod tests {
         assert_eq!(summary.override_label, Some("direct-only"));
     }
 }
-
 #[cfg(feature = "manifest")]
 mod compliance {
-    use std::sync::Arc;
-
-    use reqwest::StatusCode;
-    use thiserror::Error;
-
     use crate::{
         ChunkFetchSpec,
         gateway::{
@@ -244,14 +221,15 @@ mod compliance {
         },
         multi_fetch::FetchRequest,
     };
-
+    use reqwest::StatusCode;
+    use std::sync::Arc;
+    use thiserror::Error;
     /// Parsed and validated policy evidence returned by a gateway.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct PolicyEvidence {
         /// Exact catalog-backed denial returned by the gateway.
         pub evidence: GatewayFailureEvidence,
     }
-
     /// Validation errors surfaced while interpreting policy evidence.
     #[derive(Debug, Error)]
     pub enum PolicyValidationError {
@@ -274,19 +252,16 @@ mod compliance {
         #[error("policy catalog digest mismatch (expected {expected}, got {actual})")]
         CatalogDigestMismatch { expected: String, actual: String },
     }
-
     /// Validator for policy evidence emitted by gateways.
     #[derive(Debug, Clone, Copy)]
     pub struct PolicyEvidenceValidator<'a> {
         expected_catalog_digest_hex: Option<&'a str>,
     }
-
     impl<'a> Default for PolicyEvidenceValidator<'a> {
         fn default() -> Self {
             Self::new()
         }
     }
-
     impl<'a> PolicyEvidenceValidator<'a> {
         /// Construct a validator requiring the exact canonical V1 denial envelope.
         #[must_use]
@@ -295,14 +270,12 @@ mod compliance {
                 expected_catalog_digest_hex: None,
             }
         }
-
         /// Require an exact governed catalog digest in the gateway evidence.
         #[must_use]
         pub fn with_expected_catalog_digest(mut self, digest_hex: &'a str) -> Self {
             self.expected_catalog_digest_hex = Some(digest_hex);
             self
         }
-
         /// Validate exact catalog-backed policy evidence.
         pub fn validate(
             &self,
@@ -336,7 +309,6 @@ mod compliance {
             Ok(PolicyEvidence { evidence })
         }
     }
-
     /// Errors surfaced while probing gateways with honey tokens.
     #[derive(Debug, Error)]
     pub enum HoneyProbeError {
@@ -355,14 +327,12 @@ mod compliance {
             error: PolicyValidationError,
         },
     }
-
     /// Policy evidence captured for a gateway during a honey probe.
     #[derive(Debug, Clone)]
     pub struct HoneyProbeReport {
         pub provider_id: String,
         pub policy: PolicyEvidence,
     }
-
     /// Execute a honey probe against all configured providers, expecting a policy block.
     pub async fn run_honey_probe(
         fetcher: &GatewayFetcher,
@@ -406,25 +376,10 @@ mod compliance {
         Ok(reports)
     }
 }
-
 #[cfg(feature = "manifest")]
 pub use compliance::*;
-
 #[cfg(all(feature = "manifest", test))]
 mod compliance_tests {
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    use base64::Engine as _;
-    use blake3;
-    use ed25519_dalek::SigningKey;
-    use reqwest::{StatusCode, header::HeaderMap};
-    use sorafs_chunker::ChunkProfile;
-    use sorafs_manifest::{STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenV1};
-
     use super::*;
     use crate::{
         CarBuildPlan, ChunkFetchSpec,
@@ -434,14 +389,22 @@ mod compliance_tests {
         },
         policy::{PolicyEvidenceValidator, run_honey_probe},
     };
-
+    use base64::Engine as _;
+    use blake3;
+    use ed25519_dalek::SigningKey;
+    use reqwest::{StatusCode, header::HeaderMap};
+    use sorafs_chunker::ChunkProfile;
+    use sorafs_manifest::{STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenV1};
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
     const CATALOG_DIGEST_HEX: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
     }
-
     fn sample_stream_token(
         manifest_cid_hex: &str,
         provider_id_hex: &str,
@@ -473,27 +436,22 @@ mod compliance_tests {
         )
         .expect("sign stream token")
     }
-
     fn encode_token_b64(token: &StreamTokenV1) -> String {
         let bytes = norito::to_bytes(token).expect("encode token");
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
-
     fn provider_id_hex() -> String {
         "ab".repeat(32)
     }
-
     #[derive(Clone)]
     struct TestEngine {
         responses: HashMap<String, HttpResponse>,
     }
-
     impl TestEngine {
         fn new(responses: HashMap<String, HttpResponse>) -> Self {
             Self { responses }
         }
     }
-
     impl HttpEngine for TestEngine {
         fn get(&self, request: HttpRequest) -> HttpFuture {
             let path = request.url.path().to_string();
@@ -505,7 +463,6 @@ mod compliance_tests {
             })
         }
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn honey_probe_requires_exact_catalog_backed_denial() {
         let payload = sample_payload(2048);
@@ -517,7 +474,6 @@ mod compliance_tests {
         let chunker_handle = "sorafs.sf1@1.0.0".to_string();
         let stream_token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
         let stream_token_b64 = encode_token_b64(&stream_token);
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -536,7 +492,6 @@ mod compliance_tests {
             },
         );
         let engine = Arc::new(TestEngine::new(responses));
-
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -561,10 +516,8 @@ mod compliance_tests {
         };
         let context = GatewayFetchContext::build_with_engine(config, [provider], engine)
             .expect("gateway fetch context builds");
-
         let validator =
             PolicyEvidenceValidator::new().with_expected_catalog_digest(CATALOG_DIGEST_HEX);
-
         let reports = run_honey_probe(&context.fetcher(), &context.providers(), &spec, &validator)
             .await
             .expect("probe succeeds");
@@ -577,7 +530,6 @@ mod compliance_tests {
         );
         assert_eq!(report.policy.evidence.source, "baseline");
     }
-
     fn policy_evidence(source: &str, catalog_digest_hex: &str) -> GatewayFailureEvidence {
         GatewayFailureEvidence {
             observed_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
@@ -586,7 +538,6 @@ mod compliance_tests {
             catalog_digest_hex: catalog_digest_hex.to_owned(),
         }
     }
-
     #[test]
     fn validator_accepts_only_denying_sources_and_exact_catalog() {
         let validator =
@@ -597,7 +548,6 @@ mod compliance_tests {
                 .expect("canonical denial validates");
             assert_eq!(validated.evidence.source, source);
         }
-
         for source in ["no_match", "accepted_appeal", "unknown"] {
             let error = validator
                 .validate(policy_evidence(source, CATALOG_DIGEST_HEX))
@@ -605,37 +555,31 @@ mod compliance_tests {
             assert!(matches!(error, PolicyValidationError::Source));
         }
     }
-
     #[test]
     fn validator_rejects_noncanonical_or_unexpected_catalog() {
         let validator =
             PolicyEvidenceValidator::new().with_expected_catalog_digest(CATALOG_DIGEST_HEX);
-
         let mut wrong_status = policy_evidence("baseline", CATALOG_DIGEST_HEX);
         wrong_status.observed_status = StatusCode::FORBIDDEN;
         assert!(matches!(
             validator.validate(wrong_status),
             Err(PolicyValidationError::Status { .. })
         ));
-
         let mut wrong_code = policy_evidence("baseline", CATALOG_DIGEST_HEX);
         wrong_code.code = "denylisted".to_owned();
         assert!(matches!(
             validator.validate(wrong_code),
             Err(PolicyValidationError::Code)
         ));
-
         let uppercase = CATALOG_DIGEST_HEX.to_ascii_uppercase();
         assert!(matches!(
             validator.validate(policy_evidence("baseline", &uppercase)),
             Err(PolicyValidationError::CatalogDigest)
         ));
-
         assert!(matches!(
             validator.validate(policy_evidence("baseline", &"ab".repeat(32))),
             Err(PolicyValidationError::CatalogDigestMismatch { .. })
         ));
-
         let malformed_expectation =
             PolicyEvidenceValidator::new().with_expected_catalog_digest("not-a-digest");
         assert!(matches!(

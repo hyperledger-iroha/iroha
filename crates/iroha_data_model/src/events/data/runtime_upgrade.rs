@@ -1,16 +1,11 @@
 //! Runtime upgrade lifecycle events.
-
-use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
+use iroha_data_model_derive::model;
 #[model]
 mod model {
-    use getset::Getters;
-
     use super::*;
-
+    use getset::Getters;
     /// Runtime upgrade lifecycle events (proposal/activation/cancellation).
     #[derive(
         Debug,
@@ -30,7 +25,6 @@ mod model {
         Activated(RuntimeUpgradeActivated),
         Canceled(RuntimeUpgradeCanceled),
     }
-
     /// Emitted when a runtime upgrade is proposed.
     #[derive(
         Debug,
@@ -51,7 +45,6 @@ mod model {
         pub start_height: u64,
         pub end_height: u64,
     }
-
     /// Emitted when a runtime upgrade is activated at `at_height`.
     #[derive(
         Debug,
@@ -71,7 +64,6 @@ mod model {
         pub abi_version: u16,
         pub at_height: u64,
     }
-
     /// Emitted when a runtime upgrade is canceled.
     #[derive(
         Debug,
@@ -90,7 +82,6 @@ mod model {
         pub id: crate::runtime::RuntimeUpgradeId,
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     RuntimeUpgradeEvent,
@@ -98,7 +89,6 @@ impl_json_via_norito_bytes!(
     RuntimeUpgradeActivated,
     RuntimeUpgradeCanceled,
 );
-
 /// Prelude exports for runtime upgrade events
 pub mod prelude {
     pub use super::{

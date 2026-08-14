@@ -1,33 +1,30 @@
 #![allow(unexpected_cfgs)]
-
 //! SoraDNS resolver prototype library.
 //!
 //! The resolver ingests proof bundles and resolver adverts, tracks resolver
 //! state, emits change events, and exposes DNS transports (DoH, DoT, DoQ) that
 //! currently resolve against a static record set supplied via configuration.
-
 pub mod bundle;
 pub mod canonical;
 pub mod config;
 pub mod directory;
 pub mod dns;
 pub mod events;
+pub mod limits;
 pub mod rad;
 pub mod state;
 pub mod transparency;
-
-use std::{
-    collections::HashMap,
-    convert::Infallible,
-    net::SocketAddr,
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicI64, AtomicU64, Ordering},
+use crate::{
+    bundle::ProofBundleV1,
+    config::{DotTlsConfig, ResolverConfig},
+    events::EventEmitter,
+    limits::{
+        MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
+        MAX_TLS_KEY_BYTES, read_bounded_file, replace_retained_bytes,
     },
-    time::Duration,
+    rad::{ResolverAttestation, rad_retained_bytes, validate_rad},
+    state::{ResolverState, ResolverStateMetrics},
 };
-
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -48,6 +45,17 @@ use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    net::SocketAddr,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use time::OffsetDateTime;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -60,20 +68,9 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{error, info, warn};
-
-use crate::{
-    bundle::ProofBundleV1,
-    config::{DotTlsConfig, ResolverConfig},
-    events::EventEmitter,
-    rad::{ResolverAttestation, validate_rad},
-    state::{ResolverState, ResolverStateMetrics},
-};
-
 const DNS_CONTENT_TYPE: &str = "application/dns-message";
-
 /// Shared resolver application state guarded by an async `RwLock`.
 pub type SharedState = Arc<RwLock<ResolverState>>;
-
 #[derive(Clone, Default)]
 struct MetricsRegistry {
     last_sync_unix: Arc<AtomicI64>,
@@ -81,7 +78,6 @@ struct MetricsRegistry {
     dns_failures_total: Arc<AtomicU64>,
     validation_failures_total: Arc<AtomicU64>,
 }
-
 impl MetricsRegistry {
     fn new() -> Self {
         Self {
@@ -91,42 +87,33 @@ impl MetricsRegistry {
             validation_failures_total: Arc::new(AtomicU64::new(0)),
         }
     }
-
     fn update_last_sync(&self, unix: i64) {
         self.last_sync_unix.store(unix, Ordering::Relaxed);
     }
-
     fn last_sync(&self) -> i64 {
         self.last_sync_unix.load(Ordering::Relaxed)
     }
-
     fn inc_dns_query(&self) {
         let _ = self.dns_queries_total.fetch_add(1, Ordering::Relaxed);
     }
-
     fn inc_dns_failure(&self) {
         let _ = self.dns_failures_total.fetch_add(1, Ordering::Relaxed);
     }
-
     fn inc_validation_failure(&self) {
         let _ = self
             .validation_failures_total
             .fetch_add(1, Ordering::Relaxed);
     }
-
     fn dns_queries_total(&self) -> u64 {
         self.dns_queries_total.load(Ordering::Relaxed)
     }
-
     fn dns_failures_total(&self) -> u64 {
         self.dns_failures_total.load(Ordering::Relaxed)
     }
-
     fn validation_failures_total(&self) -> u64 {
         self.validation_failures_total.load(Ordering::Relaxed)
     }
 }
-
 /// Resolver daemon orchestrating configuration, state management, and transports.
 #[derive(Clone)]
 pub struct ResolverDaemon {
@@ -138,19 +125,16 @@ pub struct ResolverDaemon {
     event_addr: Option<SocketAddr>,
     metrics: MetricsRegistry,
 }
-
 #[derive(Clone)]
 struct ResolverTls {
     rustls: Arc<ServerConfig>,
 }
-
 #[derive(Clone)]
 struct AppContext {
     state: SharedState,
     metrics: MetricsRegistry,
     sync_interval: Duration,
 }
-
 impl AppContext {
     fn new(state: SharedState, metrics: MetricsRegistry, sync_interval: Duration) -> Self {
         Self {
@@ -159,7 +143,6 @@ impl AppContext {
             sync_interval,
         }
     }
-
     async fn resolve_dns(&self, message: &[u8]) -> Response<Body> {
         self.metrics.inc_dns_query();
         match dns::decode_message(message) {
@@ -191,44 +174,34 @@ impl AppContext {
             }
         }
     }
-
     async fn metrics_snapshot(&self) -> ResolverStateMetrics {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let guard = self.state.read().await;
         guard.metrics_snapshot(now)
     }
-
     fn last_sync_unix(&self) -> i64 {
         self.metrics.last_sync()
     }
-
     fn sync_interval(&self) -> Duration {
         self.sync_interval
     }
 }
-
 impl ResolverDaemon {
     /// Create a new resolver daemon. Validates configuration and initialises state.
     pub fn new(config: ResolverConfig) -> Result<Self> {
         config.validate()?;
-
         let http_client = reqwest::Client::builder()
             .user_agent("soradns-resolver/0.1.0")
             .build()?;
-
         let tls = match config.dot_tls() {
             Some(tls) => Some(load_tls_configs(tls)?),
             None => None,
         };
-
         let event_addr = config.event_listen();
-
         let mut state = ResolverState::new(config.resolver_id.clone(), config.region.clone());
-        state.update_static_zones(config.static_zones());
-
+        state.update_static_zones(config.static_zones())?;
         let events =
             EventEmitter::new(config.resolver_id.clone(), config.event_log_path().cloned())?;
-
         Ok(Self {
             config,
             state: Arc::new(RwLock::new(state)),
@@ -239,20 +212,18 @@ impl ResolverDaemon {
             metrics: MetricsRegistry::new(),
         })
     }
-
     /// Returns a clone of the shared state handle for background tasks.
     #[must_use]
     pub fn shared_state(&self) -> SharedState {
         Arc::clone(&self.state)
     }
-
     /// Performs a single synchronization pass and returns the number of tracked zones.
     pub async fn sync_once(&self) -> Result<usize> {
         let mut state = self.state.write().await;
         let bundle_count = self.load_proof_bundles(&mut state).await?;
         let rad_count = self.refresh_rad_entries(&mut state).await?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let expirations = state.prune_stale_entries(now);
+        let expirations = state.prune_stale_entries(now)?;
         self.events.emit_expirations(&expirations);
         info!(
             bundles = bundle_count,
@@ -264,9 +235,9 @@ impl ResolverDaemon {
         self.metrics.update_last_sync(now);
         Ok(state.zone_count())
     }
-
     async fn load_proof_bundles(&self, state: &mut ResolverState) -> Result<usize> {
         let mut loaded: HashMap<String, ProofBundleV1> = HashMap::new();
+        let mut retained_bytes = 0usize;
         for source in self.config.bundle_sources() {
             match source.fetch(&self.http_client).await {
                 Ok(bundles) => {
@@ -276,7 +247,49 @@ impl ResolverDaemon {
                             warn!(?error, namehash = %namehash_hex, "skipping invalid proof bundle");
                             continue;
                         }
+                        let entry_bytes = bundle
+                            .retained_bytes()?
+                            .checked_add(namehash_hex.capacity())
+                            .and_then(|bytes| {
+                                bytes.checked_add(
+                                    std::mem::size_of::<(String, ProofBundleV1)>()
+                                        .saturating_mul(2),
+                                )
+                            })
+                            .ok_or_else(|| eyre::eyre!("proof-bundle sync accounting overflow"))?;
+                        let prior_bytes = loaded
+                            .get(&namehash_hex)
+                            .map(|prior| {
+                                prior.retained_bytes().map(|bytes| {
+                                    bytes
+                                        .saturating_add(namehash_hex.capacity())
+                                        .saturating_add(
+                                            std::mem::size_of::<(String, ProofBundleV1)>()
+                                                .saturating_mul(2),
+                                        )
+                                })
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
+                        let next_retained = replace_retained_bytes(
+                            retained_bytes,
+                            prior_bytes,
+                            entry_bytes,
+                            MAX_STATE_RETAINED_BYTES,
+                            "proof-bundle sync map",
+                        )?;
+                        if !loaded.contains_key(&namehash_hex) {
+                            if loaded.len() >= MAX_STATE_BUNDLES {
+                                eyre::bail!(
+                                    "proof-bundle sync map exceeds the {MAX_STATE_BUNDLES}-entry limit"
+                                );
+                            }
+                            loaded.try_reserve(1).map_err(|error| {
+                                eyre::eyre!("failed to grow proof-bundle sync map: {error}")
+                            })?;
+                        }
                         loaded.insert(namehash_hex, bundle);
+                        retained_bytes = next_retained;
                     }
                 }
                 Err(error) => warn!(
@@ -285,13 +298,13 @@ impl ResolverDaemon {
                 ),
             }
         }
-        let diff = state.update_bundles(loaded);
+        let diff = state.update_bundles(loaded)?;
         self.events.emit_bundle_diff(&diff);
         Ok(state.bundle_count())
     }
-
     async fn refresh_rad_entries(&self, state: &mut ResolverState) -> Result<usize> {
         let mut adverts: HashMap<String, ResolverAttestation> = HashMap::new();
+        let mut retained_bytes = 0usize;
         for source in self.config.rad_sources() {
             match source.fetch(&self.http_client).await {
                 Ok(entries) => {
@@ -306,7 +319,48 @@ impl ResolverDaemon {
                             continue;
                         }
                         let resolver_key = hex::encode(advert.resolver_id);
+                        let entry_bytes = rad_retained_bytes(&advert)?
+                            .checked_add(resolver_key.capacity())
+                            .and_then(|bytes| {
+                                bytes.checked_add(
+                                    std::mem::size_of::<(String, ResolverAttestation)>()
+                                        .saturating_mul(2),
+                                )
+                            })
+                            .ok_or_else(|| eyre::eyre!("RAD sync accounting overflow"))?;
+                        let prior_bytes = adverts
+                            .get(&resolver_key)
+                            .map(|prior| {
+                                rad_retained_bytes(prior).map(|bytes| {
+                                    bytes
+                                        .saturating_add(resolver_key.capacity())
+                                        .saturating_add(
+                                            std::mem::size_of::<(String, ResolverAttestation)>()
+                                                .saturating_mul(2),
+                                        )
+                                })
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
+                        let next_retained = replace_retained_bytes(
+                            retained_bytes,
+                            prior_bytes,
+                            entry_bytes,
+                            MAX_STATE_RETAINED_BYTES,
+                            "RAD sync map",
+                        )?;
+                        if !adverts.contains_key(&resolver_key) {
+                            if adverts.len() >= MAX_STATE_RAD_ENTRIES {
+                                eyre::bail!(
+                                    "RAD sync map exceeds the {MAX_STATE_RAD_ENTRIES}-entry limit"
+                                );
+                            }
+                            adverts.try_reserve(1).map_err(|error| {
+                                eyre::eyre!("failed to grow RAD sync map: {error}")
+                            })?;
+                        }
                         adverts.insert(resolver_key, advert);
+                        retained_bytes = next_retained;
                     }
                 }
                 Err(error) => warn!(
@@ -315,17 +369,14 @@ impl ResolverDaemon {
                 ),
             }
         }
-        let diff = state.update_resolver_adverts(adverts);
+        let diff = state.update_resolver_adverts(adverts)?;
         self.events.emit_resolver_diff(&diff);
         Ok(state.resolver_advert_count())
     }
-
     /// Run the daemon, spawning DNS transports and the event stream endpoint.
     pub async fn run(&self) -> Result<()> {
         let _ = self.sync_once().await?;
-
         let mut tasks: Vec<JoinHandle<()>> = Vec::new();
-
         let sync_interval = self.config.sync_interval();
         if !sync_interval.is_zero() {
             let daemon = self.clone();
@@ -341,7 +392,6 @@ impl ResolverDaemon {
             });
             tasks.push(handle);
         }
-
         for &addr in self.config.doh_listen() {
             tasks.push(tokio::spawn(start_doh_server(
                 addr,
@@ -350,7 +400,6 @@ impl ResolverDaemon {
                 sync_interval,
             )));
         }
-
         for &addr in self.config.dot_listen() {
             if let Some(tls) = &self.tls {
                 tasks.push(tokio::spawn(start_dot_server(
@@ -362,15 +411,12 @@ impl ResolverDaemon {
                 warn!(%addr, "DoT listener requested without TLS configuration; skipping");
             }
         }
-
         for &addr in self.config.doq_listen() {
             tasks.push(tokio::spawn(start_doq_server(addr, self.state.clone())));
         }
-
         if let Some(addr) = self.event_addr {
             tasks.push(tokio::spawn(start_event_server(addr, self.events.clone())));
         }
-
         info!("resolver listeners started; waiting for shutdown signal");
         if let Err(error) = signal::ctrl_c().await {
             warn!(?error, "failed to install ctrl-c handler");
@@ -382,7 +428,6 @@ impl ResolverDaemon {
         Ok(())
     }
 }
-
 async fn start_doh_server(
     addr: SocketAddr,
     state: SharedState,
@@ -406,7 +451,6 @@ async fn start_doh_server(
         Err(error) => error!(%addr, ?error, "failed to bind DoH listener"),
     }
 }
-
 async fn start_dot_server(addr: SocketAddr, tls_config: Arc<ServerConfig>, state: SharedState) {
     match TcpListener::bind(addr).await {
         Ok(listener) => {
@@ -433,7 +477,6 @@ async fn start_dot_server(addr: SocketAddr, tls_config: Arc<ServerConfig>, state
         Err(error) => error!(%addr, ?error, "failed to bind DoT listener"),
     }
 }
-
 /// Temporary UDP DoQ listener used until QUIC support returns.
 async fn start_doq_server(addr: SocketAddr, state: SharedState) {
     match UdpSocket::bind(addr).await {
@@ -467,7 +510,6 @@ async fn start_doq_server(addr: SocketAddr, state: SharedState) {
         Err(error) => error!(%addr, ?error, "failed to bind DoQ listener"),
     }
 }
-
 async fn start_event_server(addr: SocketAddr, emitter: EventEmitter) {
     match TcpListener::bind(addr).await {
         Ok(listener) => {
@@ -482,7 +524,6 @@ async fn start_event_server(addr: SocketAddr, emitter: EventEmitter) {
         Err(error) => error!(%addr, ?error, "failed to bind event listener"),
     }
 }
-
 async fn handle_dot_stream(
     stream: tokio::net::TcpStream,
     acceptor: TlsAcceptor,
@@ -494,7 +535,6 @@ async fn handle_dot_stream(
     let frame_len = u16::from_be_bytes(len_bytes) as usize;
     let mut payload = vec![0_u8; frame_len];
     tls_stream.read_exact(&mut payload).await?;
-
     if let Ok(request) = dns::decode_message(&payload) {
         if let Some(bytes) = resolve_bytes(&state, &request).await {
             tls_stream
@@ -505,11 +545,9 @@ async fn handle_dot_stream(
     } else {
         warn!("failed to decode DoT request");
     }
-
     tls_stream.flush().await?;
     Ok(())
 }
-
 async fn doh_get(
     AxumState(ctx): AxumState<AppContext>,
     Query(params): Query<HashMap<String, String>>,
@@ -522,11 +560,9 @@ async fn doh_get(
         Err(_) => build_error_response(StatusCode::BAD_REQUEST, "invalid base64 dns parameter"),
     }
 }
-
 async fn doh_post(AxumState(ctx): AxumState<AppContext>, body: Bytes) -> Response<Body> {
     ctx.resolve_dns(body.as_ref()).await
 }
-
 async fn metrics_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body> {
     let snapshot = ctx.metrics_snapshot().await;
     let last_sync_unix = ctx.last_sync_unix();
@@ -535,7 +571,6 @@ async fn metrics_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body
         escape_label_value(&snapshot.resolver_id),
         escape_label_value(&snapshot.region),
     );
-
     let mut lines = Vec::new();
     lines.push("# HELP soradns_resolver_bundle_count Number of active proof bundles".into());
     lines.push("# TYPE soradns_resolver_bundle_count gauge".into());
@@ -617,7 +652,6 @@ async fn metrics_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body
         "soradns_resolver_validation_failures_total{{{labels}}} {}",
         ctx.metrics.validation_failures_total()
     ));
-
     let body = lines.join("\n") + "\n";
     match Response::builder()
         .status(StatusCode::OK)
@@ -634,7 +668,6 @@ async fn metrics_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body
         }
     }
 }
-
 async fn health_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body> {
     let snapshot = ctx.metrics_snapshot().await;
     let last_sync_unix = ctx.last_sync_unix();
@@ -677,7 +710,6 @@ async fn health_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body>
     if let Some(ttl) = snapshot.proof_ttl_min_secs {
         map.insert("bundle_proof_ttl_min_secs".into(), Value::from(ttl));
     }
-
     match json::to_string(&Value::Object(map)) {
         Ok(body) => match Response::builder()
             .status(StatusCode::OK)
@@ -699,7 +731,6 @@ async fn health_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body>
         }
     }
 }
-
 async fn resolve_bytes(state: &SharedState, request: &dns::DnsMessage) -> Option<Vec<u8>> {
     let response = {
         let guard = state.read().await;
@@ -713,7 +744,6 @@ async fn resolve_bytes(state: &SharedState, request: &dns::DnsMessage) -> Option
         }
     }
 }
-
 async fn sse_handler(
     AxumState(emitter): AxumState<EventEmitter>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -736,38 +766,31 @@ async fn sse_handler(
             }
         }
     });
-
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     )
 }
-
 fn load_tls_configs(config: &DotTlsConfig) -> Result<ResolverTls> {
     let certs = load_certs(&config.cert_path)?;
     let key = load_key(&config.key_path)?;
-
     let mut dot_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs.clone(), key.clone_key())?;
     dot_config.alpn_protocols = vec![b"dot".to_vec()];
     let rustls = Arc::new(dot_config);
-
     Ok(ResolverTls { rustls })
 }
-
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = read_bounded_file(path, MAX_TLS_CERT_BYTES, "DoT certificate")?;
     let cert = CertificateDer::from(bytes);
     Ok(vec![cert])
 }
-
 fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = read_bounded_file(path, MAX_TLS_KEY_BYTES, "DoT private key")?;
     Ok(PrivateKeyDer::from(PrivatePkcs8KeyDer::from(bytes)))
 }
-
 fn build_error_response(status: StatusCode, message: &str) -> Response<Body> {
     Response::builder()
         .status(status)
@@ -775,7 +798,6 @@ fn build_error_response(status: StatusCode, message: &str) -> Response<Body> {
         .body(Body::from(message.to_string()))
         .unwrap_or_else(|_| Response::new(Body::from("unrecoverable error")))
 }
-
 fn escape_label_value(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -788,11 +810,10 @@ fn escape_label_value(value: &str) -> String {
     }
     escaped
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
-
+    use super::*;
+    use crate::config::StaticZone;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hickory_proto::{
         op::{Message, MessageType, OpCode, Query, ResponseCode},
@@ -803,14 +824,11 @@ mod tests {
         Client as HttpClient, StatusCode as HttpStatus,
         header::{ACCEPT, CONTENT_TYPE},
     };
+    use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
     use tokio::{
         net::UdpSocket,
         time::{Duration, sleep},
     };
-
-    use super::*;
-    use crate::config::StaticZone;
-
     #[tokio::test(flavor = "multi_thread")]
     async fn doq_roundtrip_resolves_static_record() -> Result<()> {
         let addr = match std::net::UdpSocket::bind("127.0.0.1:0") {
@@ -822,7 +840,6 @@ mod tests {
             "resolver".into(),
             "global".into(),
         )));
-
         {
             let mut guard = state.write().await;
             let name = Name::from_ascii("example.test.").unwrap();
@@ -831,47 +848,38 @@ mod tests {
                 domain: "example.test".into(),
                 records: vec![record],
                 freeze: None,
-            }]);
+                retained_bytes: 1024,
+            }])?;
         }
-
         let server_state = state.clone();
         let doq_task = tokio::spawn(start_doq_server(addr, server_state));
-
         sleep(Duration::from_millis(50)).await;
-
         let client = match UdpSocket::bind("127.0.0.1:0").await {
             Ok(socket) => socket,
             Err(err) if err.kind() == ErrorKind::PermissionDenied => return Ok(()),
             Err(err) => return Err(err.into()),
         };
         client.connect(addr).await?;
-
         let mut query = Message::new(0xCAFE, MessageType::Query, OpCode::Query);
         let name = Name::from_ascii("example.test.").unwrap();
         query.add_query(Query::query(name.clone(), RecordType::A));
         query.metadata.recursion_desired = true;
         let body = dns::encode_message(&query)?;
-
         client.send(&body).await?;
-
         let mut buf = vec![0_u8; 4096];
         let len = client.recv(&mut buf).await?;
-
         let response = dns::decode_message(&buf[..len])?;
         assert_eq!(response.metadata.id, 0xCAFE);
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert_eq!(response.answers.len(), 1);
-
         if let RData::A(answer) = &response.answers[0].data {
             assert_eq!(answer.0, Ipv4Addr::new(192, 0, 2, 1));
         } else {
             panic!("expected A record in response");
         }
-
         doq_task.abort();
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn doh_get_and_post_resolve_static_record() -> Result<()> {
         let addr = match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -895,9 +903,9 @@ mod tests {
                 domain: "example.test".into(),
                 records: vec![record],
                 freeze: None,
-            }]);
+                retained_bytes: 1024,
+            }])?;
         }
-
         let server_state = state.clone();
         let metrics = MetricsRegistry::new();
         let doh_task = tokio::spawn(start_doh_server(
@@ -907,20 +915,16 @@ mod tests {
             Duration::from_secs(30),
         ));
         sleep(Duration::from_millis(50)).await;
-
         let mut query = Message::new(0xCAFE, MessageType::Query, OpCode::Query);
         let name = Name::from_ascii("example.test.").unwrap();
         query.add_query(Query::query(name.clone(), RecordType::A));
         query.metadata.recursion_desired = true;
         let body = dns::encode_message(&query)?;
-
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(2))
             .build()
             .expect("reqwest client");
-
         let base = format!("http://{}:{}/dns-query", addr.ip(), addr.port());
-
         // GET flow using base64url encoded payload.
         let encoded = URL_SAFE_NO_PAD.encode(&body);
         let get_url = format!("{base}?dns={encoded}");
@@ -939,7 +943,6 @@ mod tests {
         );
         let get_bytes = get_response.bytes().await?;
         assert_example_a_response(&get_bytes)?;
-
         // POST flow with binary DNS payload.
         let post_response = client
             .post(&base)
@@ -957,11 +960,9 @@ mod tests {
         );
         let post_bytes = post_response.bytes().await?;
         assert_example_a_response(&post_bytes)?;
-
         doh_task.abort();
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn doh_metrics_endpoint_reports_counts() -> Result<()> {
         let addr = match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -979,7 +980,6 @@ mod tests {
         )));
         let metrics = MetricsRegistry::new();
         metrics.update_last_sync(1234);
-
         let server_state = state.clone();
         let doh_task = tokio::spawn(start_doh_server(
             addr,
@@ -988,7 +988,6 @@ mod tests {
             Duration::from_secs(30),
         ));
         sleep(Duration::from_millis(50)).await;
-
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(2))
             .build()
@@ -1021,11 +1020,9 @@ mod tests {
             body.contains("soradns_resolver_validation_failures_total"),
             "metrics output missing validation failure counter: {body}"
         );
-
         doh_task.abort();
         Ok(())
     }
-
     #[tokio::test]
     async fn health_endpoint_reports_counters() -> Result<()> {
         let state = Arc::new(RwLock::new(ResolverState::new(
@@ -1037,7 +1034,6 @@ mod tests {
         metrics.inc_dns_query();
         metrics.inc_dns_failure();
         metrics.inc_validation_failure();
-
         let ctx = AppContext::new(state, metrics, Duration::from_secs(15));
         let response = health_handler(AxumState(ctx)).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -1061,7 +1057,6 @@ mod tests {
         assert_eq!(map.get("last_sync_unix").and_then(Value::as_i64), Some(42));
         Ok(())
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn doh_health_endpoint_reports_status() -> Result<()> {
         let addr = match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -1079,7 +1074,6 @@ mod tests {
         )));
         let metrics = MetricsRegistry::new();
         metrics.update_last_sync(5678);
-
         let server_state = state.clone();
         let doh_task = tokio::spawn(start_doh_server(
             addr,
@@ -1088,7 +1082,6 @@ mod tests {
             Duration::from_secs(30),
         ));
         sleep(Duration::from_millis(50)).await;
-
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(2))
             .build()
@@ -1107,11 +1100,9 @@ mod tests {
             value.get("sync_interval_secs").and_then(|v| v.as_u64()),
             Some(30)
         );
-
         doh_task.abort();
         Ok(())
     }
-
     fn assert_example_a_response(bytes: &[u8]) -> Result<()> {
         let response = dns::decode_message(bytes)?;
         assert_eq!(response.metadata.id, 0xCAFE);

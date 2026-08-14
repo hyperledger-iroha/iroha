@@ -21,17 +21,6 @@
 //! }
 //! # }
 //! ```
-
-use core::convert::TryFrom as _;
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    error::Error,
-    fmt,
-    num::NonZeroUsize,
-};
-
-use iroha_data_model::{name::Name, state_path::StatePath};
-
 use crate::{
     VMError, encoding,
     instruction::wide,
@@ -39,7 +28,14 @@ use crate::{
     metadata::ProgramMetadata,
     prepared::PreparedContract,
 };
-
+use core::convert::TryFrom as _;
+use iroha_data_model::{name::Name, state_path::StatePath};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error::Error,
+    fmt,
+    num::NonZeroUsize,
+};
 /// Bytecode-proven durable-state accesses for one deployable contract scope.
 ///
 /// `complete` is true only when every reachable durable-state syscall receives
@@ -59,20 +55,17 @@ pub struct StaticStateAccessAnalysis {
     /// Whether every reachable state target was proven exact and direct.
     pub complete: bool,
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StaticStatePath {
     Literal(u16),
     FromName(u16),
     MapChild { base: u16, key: StaticNoritoKey },
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StaticNoritoKey {
     PointerEnvelope(u16),
     LiteralPayload(u16),
 }
-
 #[derive(Clone, PartialEq, Eq)]
 struct StaticStateFacts {
     names: [Option<u16>; 256],
@@ -83,7 +76,6 @@ struct StaticStateFacts {
     stack_offsets: [Option<i64>; 256],
     direct: bool,
 }
-
 impl StaticStateFacts {
     fn entrypoint() -> Self {
         Self {
@@ -96,7 +88,6 @@ impl StaticStateFacts {
             direct: true,
         }
     }
-
     fn clear(&mut self) {
         self.names = [None; 256];
         self.paths = [None; 256];
@@ -105,7 +96,6 @@ impl StaticStateFacts {
         self.content_may_be_mutable = [false; 256];
         self.stack_offsets = [None; 256];
     }
-
     fn clear_content(&mut self, register: usize) {
         self.names[register] = None;
         self.paths[register] = None;
@@ -113,12 +103,10 @@ impl StaticStateFacts {
         self.norito_keys[register] = None;
         self.content_may_be_mutable[register] = false;
     }
-
     fn clear_register(&mut self, register: usize) {
         self.clear_content(register);
         self.stack_offsets[register] = None;
     }
-
     fn copy_register(&mut self, destination: usize, source: usize) {
         self.names[destination] = self.names[source];
         self.paths[destination] = self.paths[source];
@@ -127,7 +115,6 @@ impl StaticStateFacts {
         self.content_may_be_mutable[destination] = self.content_may_be_mutable[source];
         self.stack_offsets[destination] = self.stack_offsets[source];
     }
-
     fn mark_content_mutable(&mut self, register: usize) {
         if self.names[register].is_some()
             || self.paths[register].is_some()
@@ -137,7 +124,6 @@ impl StaticStateFacts {
             self.content_may_be_mutable[register] = true;
         }
     }
-
     fn invalidate_mutable_content(&mut self) {
         for register in 0..self.content_may_be_mutable.len() {
             if self.content_may_be_mutable[register] {
@@ -145,7 +131,6 @@ impl StaticStateFacts {
             }
         }
     }
-
     fn store_is_within_minimum_stack(
         &self,
         base_register: usize,
@@ -162,7 +147,6 @@ impl StaticStateFacts {
         };
         start >= -(crate::memory::Memory::STACK_ALIGNMENT as i64) && end <= 0
     }
-
     fn merge_from(&mut self, incoming: &Self) -> bool {
         fn retain_common<T: Eq>(
             current_facts: &mut [Option<T>],
@@ -198,7 +182,6 @@ impl StaticStateFacts {
         changed
     }
 }
-
 /// Aggregate register usage counters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterUsage {
@@ -207,7 +190,6 @@ pub struct RegisterUsage {
     /// Number of times each register was written.
     pub writes: [u64; 256],
 }
-
 impl Default for RegisterUsage {
     fn default() -> Self {
         Self {
@@ -216,7 +198,6 @@ impl Default for RegisterUsage {
         }
     }
 }
-
 /// Memory instruction statistics captured during analysis.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MemoryAccesses {
@@ -225,14 +206,12 @@ pub struct MemoryAccesses {
     pub load128: u64,
     pub store128: u64,
 }
-
 /// Syscall usage summary sorted by syscall number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyscallUsage {
     pub number: u32,
     pub count: u64,
 }
-
 /// Result of analysing a compiled program.
 #[derive(Debug, Clone)]
 pub struct ProgramAnalysis {
@@ -242,14 +221,12 @@ pub struct ProgramAnalysis {
     pub memory: MemoryAccesses,
     pub syscalls: Vec<SyscallUsage>,
 }
-
 /// Errors emitted by [`analyze_program`].
 #[derive(Debug)]
 pub enum ProgramAnalysisError {
     Metadata(VMError),
     Decode(VMError),
 }
-
 impl fmt::Display for ProgramAnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -262,7 +239,6 @@ impl fmt::Display for ProgramAnalysisError {
         }
     }
 }
-
 impl Error for ProgramAnalysisError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -270,7 +246,6 @@ impl Error for ProgramAnalysisError {
         }
     }
 }
-
 /// Decode the program contained in `bytes` and return aggregate read/write and
 /// syscall usage information.
 pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisError> {
@@ -279,7 +254,6 @@ pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisE
     let decoded = IvmCache::decode_stream(code).map_err(ProgramAnalysisError::Decode)?;
     Ok(analyze_decoded(parsed.metadata, decoded.as_ref()))
 }
-
 /// Return aggregate usage information from an already prepared contract.
 ///
 /// This path reuses the validated metadata and decoded instruction stream, so
@@ -288,7 +262,6 @@ pub fn analyze_program(bytes: &[u8]) -> Result<ProgramAnalysis, ProgramAnalysisE
 pub fn analyze_prepared(contract: &PreparedContract) -> ProgramAnalysis {
     analyze_decoded(contract.metadata().clone(), contract.decoded().as_ref())
 }
-
 /// Prove exact durable-state targets from a prepared contract's authenticated
 /// literal table and reachable bytecode.
 ///
@@ -315,7 +288,6 @@ pub fn analyze_prepared_static_state_accesses(
     if roots.is_empty() {
         return None;
     }
-
     let decoded = contract.decoded();
     let literal_names = authenticated_literal_names(contract);
     let literal_state_paths = authenticated_literal_state_paths(contract);
@@ -335,7 +307,6 @@ pub fn analyze_prepared_static_state_accesses(
             std::collections::btree_map::Entry::Occupied(_) => {}
         }
     }
-
     let mut result = StaticStateAccessAnalysis {
         complete: true,
         ..StaticStateAccessAnalysis::default()
@@ -361,7 +332,6 @@ pub fn analyze_prepared_static_state_accesses(
             // access while the scheduler accepts an exact access set.
             result.complete = false;
         }
-
         let successors = contract.control_flow_successors(pc)?;
         let call_edges = direct_call_edges(op);
         // Production Kotodama entrypoints are authenticated two-instruction
@@ -407,7 +377,6 @@ pub fn analyze_prepared_static_state_accesses(
     }
     Some(result)
 }
-
 fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
     let offset_words = match wide::opcode(op.inst) {
         wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::imm16(op.inst)),
@@ -421,7 +390,6 @@ fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
     let return_pc = op.pc.checked_add(u64::from(op.len))?;
     Some((call_target, return_pc))
 }
-
 fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String>> {
     contract
         .literal_table()
@@ -435,7 +403,6 @@ fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String
         })
         .collect()
 }
-
 fn authenticated_literal_state_paths(contract: &PreparedContract) -> Vec<Option<String>> {
     contract
         .literal_table()
@@ -449,7 +416,6 @@ fn authenticated_literal_state_paths(contract: &PreparedContract) -> Vec<Option<
         })
         .collect()
 }
-
 fn authenticated_literal_pointer_envelopes(contract: &PreparedContract) -> Vec<Option<String>> {
     contract
         .literal_table()
@@ -463,7 +429,6 @@ fn authenticated_literal_pointer_envelopes(contract: &PreparedContract) -> Vec<O
         })
         .collect()
 }
-
 fn authenticated_literal_norito_payloads(contract: &PreparedContract) -> Vec<Option<String>> {
     contract
         .literal_table()
@@ -480,7 +445,6 @@ fn authenticated_literal_norito_payloads(contract: &PreparedContract) -> Vec<Opt
         })
         .collect()
 }
-
 fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Option<String> {
     let bytes = authenticated_literal_tlv_bytes(contract, pointer)?;
     let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
@@ -495,7 +459,6 @@ fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Opti
     }
     Some(name.to_string())
 }
-
 fn authenticated_literal_state_path(contract: &PreparedContract, pointer: u64) -> Option<String> {
     let bytes = authenticated_literal_tlv_bytes(contract, pointer)?;
     let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
@@ -509,7 +472,6 @@ fn authenticated_literal_state_path(contract: &PreparedContract, pointer: u64) -
     crate::host::validate_state_path(&path).ok()?;
     Some(path.to_string())
 }
-
 fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) -> Option<&[u8]> {
     let start = contract
         .header_len()
@@ -526,7 +488,6 @@ fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) ->
     crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
     Some(bytes)
 }
-
 fn transfer_static_state_facts(
     op: &DecodedOp,
     literal_names: &[Option<String>],
@@ -645,7 +606,6 @@ fn transfer_static_state_facts(
         }
     }
 }
-
 fn transfer_static_state_syscall(
     number: u32,
     literal_names: &[Option<String>],
@@ -764,7 +724,6 @@ fn transfer_static_state_syscall(
     // convention. A later exact target must establish fresh literal evidence.
     facts.clear();
 }
-
 fn analyze_decoded(metadata: ProgramMetadata, decoded: &[DecodedOp]) -> ProgramAnalysis {
     let mut builder = ProgramAnalysisBuilder::new(metadata);
     for op in decoded {
@@ -772,7 +731,6 @@ fn analyze_decoded(metadata: ProgramMetadata, decoded: &[DecodedOp]) -> ProgramA
     }
     builder.finish()
 }
-
 /// Default execution budgets for atomic multi-dataspace execution (NX-17).
 #[derive(Debug, Clone)]
 pub struct AmxLimits {
@@ -787,7 +745,6 @@ pub struct AmxLimits {
     /// Cost in nanoseconds per syscall invocation.
     pub per_syscall_ns: u64,
 }
-
 impl Default for AmxLimits {
     fn default() -> Self {
         Self {
@@ -799,7 +756,6 @@ impl Default for AmxLimits {
         }
     }
 }
-
 /// Estimated cost summary for AMX budgeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AmxCost {
@@ -808,7 +764,6 @@ pub struct AmxCost {
     /// Estimated group execution time across all dataspaces (nanoseconds).
     pub estimated_group_ns: u64,
 }
-
 /// Budget violation raised when AMX estimates exceed configured limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmxBudgetError {
@@ -827,7 +782,6 @@ pub enum AmxBudgetError {
         limit_ns: u64,
     },
 }
-
 /// Estimate the AMX execution cost and enforce per-dataspace/group budgets.
 pub fn enforce_amx_budget(
     analysis: &ProgramAnalysis,
@@ -836,26 +790,22 @@ pub fn enforce_amx_budget(
 ) -> Result<AmxCost, AmxBudgetError> {
     let per_ds_limit = limits.per_dataspace_budget_ms.saturating_mul(1_000_000);
     let group_limit = limits.group_budget_ms.saturating_mul(1_000_000);
-
     let memory_accesses = analysis.memory.load64
         + analysis.memory.store64
         + analysis.memory.load128
         + analysis.memory.store128;
     let syscall_calls: u64 = analysis.syscalls.iter().map(|entry| entry.count).sum();
-
     let estimated_ns = analysis
         .instruction_count
         .saturating_mul(limits.per_instruction_ns as usize) as u64
         + memory_accesses.saturating_mul(limits.per_memory_access_ns)
         + syscall_calls.saturating_mul(limits.per_syscall_ns);
-
     if estimated_ns > per_ds_limit {
         return Err(AmxBudgetError::PerDataspaceBudgetExceeded {
             estimated_ns,
             limit_ns: per_ds_limit,
         });
     }
-
     let group_estimated_ns = estimated_ns.saturating_mul(dataspace_count.get() as u64);
     if group_estimated_ns > group_limit {
         return Err(AmxBudgetError::GroupBudgetExceeded {
@@ -863,13 +813,11 @@ pub fn enforce_amx_budget(
             limit_ns: group_limit,
         });
     }
-
     Ok(AmxCost {
         estimated_ns_per_dataspace: estimated_ns,
         estimated_group_ns: group_estimated_ns,
     })
 }
-
 struct ProgramAnalysisBuilder {
     metadata: ProgramMetadata,
     registers: RegisterUsage,
@@ -877,7 +825,6 @@ struct ProgramAnalysisBuilder {
     instruction_count: usize,
     syscall_table: BTreeMap<u32, u64>,
 }
-
 impl ProgramAnalysisBuilder {
     fn new(metadata: ProgramMetadata) -> Self {
         Self {
@@ -888,7 +835,6 @@ impl ProgramAnalysisBuilder {
             syscall_table: BTreeMap::new(),
         }
     }
-
     fn finish(self) -> ProgramAnalysis {
         let syscalls = self
             .syscall_table
@@ -903,7 +849,6 @@ impl ProgramAnalysisBuilder {
             syscalls,
         }
     }
-
     fn visit(&mut self, op: &DecodedOp) {
         self.instruction_count += 1;
         let opcode = wide::opcode(op.inst);
@@ -1054,7 +999,6 @@ impl ProgramAnalysisBuilder {
             }
         }
     }
-
     fn two_src_one_dst(&mut self, inst: u32) {
         let rd = Self::reg(wide::rd(inst));
         let rs1 = Self::reg(wide::rs1(inst));
@@ -1063,14 +1007,12 @@ impl ProgramAnalysisBuilder {
         self.read(rs1);
         self.read(rs2);
     }
-
     fn one_src_one_dst(&mut self, inst: u32) {
         let rd = Self::reg(wide::rd(inst));
         let rs = Self::reg(wide::rs1(inst));
         self.write(rd);
         self.read(rs);
     }
-
     fn read<R>(&mut self, reg: R)
     where
         R: Into<usize>,
@@ -1079,7 +1021,6 @@ impl ProgramAnalysisBuilder {
         debug_assert!(idx < self.registers.reads.len());
         self.registers.reads[idx] = self.registers.reads[idx].saturating_add(1);
     }
-
     fn write<R>(&mut self, reg: R)
     where
         R: Into<usize>,
@@ -1088,17 +1029,14 @@ impl ProgramAnalysisBuilder {
         debug_assert!(idx < self.registers.writes.len());
         self.registers.writes[idx] = self.registers.writes[idx].saturating_add(1);
     }
-
     fn reg(index: usize) -> u8 {
         u8::try_from(index).expect("register index fits in u8")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{encoding::wide as wide_enc, instruction::wide};
-
     fn base_analysis(instruction_count: usize) -> ProgramAnalysis {
         ProgramAnalysis {
             metadata: ProgramMetadata::default(),
@@ -1108,7 +1046,6 @@ mod tests {
             syscalls: Vec::new(),
         }
     }
-
     fn build_program(words: &[u32]) -> Vec<u8> {
         let mut bytes = ProgramMetadata::default_for(1, 0, 1).encode();
         for word in words {
@@ -1116,7 +1053,6 @@ mod tests {
         }
         bytes
     }
-
     #[test]
     fn static_state_analysis_proves_compiler_literal_map_child() {
         let source = r#"
@@ -1141,7 +1077,6 @@ seiyaku StaticMapAnalysis {
                     .find(|entrypoint| entrypoint.name == "write_one")
             })
             .expect("compiled entrypoint descriptor");
-
         assert!(analysis.complete);
         assert!(analysis.has_state_writes);
         assert_eq!(
@@ -1149,7 +1084,6 @@ seiyaku StaticMapAnalysis {
             descriptor.write_keys.iter().cloned().collect()
         );
     }
-
     #[test]
     fn static_state_analysis_keeps_user_helper_access_incomplete() {
         let source = r#"
@@ -1166,12 +1100,10 @@ seiyaku HelperMapAnalysis {
             .expect("prepare helper-hidden StateMap access");
         let analysis = analyze_prepared_static_state_accesses(&prepared, Some("helper_write"))
             .expect("analyze helper-hidden StateMap access");
-
         assert!(analysis.has_state_writes);
         assert!(!analysis.complete);
         assert!(analysis.write_keys.is_empty());
     }
-
     #[test]
     fn static_state_analysis_marks_reachable_indirect_edge_incomplete() {
         let source = r#"
@@ -1211,14 +1143,12 @@ seiyaku IndirectStateAnalysis {
                 control_flow,
             })
             .expect("construct analyzer-only adversarial contract");
-
         let analysis = analyze_prepared_static_state_accesses(&adversarial, Some("run"))
             .expect("analyze indirect control flow");
         assert!(!analysis.complete);
         assert!(!analysis.has_state_reads);
         assert!(!analysis.has_state_writes);
     }
-
     #[test]
     fn static_state_analysis_invalidates_host_paths_across_unbounded_stores() {
         let literal_names = vec![Some("Counters".to_owned())];
@@ -1229,7 +1159,6 @@ seiyaku IndirectStateAnalysis {
             wide_enc::encode_store(wide::memory::STORE64, 2, 3, 0),
             wide_enc::encode_store128(wide::memory::STORE128, 2, 3, 4),
         ];
-
         for store in stores {
             let mut facts = StaticStateFacts::entrypoint();
             facts.names[10] = Some(0);
@@ -1248,7 +1177,6 @@ seiyaku IndirectStateAnalysis {
                 &mut analysis,
             );
             assert!(facts.content_may_be_mutable[10]);
-
             transfer_static_state_facts(
                 &DecodedOp {
                     pc: 0,
@@ -1271,13 +1199,11 @@ seiyaku IndirectStateAnalysis {
                 &mut facts,
                 &mut analysis,
             );
-
             assert!(analysis.has_state_writes);
             assert!(!analysis.complete);
             assert!(analysis.write_keys.is_empty());
         }
     }
-
     #[test]
     fn static_state_analysis_rejects_legacy_name_carrier() {
         let literal_names = vec![Some("legacy".to_owned())];
@@ -1290,7 +1216,6 @@ seiyaku IndirectStateAnalysis {
             complete: true,
             ..StaticStateAccessAnalysis::default()
         };
-
         transfer_static_state_syscall(
             crate::syscalls::SYSCALL_STATE_SET,
             &literal_names,
@@ -1300,19 +1225,16 @@ seiyaku IndirectStateAnalysis {
             &mut facts,
             &mut analysis,
         );
-
         assert!(analysis.has_state_writes);
         assert!(!analysis.complete);
         assert!(analysis.write_keys.is_empty());
     }
-
     #[test]
     fn static_state_analysis_rejects_nested_scan_wildcard_claim() {
         let literal_names = vec![None];
         let literal_state_paths = vec![Some("Counters/00".to_owned())];
         let literal_pointer_envelopes = vec![None];
         let literal_norito_payloads = vec![None];
-
         for syscall in [
             crate::syscalls::SYSCALL_STATE_KEYS,
             crate::syscalls::SYSCALL_STATE_COUNT,
@@ -1323,7 +1245,6 @@ seiyaku IndirectStateAnalysis {
                 complete: true,
                 ..StaticStateAccessAnalysis::default()
             };
-
             transfer_static_state_syscall(
                 syscall,
                 &literal_names,
@@ -1333,13 +1254,11 @@ seiyaku IndirectStateAnalysis {
                 &mut facts,
                 &mut analysis,
             );
-
             assert!(analysis.has_state_reads);
             assert!(!analysis.complete);
             assert!(analysis.read_keys.is_empty());
         }
     }
-
     #[test]
     fn analysis_reports_registers_memory_and_syscalls() {
         let words = [
@@ -1368,7 +1287,6 @@ seiyaku IndirectStateAnalysis {
         assert!(report.registers.reads[1] >= 2);
         assert!(report.registers.reads[2] >= 1);
     }
-
     #[test]
     fn analysis_reports_extended_syscall_numbers() {
         let syscall = crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
@@ -1383,14 +1301,12 @@ seiyaku IndirectStateAnalysis {
             }]
         );
     }
-
     #[test]
     fn analysis_rejects_truncated_program() {
         let bytes = vec![0u8; 4];
         let err = analyze_program(&bytes).expect_err("metadata parse should fail");
         assert!(matches!(err, ProgramAnalysisError::Metadata(_)));
     }
-
     #[test]
     fn analysis_treats_setvl_operand_as_immediate() {
         let words = [
@@ -1405,7 +1321,6 @@ seiyaku IndirectStateAnalysis {
             "SETVL immediate must not be reported as a register read"
         );
     }
-
     #[test]
     fn analysis_tracks_poseidon_register_inputs() {
         let words = [
@@ -1414,7 +1329,6 @@ seiyaku IndirectStateAnalysis {
             wide_enc::encode_halt(),
         ];
         let report = analyze_program(&build_program(&words)).expect("analysis succeeds");
-
         assert_eq!(report.registers.writes[9], 1);
         assert_eq!(report.registers.writes[8], 1);
         assert_eq!(report.registers.reads[10], 1);
@@ -1424,7 +1338,6 @@ seiyaku IndirectStateAnalysis {
         }
         assert_eq!(report.memory, MemoryAccesses::default());
     }
-
     #[test]
     fn analysis_tracks_indexed_literal_and_implicit_far_link() {
         let words = [
@@ -1435,13 +1348,11 @@ seiyaku IndirectStateAnalysis {
         ];
         let program = build_program(&words);
         let report = analyze_program(&program).expect("analysis succeeds");
-
         assert_eq!(report.registers.writes[42], 1);
         assert_eq!(report.registers.writes[43], 1);
         assert_eq!(report.registers.writes[1], 1);
         assert_eq!(report.registers.reads.iter().sum::<u64>(), 0);
     }
-
     #[test]
     fn amx_budget_accepts_small_program() {
         let analysis = base_analysis(10_000);
@@ -1449,7 +1360,6 @@ seiyaku IndirectStateAnalysis {
         let result = enforce_amx_budget(&analysis, NonZeroUsize::new(1).unwrap(), &limits).unwrap();
         assert!(result.estimated_ns_per_dataspace < limits.per_dataspace_budget_ms * 1_000_000);
     }
-
     #[test]
     fn amx_budget_rejects_large_program() {
         // 700k instructions * 50 ns = 35 ms > 30 ms per-dataspace budget.
@@ -1462,7 +1372,6 @@ seiyaku IndirectStateAnalysis {
             AmxBudgetError::PerDataspaceBudgetExceeded { .. }
         ));
     }
-
     #[test]
     fn amx_budget_rejects_group_overflow() {
         // Fits per-dataspace budget (~27.5 ms) but violates group budget when scaled to 6 lanes.

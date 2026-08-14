@@ -6,9 +6,6 @@
 //! reader over its authoritative finalized state and rechecks the exact native
 //! provider-admission policy after both signatures. Private key material
 //! remains inside the injected signers.
-
-use std::{fmt, sync::Arc};
-
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_core::{
     smartcontracts::isi::sorafs_proof_outcome::read_sorafs_proof_outcome_signer_policy_in_finalized_view,
@@ -31,8 +28,8 @@ use sorafs_manifest::{
 use sorafs_node::{
     PotrAdmissionPolicyBindingError, PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError,
 };
+use std::{fmt, sync::Arc};
 use thiserror::Error;
-
 /// Fixed, payload-free failure classes returned by a runtime signing service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrSignerServiceError {
@@ -43,14 +40,12 @@ pub enum PotrSignerServiceError {
     #[error("runtime signer refused request")]
     Refused,
 }
-
 /// Public, non-secret qualification for one PoTR runtime signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PotrRuntimeProviderQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl PotrRuntimeProviderQualificationV1 {
     /// Construct one adapter and public-policy qualification.
     #[must_use]
@@ -60,28 +55,23 @@ impl PotrRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the non-zero adapter and public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the non-zero digest of the exact public policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
-
     fn from_admission_binding(binding: PotrAdmissionPolicyBindingV1) -> Self {
         Self::new(binding.policy_sequence, binding.policy_digest)
     }
 }
-
 /// Independently configured identity and policy binding for one PoTR signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PotrRuntimeProviderBindingV1 {
@@ -89,7 +79,6 @@ pub struct PotrRuntimeProviderBindingV1 {
     signer_id: [u8; 32],
     qualification: PotrRuntimeProviderQualificationV1,
 }
-
 impl PotrRuntimeProviderBindingV1 {
     /// Construct and validate one production runtime signer binding.
     ///
@@ -110,25 +99,21 @@ impl PotrRuntimeProviderBindingV1 {
         binding.validate()?;
         Ok(binding)
     }
-
     /// Return the stable opaque production handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the stable signer administration identity.
     #[must_use]
     pub const fn signer_id(&self) -> [u8; 32] {
         self.signer_id
     }
-
     /// Return the expected adapter and public-policy qualification.
     #[must_use]
     pub const fn qualification(&self) -> PotrRuntimeProviderQualificationV1 {
         self.qualification
     }
-
     fn validate(&self) -> Result<(), PotrRuntimeSignerConfigError> {
         validate_potr_runtime_handle(&self.handle)?;
         if self.signer_id == [0; 32] {
@@ -140,7 +125,6 @@ impl PotrRuntimeProviderBindingV1 {
         Ok(())
     }
 }
-
 /// Stable identities of the independently administered PoTR policy reader.
 ///
 /// These public, non-secret pins keep the immutable finalized-state source and
@@ -152,7 +136,6 @@ pub struct PotrRuntimeReaderBindingsV1 {
     source_id: [u8; 32],
     resolver_id: [u8; 32],
 }
-
 impl PotrRuntimeReaderBindingsV1 {
     /// Construct and validate the three independent reader identities.
     ///
@@ -172,25 +155,21 @@ impl PotrRuntimeReaderBindingsV1 {
         bindings.validate()?;
         Ok(bindings)
     }
-
     /// Return the admission-reader facade identity.
     #[must_use]
     pub const fn reader_id(self) -> [u8; 32] {
         self.reader_id
     }
-
     /// Return the immutable finalized-state source identity.
     #[must_use]
     pub const fn source_id(self) -> [u8; 32] {
         self.source_id
     }
-
     /// Return the admission-material resolver identity.
     #[must_use]
     pub const fn resolver_id(self) -> [u8; 32] {
         self.resolver_id
     }
-
     fn validate(self) -> Result<(), PotrRuntimeSignerConfigError> {
         if self.reader_id == [0; 32] {
             return Err(PotrRuntimeSignerConfigError::ZeroAdmissionReaderId);
@@ -210,7 +189,6 @@ impl PotrRuntimeReaderBindingsV1 {
         Ok(())
     }
 }
-
 /// Fixed, payload-free failure classes returned by the live admission reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrAdmissionReaderError {
@@ -227,7 +205,6 @@ pub enum PotrAdmissionReaderError {
     #[error("PoTR admission reader refused request")]
     Refused,
 }
-
 /// Exact live council admission and its finalized policy binding.
 #[derive(Clone)]
 pub struct PotrAdmissionSnapshotV1 {
@@ -236,7 +213,6 @@ pub struct PotrAdmissionSnapshotV1 {
     /// Council-verified admission selected by that policy revision.
     pub admission: Arc<AdmissionRecord>,
 }
-
 impl fmt::Debug for PotrAdmissionSnapshotV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -246,7 +222,6 @@ impl fmt::Debug for PotrAdmissionSnapshotV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Runtime-only exact-anchor reader for active provider admission policy.
 ///
 /// Implementations must query the authoritative finalized policy source and
@@ -257,7 +232,6 @@ impl fmt::Debug for PotrAdmissionSnapshotV1 {
 pub trait PotrAdmissionReaderV1: Send + Sync {
     /// Stable non-secret identity of this administered reader.
     fn reader_id(&self) -> [u8; 32];
-
     /// Resolve the exact active provider admission for one receipt interval.
     fn active_admission(
         &self,
@@ -267,7 +241,6 @@ pub trait PotrAdmissionReaderV1: Send + Sync {
         minimum: &PotrAdmissionPolicyBindingV1,
     ) -> Result<PotrAdmissionSnapshotV1, PotrAdmissionReaderError>;
 }
-
 /// One provider policy read from a single immutable finalized state view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PotrFinalizedPolicySnapshotV1 {
@@ -278,7 +251,6 @@ pub struct PotrFinalizedPolicySnapshotV1 {
     /// Native governed provider proof/admission policy.
     pub policy: ProofOutcomeSignerPolicyRecordV1,
 }
-
 /// Exact-view source used by the production admission reader.
 ///
 /// A source identity names the administered chain-query connection, not a
@@ -287,7 +259,6 @@ pub struct PotrFinalizedPolicySnapshotV1 {
 pub trait PotrFinalizedPolicySourceV1: Send + Sync {
     /// Stable non-secret identity of the administered finalized-state source.
     fn source_id(&self) -> [u8; 32];
-
     /// Read one provider's current native policy from an immutable finalized
     /// view.
     fn active_policy(
@@ -295,14 +266,12 @@ pub trait PotrFinalizedPolicySourceV1: Send + Sync {
         provider_id: [u8; 32],
     ) -> Result<PotrFinalizedPolicySnapshotV1, PotrAdmissionReaderError>;
 }
-
 /// Native state-backed finalized policy source used by Torii.
 #[derive(Clone)]
 pub struct PotrStateFinalizedPolicySourceV1 {
     source_id: [u8; 32],
     state: Arc<State>,
 }
-
 impl fmt::Debug for PotrStateFinalizedPolicySourceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -310,7 +279,6 @@ impl fmt::Debug for PotrStateFinalizedPolicySourceV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PotrStateFinalizedPolicySourceV1 {
     /// Pin a non-secret source identity to the node's authoritative state.
     ///
@@ -327,12 +295,10 @@ impl PotrStateFinalizedPolicySourceV1 {
         Ok(Self { source_id, state })
     }
 }
-
 impl PotrFinalizedPolicySourceV1 for PotrStateFinalizedPolicySourceV1 {
     fn source_id(&self) -> [u8; 32] {
         self.source_id
     }
-
     fn active_policy(
         &self,
         provider_id: [u8; 32],
@@ -366,7 +332,6 @@ impl PotrFinalizedPolicySourceV1 for PotrStateFinalizedPolicySourceV1 {
         })
     }
 }
-
 /// Resolver for council-verified admission envelope material.
 ///
 /// The finalized ledger policy remains authoritative. A resolver may only
@@ -375,7 +340,6 @@ impl PotrFinalizedPolicySourceV1 for PotrStateFinalizedPolicySourceV1 {
 pub trait PotrAdmissionMaterialResolverV1: Send + Sync {
     /// Stable non-secret identity of this administered material resolver.
     fn resolver_id(&self) -> [u8; 32];
-
     /// Resolve one exact council-verified envelope.
     fn resolve(
         &self,
@@ -383,14 +347,12 @@ pub trait PotrAdmissionMaterialResolverV1: Send + Sync {
         admission_envelope_digest: [u8; 32],
     ) -> Result<Arc<AdmissionRecord>, PotrAdmissionReaderError>;
 }
-
 /// Immutable resolver around Torii's council-verified admission registry.
 #[derive(Clone)]
 pub struct PotrAdmissionRegistryResolverV1 {
     resolver_id: [u8; 32],
     registry: Arc<crate::sorafs::AdmissionRegistry>,
 }
-
 impl fmt::Debug for PotrAdmissionRegistryResolverV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -398,7 +360,6 @@ impl fmt::Debug for PotrAdmissionRegistryResolverV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PotrAdmissionRegistryResolverV1 {
     /// Bind an explicit non-secret identity to a verified registry snapshot.
     ///
@@ -418,12 +379,10 @@ impl PotrAdmissionRegistryResolverV1 {
         })
     }
 }
-
 impl PotrAdmissionMaterialResolverV1 for PotrAdmissionRegistryResolverV1 {
     fn resolver_id(&self) -> [u8; 32] {
         self.resolver_id
     }
-
     fn resolve(
         &self,
         provider_id: [u8; 32],
@@ -439,7 +398,6 @@ impl PotrAdmissionMaterialResolverV1 for PotrAdmissionRegistryResolverV1 {
         Ok(admission)
     }
 }
-
 /// Production exact-finalized PoTR admission reader.
 #[derive(Clone)]
 pub struct PotrFinalizedAdmissionReaderV1 {
@@ -451,7 +409,6 @@ pub struct PotrFinalizedAdmissionReaderV1 {
     source_id: [u8; 32],
     resolver_id: [u8; 32],
 }
-
 impl fmt::Debug for PotrFinalizedAdmissionReaderV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -459,7 +416,6 @@ impl fmt::Debug for PotrFinalizedAdmissionReaderV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PotrFinalizedAdmissionReaderV1 {
     /// Construct an identity-pinned finalized admission reader.
     ///
@@ -506,7 +462,6 @@ impl PotrFinalizedAdmissionReaderV1 {
             resolver_id,
         })
     }
-
     fn check_dependency_identities(&self) -> Result<(), PotrAdmissionReaderError> {
         if self.source.source_id() != self.source_id
             || self.resolver.resolver_id() != self.resolver_id
@@ -516,12 +471,10 @@ impl PotrFinalizedAdmissionReaderV1 {
         Ok(())
     }
 }
-
 impl PotrAdmissionReaderV1 for PotrFinalizedAdmissionReaderV1 {
     fn reader_id(&self) -> [u8; 32] {
         self.reader_id
     }
-
     fn active_admission(
         &self,
         provider_id: [u8; 32],
@@ -595,7 +548,6 @@ impl PotrAdmissionReaderV1 for PotrFinalizedAdmissionReaderV1 {
         Ok(PotrAdmissionSnapshotV1 { binding, admission })
     }
 }
-
 /// Invalid configuration for the production finalized admission reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrFinalizedAdmissionReaderConfigError {
@@ -618,7 +570,6 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
     #[error("PoTR finalized reader component identities must be distinct")]
     IdentityCollision,
 }
-
 /// Runtime-only Ed25519 signer for the gateway role of a PoTR receipt.
 ///
 /// Implementations may delegate to PKCS#11, an HSM, or a remote signing
@@ -627,20 +578,15 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
 pub trait PotrGatewaySignerV1: Send + Sync {
     /// Stable opaque production provider handle.
     fn handle(&self) -> &str;
-
     /// Stable non-secret identity of this independently administered signer.
     fn signer_id(&self) -> [u8; 32];
-
     /// Qualify the active adapter and exact public-policy revision.
     fn qualification(&self) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError>;
-
     /// Return the active Ed25519 public key.
     fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError>;
-
     /// Sign the exact domain-separated canonical PoTR payload.
     fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError>;
 }
-
 /// Runtime-only ML-DSA-65 signer for the provider role of a PoTR receipt.
 ///
 /// The declared provider identity and public key are checked against the
@@ -650,23 +596,17 @@ pub trait PotrGatewaySignerV1: Send + Sync {
 pub trait PotrProviderSignerV1: Send + Sync {
     /// Stable opaque production provider handle.
     fn handle(&self) -> &str;
-
     /// Stable non-secret identity of this independently administered signer.
     fn signer_id(&self) -> [u8; 32];
-
     /// Qualify the active adapter and governed admission-policy revision.
     fn qualification(&self) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError>;
-
     /// Governed provider identity served by this signer.
     fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError>;
-
     /// Return the active ML-DSA-65 public key.
     fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError>;
-
     /// Sign the exact domain-separated canonical PoTR payload.
     fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError>;
 }
-
 fn validate_potr_runtime_handle(handle: &str) -> Result<(), PotrRuntimeSignerConfigError> {
     match validate_production_runtime_handle(handle) {
         Ok(()) => Ok(()),
@@ -678,7 +618,6 @@ fn validate_potr_runtime_handle(handle: &str) -> Result<(), PotrRuntimeSignerCon
         }
     }
 }
-
 fn qualify_gateway_signer(
     expected: &PotrRuntimeProviderBindingV1,
     signer: &dyn PotrGatewaySignerV1,
@@ -714,7 +653,6 @@ fn qualify_gateway_signer(
     }
     Ok(())
 }
-
 fn qualify_provider_signer(
     expected: &PotrRuntimeProviderBindingV1,
     signer: &dyn PotrProviderSignerV1,
@@ -763,7 +701,6 @@ fn qualify_provider_signer(
     }
     Ok(())
 }
-
 /// Externally administered PoTR signer roles plus non-secret reader pins.
 ///
 /// Torii accepts this object before API construction, then binds the two signer
@@ -779,7 +716,6 @@ pub struct PotrRuntimeSignerRolesV1 {
     baseline_admission_policy: PotrAdmissionPolicyBindingV1,
     reader_bindings: PotrRuntimeReaderBindingsV1,
 }
-
 impl fmt::Debug for PotrRuntimeSignerRolesV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -791,7 +727,6 @@ impl fmt::Debug for PotrRuntimeSignerRolesV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PotrRuntimeSignerRolesV1 {
     /// Validate independently administered signer roles and exact non-secret
     /// finalized-reader identities.
@@ -877,37 +812,31 @@ impl PotrRuntimeSignerRolesV1 {
             reader_bindings,
         })
     }
-
     /// Return the independently configured gateway signer binding.
     #[must_use]
     pub fn gateway_binding(&self) -> &PotrRuntimeProviderBindingV1 {
         &self.gateway_binding
     }
-
     /// Return the independently configured provider signer binding.
     #[must_use]
     pub fn provider_binding(&self) -> &PotrRuntimeProviderBindingV1 {
         &self.provider_binding
     }
-
     /// Return the exact configured gateway verification key.
     #[must_use]
     pub const fn expected_gateway_public_key(&self) -> [u8; 32] {
         self.expected_gateway_public_key
     }
-
     /// Return the baseline finalized provider-admission policy.
     #[must_use]
     pub const fn baseline_admission_policy(&self) -> PotrAdmissionPolicyBindingV1 {
         self.baseline_admission_policy
     }
-
     /// Return the configured reader, finalized-source, and resolver identities.
     #[must_use]
     pub const fn reader_bindings(&self) -> PotrRuntimeReaderBindingsV1 {
         self.reader_bindings
     }
-
     /// Bind these roles to Torii's authoritative finalized state and verified
     /// admission material after both are constructed.
     ///
@@ -952,7 +881,6 @@ impl PotrRuntimeSignerRolesV1 {
         )
     }
 }
-
 /// Independently administered runtime signers plus a live admission reader.
 #[derive(Clone)]
 pub struct PotrRuntimeSignersV1 {
@@ -967,7 +895,6 @@ pub struct PotrRuntimeSignersV1 {
     provider_signer_id: [u8; 32],
     admission_reader_id: [u8; 32],
 }
-
 impl fmt::Debug for PotrRuntimeSignersV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -982,7 +909,6 @@ impl fmt::Debug for PotrRuntimeSignersV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PotrRuntimeSignersV1 {
     /// Bind two independently administered signer objects and an exact-anchor
     /// finalized admission reader.
@@ -1066,13 +992,11 @@ impl PotrRuntimeSignersV1 {
             admission_reader_id,
         })
     }
-
     /// Return the non-secret Ed25519 gateway key required by runtime policy.
     #[must_use]
     pub const fn expected_gateway_public_key(&self) -> [u8; 32] {
         self.expected_gateway_public_key
     }
-
     fn revalidate_gateway_binding(&self) -> Result<(), PotrReceiptRuntimeSigningError> {
         if self.gateway.handle() != self.gateway_binding.handle()
             || self.gateway.signer_id() != self.gateway_binding.signer_id()
@@ -1092,7 +1016,6 @@ impl PotrRuntimeSignersV1 {
         }
         Ok(())
     }
-
     fn revalidate_provider_identity(&self) -> Result<(), PotrReceiptRuntimeSigningError> {
         if self.provider.handle() != self.provider_binding.handle()
             || self.provider.signer_id() != self.provider_binding.signer_id()
@@ -1101,7 +1024,6 @@ impl PotrRuntimeSignersV1 {
         }
         Ok(())
     }
-
     fn revalidate_provider_binding(
         &self,
         expected: PotrRuntimeProviderQualificationV1,
@@ -1120,14 +1042,12 @@ impl PotrRuntimeSignersV1 {
         }
         Ok(())
     }
-
     fn revalidate_admission_reader(&self) -> Result<(), PotrReceiptRuntimeSigningError> {
         if self.admission_reader.reader_id() != self.admission_reader_id {
             return Err(PotrReceiptRuntimeSigningError::AdmissionReaderIdentityDrift);
         }
         Ok(())
     }
-
     fn read_admission(
         &self,
         receipt: &PotrReceiptV1,
@@ -1143,14 +1063,12 @@ impl PotrRuntimeSignersV1 {
         self.revalidate_admission_reader()?;
         result.map_err(PotrReceiptRuntimeSigningError::AdmissionReader)
     }
-
     fn gateway_public_key(&self) -> Result<[u8; 32], PotrReceiptRuntimeSigningError> {
         self.revalidate_gateway_binding()?;
         let result = self.gateway.public_key();
         self.revalidate_gateway_binding()?;
         result.map_err(PotrReceiptRuntimeSigningError::GatewayService)
     }
-
     fn provider_id(
         &self,
         expected: PotrRuntimeProviderQualificationV1,
@@ -1160,7 +1078,6 @@ impl PotrRuntimeSignersV1 {
         self.revalidate_provider_binding(expected)?;
         result.map_err(PotrReceiptRuntimeSigningError::ProviderService)
     }
-
     fn provider_public_key(
         &self,
         expected: PotrRuntimeProviderQualificationV1,
@@ -1170,14 +1087,12 @@ impl PotrRuntimeSignersV1 {
         self.revalidate_provider_binding(expected)?;
         result.map_err(PotrReceiptRuntimeSigningError::ProviderService)
     }
-
     fn gateway_sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrReceiptRuntimeSigningError> {
         self.revalidate_gateway_binding()?;
         let result = self.gateway.sign(payload);
         self.revalidate_gateway_binding()?;
         result.map_err(PotrReceiptRuntimeSigningError::GatewayService)
     }
-
     fn provider_sign(
         &self,
         expected: PotrRuntimeProviderQualificationV1,
@@ -1188,7 +1103,6 @@ impl PotrRuntimeSignersV1 {
         self.revalidate_provider_binding(expected)?;
         result.map_err(PotrReceiptRuntimeSigningError::ProviderService)
     }
-
     /// Attach both signatures after validating runtime keys against policy.
     pub(crate) fn sign_receipt(
         &self,
@@ -1213,13 +1127,11 @@ impl PotrRuntimeSignersV1 {
         let provider_qualification =
             PotrRuntimeProviderQualificationV1::from_admission_binding(admission_snapshot.binding);
         self.revalidate_provider_binding(provider_qualification)?;
-
         let runtime_gateway_public_key = self.gateway_public_key()?;
         validate_gateway_public_key(&runtime_gateway_public_key)?;
         if runtime_gateway_public_key != self.expected_gateway_public_key {
             return Err(PotrReceiptRuntimeSigningError::GatewayPolicyMismatch);
         }
-
         let runtime_provider_id = self.provider_id(provider_qualification)?;
         if runtime_provider_id == [0; 32] {
             return Err(PotrReceiptRuntimeSigningError::InvalidProviderIdentity);
@@ -1227,7 +1139,6 @@ impl PotrRuntimeSignersV1 {
         if runtime_provider_id != receipt.provider_id {
             return Err(PotrReceiptRuntimeSigningError::RuntimeProviderMismatch);
         }
-
         let runtime_provider_public_key = self.provider_public_key(provider_qualification)?;
         validate_provider_public_key(&runtime_provider_public_key)?;
         let governed_provider_public_key = admission
@@ -1236,7 +1147,6 @@ impl PotrRuntimeSignersV1 {
         if runtime_provider_public_key.as_slice() != governed_provider_public_key {
             return Err(PotrReceiptRuntimeSigningError::ProviderPolicyMismatch);
         }
-
         receipt.gateway_signature = None;
         receipt.provider_signature = None;
         let payload = receipt
@@ -1279,7 +1189,6 @@ impl PotrRuntimeSignersV1 {
             admission_policy: admission_snapshot.binding,
         })
     }
-
     fn effective_policy_floor(
         &self,
         durable_policy_floor: Option<&PotrAdmissionPolicyBindingV1>,
@@ -1303,13 +1212,11 @@ impl PotrRuntimeSignersV1 {
         }
     }
 }
-
 pub(crate) struct SignedPotrReceiptV1 {
     receipt: PotrReceiptV1,
     admission: Arc<AdmissionRecord>,
     admission_policy: PotrAdmissionPolicyBindingV1,
 }
-
 impl fmt::Debug for SignedPotrReceiptV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1319,7 +1226,6 @@ impl fmt::Debug for SignedPotrReceiptV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SignedPotrReceiptV1 {
     pub(crate) fn into_parts(
         self,
@@ -1331,7 +1237,6 @@ impl SignedPotrReceiptV1 {
         (self.receipt, self.admission, self.admission_policy)
     }
 }
-
 fn validate_admission_snapshot(
     snapshot: &PotrAdmissionSnapshotV1,
     receipt: &PotrReceiptV1,
@@ -1367,7 +1272,6 @@ fn validate_admission_snapshot(
     }
     Ok(())
 }
-
 const fn proof_stream_tier_for_availability(availability: AvailabilityTier) -> ProofStreamTier {
     match availability {
         AvailabilityTier::Hot => ProofStreamTier::Hot,
@@ -1375,7 +1279,6 @@ const fn proof_stream_tier_for_availability(availability: AvailabilityTier) -> P
         AvailabilityTier::Cold => ProofStreamTier::Archive,
     }
 }
-
 fn validate_gateway_public_key(
     public_key: &[u8; 32],
 ) -> Result<(), PotrReceiptRuntimeSigningError> {
@@ -1386,13 +1289,11 @@ fn validate_gateway_public_key(
     }
     Ok(())
 }
-
 fn validate_provider_public_key(public_key: &[u8]) -> Result<(), PotrReceiptRuntimeSigningError> {
     PublicKey::from_bytes(Algorithm::MlDsa, public_key)
         .map(|_| ())
         .map_err(|_| PotrReceiptRuntimeSigningError::InvalidProviderPublicKey)
 }
-
 /// Invalid construction of the role-separated PoTR runtime boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrRuntimeSignerConfigError {
@@ -1478,7 +1379,6 @@ pub enum PotrRuntimeSignerConfigError {
     #[error("PoTR runtime signer roles require a council-verified admission registry")]
     MissingAdmissionRegistry,
 }
-
 /// Fail-closed PoTR receipt signing and policy-binding failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum PotrReceiptRuntimeSigningError {
@@ -1555,15 +1455,9 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
     #[error("runtime signers produced an invalid PoTR receipt")]
     InvalidSignedReceipt,
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    };
-
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{account::AccountId, sorafs::proof_ledger::ProofOutcomeSignerPolicyV1};
@@ -1574,9 +1468,11 @@ mod tests {
         potr::{POTR_RECEIPT_VERSION_V1, PotrStatus},
         proof_stream::ProofStreamTier,
     };
-
-    use super::*;
-
+    use std::collections::BTreeMap;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
     const GATEWAY_SIGNER_ID: [u8; 32] = [0xA1; 32];
     const PROVIDER_SIGNER_ID: [u8; 32] = [0xB2; 32];
     const GATEWAY_HANDLE: &str = "hsm:potr:gateway-primary";
@@ -1589,13 +1485,11 @@ mod tests {
     const ADMISSION_POLICY_IDENTITY: [u8; 32] = [0xD4; 32];
     const FINALIZED_SOURCE_ID: [u8; 32] = [0xD5; 32];
     const ADMISSION_RESOLVER_ID: [u8; 32] = [0xD6; 32];
-
     struct TestAdmissionReader {
         reader_id: [u8; 32],
         responses: Mutex<Vec<Result<PotrAdmissionSnapshotV1, PotrAdmissionReaderError>>>,
         calls: AtomicUsize,
     }
-
     impl TestAdmissionReader {
         fn stable(snapshot: PotrAdmissionSnapshotV1) -> Self {
             Self {
@@ -1604,7 +1498,6 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }
         }
-
         fn with_responses(
             responses: Vec<Result<PotrAdmissionSnapshotV1, PotrAdmissionReaderError>>,
         ) -> Self {
@@ -1615,7 +1508,6 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }
         }
-
         fn replace_responses(
             &self,
             responses: Vec<Result<PotrAdmissionSnapshotV1, PotrAdmissionReaderError>>,
@@ -1625,12 +1517,10 @@ mod tests {
             self.calls.store(0, Ordering::SeqCst);
         }
     }
-
     impl PotrAdmissionReaderV1 for TestAdmissionReader {
         fn reader_id(&self) -> [u8; 32] {
             self.reader_id
         }
-
         fn active_admission(
             &self,
             _provider_id: [u8; 32],
@@ -1643,13 +1533,11 @@ mod tests {
             responses[call.min(responses.len() - 1)].clone()
         }
     }
-
     struct TestFinalizedPolicySource {
         source_id: Mutex<[u8; 32]>,
         responses: Mutex<Vec<Result<PotrFinalizedPolicySnapshotV1, PotrAdmissionReaderError>>>,
         calls: AtomicUsize,
     }
-
     impl TestFinalizedPolicySource {
         fn stable(snapshot: PotrFinalizedPolicySnapshotV1) -> Self {
             Self {
@@ -1658,7 +1546,6 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }
         }
-
         fn with_error(error: PotrAdmissionReaderError) -> Self {
             Self {
                 source_id: Mutex::new(FINALIZED_SOURCE_ID),
@@ -1666,17 +1553,14 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }
         }
-
         fn drift_identity(&self) {
             *self.source_id.lock().expect("source identity lock") = [0xE1; 32];
         }
     }
-
     impl PotrFinalizedPolicySourceV1 for TestFinalizedPolicySource {
         fn source_id(&self) -> [u8; 32] {
             *self.source_id.lock().expect("source identity lock")
         }
-
         fn active_policy(
             &self,
             _provider_id: [u8; 32],
@@ -1686,12 +1570,10 @@ mod tests {
             responses[call.min(responses.len() - 1)].clone()
         }
     }
-
     struct TestAdmissionMaterialResolver {
         resolver_id: Mutex<[u8; 32]>,
         admissions: Mutex<BTreeMap<[u8; 32], Arc<AdmissionRecord>>>,
     }
-
     impl TestAdmissionMaterialResolver {
         fn new(admissions: impl IntoIterator<Item = AdmissionRecord>) -> Self {
             Self {
@@ -1704,17 +1586,14 @@ mod tests {
                 ),
             }
         }
-
         fn drift_identity(&self) {
             *self.resolver_id.lock().expect("resolver identity lock") = [0xE2; 32];
         }
     }
-
     impl PotrAdmissionMaterialResolverV1 for TestAdmissionMaterialResolver {
         fn resolver_id(&self) -> [u8; 32] {
             *self.resolver_id.lock().expect("resolver identity lock")
         }
-
         fn resolve(
             &self,
             provider_id: [u8; 32],
@@ -1733,7 +1612,6 @@ mod tests {
             Ok(admission)
         }
     }
-
     struct TestGatewaySigner {
         signer_id: [u8; 32],
         qualification: PotrRuntimeProviderQualificationV1,
@@ -1743,22 +1621,18 @@ mod tests {
         corrupt_signature: bool,
         calls: Arc<AtomicUsize>,
     }
-
     impl PotrGatewaySignerV1 for TestGatewaySigner {
         fn handle(&self) -> &str {
             GATEWAY_HANDLE
         }
-
         fn signer_id(&self) -> [u8; 32] {
             self.signer_id
         }
-
         fn qualification(
             &self,
         ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
             Ok(self.qualification)
         }
-
         fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
             if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
@@ -1767,7 +1641,6 @@ mod tests {
                 .public_key_override
                 .unwrap_or_else(|| self.key.verifying_key().to_bytes()))
         }
-
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.unavailable.load(Ordering::SeqCst) {
@@ -1780,7 +1653,6 @@ mod tests {
             Ok(signature)
         }
     }
-
     struct TestProviderSigner {
         signer_id: [u8; 32],
         qualification: PotrRuntimeProviderQualificationV1,
@@ -1791,7 +1663,6 @@ mod tests {
         corrupt_signature: bool,
         calls: Arc<AtomicUsize>,
     }
-
     impl TestProviderSigner {
         fn public_key_bytes(&self) -> Vec<u8> {
             let (algorithm, public_key) = self
@@ -1803,29 +1674,24 @@ mod tests {
             public_key.to_vec()
         }
     }
-
     impl PotrProviderSignerV1 for TestProviderSigner {
         fn handle(&self) -> &str {
             PROVIDER_HANDLE
         }
-
         fn signer_id(&self) -> [u8; 32] {
             self.signer_id
         }
-
         fn qualification(
             &self,
         ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
             Ok(self.qualification)
         }
-
         fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
             if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
             }
             Ok(self.provider_id)
         }
-
         fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
             if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
@@ -1835,7 +1701,6 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| self.public_key_bytes()))
         }
-
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.unavailable.load(Ordering::SeqCst) {
@@ -1851,22 +1716,18 @@ mod tests {
             Ok(signature)
         }
     }
-
     struct PostSignQualificationDriftingGatewaySigner {
         key: SigningKey,
         qualification: Mutex<PotrRuntimeProviderQualificationV1>,
         calls: Arc<AtomicUsize>,
     }
-
     impl PotrGatewaySignerV1 for PostSignQualificationDriftingGatewaySigner {
         fn handle(&self) -> &str {
             GATEWAY_HANDLE
         }
-
         fn signer_id(&self) -> [u8; 32] {
             GATEWAY_SIGNER_ID
         }
-
         fn qualification(
             &self,
         ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
@@ -1875,11 +1736,9 @@ mod tests {
                 .map(|qualification| *qualification)
                 .map_err(|_| PotrSignerServiceError::Unavailable)
         }
-
         fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
             Ok(self.key.verifying_key().to_bytes())
         }
-
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let signature = self.key.sign(payload).to_bytes().to_vec();
@@ -1891,23 +1750,19 @@ mod tests {
             Ok(signature)
         }
     }
-
     struct PostSignQualificationDriftingProviderSigner {
         provider_id: [u8; 32],
         key: KeyPair,
         qualification: Mutex<PotrRuntimeProviderQualificationV1>,
         calls: Arc<AtomicUsize>,
     }
-
     impl PotrProviderSignerV1 for PostSignQualificationDriftingProviderSigner {
         fn handle(&self) -> &str {
             PROVIDER_HANDLE
         }
-
         fn signer_id(&self) -> [u8; 32] {
             PROVIDER_SIGNER_ID
         }
-
         fn qualification(
             &self,
         ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
@@ -1916,11 +1771,9 @@ mod tests {
                 .map(|qualification| *qualification)
                 .map_err(|_| PotrSignerServiceError::Unavailable)
         }
-
         fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
             Ok(self.provider_id)
         }
-
         fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.key
                 .public_key()
@@ -1928,7 +1781,6 @@ mod tests {
                 .map(|(_, bytes)| bytes.to_vec())
                 .map_err(|_| PotrSignerServiceError::Refused)
         }
-
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let signature = Signature::try_new(self.key.private_key(), payload)
@@ -1943,7 +1795,6 @@ mod tests {
             Ok(signature)
         }
     }
-
     struct RotatingProviderSigner {
         signer_id: [u8; 32],
         provider_id: [u8; 32],
@@ -1951,7 +1802,6 @@ mod tests {
         qualification: Mutex<PotrRuntimeProviderQualificationV1>,
         calls: Arc<AtomicUsize>,
     }
-
     impl RotatingProviderSigner {
         fn rotate(&self, key: KeyPair, qualification: PotrRuntimeProviderQualificationV1) {
             *self.key.lock().expect("provider signer key lock") = key;
@@ -1961,16 +1811,13 @@ mod tests {
                 .expect("provider signer qualification lock") = qualification;
         }
     }
-
     impl PotrProviderSignerV1 for RotatingProviderSigner {
         fn handle(&self) -> &str {
             PROVIDER_HANDLE
         }
-
         fn signer_id(&self) -> [u8; 32] {
             self.signer_id
         }
-
         fn qualification(
             &self,
         ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
@@ -1979,11 +1826,9 @@ mod tests {
                 .map(|qualification| *qualification)
                 .map_err(|_| PotrSignerServiceError::Unavailable)
         }
-
         fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
             Ok(self.provider_id)
         }
-
         fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.key
                 .lock()
@@ -1993,7 +1838,6 @@ mod tests {
                 .map(|(_, bytes)| bytes.to_vec())
                 .map_err(|_| PotrSignerServiceError::Refused)
         }
-
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let key = self
@@ -2005,7 +1849,6 @@ mod tests {
                 .map_err(|_| PotrSignerServiceError::Refused)
         }
     }
-
     struct TestFixture {
         gateway_key: SigningKey,
         provider_key: KeyPair,
@@ -2013,7 +1856,6 @@ mod tests {
         admission_policy: PotrAdmissionPolicyBindingV1,
         receipt: PotrReceiptV1,
     }
-
     fn fixture() -> TestFixture {
         let gateway_key = SigningKey::from_bytes(&[0x11; 32]);
         let provider_key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa)
@@ -2023,7 +1865,6 @@ mod tests {
             .try_to_bytes()
             .expect("encode provider key");
         assert_eq!(algorithm, Algorithm::MlDsa);
-
         let mut envelope: ProviderAdmissionEnvelopeV1 = norito::decode_from_bytes(include_bytes!(
             "../../../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"
         ))
@@ -2046,7 +1887,6 @@ mod tests {
             compute_proposal_digest(&envelope.proposal).expect("proposal digest");
         envelope.advert_body_digest =
             compute_advert_body_digest(&envelope.advert_body).expect("advert body digest");
-
         let council_key = SigningKey::from_bytes(&[0x45; 32]);
         envelope.council_signatures.clear();
         let authorization_digest =
@@ -2098,7 +1938,6 @@ mod tests {
             receipt,
         }
     }
-
     fn admission_snapshot(
         admission: &AdmissionRecord,
         binding: PotrAdmissionPolicyBindingV1,
@@ -2108,7 +1947,6 @@ mod tests {
             admission: Arc::new(admission.clone()),
         }
     }
-
     fn admission_reader(
         admission: &AdmissionRecord,
         binding: PotrAdmissionPolicyBindingV1,
@@ -2117,7 +1955,6 @@ mod tests {
             admission, binding,
         )))
     }
-
     fn gateway_binding() -> PotrRuntimeProviderBindingV1 {
         PotrRuntimeProviderBindingV1::try_new(
             GATEWAY_HANDLE,
@@ -2126,7 +1963,6 @@ mod tests {
         )
         .expect("valid gateway runtime binding")
     }
-
     fn provider_binding(
         admission_policy: PotrAdmissionPolicyBindingV1,
     ) -> PotrRuntimeProviderBindingV1 {
@@ -2137,7 +1973,6 @@ mod tests {
         )
         .expect("valid provider runtime binding")
     }
-
     fn reader_bindings() -> PotrRuntimeReaderBindingsV1 {
         PotrRuntimeReaderBindingsV1::try_new(
             ADMISSION_READER_ID,
@@ -2146,7 +1981,6 @@ mod tests {
         )
         .expect("valid finalized-reader runtime bindings")
     }
-
     fn configured_runtime_binding(
         fixture: &TestFixture,
     ) -> iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
@@ -2180,7 +2014,6 @@ mod tests {
                 },
         }
     }
-
     fn finalized_policy_snapshot(
         fixture: &TestFixture,
         admission: &AdmissionRecord,
@@ -2217,7 +2050,6 @@ mod tests {
             },
         }
     }
-
     fn finalized_reader(
         fixture: &TestFixture,
         source: Arc<TestFinalizedPolicySource>,
@@ -2234,7 +2066,6 @@ mod tests {
         )
         .expect("valid finalized admission reader")
     }
-
     fn admission_with_provider_key(
         base: &AdmissionRecord,
         provider_key: &KeyPair,
@@ -2276,7 +2107,6 @@ mod tests {
                 .expect("rotated council policy");
         AdmissionRecord::new(envelope, &policy).expect("rotated council admission")
     }
-
     fn runtime_signers(
         fixture: &TestFixture,
         gateway_unavailable: bool,
@@ -2292,7 +2122,6 @@ mod tests {
             provider_unavailable,
         )
     }
-
     fn runtime_signers_with_reader(
         fixture: &TestFixture,
         admission_reader: Arc<dyn PotrAdmissionReaderV1>,
@@ -2338,7 +2167,6 @@ mod tests {
             .store(provider_unavailable, Ordering::SeqCst);
         (signers, gateway_calls, provider_calls)
     }
-
     #[test]
     fn finalized_reader_accepts_exact_committed_policy_and_governed_rotation() {
         let fixture = fixture();
@@ -2362,7 +2190,6 @@ mod tests {
             initial.admission.envelope_digest(),
             fixture.admission.envelope_digest()
         );
-
         let rotated_key =
             KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::MlDsa).expect("rotated provider key");
         let rotated_admission = admission_with_provider_key(&fixture.admission, &rotated_key);
@@ -2394,7 +2221,6 @@ mod tests {
             rotated_admission.envelope_digest()
         );
     }
-
     #[test]
     fn finalized_reader_rejects_stale_fork_and_identity_substitution() {
         let fixture = fixture();
@@ -2407,7 +2233,6 @@ mod tests {
                 .clone()]));
             finalized_reader(&fixture, source, resolver)
         };
-
         let mut newer_floor = fixture.admission_policy;
         newer_floor.policy_sequence = 2;
         newer_floor.policy_digest = [0xA1; 32];
@@ -2424,7 +2249,6 @@ mod tests {
                 .expect_err("rollback below durable floor"),
             PotrAdmissionReaderError::Stale
         );
-
         let mut fork = fixture.admission_policy;
         fork.finalized_block_hash = [0xA3; 32];
         assert_eq!(
@@ -2438,7 +2262,6 @@ mod tests {
                 .expect_err("same-height fork"),
             PotrAdmissionReaderError::Stale
         );
-
         let mut substitution = fixture.admission_policy;
         substitution.policy_digest = [0xA4; 32];
         assert_eq!(
@@ -2452,7 +2275,6 @@ mod tests {
                 .expect_err("same-revision policy substitution"),
             PotrAdmissionReaderError::Stale
         );
-
         let mut foreign_identity = fixture.admission_policy;
         foreign_identity.policy_identity = [0xA5; 32];
         assert_eq!(
@@ -2467,7 +2289,6 @@ mod tests {
             PotrAdmissionReaderError::Stale
         );
     }
-
     #[test]
     fn finalized_reader_rejects_revocation_outage_and_key_substitution() {
         let fixture = fixture();
@@ -2491,7 +2312,6 @@ mod tests {
                 source_error
             );
         }
-
         let mut expired =
             finalized_policy_snapshot(&fixture, &fixture.admission, fixture.admission_policy);
         expired.policy.policy.valid_until_unix =
@@ -2511,7 +2331,6 @@ mod tests {
                 .expect_err("expired native policy"),
             PotrAdmissionReaderError::Revoked
         );
-
         let mut backdated =
             finalized_policy_snapshot(&fixture, &fixture.admission, fixture.admission_policy);
         backdated.policy.activated_at_unix_ms = fixture.receipt.requested_at_ms.saturating_add(1);
@@ -2530,7 +2349,6 @@ mod tests {
                 .expect_err("policy activated after request"),
             PotrAdmissionReaderError::Revoked
         );
-
         let mut gateway_substitution =
             finalized_policy_snapshot(&fixture, &fixture.admission, fixture.admission_policy);
         gateway_substitution.policy.policy.gateway_public_key = SigningKey::from_bytes(&[0xBD; 32])
@@ -2551,7 +2369,6 @@ mod tests {
                 .expect_err("committed gateway key substitution"),
             PotrAdmissionReaderError::Refused
         );
-
         let mut substituted =
             finalized_policy_snapshot(&fixture, &fixture.admission, fixture.admission_policy);
         let attacker_key =
@@ -2578,7 +2395,6 @@ mod tests {
             PotrAdmissionReaderError::Refused
         );
     }
-
     #[test]
     fn finalized_reader_fails_closed_on_source_or_resolver_identity_drift() {
         let fixture = fixture();
@@ -2601,7 +2417,6 @@ mod tests {
                 .expect_err("source identity drift"),
             PotrAdmissionReaderError::Refused
         );
-
         let source = Arc::new(TestFinalizedPolicySource::stable(
             finalized_policy_snapshot(&fixture, &fixture.admission, fixture.admission_policy),
         ));
@@ -2619,7 +2434,6 @@ mod tests {
             PotrAdmissionReaderError::Refused
         );
     }
-
     #[test]
     fn signer_roles_pin_reader_components_without_accepting_a_local_reader() {
         let fixture = fixture();
@@ -2758,7 +2572,6 @@ mod tests {
             PotrRuntimeSignerConfigError::RuntimeIdentityCollision
         );
     }
-
     #[test]
     fn role_separated_runtime_signers_produce_governed_receipt() {
         let fixture = fixture();
@@ -2777,12 +2590,10 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn runtime_signing_rejects_caller_selected_deadline_and_tier() {
         let fixture = fixture();
         let (signers, gateway_calls, provider_calls) = runtime_signers(&fixture, false, false);
-
         let mut wrong_deadline = fixture.receipt.clone();
         wrong_deadline.deadline_ms = wrong_deadline.deadline_ms.saturating_add(1);
         assert_eq!(
@@ -2791,7 +2602,6 @@ mod tests {
                 .expect_err("caller deadline must not override governed QoS"),
             PotrReceiptRuntimeSigningError::AdmissionDeadlineMismatch
         );
-
         let mut wrong_tier = fixture.receipt.clone();
         wrong_tier.tier = match wrong_tier.tier {
             ProofStreamTier::Hot => ProofStreamTier::Warm,
@@ -2803,7 +2613,6 @@ mod tests {
                 .expect_err("caller tier must not override governed QoS"),
             PotrReceiptRuntimeSigningError::AdmissionTierMismatch
         );
-
         let mut invalid_status = fixture.receipt.clone();
         invalid_status.status = PotrStatus::MissedDeadline;
         assert!(matches!(
@@ -2815,7 +2624,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn runtime_bindings_use_central_handle_grammar_and_reject_invalid_qualification() {
         PotrRuntimeProviderBindingV1::try_new(
@@ -2883,7 +2691,6 @@ mod tests {
             PotrRuntimeSignerConfigError::RuntimeIdentityCollision
         );
     }
-
     #[test]
     fn provider_qualification_must_match_the_configured_admission_anchor() {
         let fixture = fixture();
@@ -2912,7 +2719,6 @@ mod tests {
             PotrRuntimeProviderQualificationV1::new(2, [0xE6; 32]),
         )
         .expect("structurally valid mismatched provider binding");
-
         assert_eq!(
             PotrRuntimeSignersV1::try_new(
                 gateway,
@@ -2927,7 +2733,6 @@ mod tests {
             PotrRuntimeSignerConfigError::ProviderQualificationPolicyMismatch
         );
     }
-
     #[test]
     fn unavailable_signer_services_fail_startup_qualification() {
         let fixture = fixture();
@@ -2954,7 +2759,6 @@ mod tests {
                 calls: Arc::new(AtomicUsize::new(0)),
             })
         };
-
         for (gateway_unavailable, provider_unavailable) in [(true, false), (false, true)] {
             assert_eq!(
                 PotrRuntimeSignersV1::try_new(
@@ -2971,7 +2775,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn post_signature_qualification_drift_discards_the_receipt() {
         let fixture = fixture();
@@ -3011,7 +2814,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let gateway_calls = Arc::new(AtomicUsize::new(0));
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let gateway: Arc<dyn PotrGatewaySignerV1> = Arc::new(TestGatewaySigner {
@@ -3049,7 +2851,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn invalid_gateway_output_is_rejected_before_provider_signing() {
         let fixture = fixture();
@@ -3084,7 +2885,6 @@ mod tests {
             fixture.admission_policy,
         )
         .expect("independent runtime signers");
-
         assert_eq!(
             signers
                 .sign_receipt(fixture.receipt, None)
@@ -3098,7 +2898,6 @@ mod tests {
             "provider HSM must not sign after an invalid gateway result"
         );
     }
-
     #[test]
     fn signer_identity_and_object_reuse_are_rejected() {
         let fixture = fixture();
@@ -3134,7 +2933,6 @@ mod tests {
             .expect_err("inert gateway policy anchor must fail"),
             PotrRuntimeSignerConfigError::InvalidGatewayPolicyKey
         );
-
         let shared_identity_gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
             qualification: GATEWAY_QUALIFICATION,
@@ -3172,27 +2970,22 @@ mod tests {
             .expect_err("shared runtime identity must fail"),
             PotrRuntimeSignerConfigError::SharedSignerIdentity
         );
-
         struct DualRoleSigner;
         impl PotrGatewaySignerV1 for DualRoleSigner {
             fn handle(&self) -> &str {
                 GATEWAY_HANDLE
             }
-
             fn signer_id(&self) -> [u8; 32] {
                 GATEWAY_SIGNER_ID
             }
-
             fn qualification(
                 &self,
             ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
                 Ok(GATEWAY_QUALIFICATION)
             }
-
             fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
                 Err(PotrSignerServiceError::Refused)
             }
-
             fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
                 Err(PotrSignerServiceError::Refused)
             }
@@ -3201,25 +2994,20 @@ mod tests {
             fn handle(&self) -> &str {
                 PROVIDER_HANDLE
             }
-
             fn signer_id(&self) -> [u8; 32] {
                 PROVIDER_SIGNER_ID
             }
-
             fn qualification(
                 &self,
             ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
                 Ok(PROVIDER_BASELINE_QUALIFICATION)
             }
-
             fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
                 Err(PotrSignerServiceError::Refused)
             }
-
             fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
                 Err(PotrSignerServiceError::Refused)
             }
-
             fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
                 Err(PotrSignerServiceError::Refused)
             }
@@ -3241,7 +3029,6 @@ mod tests {
             PotrRuntimeSignerConfigError::SharedSignerObject
         );
     }
-
     #[test]
     fn admission_reader_cannot_reuse_or_drift_into_a_signer_trust_domain() {
         let fixture = fixture();
@@ -3285,13 +3072,11 @@ mod tests {
             .expect_err("reader and signer identities must remain distinct"),
             PotrRuntimeSignerConfigError::AdmissionReaderSharesSignerIdentity
         );
-
         struct DriftingAdmissionReader {
             identity_reads: AtomicUsize,
             snapshot: PotrAdmissionSnapshotV1,
             query_calls: Arc<AtomicUsize>,
         }
-
         impl PotrAdmissionReaderV1 for DriftingAdmissionReader {
             fn reader_id(&self) -> [u8; 32] {
                 if self.identity_reads.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -3300,7 +3085,6 @@ mod tests {
                     [0x77; 32]
                 }
             }
-
             fn active_admission(
                 &self,
                 _provider_id: [u8; 32],
@@ -3312,7 +3096,6 @@ mod tests {
                 Ok(self.snapshot.clone())
             }
         }
-
         let query_calls = Arc::new(AtomicUsize::new(0));
         let drifting_reader = Arc::new(DriftingAdmissionReader {
             identity_reads: AtomicUsize::new(0),
@@ -3356,7 +3139,6 @@ mod tests {
         );
         assert_eq!(query_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn runtime_signer_identity_drift_fails_before_key_or_signature_use() {
         struct DriftingGatewaySigner {
@@ -3364,12 +3146,10 @@ mod tests {
             key: SigningKey,
             service_calls: Arc<AtomicUsize>,
         }
-
         impl PotrGatewaySignerV1 for DriftingGatewaySigner {
             fn handle(&self) -> &str {
                 GATEWAY_HANDLE
             }
-
             fn signer_id(&self) -> [u8; 32] {
                 if self.identity_reads.fetch_add(1, Ordering::SeqCst) < 3 {
                     GATEWAY_SIGNER_ID
@@ -3377,36 +3157,30 @@ mod tests {
                     [0xC3; 32]
                 }
             }
-
             fn qualification(
                 &self,
             ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
                 Ok(GATEWAY_QUALIFICATION)
             }
-
             fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
                 self.service_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(self.key.verifying_key().to_bytes())
             }
-
             fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
                 self.service_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(self.key.sign(payload).to_bytes().to_vec())
             }
         }
-
         struct DriftingProviderSigner {
             identity_reads: AtomicUsize,
             provider_id: [u8; 32],
             key: KeyPair,
             service_calls: Arc<AtomicUsize>,
         }
-
         impl PotrProviderSignerV1 for DriftingProviderSigner {
             fn handle(&self) -> &str {
                 PROVIDER_HANDLE
             }
-
             fn signer_id(&self) -> [u8; 32] {
                 if self.identity_reads.fetch_add(1, Ordering::SeqCst) < 4 {
                     PROVIDER_SIGNER_ID
@@ -3414,18 +3188,15 @@ mod tests {
                     [0xD4; 32]
                 }
             }
-
             fn qualification(
                 &self,
             ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
                 Ok(PROVIDER_BASELINE_QUALIFICATION)
             }
-
             fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
                 self.service_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(self.provider_id)
             }
-
             fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
                 self.service_calls.fetch_add(1, Ordering::SeqCst);
                 self.key
@@ -3434,7 +3205,6 @@ mod tests {
                     .map(|(_, bytes)| bytes.to_vec())
                     .map_err(|_| PotrSignerServiceError::Refused)
             }
-
             fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
                 self.service_calls.fetch_add(1, Ordering::SeqCst);
                 Signature::try_new(self.key.private_key(), payload)
@@ -3442,7 +3212,6 @@ mod tests {
                     .map_err(|_| PotrSignerServiceError::Refused)
             }
         }
-
         let fixture = fixture();
         let gateway_service_calls = Arc::new(AtomicUsize::new(0));
         let drifting_gateway = Arc::new(DriftingGatewaySigner {
@@ -3478,7 +3247,6 @@ mod tests {
             PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift
         );
         assert_eq!(gateway_service_calls.load(Ordering::SeqCst), 0);
-
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
             qualification: GATEWAY_QUALIFICATION,
@@ -3514,7 +3282,6 @@ mod tests {
         );
         assert_eq!(provider_service_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn provider_identity_key_and_algorithm_mismatches_fail_before_signing() {
         let fixture = fixture();
@@ -3554,7 +3321,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
             qualification: GATEWAY_QUALIFICATION,
@@ -3592,7 +3358,6 @@ mod tests {
             .expect_err("Ed25519 provider material must fail at startup"),
             PotrRuntimeSignerConfigError::SignerBindingMismatch
         );
-
         let rotated_provider_key =
             KeyPair::try_from_seed(vec![0x82; 32], Algorithm::MlDsa).expect("rotated provider key");
         let gateway = Arc::new(TestGatewaySigner {
@@ -3631,7 +3396,6 @@ mod tests {
             PotrReceiptRuntimeSigningError::ProviderPolicyMismatch
         );
     }
-
     #[test]
     fn signer_outages_are_independent_and_fail_closed() {
         let fixture = fixture();
@@ -3644,7 +3408,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let (provider_out, gateway_calls, provider_calls) = runtime_signers(&fixture, false, true);
         assert_eq!(
             provider_out
@@ -3655,7 +3418,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn live_admission_reader_outage_and_revocation_fail_before_signing() {
         for reader_error in [
@@ -3677,7 +3439,6 @@ mod tests {
             assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
         }
     }
-
     #[test]
     fn live_reader_must_return_council_trusted_policy_active_through_recording() {
         let fixture = fixture();
@@ -3699,7 +3460,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let (signers, gateway_calls, provider_calls) = runtime_signers(&fixture, false, false);
         let mut expired_before_recording = fixture.receipt;
         expired_before_recording.recorded_at_ms = fixture
@@ -3717,7 +3477,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn durable_policy_floor_rejects_stale_and_substituted_reader_results() {
         let fixture = fixture();
@@ -3726,7 +3485,6 @@ mod tests {
         durable_floor.policy_digest = [0x91; 32];
         durable_floor.finalized_height = 102;
         durable_floor.finalized_block_hash = [0x92; 32];
-
         let stale_reader: Arc<dyn PotrAdmissionReaderV1> = Arc::new(TestAdmissionReader::stable(
             admission_snapshot(&fixture.admission, fixture.admission_policy),
         ));
@@ -3742,7 +3500,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let mut fork_substitution = fixture.admission_policy;
         fork_substitution.policy_sequence = 2;
         fork_substitution.policy_digest = [0x97; 32];
@@ -3762,7 +3519,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let mut substituted = durable_floor;
         substituted.policy_digest[0] ^= 0x80;
         let substituted_reader: Arc<dyn PotrAdmissionReaderV1> = Arc::new(
@@ -3781,7 +3537,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn admission_change_or_outage_after_signing_discards_both_signatures() {
         let fixture = fixture();
@@ -3808,7 +3563,6 @@ mod tests {
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
-
         let outage_reader: Arc<dyn PotrAdmissionReaderV1> =
             Arc::new(TestAdmissionReader::with_responses(vec![
                 Ok(admission_snapshot(
@@ -3828,7 +3582,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn governed_provider_key_rotation_uses_one_live_reader_and_stable_signer_boundary() {
         let fixture = fixture();
@@ -3841,7 +3594,6 @@ mod tests {
         rotated_policy.finalized_height = 102;
         rotated_policy.finalized_block_hash = [0x96; 32];
         rotated_policy.admission_envelope_digest = *rotated_admission.envelope_digest();
-
         let gateway_calls = Arc::new(AtomicUsize::new(0));
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
@@ -3874,13 +3626,11 @@ mod tests {
             fixture.admission_policy,
         )
         .expect("live rotation boundary");
-
         let first = signers
             .sign_receipt(fixture.receipt.clone(), None)
             .expect("initial governed key")
             .into_parts();
         assert_eq!(first.2, fixture.admission_policy);
-
         provider.rotate(
             rotated_key,
             PotrRuntimeProviderQualificationV1::from_admission_binding(rotated_policy),
@@ -3907,7 +3657,6 @@ mod tests {
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 2);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
     }
-
     #[test]
     fn gateway_rotation_requires_independent_policy_update() {
         let fixture = fixture();
@@ -3953,7 +3702,6 @@ mod tests {
             PotrRuntimeSignerConfigError::SignerBindingMismatch
         );
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
-
         let rotated_policy_signers = PotrRuntimeSignersV1::try_new(
             gateway,
             provider,

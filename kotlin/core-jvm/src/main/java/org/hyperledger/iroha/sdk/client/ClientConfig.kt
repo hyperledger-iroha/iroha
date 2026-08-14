@@ -16,6 +16,7 @@ import org.hyperledger.iroha.sdk.telemetry.*
 /** Configuration options for [IrohaClient] implementations. */
 class ClientConfig private constructor(builder: Builder) {
     private val localSigningContext: LocalSigningContext? = builder.localSigningContext
+    private val operatorSigningContext: OperatorSigningContext? = builder.operatorSigningContext
     private val baseUri: URI = builder.baseUri
     private val sorafsGatewayUri: URI = builder.sorafsGatewayUri ?: builder.baseUri
     private val requestTimeout: Duration = builder.requestTimeout
@@ -54,7 +55,16 @@ class ClientConfig private constructor(builder: Builder) {
 
     internal fun requireLocalSigningContext(): LocalSigningContext =
         checkNotNull(localSigningContext) {
-            "localSigningContext must be configured before requesting a signing draft"
+            "localSigningContext must be configured before signing a request or requesting a signing draft"
+        }
+
+    /** Immutable exact-network signer used only by operator-only Torii APIs. */
+    fun operatorSigningContext(): Optional<OperatorSigningContext> =
+        Optional.ofNullable(operatorSigningContext)
+
+    internal fun requireOperatorSigningContext(): OperatorSigningContext =
+        checkNotNull(operatorSigningContext) {
+            "operatorSigningContext must be configured before an operator request"
         }
 
     fun baseUri(): URI = baseUri
@@ -97,6 +107,7 @@ class ClientConfig private constructor(builder: Builder) {
             .setDeviceProfileProvider(deviceProfileProvider).setCrashTelemetryMetadataProvider(crashMetadataProvider)
             .setCrashTelemetryEnabled(crashTelemetryEnabled)
         localSigningContext?.let(builder::setLocalSigningContext)
+        operatorSigningContext?.let(builder::setOperatorSigningContext)
         return builder
     }
 
@@ -132,6 +143,7 @@ class ClientConfig private constructor(builder: Builder) {
 
     class Builder {
         internal var localSigningContext: LocalSigningContext? = null
+        internal var operatorSigningContext: OperatorSigningContext? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
         internal var sorafsGatewayUri: URI? = null
         internal var requestTimeout: Duration = Duration.ofSeconds(10)
@@ -153,6 +165,11 @@ class ClientConfig private constructor(builder: Builder) {
         /** Enables local draft signing with one immutable, caller-owned network context. */
         fun setLocalSigningContext(context: LocalSigningContext): Builder {
             this.localSigningContext = context
+            return this
+        }
+        /** Enables fresh exact-network signing for operator-only Torii APIs. */
+        fun setOperatorSigningContext(context: OperatorSigningContext): Builder {
+            this.operatorSigningContext = context
             return this
         }
         fun setBaseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }

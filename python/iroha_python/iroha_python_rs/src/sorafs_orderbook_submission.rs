@@ -1,16 +1,12 @@
 //! Strict native inspection for Python SoraFS orderbook submission.
-
 #[rustfmt::skip]
 use iroha_data_model::{sorafs::orderbook_submission::{SorafsOrderbookSubmissionRouteV1, decode_and_verify_sorafs_orderbook_submission_receipt_v1, inspect_sorafs_orderbook_submission_for_discriminant_v1 as inspect_submission, parse_sorafs_orderbook_receipt_signer_v1, parse_sorafs_orderbook_submission_identity_v1}, transaction::TransactionSubmissionReceipt};
 #[rustfmt::skip]
 use pyo3::{Py, PyErr, PyResult, Python, exceptions::PyValueError, pyfunction, types::{PyDict, PyDictMethods}};
-
 use crate::PyNetworkId;
-
 fn invalid(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_sorafs_orderbook_submission_v1")]
 #[rustfmt::skip]
@@ -32,7 +28,6 @@ pub(crate) fn inspect_sorafs_orderbook_submission_v1_py(
     result.set_item("signed_transaction_hash", identity.signed_transaction_hash.to_string())?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "verify_sorafs_orderbook_submission_receipt_v1")]
 #[rustfmt::skip]
@@ -48,7 +43,6 @@ pub(crate) fn verify_sorafs_orderbook_submission_receipt_v1_py(
     let receipt = decode_and_verify_sorafs_orderbook_submission_receipt_v1(receipt_norito, &identity, &signer).map_err(|error| invalid(error.to_string()))?;
     norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))
 }
-
 #[pyfunction]
 #[pyo3(name = "decode_transaction_receipt_json")]
 pub(crate) fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> {

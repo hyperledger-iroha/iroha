@@ -1,12 +1,9 @@
 //! Validate the exact non-secret Governance DAG runtime-signer binding.
-
-use std::{fmt::Write as _, path::PathBuf};
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-
+use std::{fmt::Write as _, path::PathBuf};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -14,7 +11,6 @@ fn base_reader() -> ConfigReader {
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -26,13 +22,11 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 fn public_key_hex(seed: u8) -> String {
     let key_pair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
     hex::encode(key_pair.public_key().to_bytes().1)
 }
-
 fn native_signer_bindings() -> String {
     [
         ("proof_outcome", "proof-outcome", 0x60),
@@ -64,7 +58,6 @@ policy_digest_hex = "{policy_digest_hex}"
     .collect::<Vec<_>>()
     .join("")
 }
-
 fn producer_checkpoint_store_binding() -> String {
     format!(
         r#"
@@ -77,7 +70,6 @@ checkpoint_store_policy_digest_hex = "{}"
         "81".repeat(32)
     )
 }
-
 fn signer_overlay(
     peer_id: Option<&str>,
     handle: Option<&str>,
@@ -122,7 +114,6 @@ governance_dag_dir = "/tmp/sorafs-governance"
     source.push_str(&native_signer_bindings());
     source
 }
-
 #[test]
 fn governance_dag_runtime_signer_and_producer_store_project_exact_bindings() {
     let public_key = public_key_hex(0x61);
@@ -136,7 +127,6 @@ fn governance_dag_runtime_signer_and_producer_store_project_exact_bindings() {
     ))
     .expect("complete canonical signer binding");
     let storage = &actual.torii.sorafs_storage;
-
     assert_eq!(
         storage.governance_dag_publisher_peer_id.as_deref(),
         Some("12D3KooWGovernancePrimary")
@@ -173,7 +163,6 @@ fn governance_dag_runtime_signer_and_producer_store_project_exact_bindings() {
         Some([0x81; 32])
     );
 }
-
 #[test]
 fn governance_dag_local_producer_rejects_missing_checkpoint_store_binding() {
     let public_key = public_key_hex(0x66);
@@ -186,7 +175,6 @@ fn governance_dag_local_producer_rejects_missing_checkpoint_store_binding() {
         Some(&public_key),
     )
     .replace(&producer_checkpoint_store_binding(), "");
-
     let error = parse_overlay(&source).expect_err("producer checkpoint store is mandatory");
     assert!(
         error.contains(
@@ -195,7 +183,6 @@ fn governance_dag_local_producer_rejects_missing_checkpoint_store_binding() {
         "unexpected missing-store diagnostic: {error}"
     );
 }
-
 #[test]
 fn governance_dag_local_producer_rejects_partial_checkpoint_store_bindings() {
     let public_key = public_key_hex(0x67);
@@ -228,7 +215,6 @@ fn governance_dag_local_producer_rejects_partial_checkpoint_store_bindings() {
         );
     }
 }
-
 #[test]
 fn disabled_governance_service_rejects_network_auth_but_accepts_producer_store() {
     let public_key = public_key_hex(0x68);
@@ -241,7 +227,6 @@ fn disabled_governance_service_rejects_network_auth_but_accepts_producer_store()
         Some(&public_key),
     );
     parse_overlay(&complete).expect("disabled service accepts the producer checkpoint store");
-
     let with_dormant_ipfs_auth = complete.replacen(
         "[sorafs.storage.governance_dag_service]\nenabled = false\n",
         &format!(
@@ -264,7 +249,6 @@ ipfs_authenticator_policy_digest_hex = "{}"
         "unexpected disabled-service diagnostic: {error}"
     );
 }
-
 #[test]
 fn governance_dag_runtime_signer_rejects_every_partial_five_field_binding() {
     let public_key = public_key_hex(0x62);
@@ -283,7 +267,6 @@ fn governance_dag_runtime_signer_rejects_every_partial_five_field_binding() {
         (complete.0, complete.1, complete.2, None, complete.4),
         (complete.0, complete.1, complete.2, complete.3, None),
     ];
-
     for (peer_id, handle, revision, digest, public_key) in cases {
         let error = parse_overlay(&signer_overlay(
             peer_id, handle, revision, digest, public_key,
@@ -295,7 +278,6 @@ fn governance_dag_runtime_signer_rejects_every_partial_five_field_binding() {
         );
     }
 }
-
 #[test]
 fn governance_dag_runtime_signer_rejects_zero_and_noncanonical_qualification() {
     let public_key = public_key_hex(0x63);
@@ -345,7 +327,6 @@ fn governance_dag_runtime_signer_rejects_zero_and_noncanonical_qualification() {
         );
     }
 }
-
 #[test]
 fn governance_dag_runtime_signer_rejects_test_marked_handle_without_echoing_it() {
     let public_key = public_key_hex(0x64);
@@ -359,11 +340,9 @@ fn governance_dag_runtime_signer_rejects_test_marked_handle_without_echoing_it()
         Some(&public_key),
     ))
     .expect_err("test-marked signer handle must fail");
-
     assert!(error.contains("must be a production runtime handle"));
     assert!(!error.contains(secret_marker));
 }
-
 #[test]
 fn governance_dag_runtime_signer_rejects_dormant_and_disabled_bindings() {
     let public_key = public_key_hex(0x65);

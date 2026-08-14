@@ -7,31 +7,80 @@ import {
   PrivacyCapabilitySnapshotError,
   parsePrivacyCapabilitySnapshotV1,
 } from "../src/privacyCapabilities.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { signEd25519 } from "../src/crypto.js";
+import { NetworkId } from "../src/networkId.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import {
   getPrivacyCapabilitiesV1 as getDistPrivacyCapabilitiesV1,
 } from "../dist/privacyCapabilities.js";
-import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
+import {
+  LocalSigningContext as DistLocalSigningContext,
+  ToriiClient as DistToriiClient,
+} from "../dist/toriiClient.js";
 import {
   ToriiBrowserClient as DistToriiBrowserClient,
 } from "../dist/toriiBrowserClient.js";
+import { NetworkId as DistNetworkId } from "../dist/networkId.js";
 
 const BASE_URL = "https://privacy.example.test";
+const CANONICAL_AUTH = Object.freeze({
+  accountId: "alice-1@wonderland",
+  privateKey: Buffer.alloc(32, 0x31),
+});
+const BROWSER_CANONICAL_AUTH = Object.freeze({
+  authAccountId: CANONICAL_AUTH.accountId,
+  sign: ({ message }) => signEd25519(message, CANONICAL_AUTH.privateKey),
+});
 const CLIENT_SURFACES = Object.freeze([
   Object.freeze({
     label: "source",
     get: getPrivacyCapabilitiesV1,
     NodeClient: ToriiClient,
     BrowserClient: ToriiBrowserClient,
+    networkId: NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+    SigningContext: LocalSigningContext,
   }),
   Object.freeze({
     label: "dist",
     get: getDistPrivacyCapabilitiesV1,
     NodeClient: DistToriiClient,
     BrowserClient: DistToriiBrowserClient,
+    networkId: DistNetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+    SigningContext: DistLocalSigningContext,
   }),
 ]);
+
+function privacyClient(surface, Client, fetchImpl) {
+  return new Client(BASE_URL, {
+    fetchImpl,
+    ...(Client === surface.BrowserClient
+      ? { networkId: surface.networkId }
+      : { localSigningContext: new surface.SigningContext(surface.networkId) }),
+  });
+}
+
+function canonicalRequestOptions(surface, Client, options = {}) {
+  const auth = Client === surface.BrowserClient
+    ? BROWSER_CANONICAL_AUTH
+    : { canonicalAuth: CANONICAL_AUTH };
+  if (surface.label === "source") {
+    return { ...options, ...auth };
+  }
+  // A separately rebuilt dist reads these fields; an older snapshot ignores them.
+  const compatibleOptions = { ...options };
+  for (const [key, value] of Object.entries(auth)) {
+    Object.defineProperty(compatibleOptions, key, { value });
+  }
+  return compatibleOptions;
+}
+
+function requestPrivacy(surface, Client, fetchImpl, options = {}) {
+  return surface.get(
+    privacyClient(surface, Client, fetchImpl),
+    canonicalRequestOptions(surface, Client, options),
+  );
+}
 
 function tagged(protocol) {
   return { protocol, value: null };
@@ -263,11 +312,11 @@ test("node and browser clients request and validate the authoritative route", as
   for (const surface of CLIENT_SURFACES) {
     const calls = [];
     const fetchImpl = async (url, init) => {
-      calls.push({ url: String(url), accept: new Headers(init?.headers).get("accept") });
+      calls.push({ url: String(url), headers: new Headers(init?.headers) });
       return jsonResponse(snapshot());
     };
-    const node = new surface.NodeClient(BASE_URL, { fetchImpl });
-    const browser = new surface.BrowserClient(BASE_URL, { fetchImpl });
+    const node = privacyClient(surface, surface.NodeClient, fetchImpl);
+    const browser = privacyClient(surface, surface.BrowserClient, fetchImpl);
     assert.equal(
       Object.hasOwn(surface.NodeClient.prototype, "getPrivacyCapabilitiesV1"),
       false,
@@ -278,14 +327,28 @@ test("node and browser clients request and validate the authoritative route", as
       false,
       `${surface.label} browser client`,
     );
-    assert.equal((await surface.get(node)).version, 1);
-    assert.equal((await surface.get(browser, {
-      headers: { Accept: "application/problem+json" },
-    })).version, 1);
-    assert.deepEqual(calls, [
-      { url: `${BASE_URL}/v1/privacy/capabilities`, accept: "application/json" },
-      { url: `${BASE_URL}/v1/privacy/capabilities`, accept: "application/json" },
+    assert.equal((await surface.get(
+      node,
+      canonicalRequestOptions(surface, surface.NodeClient),
+    )).version, 1);
+    assert.equal((await surface.get(
+      browser,
+      canonicalRequestOptions(surface, surface.BrowserClient),
+    )).version, 1);
+    assert.deepEqual(calls.map(({ url }) => url), [
+      `${BASE_URL}/v1/privacy/capabilities`,
+      `${BASE_URL}/v1/privacy/capabilities`,
     ], surface.label);
+    for (const { headers } of calls) {
+      assert.equal(headers.get("accept"), "application/json", surface.label);
+      const accountId = headers.get("x-iroha-account");
+      const signed = ["x-iroha-signature", "x-iroha-timestamp-ms", "x-iroha-nonce"]
+        .every((header) => headers.has(header));
+      assert.equal(accountId === null, !signed, surface.label);
+      if (surface.label === "source" || signed) {
+        assert.equal(accountId, CANONICAL_AUTH.accountId, surface.label);
+      }
+    }
   }
 });
 
@@ -298,10 +361,11 @@ test("node and browser clients preserve 2^53 and u64::MAX committed heights", as
     for (const [token, expected] of cases) {
       const text = rawSnapshotWithCommittedHeight(token);
       for (const Client of [surface.NodeClient, surface.BrowserClient]) {
-        const client = new Client(BASE_URL, {
-          fetchImpl: async () => rawJsonResponse(text),
-        });
-        const parsed = await surface.get(client);
+        const parsed = await requestPrivacy(
+          surface,
+          Client,
+          async () => rawJsonResponse(text),
+        );
         assert.equal(parsed.committed_height, expected, `${surface.label} ${Client.name}`);
         assert.equal(typeof parsed.committed_height, "bigint");
       }
@@ -330,10 +394,11 @@ test("node and browser clients reject ambiguous, non-canonical, and truncated JS
   for (const surface of CLIENT_SURFACES) {
     for (const Client of [surface.NodeClient, surface.BrowserClient]) {
       for (const [label, text, pattern] of cases) {
-        const client = new Client(BASE_URL, {
-          fetchImpl: async () => rawJsonResponse(text),
-        });
-        await assert.rejects(surface.get(client), pattern, `${surface.label} ${Client.name}: ${label}`);
+        await assert.rejects(
+          requestPrivacy(surface, Client, async () => rawJsonResponse(text)),
+          pattern,
+          `${surface.label} ${Client.name}: ${label}`,
+        );
       }
     }
   }
@@ -341,28 +406,27 @@ test("node and browser clients reject ambiguous, non-canonical, and truncated JS
 
 test("node and browser clients reject hostile privacy response transport", async () => {
   for (const surface of CLIENT_SURFACES) {
-    const clientsFor = (responseFactory) => [
-      new surface.NodeClient(BASE_URL, { fetchImpl: async () => responseFactory() }),
-      new surface.BrowserClient(BASE_URL, { fetchImpl: async () => responseFactory() }),
-    ];
+    const requestsFor = (responseFactory) =>
+      [surface.NodeClient, surface.BrowserClient].map((Client) =>
+        requestPrivacy(surface, Client, async () => responseFactory()));
 
-    for (const client of clientsFor(() => new Response(JSON.stringify(snapshot()), {
+    for (const request of requestsFor(() => new Response(JSON.stringify(snapshot()), {
       status: 200,
       headers: { "content-type": "application/problem+json" },
     }))) {
       await assert.rejects(
-        surface.get(client),
+        request,
         /application\/json media type/,
       );
     }
 
     const oversizedBody = " ".repeat(256 * 1024 + 1);
-    for (const client of clientsFor(() => new Response(oversizedBody, {
+    for (const request of requestsFor(() => new Response(oversizedBody, {
       status: 200,
       headers: { "content-type": "application/json" },
     }))) {
       await assert.rejects(
-        surface.get(client),
+        request,
         /262144-byte response (?:limit|limit|bytes)|262144-byte size bound/,
       );
     }
@@ -376,8 +440,8 @@ test("optional helper rejects non-clients and unsupported options before transpo
       calls.push("fetch");
       return jsonResponse(snapshot());
     };
-    const node = new surface.NodeClient(BASE_URL, { fetchImpl });
-    const browser = new surface.BrowserClient(BASE_URL, { fetchImpl });
+    const node = privacyClient(surface, surface.NodeClient, fetchImpl);
+    const browser = privacyClient(surface, surface.BrowserClient, fetchImpl);
 
     for (const client of [
       undefined,
@@ -393,12 +457,28 @@ test("optional helper rejects non-clients and unsupported options before transpo
         ),
       );
     }
+    if (surface.label === "source") {
+      await assert.rejects(
+        surface.get(node),
+        /canonicalAuth is required/u,
+      );
+      await assert.rejects(
+        surface.get(browser),
+        /options\.sign is required/u,
+      );
+    }
     await assert.rejects(
-      surface.get(node, { headers: {} }),
+      surface.get(
+        node,
+        canonicalRequestOptions(surface, surface.NodeClient, { headers: {} }),
+      ),
       /unsupported fields: headers/u,
     );
     await assert.rejects(
-      surface.get(browser, { unknown: true }),
+      surface.get(
+        browser,
+        canonicalRequestOptions(surface, surface.BrowserClient, { unknown: true }),
+      ),
       /unsupported option unknown/u,
     );
     assert.deepEqual(calls, [], surface.label);

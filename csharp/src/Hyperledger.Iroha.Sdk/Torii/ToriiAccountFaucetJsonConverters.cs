@@ -15,6 +15,16 @@ internal static class ToriiAccountFaucetJson
             throw new JsonException($"{context}.algorithm must be {ToriiAccountFaucetPow.Algorithm}.");
         }
 
+        if (response.NetworkId is null)
+        {
+            throw new JsonException($"{context}.network_id must not be null.");
+        }
+
+        if (response.DifficultyBits == 0)
+        {
+            throw new JsonException($"{context}.difficulty_bits must be positive.");
+        }
+
         if (response.AnchorHeight == 0)
         {
             throw new JsonException($"{context}.anchor_height must be positive.");
@@ -23,7 +33,10 @@ internal static class ToriiAccountFaucetJson
         ToriiSseEventJson.RequireExactSizedHex(response.AnchorBlockHashHex, $"{context}.anchor_block_hash_hex", 32);
         if (response.ChallengeSaltHex is not null)
         {
-            RequireExactEvenLengthHex(response.ChallengeSaltHex, $"{context}.challenge_salt_hex");
+            ToriiSseEventJson.RequireExactSizedHex(
+                response.ChallengeSaltHex,
+                $"{context}.challenge_salt_hex",
+                32);
         }
 
         try
@@ -77,6 +90,33 @@ internal static class ToriiAccountFaucetJson
         return value;
     }
 
+    internal static ushort ReadUInt16(ref Utf8JsonReader reader, string field)
+    {
+        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetUInt16(out var value))
+        {
+            throw new JsonException($"{field} must be an unsigned 16-bit integer.");
+        }
+
+        return value;
+    }
+
+    internal static NetworkId ReadNetworkId(ref Utf8JsonReader reader, string field)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            throw new JsonException($"{field} must be a canonical NetworkId string.");
+        }
+
+        try
+        {
+            return NetworkId.Parse(reader.GetString()!);
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException($"{field} must be a canonical checksummed NetworkId.", error);
+        }
+    }
+
     internal static uint ReadUInt32(ref Utf8JsonReader reader, string field)
     {
         if (reader.TokenType != JsonTokenType.Number || !reader.TryGetUInt32(out var value))
@@ -98,6 +138,16 @@ internal static class ToriiAccountFaucetJson
     }
 
     internal static byte RequireByte(byte? value, string context, string propertyName)
+    {
+        if (!value.HasValue)
+        {
+            throw new JsonException($"{context}.{propertyName} must not be null.");
+        }
+
+        return value.Value;
+    }
+
+    internal static ushort RequireUInt16(ushort? value, string context, string propertyName)
     {
         if (!value.HasValue)
         {
@@ -137,49 +187,6 @@ internal static class ToriiAccountFaucetJson
         return value;
     }
 
-    private static void RequireExactEvenLengthHex(string? value, string field)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new JsonException($"{field} must be a non-empty even-length hex string.");
-        }
-
-        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
-        {
-            throw new JsonException($"{field} must not contain surrounding whitespace.");
-        }
-
-        foreach (var character in value)
-        {
-            if (char.IsWhiteSpace(character))
-            {
-                throw new JsonException($"{field} must not contain whitespace.");
-            }
-
-            if (char.IsControl(character))
-            {
-                throw new JsonException($"{field} must not contain control characters.");
-            }
-        }
-
-        if (value.Length % 2 != 0 || !IsLowercaseHex(value))
-        {
-            throw new JsonException($"{field} must be an exact lowercase even-length hex string.");
-        }
-    }
-
-    private static bool IsLowercaseHex(string value)
-    {
-        foreach (var character in value)
-        {
-            if (character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
 }
 
 internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<ToriiAccountFaucetPuzzle>
@@ -203,6 +210,8 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         string? algorithm = null;
+        NetworkId? networkId = null;
+        ushort? chainDiscriminant = null;
         byte? difficultyBits = null;
         ulong? anchorHeight = null;
         string? anchorBlockHashHex = null;
@@ -224,6 +233,13 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
                             algorithm,
                             "account faucet puzzle",
                             "algorithm"),
+                        NetworkId = networkId
+                            ?? throw new JsonException(
+                                "account faucet puzzle.network_id must not be null."),
+                        ChainDiscriminant = ToriiAccountFaucetJson.RequireUInt16(
+                            chainDiscriminant,
+                            "account faucet puzzle",
+                            "chain_discriminant"),
                         DifficultyBits = ToriiAccountFaucetJson.RequireByte(
                             difficultyBits,
                             "account faucet puzzle",
@@ -280,6 +296,16 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
                 case "algorithm":
                     algorithm = ToriiAccountFaucetJson.ReadOptionalString(ref reader, "account faucet puzzle.algorithm");
                     break;
+                case "network_id":
+                    networkId = ToriiAccountFaucetJson.ReadNetworkId(
+                        ref reader,
+                        "account faucet puzzle.network_id");
+                    break;
+                case "chain_discriminant":
+                    chainDiscriminant = ToriiAccountFaucetJson.ReadUInt16(
+                        ref reader,
+                        "account faucet puzzle.chain_discriminant");
+                    break;
                 case "difficulty_bits":
                     difficultyBits = ToriiAccountFaucetJson.ReadByte(ref reader, "account faucet puzzle.difficulty_bits");
                     break;
@@ -320,6 +346,9 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
         var field = error.ParamName switch
         {
             "Algorithm" => "algorithm",
+            "NetworkId" => "network_id",
+            "ChainDiscriminant" => "chain_discriminant",
+            "DifficultyBits" => "difficulty_bits",
             "AnchorHeight" => "anchor_height",
             "AnchorBlockHashHex" => "anchor_block_hash_hex",
             "ChallengeSaltHex" => "challenge_salt_hex",
@@ -341,6 +370,8 @@ internal sealed class ToriiAccountFaucetPuzzleJsonConverter : JsonConverter<Tori
 
         writer.WriteStartObject();
         writer.WriteString("algorithm", value.Algorithm);
+        writer.WriteString("network_id", value.NetworkId.ToString());
+        writer.WriteNumber("chain_discriminant", value.ChainDiscriminant);
         writer.WriteNumber("difficulty_bits", value.DifficultyBits);
         writer.WriteNumber("anchor_height", value.AnchorHeight);
         writer.WriteString("anchor_block_hash_hex", value.AnchorBlockHashHex);

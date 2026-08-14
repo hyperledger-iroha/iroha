@@ -1,15 +1,12 @@
-use std::{env, fs};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
+use std::{env, fs};
 use tempfile::TempDir;
-
 #[test]
 fn mochi_bundle_command_generates_manifest() {
     let temp = TempDir::new().expect("temp dir");
     let output_dir = temp.path().join("bundle-output");
-
     cargo_bin_cmd!("xtask")
         .args([
             "mochi-bundle",
@@ -21,7 +18,6 @@ fn mochi_bundle_command_generates_manifest() {
         ])
         .assert()
         .success();
-
     let bundle_name = format!("mochi-{}-{}-debug", env::consts::OS, env::consts::ARCH);
     let bundle_root = output_dir.join(&bundle_name);
     assert!(
@@ -29,7 +25,6 @@ fn mochi_bundle_command_generates_manifest() {
         "expected bundle directory at {}",
         bundle_root.display()
     );
-
     let manifest_path = bundle_root.join("manifest.json");
     let manifest = fs::read_to_string(&manifest_path)
         .unwrap_or_else(|_| panic!("missing manifest {}", manifest_path.display()));
@@ -57,13 +52,11 @@ fn mochi_bundle_command_generates_manifest() {
         "manifest should list {kagami_name}"
     );
 }
-
 #[test]
 fn mochi_bundle_matrix_and_smoke() {
     let temp = TempDir::new().expect("temp dir");
     let output_dir = temp.path().join("bundle-output");
     let matrix_path = temp.path().join("matrix.json");
-
     cargo_bin_cmd!("xtask")
         .args([
             "mochi-bundle",
@@ -78,7 +71,6 @@ fn mochi_bundle_matrix_and_smoke() {
         ])
         .assert()
         .success();
-
     let matrix_contents = fs::read_to_string(&matrix_path)
         .unwrap_or_else(|_| panic!("missing matrix {}", matrix_path.display()));
     let matrix: Value = json::from_str(&matrix_contents).expect("parse matrix");
@@ -109,7 +101,6 @@ fn mochi_bundle_matrix_and_smoke() {
         !entry.contains_key("archive"),
         "archive field must be absent when --no-archive is used"
     );
-
     let manifest_path = output_dir.join(&bundle_name).join("manifest.json");
     let manifest_bytes = fs::read(&manifest_path)
         .unwrap_or_else(|_| panic!("missing manifest {}", manifest_path.display()));
@@ -122,13 +113,11 @@ fn mochi_bundle_matrix_and_smoke() {
         "matrix should include manifest digest"
     );
 }
-
 #[test]
 fn mochi_bundle_stage_directory_copies_bundle() {
     let temp = TempDir::new().expect("temp dir");
     let output_dir = temp.path().join("bundle-output");
     let stage_dir = temp.path().join("stage-output");
-
     cargo_bin_cmd!("xtask")
         .args([
             "mochi-bundle",
@@ -142,7 +131,6 @@ fn mochi_bundle_stage_directory_copies_bundle() {
         ])
         .assert()
         .success();
-
     let bundle_name = format!("mochi-{}-{}-debug", env::consts::OS, env::consts::ARCH);
     let original_bundle = output_dir.join(&bundle_name);
     let staged_bundle = stage_dir.join(&bundle_name);
@@ -151,7 +139,6 @@ fn mochi_bundle_stage_directory_copies_bundle() {
         "expected staged bundle directory at {}",
         staged_bundle.display()
     );
-
     let original_manifest = original_bundle.join("manifest.json");
     let staged_manifest = staged_bundle.join("manifest.json");
     let original_contents = fs::read_to_string(&original_manifest)

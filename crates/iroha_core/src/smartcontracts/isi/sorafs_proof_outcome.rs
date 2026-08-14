@@ -1,8 +1,10 @@
 //! Finalized chain-authoritative SoraFS PDP and PoTR outcome handlers.
-
+use super::*;
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    state::{StateTransaction, WorldReadOnly},
+};
 use core::convert::TryFrom;
-use std::{str::FromStr, sync::OnceLock};
-
 use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
 use iroha_data_model::{
     account::AccountId,
@@ -44,13 +46,7 @@ use sorafs_manifest::{
     PDP_PROOF_SIGNATURE_DOMAIN_V1, PdpGovernanceArchiveV1, PdpProofV1, PdpRejectionReasonV1,
     PdpTerminalDecisionV1, PotrReceiptV1, PotrStatus,
 };
-
-use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    state::{StateTransaction, WorldReadOnly},
-};
-
+use std::{str::FromStr, sync::OnceLock};
 const POLICY_STATE_KEY_PREFIX: &str = "sorafs_proof_outcome_policy_v1_";
 const OUTCOME_STATE_KEY_PREFIX: &str = "sorafs_proof_outcome_v1_";
 const EVENT_STATE_KEY_PREFIX: &str = "sorafs_proof_outcome_event_v1_";
@@ -86,7 +82,6 @@ const POTR_RECEIPT_LIMITS: DecodeLimits = DecodeLimits::new(
     2 * PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1,
     32,
 );
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ProofOutcomePersistedEventV1 {
     sequence: u64,
@@ -94,14 +89,12 @@ struct ProofOutcomePersistedEventV1 {
     event_index: u32,
     outcome: ProofOutcomeRecordV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ProofOutcomeEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
     last_event_index: u32,
 }
-
 struct PreparedOutcome {
     identity_digest: [u8; 32],
     outcome_digest: [u8; 32],
@@ -111,7 +104,6 @@ struct PreparedOutcome {
     projection: ProofOutcomeProjectionV1,
     has_provider_proof: bool,
 }
-
 impl PreparedOutcome {
     fn into_record(
         self,
@@ -131,17 +123,14 @@ impl PreparedOutcome {
         }
     }
 }
-
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
 fn policy_key(provider_id: ProviderId) -> StatePath {
     StatePath::from_str(&format!(
         "{POLICY_STATE_KEY_PREFIX}{}",
@@ -149,7 +138,6 @@ fn policy_key(provider_id: ProviderId) -> StatePath {
     ))
     .expect("static prefix plus provider hex is a valid state key")
 }
-
 fn outcome_key(kind: ProofOutcomeKindV1, identity_digest: [u8; 32]) -> StatePath {
     let kind = match kind {
         ProofOutcomeKindV1::Pdp => "pdp",
@@ -161,12 +149,10 @@ fn outcome_key(kind: ProofOutcomeKindV1, identity_digest: [u8; 32]) -> StatePath
     ))
     .expect("static prefix plus proof kind and digest is a valid state key")
 }
-
 fn event_key(sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
-
 fn event_journal_head_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
@@ -174,7 +160,6 @@ fn event_journal_head_key() -> &'static StatePath {
             .expect("static proof-outcome event journal head key is valid")
     })
 }
-
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -189,8 +174,16 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     }
     Ok(bytes)
 }
-
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    decode_state_measured(bytes, label).map(|(value, _)| value)
+}
+fn decode_state_measured<T>(
+    bytes: &[u8],
+    label: &str,
+) -> Result<(T, usize), InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
@@ -200,16 +193,71 @@ where
             bytes.len()
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
-    if encode_state(&value, label)? != bytes {
+    let limits =
+        crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), STATE_LIMITS)
+            .map_err(InstructionExecutionError::Query)?;
+    let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_from_bytes_with_limits::<T>(bytes, limits)
+    });
+    let value = value.map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    Ok((value, usage.total_allocated_bytes()))
+}
+fn decode_state_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.is_empty() || bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
-            "{label} is not exact canonical Norito"
+            "{label} length {} is outside 1..={STATE_MAX_BYTES}",
+            bytes.len()
         )));
     }
+    let limits = current
+        .decode_limits(bytes.len(), STATE_LIMITS)
+        .map_err(InstructionExecutionError::Query)?;
+    let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_from_bytes_with_limits::<T>(bytes, limits)
+    });
+    let value = value.map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    current
+        .add_nested(usage.total_allocated_bytes())
+        .map_err(InstructionExecutionError::Query)?;
     Ok(value)
 }
-
 fn decode_payload<T>(
     bytes: &[u8],
     maximum: usize,
@@ -225,20 +273,27 @@ where
             bytes.len()
         )));
     }
+    let limits =
+        crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), limits)
+            .map_err(InstructionExecutionError::Query)?;
     let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
-        invalid_parameter(format!("failed to decode canonical {label}: {error}"))
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            invalid_parameter(format!("failed to decode canonical {label}: {error}"))
+        }
     })?;
-    let canonical = norito::to_bytes(&value).map_err(|error| {
-        invalid_parameter(format!("failed to encode canonical {label}: {error}"))
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            invalid_parameter(format!("{label} is not exact canonical Norito"))
+        } else {
+            invalid_parameter(format!("failed to encode canonical {label}: {error}"))
+        }
     })?;
-    if canonical != bytes {
-        return Err(invalid_parameter(format!(
-            "{label} is not exact canonical Norito"
-        )));
-    }
     Ok(value)
 }
-
 fn block_time_ms(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
@@ -250,7 +305,6 @@ fn block_time_ms(
     }
     Ok(now)
 }
-
 fn has_named_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -278,7 +332,6 @@ fn has_named_permission(
                     .any(|permission| permission.name() == permission_name)
             })
 }
-
 fn has_scheduler_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -300,7 +353,6 @@ fn has_scheduler_permission(
             .filter_map(|role_id| state_transaction.world.roles.get(role_id))
             .any(|role| role.permissions().any(|permission| permission == &required))
 }
-
 fn validate_ed25519_public_key(
     bytes: &[u8; 32],
     label: &str,
@@ -309,7 +361,6 @@ fn validate_ed25519_public_key(
         .map(|_| ())
         .map_err(|error| invalid_parameter(format!("invalid {label}: {error}")))
 }
-
 fn validate_mldsa_public_key(bytes: &[u8], label: &str) -> Result<(), InstructionExecutionError> {
     if bytes.is_empty() || bytes.len() > PROOF_OUTCOME_MAX_PROVIDER_KEY_BYTES_V1 {
         return Err(invalid_parameter(format!(
@@ -321,23 +372,32 @@ fn validate_mldsa_public_key(bytes: &[u8], label: &str) -> Result<(), Instructio
         .map(|_| ())
         .map_err(|error| invalid_parameter(format!("invalid {label}: {error}")))
 }
-
 fn policy_digest(
     policy: &ProofOutcomeSignerPolicyV1,
 ) -> Result<[u8; 32], InstructionExecutionError> {
-    let bytes = norito::to_bytes(policy)
+    let encoded_len = norito::core::encoded_frame_len(policy)
         .map_err(|error| invalid_parameter(format!("failed to encode signer policy: {error}")))?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(POLICY_DIGEST_DOMAIN_V1);
     hasher.update(
-        &u64::try_from(bytes.len())
-            .expect("slice length fits u64")
+        &u64::try_from(encoded_len)
+            .map_err(|_| invalid_parameter("signer policy length does not fit u64"))?
             .to_le_bytes(),
     );
-    hasher.update(&bytes);
+    struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+    impl std::io::Write for Blake3Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    norito::core::write_frame_to_writer(policy, &mut Blake3Writer(&mut hasher))
+        .map_err(|error| invalid_parameter(format!("failed to encode signer policy: {error}")))?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn validate_signer_policy(
     policy: &ProofOutcomeSignerPolicyV1,
 ) -> Result<(), InstructionExecutionError> {
@@ -361,7 +421,6 @@ fn validate_signer_policy(
     )?;
     validate_ed25519_public_key(&policy.gateway_public_key, "PoTR gateway public key")
 }
-
 fn read_signer_policy(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
@@ -384,7 +443,6 @@ fn read_signer_policy(
     }
     Ok(Some(record))
 }
-
 fn map_pdp_status(decision: PdpTerminalDecisionV1) -> PdpOutcomeStatusV1 {
     match decision {
         PdpTerminalDecisionV1::Accepted => PdpOutcomeStatusV1::Accepted,
@@ -399,7 +457,6 @@ fn map_pdp_status(decision: PdpTerminalDecisionV1) -> PdpOutcomeStatusV1 {
         },
     }
 }
-
 fn map_potr_status(status: PotrStatus) -> PotrOutcomeStatusV1 {
     match status {
         PotrStatus::Success => PotrOutcomeStatusV1::Success,
@@ -409,7 +466,6 @@ fn map_potr_status(status: PotrStatus) -> PotrOutcomeStatusV1 {
         PotrStatus::ClientCancelled => PotrOutcomeStatusV1::ClientCancelled,
     }
 }
-
 fn prepare_pdp_outcome(
     archive_payload: &[u8],
 ) -> Result<PreparedOutcome, InstructionExecutionError> {
@@ -483,7 +539,6 @@ fn prepare_pdp_outcome(
         has_provider_proof: archive.proof_digest.is_some(),
     })
 }
-
 fn prepare_potr_outcome(
     receipt_payload: &[u8],
     admission_envelope_digest: [u8; 32],
@@ -544,7 +599,6 @@ fn prepare_potr_outcome(
         has_provider_proof: true,
     })
 }
-
 fn verify_pdp_attestation(
     proof_digest: [u8; 32],
     attestation: &ProofOutcomeEd25519AttestationV1,
@@ -560,8 +614,13 @@ fn verify_pdp_attestation(
         corrupt_state(format!("stored PDP signature failed verification: {error}"))
     })
 }
-
 fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), InstructionExecutionError> {
+    validate_outcome_record_with_current(record, None)
+}
+fn validate_outcome_record_with_current(
+    record: &ProofOutcomeRecordV1,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<(), InstructionExecutionError> {
     if record.version != PROOF_OUTCOME_RECORD_VERSION_V1
         || record.identity_digest == [0; 32]
         || record.outcome_digest == [0; 32]
@@ -623,10 +682,17 @@ fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), Instruct
                     "stored PoTR outcome key or receipt metadata is invalid",
                 ));
             }
-            let receipt: PotrReceiptV1 = decode_state(
-                &projection.canonical_signed_receipt,
-                "stored canonical PoTR receipt",
-            )?;
+            let receipt: PotrReceiptV1 = match current.as_deref_mut() {
+                Some(current) => decode_state_for_current(
+                    &projection.canonical_signed_receipt,
+                    "stored canonical PoTR receipt",
+                    current,
+                )?,
+                None => decode_state(
+                    &projection.canonical_signed_receipt,
+                    "stored canonical PoTR receipt",
+                )?,
+            };
             receipt.validate().map_err(|error| {
                 corrupt_state(format!("stored PoTR receipt is invalid: {error}"))
             })?;
@@ -672,7 +738,6 @@ fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), Instruct
     }
     Ok(())
 }
-
 fn read_outcome(
     world: &impl WorldReadOnly,
     kind: ProofOutcomeKindV1,
@@ -682,8 +747,21 @@ fn read_outcome(
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
-    let record: ProofOutcomeRecordV1 = decode_state(bytes, "proof-outcome record")?;
-    validate_outcome_record(&record)?;
+    let record: ProofOutcomeRecordV1 =
+        if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            let (record, allocation_bytes) = decode_state_measured(bytes, "proof-outcome record")?;
+            let mut current =
+                crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+                    allocation_bytes,
+                )
+                .map_err(InstructionExecutionError::Query)?;
+            validate_outcome_record_with_current(&record, Some(&mut current))?;
+            record
+        } else {
+            let record = decode_state(bytes, "proof-outcome record")?;
+            validate_outcome_record(&record)?;
+            record
+        };
     if record.kind() != kind
         || record.identity_digest != identity_digest
         || outcome_key(record.kind(), record.identity_digest) != key
@@ -694,7 +772,6 @@ fn read_outcome(
     }
     Ok(Some(record))
 }
-
 fn same_cryptographic_outcome(
     existing: &ProofOutcomeRecordV1,
     candidate: &ProofOutcomeRecordV1,
@@ -707,7 +784,6 @@ fn same_cryptographic_outcome(
         && existing.admission_envelope_digest == candidate.admission_envelope_digest
         && existing.projection == candidate.projection
 }
-
 fn validate_outcome_against_current_policy(
     prepared: &PreparedOutcome,
     policy: &ProofOutcomeSignerPolicyV1,
@@ -764,12 +840,18 @@ fn validate_outcome_against_current_policy(
     }
     Ok(())
 }
-
 fn validate_persisted_event(
     event: &ProofOutcomePersistedEventV1,
     expected_sequence: u64,
 ) -> Result<(), InstructionExecutionError> {
-    validate_outcome_record(&event.outcome)?;
+    validate_persisted_event_with_current(event, expected_sequence, None)
+}
+fn validate_persisted_event_with_current(
+    event: &ProofOutcomePersistedEventV1,
+    expected_sequence: u64,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<(), InstructionExecutionError> {
+    validate_outcome_record_with_current(&event.outcome, current)?;
     if event.sequence == 0
         || event.sequence != expected_sequence
         || event.target_block_height == 0
@@ -781,7 +863,6 @@ fn validate_persisted_event(
     }
     Ok(())
 }
-
 fn validate_event_successor(
     previous: Option<&ProofOutcomePersistedEventV1>,
     current: &ProofOutcomePersistedEventV1,
@@ -821,7 +902,6 @@ fn validate_event_successor(
         )),
     }
 }
-
 fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -834,33 +914,57 @@ fn read_persisted_event(
     let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
         return Ok(None);
     };
-    let event: ProofOutcomePersistedEventV1 = decode_state(bytes, "proof-outcome committed event")?;
-    validate_persisted_event(&event, sequence)?;
+    let event: ProofOutcomePersistedEventV1 =
+        if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            let (event, allocation_bytes) =
+                decode_state_measured(bytes, "proof-outcome committed event")?;
+            let mut current =
+                crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+                    allocation_bytes,
+                )
+                .map_err(InstructionExecutionError::Query)?;
+            validate_persisted_event_with_current(&event, sequence, Some(&mut current))?;
+            event
+        } else {
+            let event = decode_state(bytes, "proof-outcome committed event")?;
+            validate_persisted_event(&event, sequence)?;
+            event
+        };
     Ok(Some(event))
 }
-
 fn validate_event_outcome_binding(
     world: &impl WorldReadOnly,
     event: &ProofOutcomePersistedEventV1,
 ) -> Result<usize, InstructionExecutionError> {
     let key = outcome_key(event.outcome.kind(), event.outcome.identity_digest);
-    let state_bytes = world.smart_contract_state().get(&key).map_or(0, Vec::len);
-    let outcome = read_outcome(world, event.outcome.kind(), event.outcome.identity_digest)?
-        .ok_or_else(|| {
-            corrupt_state(format!(
-                "proof-outcome event sequence {} references a missing outcome",
-                event.sequence
-            ))
-        })?;
-    if outcome != event.outcome {
+    let state_bytes = world.smart_contract_state().get(&key).ok_or_else(|| {
+        corrupt_state(format!(
+            "proof-outcome event sequence {} references a missing outcome",
+            event.sequence
+        ))
+    })?;
+    if state_bytes.is_empty() || state_bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
-            "proof-outcome event sequence {} disagrees with authoritative state",
+            "proof-outcome event sequence {} references an outcome whose length is outside 1..={STATE_MAX_BYTES}",
             event.sequence
         )));
     }
-    Ok(state_bytes)
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(STATE_MAX_BYTES);
+    if state_bytes.len() > maximum {
+        return Err(InstructionExecutionError::Query(
+            QueryExecutionFail::CapacityLimit,
+        ));
+    }
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    norito::verify_exact_frame(&event.outcome, state_bytes).map_err(|_| {
+        corrupt_state(format!(
+            "proof-outcome event sequence {} disagrees with authoritative state",
+            event.sequence
+        ))
+    })?;
+    Ok(state_bytes.len())
 }
-
 fn read_event_journal_head(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ProofOutcomeEventJournalHeadV1>, InstructionExecutionError> {
@@ -896,7 +1000,6 @@ fn read_event_journal_head(
     validate_event_successor(predecessor.as_ref(), &terminal)?;
     Ok(Some(head))
 }
-
 fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ProofOutcomeEventJournalHeadV1>,
@@ -940,7 +1043,6 @@ fn ensure_no_event_after_head(
     }
     Ok(())
 }
-
 fn append_event_journal(
     state_transaction: &mut StateTransaction<'_, '_>,
     outcome: &ProofOutcomeRecordV1,
@@ -1020,7 +1122,6 @@ fn append_event_journal(
     );
     Ok(())
 }
-
 impl Execute for SetSorafsProofOutcomeSignerPolicy {
     fn execute(
         self,
@@ -1095,7 +1196,6 @@ impl Execute for SetSorafsProofOutcomeSignerPolicy {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsProofOutcome {
     fn execute(
         self,
@@ -1160,11 +1260,12 @@ impl Execute for SubmitSorafsProofOutcome {
         append_event_journal(state_transaction, &candidate)
     }
 }
-
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
-
 fn resolve_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<ProofOutcomeFinalizedCursorV1, QueryExecutionFail> {
@@ -1189,7 +1290,6 @@ fn resolve_finalized_cursor(
     }
     Ok(ProofOutcomeFinalizedCursorV1 { height, block_hash })
 }
-
 /// Read the active provider proof/admission policy from one immutable finalized
 /// state view.
 ///
@@ -1217,10 +1317,9 @@ pub fn read_sorafs_proof_outcome_signer_policy_in_finalized_view(
     let policy = read_signer_policy(state_ro.world(), provider_id).map_err(query_failure)?;
     Ok((finalized_cursor, policy))
 }
-
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
-    event: &ProofOutcomePersistedEventV1,
+    event: ProofOutcomePersistedEventV1,
 ) -> Result<ProofOutcomeFinalizedEventV1, QueryExecutionFail> {
     let hash_index = event
         .target_block_height
@@ -1252,10 +1351,9 @@ fn resolve_committed_event(
         block_height: event.target_block_height,
         block_hash,
         event_index: event.event_index,
-        outcome: event.outcome.clone(),
+        outcome: event.outcome,
     })
 }
-
 fn charge_state_bytes(total: &mut usize, amount: usize) -> Result<(), QueryExecutionFail> {
     *total = total.checked_add(amount).ok_or_else(|| {
         QueryExecutionFail::Conversion(
@@ -1269,25 +1367,78 @@ fn charge_state_bytes(total: &mut usize, amount: usize) -> Result<(), QueryExecu
     }
     Ok(())
 }
-
 fn ensure_page_budget<T: norito::core::NoritoSerialize>(
     value: &T,
 ) -> Result<(), QueryExecutionFail> {
-    let length = norito::to_bytes(value)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode proof-outcome event page: {error}"
-            ))
-        })?
-        .len();
-    if length > PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
+    let length = norito::core::encoded_frame_len(value).map_err(|error| {
+        QueryExecutionFail::Conversion(format!("failed to size proof-outcome event page: {error}"))
+    })?;
+    if length > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
-            "proof-outcome event page encodes to {length} bytes, above {PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "proof-outcome event page encodes to {length} bytes, above {maximum}"
         )));
     }
     Ok(())
 }
-
+#[derive(Clone, Copy)]
+struct ProofOutcomeQueryEventPosition {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+}
+impl From<&ProofOutcomePersistedEventV1> for ProofOutcomeQueryEventPosition {
+    fn from(event: &ProofOutcomePersistedEventV1) -> Self {
+        Self {
+            sequence: event.sequence,
+            target_block_height: event.target_block_height,
+            event_index: event.event_index,
+        }
+    }
+}
+fn validate_query_event_successor(
+    previous: Option<ProofOutcomeQueryEventPosition>,
+    current: &ProofOutcomePersistedEventV1,
+) -> Result<(), QueryExecutionFail> {
+    let Some(previous) = previous else {
+        return (current.sequence == 1 && current.event_index == 0)
+            .then_some(())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "proof-outcome event journal does not begin at sequence one and block index zero"
+                        .to_owned(),
+                )
+            });
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "proof-outcome event journal sequence is not contiguous".to_owned(),
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(QueryExecutionFail::Conversion(
+            "proof-outcome event journal block height/index ordering is invalid".to_owned(),
+        )),
+    }
+}
 fn query_event_page(
     query: &FindSorafsProofOutcomeEvents,
     state_ro: &impl crate::state::StateReadOnly,
@@ -1342,8 +1493,7 @@ fn query_event_page(
                 )
             })?,
     )?;
-    resolve_committed_event(state_ro, &terminal)?;
-
+    resolve_committed_event(state_ro, terminal)?;
     let mut previous = match query.after {
         Some(after) => {
             if after.sequence == 0 || after.sequence > head.last_sequence {
@@ -1353,23 +1503,7 @@ fn query_event_page(
                 .smart_contract_state()
                 .get(&event_key(after.sequence))
                 .map_or(0, Vec::len);
-            let event = read_persisted_event(world, after.sequence)
-                .map_err(query_failure)?
-                .ok_or(QueryExecutionFail::Expired)?;
-            let binding_bytes =
-                validate_event_outcome_binding(world, &event).map_err(query_failure)?;
-            charge_state_bytes(
-                &mut state_read_bytes,
-                event_bytes.checked_add(binding_bytes).ok_or_else(|| {
-                    QueryExecutionFail::Conversion(
-                        "proof-outcome cursor read-byte counter overflow".to_owned(),
-                    )
-                })?,
-            )?;
-            if resolve_committed_event(state_ro, &event)?.cursor() != after {
-                return Err(QueryExecutionFail::Expired);
-            }
-            let predecessor = if after.sequence == 1 {
+            let predecessor_record = if after.sequence == 1 {
                 None
             } else {
                 let sequence = after.sequence - 1;
@@ -1388,17 +1522,40 @@ fn query_event_page(
                         })?,
                 )
             };
-            validate_event_successor(predecessor.as_ref(), &event).map_err(query_failure)?;
-            Some(event)
+            let predecessor = predecessor_record
+                .as_ref()
+                .map(ProofOutcomeQueryEventPosition::from);
+            drop(predecessor_record);
+            let event = read_persisted_event(world, after.sequence)
+                .map_err(query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            let binding_bytes =
+                validate_event_outcome_binding(world, &event).map_err(query_failure)?;
+            charge_state_bytes(
+                &mut state_read_bytes,
+                event_bytes.checked_add(binding_bytes).ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "proof-outcome cursor read-byte counter overflow".to_owned(),
+                    )
+                })?,
+            )?;
+            validate_query_event_successor(predecessor, &event)?;
+            let position = ProofOutcomeQueryEventPosition::from(&event);
+            if resolve_committed_event(state_ro, event)?.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            Some(position)
         }
         None => None,
     };
-
     let mut sequence = query
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
-    let mut events = Vec::with_capacity(limit);
-    let payload_budget = PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1.saturating_sub(1_024);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
+    let payload_budget = page_bytes_limit.saturating_sub(1_024);
     let mut encoded_event_bytes = 0usize;
     let mut inspected_records = 0usize;
     let inspected_budget = limit.saturating_add(4);
@@ -1427,7 +1584,7 @@ fn query_event_page(
                     "proof-outcome event journal is missing sequence {current_sequence}"
                 ))
             })?;
-        validate_event_successor(previous.as_ref(), &event).map_err(query_failure)?;
+        validate_query_event_successor(previous, &event)?;
         let binding_bytes = validate_event_outcome_binding(world, &event).map_err(query_failure)?;
         charge_state_bytes(
             &mut state_read_bytes,
@@ -1439,14 +1596,13 @@ fn query_event_page(
                     )
                 })?,
         )?;
-        let resolved = resolve_committed_event(state_ro, &event)?;
-        let resolved_bytes = norito::to_bytes(&resolved)
-            .map_err(|error| {
-                QueryExecutionFail::Conversion(format!(
-                    "failed to encode committed proof-outcome event: {error}"
-                ))
-            })?
-            .len();
+        let position = ProofOutcomeQueryEventPosition::from(&event);
+        let resolved = resolve_committed_event(state_ro, event)?;
+        let resolved_bytes = norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to size committed proof-outcome event: {error}"
+            ))
+        })?;
         let next_bytes = encoded_event_bytes
             .checked_add(resolved_bytes)
             .ok_or_else(|| {
@@ -1457,14 +1613,14 @@ fn query_event_page(
         if next_bytes > payload_budget {
             if events.is_empty() {
                 return Err(QueryExecutionFail::Conversion(format!(
-                    "one proof-outcome event cannot fit within the {PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1}-byte page budget"
+                    "one proof-outcome event cannot fit within the {page_bytes_limit}-byte page budget"
                 )));
             }
             break;
         }
         encoded_event_bytes = next_bytes;
-        previous = Some(event);
-        events.push(resolved);
+        previous = Some(position);
+        events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
     let has_more = events
@@ -1478,14 +1634,13 @@ fn query_event_page(
     });
     let page = ProofOutcomeFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec()?,
         has_more,
         next_after,
     };
     ensure_page_budget(&page)?;
     Ok(page)
 }
-
 impl ValidSingularQuery for FindSorafsProofOutcome {
     fn execute(
         &self,
@@ -1517,7 +1672,6 @@ impl ValidSingularQuery for FindSorafsProofOutcome {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsProofOutcomeEvents {
     fn execute(
         &self,
@@ -1533,9 +1687,14 @@ impl ValidSingularQuery for FindSorafsProofOutcomeEvents {
         query_event_page(self, state_ro, actual)
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
@@ -1554,34 +1713,22 @@ mod tests {
         PdpTerminalDecisionV1, PotrReceiptV1, PotrStatus, ProfileId, ProofStreamTier,
         sign_potr_receipt_v1,
     };
-
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-
     const NOW: u64 = 10_000;
     const PROVIDER_BYTES: [u8; 32] = [0x31; 32];
     const ADMISSION_DIGEST: [u8; 32] = [0x42; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x53; 32];
-
     fn ed25519_keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
         KeyPair::from_private_key(private).expect("derive deterministic Ed25519 keypair")
     }
-
     fn mldsa_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::MlDsa)
             .expect("derive deterministic ML-DSA keypair")
     }
-
     fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
-
     fn ed25519_public_key(keypair: &KeyPair) -> [u8; 32] {
         let (algorithm, bytes) = keypair
             .public_key()
@@ -1590,7 +1737,6 @@ mod tests {
         assert_eq!(algorithm, Algorithm::Ed25519);
         bytes.try_into().expect("Ed25519 public key length")
     }
-
     fn mldsa_public_key(keypair: &KeyPair) -> Vec<u8> {
         let (algorithm, bytes) = keypair
             .public_key()
@@ -1599,11 +1745,9 @@ mod tests {
         assert_eq!(algorithm, Algorithm::MlDsa);
         bytes.to_vec()
     }
-
     fn provider_id() -> ProviderId {
         ProviderId::new(PROVIDER_BYTES)
     }
-
     fn block_header_at(height: u64, now_unix: u64) -> BlockHeader {
         BlockHeader::new(
             height.try_into().expect("nonzero fixture block height"),
@@ -1614,7 +1758,6 @@ mod tests {
             0,
         )
     }
-
     fn transact(
         state: &mut State,
         height: u64,
@@ -1630,7 +1773,6 @@ mod tests {
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
         Ok(())
     }
-
     fn state_with_accounts(
         manager: &KeyPair,
         scheduler: &KeyPair,
@@ -1643,14 +1785,12 @@ mod tests {
             let (id, value) = Account::new(id.clone()).build(&id).into_key_value();
             world.accounts.insert(id, value);
         }
-
         let manager_id = account(manager);
         let mut manager_permissions = Permissions::new();
         manager_permissions.insert(Permission::from(CanManageSorafsProofOutcomePolicy));
         world
             .account_permissions
             .insert(manager_id.clone(), manager_permissions);
-
         let scheduler_id = account(scheduler);
         let mut scheduler_permissions = Permissions::new();
         scheduler_permissions.insert(Permission::from(CanRecordSorafsProofOutcome {
@@ -1660,7 +1800,6 @@ mod tests {
             .account_permissions
             .insert(scheduler_id, scheduler_permissions);
         world.provider_owners.insert(provider_id(), manager_id);
-
         let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -1669,7 +1808,6 @@ mod tests {
         transact(&mut state, 1, NOW - 1, |_| Ok(())).expect("seed finalized genesis block");
         state
     }
-
     fn signer_policy(
         revision: u64,
         predecessor_digest: Option<[u8; 32]>,
@@ -1690,7 +1828,6 @@ mod tests {
             valid_until_unix: NOW + 100,
         }
     }
-
     fn activate_policy(
         state: &mut State,
         height: u64,
@@ -1704,7 +1841,6 @@ mod tests {
         })
         .expect("activate proof-outcome signer policy");
     }
-
     fn challenge(unique: u8) -> PdpChallengeV1 {
         PdpChallengeV1::new(
             [unique; 32],
@@ -1726,7 +1862,6 @@ mod tests {
         )
         .expect("valid PDP challenge")
     }
-
     fn signed_pdp_archive(pdp_key: &KeyPair, sequence: u64, unique: u8) -> Vec<u8> {
         let challenge = challenge(unique);
         let mut proof = PdpProofV1 {
@@ -1770,7 +1905,6 @@ mod tests {
         proof
             .verify_signature()
             .expect("signed PDP proof authenticates");
-
         let archive = PdpGovernanceArchiveV1 {
             version: PDP_GOVERNANCE_ARCHIVE_VERSION_V1,
             sequence,
@@ -1794,7 +1928,6 @@ mod tests {
         archive.validate().expect("signed PDP archive validates");
         norito::to_bytes(&archive).expect("encode PDP archive")
     }
-
     fn pdp_archive_without_proof(
         sequence: u64,
         unique: u8,
@@ -1826,17 +1959,14 @@ mod tests {
             .expect("PDP archive without proof validates");
         norito::to_bytes(&archive).expect("encode PDP archive")
     }
-
     fn unsigned_pdp_archive(sequence: u64, unique: u8) -> Vec<u8> {
         pdp_archive_without_proof(sequence, unique, PdpRejectionReasonV1::DeadlineExpired)
     }
-
     fn pdp_submission(archive_payload: Vec<u8>) -> SubmitSorafsProofOutcome {
         SubmitSorafsProofOutcome::new(SorafsProofOutcomeSubmissionV1::Pdp(
             SorafsPdpProofOutcomeSubmissionV1 { archive_payload },
         ))
     }
-
     fn signed_potr_receipt(
         gateway_key: &KeyPair,
         provider_key: &KeyPair,
@@ -1869,7 +1999,6 @@ mod tests {
         )
         .expect("sign valid PoTR receipt")
     }
-
     fn potr_submission(receipt: &PotrReceiptV1) -> SubmitSorafsProofOutcome {
         SubmitSorafsProofOutcome::new(SorafsProofOutcomeSubmissionV1::Potr(
             SorafsPotrProofOutcomeSubmissionV1 {
@@ -1880,7 +2009,6 @@ mod tests {
             },
         ))
     }
-
     fn query_events(
         state: &State,
         expected_finalized_cursor: Option<ProofOutcomeFinalizedCursorV1>,
@@ -1894,7 +2022,6 @@ mod tests {
         };
         ValidSingularQuery::execute(&query, &state.view())
     }
-
     fn query_outcome(
         state: &State,
         kind: ProofOutcomeKindV1,
@@ -1908,7 +2035,6 @@ mod tests {
         };
         ValidSingularQuery::execute(&query, &state.view())
     }
-
     fn assert_instruction_error_contains(
         result: Result<(), InstructionExecutionError>,
         expected: &str,
@@ -1925,7 +2051,6 @@ mod tests {
             "unexpected instruction error: {error}"
         );
     }
-
     #[test]
     fn signed_pdp_and_potr_relay_permissionlessly_and_split_peer_replay_is_single_event() {
         let manager = ed25519_keypair(0x01);
@@ -1943,13 +2068,11 @@ mod tests {
             &manager,
             signer_policy(1, None, &pdp_key, &potr_key, &gateway_key),
         );
-
         let pdp = pdp_submission(signed_pdp_archive(&pdp_key, 1, 0x21));
         transact(&mut state, 3, NOW + 1, |state_transaction| {
             pdp.clone().execute(&account(&relayer_a), state_transaction)
         })
         .expect("unprivileged relayer submits governed signed PDP outcome");
-
         let potr_receipt = signed_potr_receipt(&gateway_key, &potr_key, 0x31, 40);
         let potr = potr_submission(&potr_receipt);
         transact(&mut state, 4, NOW + 2, |state_transaction| {
@@ -1957,7 +2080,6 @@ mod tests {
                 .execute(&account(&relayer_b), state_transaction)
         })
         .expect("different unprivileged relayer submits governed signed PoTR outcome");
-
         transact(&mut state, 5, NOW + 3, |state_transaction| {
             pdp.clone().execute(&account(&relayer_b), state_transaction)
         })
@@ -1967,7 +2089,6 @@ mod tests {
                 .execute(&account(&relayer_a), state_transaction)
         })
         .expect("exact signed PoTR replay through another peer is a no-op");
-
         let page = query_events(
             &state,
             None,
@@ -1984,7 +2105,6 @@ mod tests {
         assert_eq!(page.events[1].outcome.kind(), ProofOutcomeKindV1::Potr);
         assert_eq!(page.events[1].outcome.submitted_by, account(&relayer_b));
     }
-
     #[test]
     fn unsigned_pdp_outcome_requires_provider_scoped_scheduler_permission() {
         let manager = ed25519_keypair(0x01);
@@ -2002,7 +2122,6 @@ mod tests {
             &manager,
             signer_policy(1, None, &pdp_key, &potr_key, &gateway_key),
         );
-
         let unsigned = pdp_submission(unsigned_pdp_archive(1, 0x22));
         assert_instruction_error_contains(
             transact(&mut state, 3, NOW + 1, |state_transaction| {
@@ -2016,7 +2135,6 @@ mod tests {
             unsigned.execute(&account(&scheduler), state_transaction)
         })
         .expect("provider-scoped scheduler records unsigned deadline outcome");
-
         let page = query_events(&state, None, None, 1).expect("query scheduler outcome");
         assert_eq!(page.events.len(), 1);
         let ProofOutcomeProjectionV1::Pdp(projection) = &page.events[0].outcome.projection else {
@@ -2026,14 +2144,12 @@ mod tests {
         assert!(projection.proof_digest.is_none());
         assert!(projection.provider_attestation.is_none());
     }
-
     #[test]
     fn invalid_pdp_without_canonical_proof_prepares_and_validates() {
         let payload = pdp_archive_without_proof(1, 0x23, PdpRejectionReasonV1::InvalidProof);
         let prepared =
             prepare_pdp_outcome(&payload).expect("prepare invalid PDP without canonical proof");
         assert!(!prepared.has_provider_proof);
-
         let record = prepared.into_record(account(&ed25519_keypair(0x02)), (NOW + 1) * 1_000);
         validate_outcome_record(&record)
             .expect("invalid PDP without canonical proof is a valid stored projection");
@@ -2044,7 +2160,6 @@ mod tests {
         assert!(projection.proof_digest.is_none());
         assert!(projection.provider_attestation.is_none());
     }
-
     #[test]
     fn proof_outcome_rejects_equivocation_non_governed_signers_and_malformed_payloads() {
         let manager = ed25519_keypair(0x01);
@@ -2065,13 +2180,11 @@ mod tests {
             &manager,
             signer_policy(1, None, &pdp_key, &potr_key, &gateway_key),
         );
-
         let original = signed_potr_receipt(&gateway_key, &potr_key, 0x41, 40);
         transact(&mut state, 3, NOW + 1, |state_transaction| {
             potr_submission(&original).execute(&account(&relayer_a), state_transaction)
         })
         .expect("commit original PoTR outcome");
-
         let conflicting = signed_potr_receipt(&gateway_key, &potr_key, 0x41, 41);
         assert_instruction_error_contains(
             transact(&mut state, 4, NOW + 2, |state_transaction| {
@@ -2079,7 +2192,6 @@ mod tests {
             }),
             "different cryptographic material",
         );
-
         let wrong_gateway = signed_potr_receipt(&wrong_gateway_key, &potr_key, 0x42, 40);
         assert_instruction_error_contains(
             transact(&mut state, 4, NOW + 2, |state_transaction| {
@@ -2094,7 +2206,6 @@ mod tests {
             }),
             "signers or timing",
         );
-
         let wrong_pdp = pdp_submission(signed_pdp_archive(&wrong_pdp_key, 2, 0x23));
         assert_instruction_error_contains(
             transact(&mut state, 4, NOW + 2, |state_transaction| {
@@ -2115,7 +2226,6 @@ mod tests {
             "outside",
         );
     }
-
     #[test]
     fn proof_signer_policy_rotates_by_revision_and_preserves_exact_replay() {
         let manager = ed25519_keypair(0x01);
@@ -2129,9 +2239,18 @@ mod tests {
         let potr_key_v2 = mldsa_keypair(0x15);
         let gateway_key_v2 = ed25519_keypair(0x16);
         let mut state = state_with_accounts(&manager, &scheduler, &relayer_a, &relayer_b);
-
         let first = signer_policy(1, None, &pdp_key_v1, &potr_key_v1, &gateway_key_v1);
         let first_digest = policy_digest(&first).expect("digest first signer policy");
+        let historical_bytes = norito::to_bytes(&first).expect("historical signer-policy frame");
+        let mut historical = blake3::Hasher::new();
+        historical.update(POLICY_DIGEST_DOMAIN_V1);
+        historical.update(
+            &u64::try_from(historical_bytes.len())
+                .expect("test frame length fits u64")
+                .to_le_bytes(),
+        );
+        historical.update(&historical_bytes);
+        assert_eq!(first_digest, *historical.finalize().as_bytes());
         assert_instruction_error_contains(
             transact(&mut state, 2, NOW, |state_transaction| {
                 SetSorafsProofOutcomeSignerPolicy::new(first.clone())
@@ -2140,7 +2259,6 @@ mod tests {
             "CanManageSorafsProofOutcomePolicy",
         );
         activate_policy(&mut state, 2, NOW, &manager, first);
-
         let old_receipt = signed_potr_receipt(&gateway_key_v1, &potr_key_v1, 0x51, 40);
         let old_submission = potr_submission(&old_receipt);
         transact(&mut state, 3, NOW + 1, |state_transaction| {
@@ -2149,7 +2267,6 @@ mod tests {
                 .execute(&account(&relayer_a), state_transaction)
         })
         .expect("commit v1-key receipt");
-
         let skipped = signer_policy(
             3,
             Some(first_digest),
@@ -2178,7 +2295,6 @@ mod tests {
             }),
             "revision or predecessor is stale",
         );
-
         activate_policy(
             &mut state,
             4,
@@ -2198,7 +2314,6 @@ mod tests {
                 .execute(&account(&relayer_b), state_transaction)
         })
         .expect("exact cryptographic replay remains a no-op after signer rotation");
-
         let stale_new_receipt = signed_potr_receipt(&gateway_key_v1, &potr_key_v1, 0x52, 40);
         assert_instruction_error_contains(
             transact(&mut state, 6, NOW + 4, |state_transaction| {
@@ -2211,13 +2326,11 @@ mod tests {
             potr_submission(&current_receipt).execute(&account(&relayer_b), state_transaction)
         })
         .expect("new receipt must use rotated governed keys");
-
         let page = query_events(&state, None, None, 8).expect("query rotated-key outcomes");
         assert_eq!(page.events.len(), 2);
         assert_eq!(page.events[0].outcome.submitted_by, account(&relayer_a));
         assert_eq!(page.events[1].outcome.submitted_by, account(&relayer_b));
     }
-
     #[test]
     fn proof_outcome_event_query_enforces_cursors_and_resource_budgets() {
         let manager = ed25519_keypair(0x01);
@@ -2242,7 +2355,6 @@ mod tests {
             })
             .expect("commit scheduler PDP outcome");
         }
-
         let first = query_events(&state, None, None, 1).expect("query first event page");
         assert_eq!(first.events.len(), 1);
         assert!(first.has_more);
@@ -2253,7 +2365,6 @@ mod tests {
         assert_eq!(second.events[0].sequence, 2);
         assert!(!second.has_more);
         assert!(second.next_after.is_none());
-
         let mut stale_cursor = first.finalized_cursor;
         stale_cursor.block_hash = [0xFF; 32];
         assert_eq!(
@@ -2290,13 +2401,11 @@ mod tests {
             ),
             Err(QueryExecutionFail::Conversion(_))
         ));
-
         let mut charged = QUERY_MAX_STATE_READ_BYTES;
         assert!(charge_state_bytes(&mut charged, 1).is_err());
         let oversized_page = vec![0_u8; PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1 + 1];
         assert!(ensure_page_budget(&oversized_page).is_err());
     }
-
     #[test]
     fn proof_outcome_lookup_is_finalized_constant_time_and_fails_closed() {
         let manager = ed25519_keypair(0x01);
@@ -2321,7 +2430,6 @@ mod tests {
             pdp_submission(payload).execute(&account(&scheduler), state_transaction)
         })
         .expect("commit proof outcome before lookup");
-
         let found = query_outcome(&state, ProofOutcomeKindV1::Pdp, identity_digest, None)
             .expect("lookup committed PDP outcome");
         assert_eq!(found.outcome.identity_digest, identity_digest);
@@ -2330,13 +2438,11 @@ mod tests {
             found.finalized_cursor,
             resolve_finalized_cursor(&state.view()).expect("resolve lookup cursor")
         );
-
         assert!(matches!(
             query_outcome(&state, ProofOutcomeKindV1::Pdp, [0; 32], None),
             Err(QueryExecutionFail::Conversion(message))
                 if message.contains("must be non-zero")
         ));
-
         let mut stale_cursor = found.finalized_cursor;
         stale_cursor.block_hash = [0xFF; 32];
         assert_eq!(
@@ -2348,7 +2454,6 @@ mod tests {
             ),
             Err(QueryExecutionFail::Expired)
         );
-
         let missing_identity = [0xEF; 32];
         assert_eq!(
             query_outcome(&state, ProofOutcomeKindV1::Potr, missing_identity, None,),
@@ -2359,7 +2464,6 @@ mod tests {
                 },
             )))
         );
-
         transact(&mut state, 4, NOW + 2, |state_transaction| {
             state_transaction.world.smart_contract_state.insert(
                 outcome_key(ProofOutcomeKindV1::Pdp, identity_digest),
@@ -2374,7 +2478,6 @@ mod tests {
                 if message.contains("failed to decode proof-outcome record")
         ));
     }
-
     #[test]
     fn proof_outcome_event_query_fails_closed_on_corrupt_committed_state() {
         let manager = ed25519_keypair(0x01);
@@ -2398,8 +2501,46 @@ mod tests {
         })
         .expect("commit proof outcome before corruption");
         query_events(&state, None, None, 1).expect("healthy journal is queryable");
-
+        let committed_event = read_persisted_event(state.view().world(), 1)
+            .expect("read committed event")
+            .expect("committed event exists");
+        let committed_outcome_key = outcome_key(
+            committed_event.outcome.kind(),
+            committed_event.outcome.identity_digest,
+        );
+        let canonical_outcome = state
+            .view()
+            .world()
+            .smart_contract_state()
+            .get(&committed_outcome_key)
+            .expect("authoritative outcome exists")
+            .clone();
+        let mut mismatched_outcome = committed_event.outcome.clone();
+        mismatched_outcome.submitted_by = account(&manager);
+        let mismatched_outcome = encode_state(&mismatched_outcome, "mismatched outcome fixture")
+            .expect("encode valid mismatched outcome fixture");
         transact(&mut state, 4, NOW + 2, |state_transaction| {
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(committed_outcome_key.clone(), mismatched_outcome);
+            Ok(())
+        })
+        .expect("commit mismatched authoritative outcome fixture");
+        assert!(matches!(
+            query_events(&state, None, None, 1),
+            Err(QueryExecutionFail::Conversion(message))
+                if message.contains("disagrees with authoritative state")
+        ));
+        transact(&mut state, 5, NOW + 3, |state_transaction| {
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(committed_outcome_key, canonical_outcome);
+            Ok(())
+        })
+        .expect("restore canonical authoritative outcome fixture");
+        transact(&mut state, 6, NOW + 4, |state_transaction| {
             state_transaction
                 .world
                 .smart_contract_state

@@ -1,19 +1,15 @@
 #![allow(unused)]
-
+use crate::{emitter_ext::EmitterExt, utils::darling_result};
 use darling::{FromDeriveInput, FromVariant};
 use manyhow::Emitter;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{DeriveInput, Variant};
-
-use crate::{emitter_ext::EmitterExt, utils::darling_result};
-
 enum FieldsStyle {
     Unit,
     Unnamed,
     Named,
 }
-
 /// Converts the `FieldStyle` to an ignoring pattern (to be put after the variant name)
 impl ToTokens for FieldsStyle {
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -24,13 +20,11 @@ impl ToTokens for FieldsStyle {
         }
     }
 }
-
 struct EventSetVariant {
     event_ident: syn::Ident,
     flag_ident: syn::Ident,
     fields_style: FieldsStyle,
 }
-
 impl FromVariant for EventSetVariant {
     fn from_variant(variant: &Variant) -> darling::Result<Self> {
         let syn::Variant {
@@ -39,7 +33,6 @@ impl FromVariant for EventSetVariant {
             fields,
             discriminant: _,
         } = variant;
-
         // A nested event is an event within an event (for example `DomainEvent::Nft`).
         // we detect those by checking whether the payload type (if any) ends with `Event`
         let is_nested = match fields {
@@ -51,7 +44,6 @@ impl FromVariant for EventSetVariant {
             // just a fail-safe, we don't use named fields in events
             syn::Fields::Named(_) => false,
         };
-
         // we have a different naming convention for nested events
         // to signify that there are actually multiple types of events inside
         let flag_ident = if is_nested {
@@ -59,13 +51,11 @@ impl FromVariant for EventSetVariant {
         } else {
             event_ident.clone()
         };
-
         let fields_style = match fields {
             syn::Fields::Unnamed(_) => FieldsStyle::Unnamed,
             syn::Fields::Named(_) => FieldsStyle::Named,
             syn::Fields::Unit => FieldsStyle::Unit,
         };
-
         Ok(Self {
             event_ident: event_ident.clone(),
             flag_ident,
@@ -73,14 +63,12 @@ impl FromVariant for EventSetVariant {
         })
     }
 }
-
 struct EventSetEnum {
     vis: syn::Visibility,
     event_enum_ident: syn::Ident,
     set_ident: syn::Ident,
     variants: Vec<EventSetVariant>,
 }
-
 impl FromDeriveInput for EventSetEnum {
     fn from_derive_input(input: &DeriveInput) -> darling::Result<Self> {
         let syn::DeriveInput {
@@ -90,30 +78,24 @@ impl FromDeriveInput for EventSetEnum {
             generics,
             data,
         } = &input;
-
         let mut accumulator = darling::error::Accumulator::default();
-
         if !generics.params.is_empty() {
             accumulator.push(darling::Error::custom(
                 "EventSet cannot be derived on generic enums",
             ));
         }
-
         let Some(variants) = darling::ast::Data::<EventSetVariant, ()>::try_from(data)?.take_enum()
         else {
             accumulator.push(darling::Error::custom(
                 "EventSet can be derived only on enums",
             ));
-
             return Err(accumulator.finish().unwrap_err());
         };
-
         if variants.len() > 32 {
             accumulator.push(darling::Error::custom(
                 "EventSet can be derived only on enums with up to 32 variants",
             ));
         }
-
         accumulator.finish_with(Self {
             vis: vis.clone(),
             event_enum_ident: event_ident.clone(),
@@ -122,7 +104,6 @@ impl FromDeriveInput for EventSetEnum {
         })
     }
 }
-
 impl ToTokens for EventSetEnum {
     #[allow(clippy::too_many_lines)] // splitting it is not really feasible, it's all tightly coupled =(
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -132,13 +113,11 @@ impl ToTokens for EventSetEnum {
             set_ident,
             variants,
         } = self;
-
         let flag_raw_values = variants
             .iter()
             .zip(0u32..)
             .map(|(_, i)| quote!(1 << #i))
             .collect::<Vec<_>>();
-
         // definitions of consts for each event
         let flag_defs = variants.iter().zip(flag_raw_values.iter()).map(
             |(
@@ -189,11 +168,9 @@ impl ToTokens for EventSetEnum {
                 }
             },
         );
-
         let doc = format!(
             " An event set for [`{event_enum_ident}`]s\n\nEvent sets of the same type can be combined with a custom `|` operator"
         );
-
         tokens.extend(quote! {
             #[derive(
                 Copy,
@@ -212,19 +189,16 @@ impl ToTokens for EventSetEnum {
             #[repr(transparent)]
             #[doc = #doc]
             #vis struct #set_ident(u32);
-
             // we want to imitate an enum here, so not using the SCREAMING_SNAKE_CASE here
             #[allow(non_upper_case_globals)]
             impl #set_ident {
                 #( #flag_defs )*
             }
-
             impl #set_ident {
                 /// Creates an empty event set
                 pub const fn empty() -> Self {
                     Self(0)
                 }
-
                 /// Creates an event set containing all events
                 pub const fn all() -> Self {
                     Self(
@@ -233,34 +207,28 @@ impl ToTokens for EventSetEnum {
                         )|*
                     )
                 }
-
                 /// Combines two event sets by computing a union of two sets
                 ///
                 /// A const method version of the `|` operator
                 pub const fn or(self, other: Self) -> Self {
                     Self(self.0 | other.0)
                 }
-
                 /// Checks whether an event set is a superset of another event set
                 ///
                 /// That is, whether `self` will match all events that `other` contains
                 const fn contains(&self, other: Self) -> bool {
                     (self.0 & other.0) == other.0
                 }
-
                 /// Decomposes an `EventSet` into a vector of basis `EventSet`s, each containing a single event
                 ///
                 /// Each of the event set in the vector will be equal to some of the associated constants for the `EventSet`
                 fn decompose(&self) -> Vec<Self> {
                     let mut result = Vec::new();
-
                     #(if self.contains(#flag_idents) {
                         result.push(#flag_idents);
                     })*
-
                     result
                 }
-
                 /// Checks whether an event set contains a specific event
                 pub const fn matches(&self, event: &#event_enum_ident) -> bool {
                     match event {
@@ -270,13 +238,10 @@ impl ToTokens for EventSetEnum {
                     }
                 }
             }
-
             impl core::fmt::Debug for #set_ident {
                 fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
                     write!(f, "{}[", stringify!(#set_ident))?;
-
                     let mut need_comma = false;
-
                     #(if self.contains(#flag_idents) {
                         if need_comma {
                             write!(f, ", ")?;
@@ -285,25 +250,20 @@ impl ToTokens for EventSetEnum {
                         }
                         write!(f, "{}", #flag_names)?
                     })*
-
                     write!(f, "]")
                 }
             }
-
             impl core::ops::BitOr for #set_ident {
                 type Output = Self;
-
                 fn bitor(self, rhs: Self) -> Self {
                     self.or(rhs)
                 }
             }
-
             impl core::ops::BitOrAssign for #set_ident {
                 fn bitor_assign(&mut self, rhs: Self) {
                     *self = self.or(rhs);
                 }
             }
-
             impl norito::json::FastJsonWrite for #set_ident {
                 fn write_json(&self, out: &mut String) {
                     out.push('[');
@@ -323,7 +283,6 @@ impl ToTokens for EventSetEnum {
                     out.push(']');
                 }
             }
-
             impl norito::json::JsonDeserialize for #set_ident {
                 fn json_deserialize(
                     parser: &mut norito::json::Parser<'_>,
@@ -334,7 +293,6 @@ impl ToTokens for EventSetEnum {
                         )?;
                     <Self as norito::json::JsonDeserialize>::json_from_value(&value)
                 }
-
                 fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
                     fn format_invalid_type(value: &norito::json::Value) -> String {
                         match value {
@@ -352,7 +310,6 @@ impl ToTokens for EventSetEnum {
                             norito::json::Value::Object(_) => String::from("map"),
                         }
                     }
-
                     let values = match value {
                         norito::json::Value::Array(values) => values,
                         other => {
@@ -362,7 +319,6 @@ impl ToTokens for EventSetEnum {
                             )));
                         }
                     };
-
                     let mut result = #set_ident::empty();
                     for value in values {
                         let name = match value {
@@ -374,7 +330,6 @@ impl ToTokens for EventSetEnum {
                                 )));
                             }
                         };
-
                         let event = match name.as_str() {
                             #(#flag_names => #flag_idents,)*
                             other => {
@@ -386,17 +341,13 @@ impl ToTokens for EventSetEnum {
                         };
                         result |= event;
                     }
-
                     Ok(result)
                 }
             }
-
-
             impl iroha_schema::IntoSchema for #set_ident {
                 fn type_name() -> iroha_schema::Ident {
                     <Self as iroha_schema::TypeId>::id()
                 }
-
                 fn update_schema_map(metamap: &mut iroha_schema::MetaMap) {
                     if !metamap.contains_key::<Self>() {
                         if !metamap.contains_key::<u32>() {
@@ -419,12 +370,10 @@ impl ToTokens for EventSetEnum {
         })
     }
 }
-
 pub fn impl_event_set_derive(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream {
     let Some(enum_) = emitter.handle(darling_result(EventSetEnum::from_derive_input(input))) else {
         return quote! {};
     };
-
     quote! {
         #enum_
     }

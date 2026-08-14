@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import IrohaSwift
@@ -28,6 +29,13 @@ private final class MusubiV1StubURLProtocol: URLProtocol {
 }
 
 final class MusubiSdkV1Tests: XCTestCase {
+    private let musubiSigningSeed = Data(repeating: 0x55, count: 32)
+
+    private var musubiAccountId: String {
+        try! Keypair(privateKeyBytes: musubiSigningSeed)
+            .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+    }
+
     override func tearDown() {
         MusubiV1StubURLProtocol.handler = nil
         MusubiV1StubURLProtocol.lastRequest = nil
@@ -1624,14 +1632,18 @@ final class MusubiSdkV1Tests: XCTestCase {
         configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
         let client = MusubiToriiClientV1(
             baseURL: try XCTUnwrap(URL(string: "https://example.test/")),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
             session: URLSession(configuration: configuration)
         )
 
+        var dispatchCount = 0
+        var nonces = Set<String>()
         for route in try fixtureRoutes() {
             let routePath = try path(route)
             let expectedRequest = try jsonData(route["request"])
             let responseBody = try jsonData(route["response"])
             MusubiV1StubURLProtocol.handler = { request in
+                dispatchCount += 1
                 let response = try XCTUnwrap(
                     HTTPURLResponse(
                         url: try XCTUnwrap(request.url),
@@ -1651,6 +1663,43 @@ final class MusubiSdkV1Tests: XCTestCase {
                 try jsonObject(try requestBody(captured)),
                 try jsonObject(expectedRequest)
             )
+            XCTAssertEqual(captured.cachePolicy, .reloadIgnoringLocalCacheData)
+            XCTAssertEqual(captured.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+            XCTAssertEqual(captured.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+            let nonce = try assertCanonicalSignature(captured)
+            XCTAssertTrue(nonces.insert(nonce).inserted)
+        }
+        XCTAssertEqual(dispatchCount, try fixtureRoutes().count)
+        XCTAssertFalse(
+            try fixtureRoutes().contains {
+                try path($0) == "/v1/musubi/instructions/publish-release"
+            }
+        )
+    }
+
+    func testAuthenticatedClientRejectsInjectedCanonicalHeadersBeforeDispatch() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
+        let client = MusubiToriiClientV1(
+            baseURL: try XCTUnwrap(URL(string: "https://example.test/")),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            session: URLSession(configuration: configuration),
+            defaultHeaders: ["x-IROHA-signature": "forged"]
+        )
+        MusubiV1StubURLProtocol.handler = { _ in
+            XCTFail("injected canonical headers must fail before dispatch")
+            throw URLError(.cannotConnectToHost)
+        }
+        let fixtureRoute = try route(MusubiToriiClientV1.versionsPath)
+        do {
+            try await invoke(
+                client,
+                path: MusubiToriiClientV1.versionsPath,
+                request: try jsonData(fixtureRoute["request"])
+            )
+            XCTFail("injected canonical headers must be rejected")
+        } catch let ToriiClientError.invalidPayload(message) {
+            XCTAssertTrue(message.contains("canonicalAuth"))
         }
     }
 
@@ -1736,6 +1785,7 @@ final class MusubiSdkV1Tests: XCTestCase {
         configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
         let client = MusubiToriiClientV1(
             baseURL: try XCTUnwrap(URL(string: "https://example.test/")),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
             session: URLSession(configuration: configuration)
         )
         let fixtureRoute = try route(MusubiToriiClientV1.versionsPath)
@@ -1773,6 +1823,7 @@ final class MusubiSdkV1Tests: XCTestCase {
         configuration.protocolClasses = [MusubiV1StubURLProtocol.self]
         let client = MusubiToriiClientV1(
             baseURL: try XCTUnwrap(URL(string: "https://example.test/")),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
             session: URLSession(configuration: configuration)
         )
         let fixtureRoute = try route(MusubiToriiClientV1.versionsPath)
@@ -2224,58 +2275,142 @@ final class MusubiSdkV1Tests: XCTestCase {
         request: Data
     ) async throws {
         let decoder = JSONDecoder()
+        let auth = musubiCanonicalAuth()
         switch path {
         case MusubiToriiClientV1.exactPackagePath:
             _ = try await client.findExactPackage(
-                decoder.decode(MusubiExactPackageQueryV1.self, from: request)
+                decoder.decode(MusubiExactPackageQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.exactReleasePath:
             _ = try await client.findExactRelease(
-                decoder.decode(MusubiExactReleaseQueryV1.self, from: request)
+                decoder.decode(MusubiExactReleaseQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.providerBundleAttestationPath:
             _ = try await client.findProviderBundleAttestation(
-                decoder.decode(MusubiProviderBundleAttestationKeyV1.self, from: request)
+                decoder.decode(MusubiProviderBundleAttestationKeyV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.resolverIndexPath:
             _ = try await client.findResolverIndex(
-                decoder.decode(MusubiResolverIndexQueryV1.self, from: request)
+                decoder.decode(MusubiResolverIndexQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.versionsPath:
             _ = try await client.findVersions(
-                decoder.decode(MusubiPackagePageQueryV1.self, from: request)
+                decoder.decode(MusubiPackagePageQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.maintainersPath:
             _ = try await client.findMaintainers(
-                decoder.decode(MusubiPackagePageQueryV1.self, from: request)
+                decoder.decode(MusubiPackagePageQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.archiveLocationsPath:
             _ = try await client.findArchiveLocations(
-                decoder.decode(MusubiArchiveLocationQueryV1.self, from: request)
+                decoder.decode(MusubiArchiveLocationQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.archiveRetentionPath:
             _ = try await client.findArchiveRetention(
-                decoder.decode(MusubiArchiveRetentionQueryV1.self, from: request)
+                decoder.decode(MusubiArchiveRetentionQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.aliasPath:
             _ = try await client.findAlias(
-                decoder.decode(MusubiAliasQueryV1.self, from: request)
+                decoder.decode(MusubiAliasQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.aliasHistoryPath:
             _ = try await client.findAliasHistory(
-                decoder.decode(MusubiAliasQueryV1.self, from: request)
+                decoder.decode(MusubiAliasQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.orderedPrefixPath:
             _ = try await client.findOrderedPrefix(
-                decoder.decode(MusubiOrderedPrefixQueryV1.self, from: request)
+                decoder.decode(MusubiOrderedPrefixQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         case MusubiToriiClientV1.searchPath:
             _ = try await client.search(
-                decoder.decode(MusubiSearchQueryV1.self, from: request)
+                decoder.decode(MusubiSearchQueryV1.self, from: request),
+                canonicalAuth: auth
             )
         default:
             XCTFail("Unhandled Musubi fixture path \(path)")
         }
+    }
+
+    private func musubiCanonicalAuth() -> ToriiCanonicalRequestAuth {
+        ToriiCanonicalRequestAuth(accountId: musubiAccountId, privateKey: musubiSigningSeed)
+    }
+
+    @discardableResult
+    private func assertCanonicalSignature(_ request: URLRequest) throws -> String {
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+            try AccountAddress.parseEncoded(musubiAccountId).canonicalHex()
+        )
+        let timestampText = try XCTUnwrap(
+            request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs)
+        )
+        let timestampMs = try XCTUnwrap(UInt64(timestampText))
+        let nonce = try XCTUnwrap(
+            request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce)
+        )
+        let encodedSignature = try XCTUnwrap(
+            request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+        )
+        let signature = try XCTUnwrap(Data(base64Encoded: encodedSignature))
+        let url = try XCTUnwrap(request.url)
+        let body = try requestBody(request)
+        let publicKey = try Curve25519.Signing.PrivateKey(
+            rawRepresentation: musubiSigningSeed
+        ).publicKey
+        func verifies(
+            networkId: NetworkId,
+            url: URL,
+            body: Data,
+            nonce candidateNonce: String = nonce
+        ) throws -> Bool {
+            publicKey.isValidSignature(
+                signature,
+                for: try ToriiCanonicalRequest.signatureMessage(
+                    networkId: networkId,
+                    method: "POST",
+                    url: url,
+                    body: body,
+                    timestampMs: timestampMs,
+                    nonce: candidateNonce
+                )
+            )
+        }
+        XCTAssertTrue(try verifies(networkId: TestNetworkIds.canonical, url: url, body: body))
+        XCTAssertFalse(try verifies(networkId: TestNetworkIds.other, url: url, body: body))
+        XCTAssertFalse(
+            try verifies(
+                networkId: TestNetworkIds.canonical,
+                url: try XCTUnwrap(URL(string: "https://example.test/v1/musubi/wrong")),
+                body: body
+            )
+        )
+        XCTAssertFalse(
+            try verifies(
+                networkId: TestNetworkIds.canonical,
+                url: url,
+                body: body + Data([0])
+            )
+        )
+        XCTAssertFalse(
+            try verifies(
+                networkId: TestNetworkIds.canonical,
+                url: url,
+                body: body,
+                nonce: "replayed-with-another-nonce"
+            )
+        )
+        return nonce
     }
 
     private func roundTripRequest(_ path: String, data: Data) throws -> NSObject {

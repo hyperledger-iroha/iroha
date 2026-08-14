@@ -285,7 +285,10 @@ Provide `canonicalAuth` to sign requests on the fly:
 ```js
 import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
 
-const torii = new ToriiClient("https://torii.nexus.example");
+// operatorSigningContext is loaded from runtime-only node-operator configuration.
+const torii = new ToriiClient("https://torii.nexus.example", {
+  operatorSigningContext,
+});
 const { privateKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
 
 const { items } = await torii.listAccountAssets("<i105-account-id>", {
@@ -544,7 +547,12 @@ surface the mutable policy envelope so SDKs stay in lockstep with relay/session 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
 
-const torii = new ToriiClient("https://torii.nexus.example");
+// Load this immutable exact-network context from runtime-only operator
+// configuration or a secret manager; never bundle it into an application.
+const operatorSigningContext = await loadOperatorSigningContext();
+const torii = new ToriiClient("https://torii.nexus.example", {
+  operatorSigningContext,
+});
 
 const status = await torii.getConnectStatus();
 console.log("connect enabled:", status?.enabled ?? false);
@@ -568,7 +576,10 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 `updateConnectAppPolicy()` accepts camelCase fields, so dashboards and automation can reuse the
 same snippet when staging approvals. Always check the current `policy` snapshot returned from
 `getConnectStatus()` before applying updates; governance reviews expect evidence that the queued
-change starts from the fleet’s latest limits.
+change starts from the fleet’s latest limits. This aggregate read targets
+`/v1/connect/status/aggregate` and requires a fresh exact-network operator
+signature. Application and wallet clients instead use their management token
+with `/v1/connect/status?sid=...` for one session.
 
 ### Connect WebSocket dialling
 

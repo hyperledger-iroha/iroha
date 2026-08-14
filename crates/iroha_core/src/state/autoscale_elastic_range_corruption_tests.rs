@@ -1,6 +1,5 @@
 fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
-    let mut malformed =
-        autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
+    let mut malformed = autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
     malformed.alias = "malformed-elastic-lane".to_owned();
     let other_dataspace = DataSpaceId::new(9);
     let cases = [
@@ -29,7 +28,6 @@ fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
             None,
         ),
     ];
-
     for (name, lane, extra_dataspace) in cases {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -80,11 +78,9 @@ fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
             .unwrap_or_else(|err| panic!("{name}: corrupted test catalog: {err}"));
             nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
         }
-
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-
         let mut state_block = state.block(second.header());
         if !scale_in {
             state_block.add_committed_fragments(100);
@@ -93,7 +89,6 @@ fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
-
         let nexus = state_block.nexus.clone();
         let actual_lane_ids = nexus
             .lane_catalog
@@ -125,7 +120,6 @@ fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
         );
     }
 }
-
 #[test]
 fn autoscale_transition_runtime_elastic_range_corruption_matrix() {
     for scale_in in [false, true] {

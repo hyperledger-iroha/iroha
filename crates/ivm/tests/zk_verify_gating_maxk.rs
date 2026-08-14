@@ -4,7 +4,6 @@ use ivm::{
     host::{self, DefaultHost, ZkHalo2Backend, ZkHalo2Config},
     syscalls,
 };
-
 fn build_envelope_bytes() -> Vec<u8> {
     let envelope = OpenVerifyEnvelope::new(
         BackendTag::Halo2IpaPasta,
@@ -15,7 +14,6 @@ fn build_envelope_bytes() -> Vec<u8> {
     );
     norito::to_bytes(&envelope).expect("encode canonical envelope")
 }
-
 fn make_tlv(payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     tlv.extend_from_slice(&u16::to_be_bytes(ivm::PointerType::NoritoBytes as u16));
@@ -26,7 +24,6 @@ fn make_tlv(payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&h);
     tlv
 }
-
 #[test]
 fn max_k_configuration_does_not_admit_without_verifier_registry() {
     let payload = build_envelope_bytes();
@@ -49,7 +46,6 @@ fn max_k_configuration_does_not_admit_without_verifier_registry() {
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), host::ERR_BACKEND);
 }
-
 #[test]
 fn verify_gated_by_enabled_flag_returns_zero() {
     let payload = build_envelope_bytes();

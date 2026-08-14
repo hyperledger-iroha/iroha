@@ -16,15 +16,13 @@
 //! an equivalent safe descriptor-rooted primitive is available.
 //! TODO: Verify and retain a portable finalized-state inclusion proof here once
 //! the public query contract exposes one.
-
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt, fs, io,
-    path::{Path, PathBuf},
+use crate::{
+    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
+    cache::{CacheError, MusubiCache},
+    graph::{GraphErrorV1, ResolverRegistrySourceV1},
+    lockfile::LockfileV1,
+    registry::{RegistryErrorV1, RegistryReadClientV1},
 };
-
 use iroha_data_model::{
     NetworkId,
     musubi::{
@@ -37,18 +35,15 @@ use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-use crate::{
-    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
-    cache::{CacheError, MusubiCache},
-    graph::{GraphErrorV1, ResolverRegistrySourceV1},
-    lockfile::LockfileV1,
-    registry::{RegistryErrorV1, RegistryReadClientV1},
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt, fs, io,
+    path::{Path, PathBuf},
 };
-
 const CACHE_SCHEMA: &str = "musubi-resolver-cache";
 const CACHE_VERSION: u8 = 1;
 const CACHE_FILE: &str = "resolver-index-v1.norito";
@@ -68,21 +63,18 @@ const CACHE_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     64,
 );
 const COMMIT_RETRIES: usize = 4;
-
 /// One exact ordered-prefix request and validated finalized response.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct CachedOrderedPageV1 {
     request: MusubiOrderedPrefixQueryV1,
     response: MusubiOrderedPackagePageV1,
 }
-
 /// One exact resolver-index request and validated finalized response.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct CachedResolverPageV1 {
     request: MusubiResolverIndexQueryV1,
     response: MusubiResolverIndexPageV1,
 }
-
 /// Complete coherent set of pages consumed by one successful graph collection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ResolverIndexCacheSnapshotV1 {
@@ -92,7 +84,6 @@ pub struct ResolverIndexCacheSnapshotV1 {
     ordered_pages: Vec<CachedOrderedPageV1>,
     resolver_pages: Vec<CachedResolverPageV1>,
 }
-
 impl ResolverIndexCacheSnapshotV1 {
     #[expect(
         clippy::too_many_lines,
@@ -111,10 +102,8 @@ impl ResolverIndexCacheSnapshotV1 {
         {
             return Err(invalid("cache snapshot page count is invalid"));
         }
-
         validate_canonical_order(&self.ordered_pages, |page| Ok(page.request.encode()))?;
         validate_canonical_order(&self.resolver_pages, |page| Ok(page.request.encode()))?;
-
         let mut bindings = BTreeMap::new();
         let mut directory = BTreeMap::new();
         for page in &self.ordered_pages {
@@ -155,7 +144,6 @@ impl ResolverIndexCacheSnapshotV1 {
                 "namespace binding",
             )?;
         }
-
         let mut row_occurrences = 0usize;
         let mut releases = BTreeMap::new();
         for page in &self.resolver_pages {
@@ -218,7 +206,6 @@ impl ResolverIndexCacheSnapshotV1 {
         )?;
         Ok(())
     }
-
     fn validate_anchor(
         &self,
         network_id: NetworkId,
@@ -231,7 +218,6 @@ impl ResolverIndexCacheSnapshotV1 {
         }
         Ok(())
     }
-
     fn digest(&self) -> Result<[u8; 32], ResolverIndexCacheErrorV1> {
         let encoded = canonical(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -239,7 +225,6 @@ impl ResolverIndexCacheSnapshotV1 {
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
     }
-
     fn merge(&mut self, other: Self) -> Result<(), ResolverIndexCacheErrorV1> {
         if !same_anchor(self, &other) {
             return Err(invalid("cannot merge different finalized cache snapshots"));
@@ -252,7 +237,6 @@ impl ResolverIndexCacheSnapshotV1 {
         })?;
         self.validate()
     }
-
     fn is_not_older_than(&self, lock: &LockfileV1) -> bool {
         self.network_id == lock.network_id
             && (self.snapshot == lock.snapshot
@@ -260,21 +244,18 @@ impl ResolverIndexCacheSnapshotV1 {
                     && self.snapshot.index_revision >= lock.snapshot.index_revision))
     }
 }
-
 /// Snapshot plus its domain-separated local integrity commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct CommittedResolverSnapshotV1 {
     value: ResolverIndexCacheSnapshotV1,
     digest: [u8; 32],
 }
-
 impl CommittedResolverSnapshotV1 {
     fn new(value: ResolverIndexCacheSnapshotV1) -> Result<Self, ResolverIndexCacheErrorV1> {
         value.validate()?;
         let digest = value.digest()?;
         Ok(Self { value, digest })
     }
-
     fn validate(&self) -> Result<(), ResolverIndexCacheErrorV1> {
         self.value.validate()?;
         if self.digest != self.value.digest()? {
@@ -285,7 +266,6 @@ impl CommittedResolverSnapshotV1 {
         Ok(())
     }
 }
-
 /// Strict first-release cache catalog.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct ResolverIndexCacheCatalogV1 {
@@ -293,7 +273,6 @@ struct ResolverIndexCacheCatalogV1 {
     version: u8,
     snapshots: Vec<CommittedResolverSnapshotV1>,
 }
-
 impl Default for ResolverIndexCacheCatalogV1 {
     fn default() -> Self {
         Self {
@@ -303,7 +282,6 @@ impl Default for ResolverIndexCacheCatalogV1 {
         }
     }
 }
-
 impl ResolverIndexCacheCatalogV1 {
     fn validate(&self) -> Result<(), ResolverIndexCacheErrorV1> {
         if self.schema != CACHE_SCHEMA
@@ -316,7 +294,6 @@ impl ResolverIndexCacheCatalogV1 {
         }
         self.validate_snapshots()
     }
-
     fn validate_snapshots(&self) -> Result<(), ResolverIndexCacheErrorV1> {
         validate_canonical_order(&self.snapshots, |entry| Ok(snapshot_key(&entry.value)))?;
         let mut finalized = BTreeMap::new();
@@ -358,7 +335,6 @@ impl ResolverIndexCacheCatalogV1 {
         }
         Ok(())
     }
-
     fn insert(
         &mut self,
         snapshot: ResolverIndexCacheSnapshotV1,
@@ -381,7 +357,6 @@ impl ResolverIndexCacheCatalogV1 {
         // conflicting or rolled-back oldest snapshot could be truncated first
         // and silently evade the cross-snapshot checks below.
         self.validate_snapshots()?;
-
         if self.snapshots.len() > MAX_CACHED_SNAPSHOTS_V1 {
             self.snapshots.sort_by(|left, right| {
                 snapshot_recency(&right.value)
@@ -395,14 +370,12 @@ impl ResolverIndexCacheCatalogV1 {
         self.validate()
     }
 }
-
 /// Durable cache handle rooted in the platform-owned Musubi cache directory.
 #[derive(Debug)]
 pub struct ResolverIndexCacheV1 {
     write_root: AtomicWriteRoot,
     root_identity: DirectoryIdentityV1,
 }
-
 impl ResolverIndexCacheV1 {
     /// Open the resolver cache below an explicit trusted user cache root.
     pub(super) fn open(user_cache_root: &Path) -> Result<Self, ResolverIndexCacheErrorV1> {
@@ -419,7 +392,6 @@ impl ResolverIndexCacheV1 {
             root_identity: DirectoryIdentityV1::capture(&metadata),
         })
     }
-
     /// Atomically merge one successfully collected coherent snapshot.
     #[expect(
         clippy::needless_pass_by_value,
@@ -448,7 +420,6 @@ impl ResolverIndexCacheV1 {
         }
         unreachable!("bounded commit retry loop returns on its final iteration")
     }
-
     /// Load newest-first coherent sources suitable for one offline resolution.
     pub(super) fn sources(
         &self,
@@ -490,7 +461,6 @@ impl ResolverIndexCacheV1 {
             .map(CachedResolverSourceV1::new)
             .collect())
     }
-
     fn load_catalog(
         &self,
     ) -> Result<Option<ResolverIndexCacheCatalogV1>, ResolverIndexCacheErrorV1> {
@@ -508,7 +478,6 @@ impl ResolverIndexCacheV1 {
         catalog.validate()?;
         Ok(Some(catalog))
     }
-
     fn validate_root(&self) -> Result<(), ResolverIndexCacheErrorV1> {
         let path = self.write_root.path();
         let metadata = fs::symlink_metadata(path)
@@ -520,16 +489,14 @@ impl ResolverIndexCacheV1 {
         Ok(())
     }
 }
-
 /// Online source wrapper that records only successfully returned validated pages.
 pub struct RecordingResolverSourceV1<'a> {
     inner: &'a RegistryReadClientV1,
     ordered: RefCell<Vec<CachedOrderedPageV1>>,
     resolver: RefCell<Vec<CachedResolverPageV1>>,
 }
-
 impl<'a> RecordingResolverSourceV1<'a> {
-    /// Wrap one signer-free online registry reader.
+    /// Wrap one authenticated online registry reader.
     pub(super) fn new(inner: &'a RegistryReadClientV1) -> Self {
         Self {
             inner,
@@ -537,7 +504,6 @@ impl<'a> RecordingResolverSourceV1<'a> {
             resolver: RefCell::new(Vec::new()),
         }
     }
-
     /// Finish a coherent capture after graph collection succeeds.
     pub(super) fn finish(self) -> Result<ResolverIndexCacheSnapshotV1, ResolverIndexCacheErrorV1> {
         let mut ordered_pages = self.ordered.into_inner();
@@ -564,14 +530,11 @@ impl<'a> RecordingResolverSourceV1<'a> {
         Ok(snapshot)
     }
 }
-
 impl ResolverRegistrySourceV1 for RecordingResolverSourceV1<'_> {
     type Error = RegistryErrorV1;
-
     fn map_error(error: Self::Error) -> GraphErrorV1 {
         GraphErrorV1::Registry(error.to_string())
     }
-
     fn ordered_prefix(
         &self,
         request: &MusubiOrderedPrefixQueryV1,
@@ -583,7 +546,6 @@ impl ResolverRegistrySourceV1 for RecordingResolverSourceV1<'_> {
         });
         Ok(response)
     }
-
     fn resolver_index(
         &self,
         request: &MusubiResolverIndexQueryV1,
@@ -596,18 +558,15 @@ impl ResolverRegistrySourceV1 for RecordingResolverSourceV1<'_> {
         Ok(response)
     }
 }
-
 /// One validated immutable snapshot replayed as the ordinary graph source.
 #[derive(Clone, Debug)]
 pub struct CachedResolverSourceV1 {
     snapshot: ResolverIndexCacheSnapshotV1,
 }
-
 impl CachedResolverSourceV1 {
     fn new(snapshot: ResolverIndexCacheSnapshotV1) -> Self {
         Self { snapshot }
     }
-
     /// Bind local package text structurally using the cached immutable namespace binding.
     pub(super) fn bind_selector_namespace(
         &self,
@@ -632,26 +591,21 @@ impl CachedResolverSourceV1 {
             selector.name.clone(),
         ))
     }
-
     /// Return the exact finalized anchor represented by this source.
     #[cfg(test)]
     pub(super) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.snapshot.snapshot
     }
-
     /// Return the non-secret account-network discriminant captured with this snapshot.
     pub(super) const fn account_chain_discriminant(&self) -> u16 {
         self.snapshot.account_chain_discriminant
     }
 }
-
 impl ResolverRegistrySourceV1 for CachedResolverSourceV1 {
     type Error = ResolverIndexCacheSourceErrorV1;
-
     fn map_error(error: Self::Error) -> GraphErrorV1 {
         GraphErrorV1::OfflineMiss(error.to_string())
     }
-
     fn ordered_prefix(
         &self,
         request: &MusubiOrderedPrefixQueryV1,
@@ -663,7 +617,6 @@ impl ResolverRegistrySourceV1 for CachedResolverSourceV1 {
             |entry| &entry.response,
         )
     }
-
     fn resolver_index(
         &self,
         request: &MusubiResolverIndexQueryV1,
@@ -676,7 +629,6 @@ impl ResolverRegistrySourceV1 for CachedResolverSourceV1 {
         )
     }
 }
-
 /// Stable cache-source lookup failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolverIndexCacheSourceErrorV1 {
@@ -685,7 +637,6 @@ pub enum ResolverIndexCacheSourceErrorV1 {
     /// Multiple disagreeing cached responses matched one exact request.
     Ambiguous,
 }
-
 impl fmt::Display for ResolverIndexCacheSourceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -697,9 +648,7 @@ impl fmt::Display for ResolverIndexCacheSourceErrorV1 {
         }
     }
 }
-
 impl Error for ResolverIndexCacheSourceErrorV1 {}
-
 /// Stable resolver-index cache failure.
 #[derive(Debug)]
 pub enum ResolverIndexCacheErrorV1 {
@@ -723,7 +672,6 @@ pub enum ResolverIndexCacheErrorV1 {
     /// No unambiguous complete cached snapshot covered a request.
     OfflineMiss(String),
 }
-
 impl fmt::Display for ResolverIndexCacheErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -749,7 +697,6 @@ impl fmt::Display for ResolverIndexCacheErrorV1 {
         }
     }
 }
-
 impl Error for ResolverIndexCacheErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -760,7 +707,6 @@ impl Error for ResolverIndexCacheErrorV1 {
         }
     }
 }
-
 fn exact_page<T, Q, P, FQ, FP>(
     pages: &[T],
     request: &Q,
@@ -785,7 +731,6 @@ where
     }
     found.ok_or(ResolverIndexCacheSourceErrorV1::Miss)
 }
-
 fn validate_request_cursor(
     cursor: Option<&iroha_data_model::musubi::MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
@@ -797,7 +742,6 @@ fn validate_request_cursor(
     }
     Ok(())
 }
-
 fn validate_canonical_order<T, K, F>(values: &[T], key: F) -> Result<(), ResolverIndexCacheErrorV1>
 where
     K: Ord,
@@ -818,7 +762,6 @@ where
     }
     Ok(())
 }
-
 fn validate_page_chains<T, B, FBase, FRequest, FNext>(
     pages: &[T],
     base_key: FBase,
@@ -872,14 +815,12 @@ where
     }
     Ok(())
 }
-
 fn ordered_base_key(page: &CachedOrderedPageV1) -> (String, u32) {
     (
         page.request.prefix.as_str().to_owned(),
         page.request.page.limit,
     )
 }
-
 fn resolver_base_key(page: &CachedResolverPageV1) -> (Vec<u8>, Vec<u8>, u32) {
     (
         page.request.package.encode(),
@@ -887,7 +828,6 @@ fn resolver_base_key(page: &CachedResolverPageV1) -> (Vec<u8>, Vec<u8>, u32) {
         page.request.page.limit,
     )
 }
-
 fn insert_identical<K: Ord, V: PartialEq>(
     values: &mut BTreeMap<K, V>,
     key: K,
@@ -895,7 +835,6 @@ fn insert_identical<K: Ord, V: PartialEq>(
     label: &str,
 ) -> Result<(), ResolverIndexCacheErrorV1> {
     use std::collections::btree_map::Entry;
-
     match values.entry(key) {
         Entry::Vacant(entry) => {
             entry.insert(value);
@@ -909,7 +848,6 @@ fn insert_identical<K: Ord, V: PartialEq>(
     }
     Ok(())
 }
-
 fn merge_pages<T, F>(
     destination: &mut Vec<T>,
     incoming: Vec<T>,
@@ -935,13 +873,11 @@ where
     destination.sort_by_cached_key(|value| key(value).unwrap_or_default());
     Ok(())
 }
-
 fn same_anchor(left: &ResolverIndexCacheSnapshotV1, right: &ResolverIndexCacheSnapshotV1) -> bool {
     left.network_id == right.network_id
         && left.account_chain_discriminant == right.account_chain_discriminant
         && left.snapshot == right.snapshot
 }
-
 fn snapshot_key(snapshot: &ResolverIndexCacheSnapshotV1) -> (NetworkId, u16, u64, [u8; 32], u64) {
     (
         snapshot.network_id,
@@ -951,7 +887,6 @@ fn snapshot_key(snapshot: &ResolverIndexCacheSnapshotV1) -> (NetworkId, u16, u64
         snapshot.snapshot.index_revision,
     )
 }
-
 fn snapshot_recency(snapshot: &ResolverIndexCacheSnapshotV1) -> (u64, u64, [u8; 32]) {
     (
         snapshot.snapshot.finalized_height,
@@ -959,16 +894,13 @@ fn snapshot_recency(snapshot: &ResolverIndexCacheSnapshotV1) -> (u64, u64, [u8; 
         snapshot.snapshot.finalized_block_hash,
     )
 }
-
 fn canonical<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, ResolverIndexCacheErrorV1> {
     norito::encode_canonical(value)
         .map_err(|error| ResolverIndexCacheErrorV1::Codec(error.to_string()))
 }
-
 fn invalid(reason: impl Into<String>) -> ResolverIndexCacheErrorV1 {
     ResolverIndexCacheErrorV1::Invalid(reason.into())
 }
-
 fn io_error(operation: &'static str, path: &Path, source: io::Error) -> ResolverIndexCacheErrorV1 {
     ResolverIndexCacheErrorV1::Io {
         operation,
@@ -976,7 +908,6 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Resolver
         source,
     }
 }
-
 #[derive(Clone, Debug)]
 struct DirectoryIdentityV1 {
     #[cfg(unix)]
@@ -984,7 +915,6 @@ struct DirectoryIdentityV1 {
     #[cfg(unix)]
     inode: u64,
 }
-
 impl DirectoryIdentityV1 {
     fn capture(metadata: &fs::Metadata) -> Self {
         Self {
@@ -994,7 +924,6 @@ impl DirectoryIdentityV1 {
             inode: metadata.ino(),
         }
     }
-
     fn matches(&self, metadata: &fs::Metadata) -> bool {
         #[cfg(unix)]
         {
@@ -1007,7 +936,6 @@ impl DirectoryIdentityV1 {
         }
     }
 }
-
 fn validate_private_directory(
     path: &Path,
     metadata: &fs::Metadata,
@@ -1024,7 +952,6 @@ fn validate_private_directory(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,20 +967,17 @@ mod tests {
         nexus::DataSpaceId,
     };
     use tempfile::TempDir;
-
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("network id")
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn other_network_id() -> NetworkId {
         "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA"
             .parse()
             .expect("other network id")
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const APP: &str = r#"manifest-version = 1
 [package]
@@ -1065,7 +989,6 @@ abi-version = 1
 [lib]
 exports = []
 "#;
-
     fn snapshot(height: u64, byte: u8) -> MusubiRegistrySnapshotV1 {
         MusubiRegistrySnapshotV1 {
             finalized_height: height,
@@ -1073,7 +996,6 @@ exports = []
             index_revision: height,
         }
     }
-
     fn binding(namespace: &str) -> MusubiNamespaceBindingV1 {
         let namespace: MusubiNamespaceV1 = namespace.parse().expect("namespace");
         MusubiNamespaceBindingV1 {
@@ -1087,7 +1009,6 @@ exports = []
             generation: 1,
         }
     }
-
     fn ordered_page(namespace: &str, height: u64, byte: u8) -> CachedOrderedPageV1 {
         let prefix = format!("{namespace}/");
         let request = MusubiOrderedPrefixQueryV1 {
@@ -1109,7 +1030,6 @@ exports = []
             },
         }
     }
-
     fn image(namespace: &str, height: u64, byte: u8) -> ResolverIndexCacheSnapshotV1 {
         ResolverIndexCacheSnapshotV1 {
             network_id: network_id(),
@@ -1119,7 +1039,6 @@ exports = []
             resolver_pages: Vec::new(),
         }
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn install_cache_ancestor_aba_hooks(
         trusted_root: PathBuf,
@@ -1144,7 +1063,6 @@ exports = []
             },
         );
     }
-
     #[test]
     fn canonical_snapshot_rejects_page_order_and_mixed_anchors() {
         let mut value = image("apps.sora", 10, 10);
@@ -1158,14 +1076,12 @@ exports = []
             value.validate(),
             Err(ResolverIndexCacheErrorV1::Invalid(_))
         ));
-
         let mut mixed = image("apps.sora", 10, 10);
         mixed.ordered_pages[0].response.snapshot = snapshot(11, 11);
         assert!(matches!(
             mixed.validate(),
             Err(ResolverIndexCacheErrorV1::Invalid(_))
         ));
-
         let mut invalid_network = image("apps.sora", 10, 10);
         invalid_network.account_chain_discriminant = 0;
         assert!(matches!(
@@ -1173,7 +1089,6 @@ exports = []
             Err(ResolverIndexCacheErrorV1::Invalid(_))
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn durable_cache_detects_tampering_and_offline_misses() {
@@ -1195,7 +1110,6 @@ exports = []
             sources[0].ordered_prefix(&missing),
             Err(ResolverIndexCacheSourceErrorV1::Miss)
         ));
-
         let path = root.join("registry-v1").join(CACHE_FILE);
         let mut bytes = fs::read(&path).expect("cache bytes");
         let last = bytes.last_mut().expect("non-empty cache");
@@ -1206,7 +1120,6 @@ exports = []
             Err(ResolverIndexCacheErrorV1::Codec(_) | ResolverIndexCacheErrorV1::Invalid(_))
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn descriptor_rooted_read_cannot_load_forged_bytes_from_an_aba_root() {
@@ -1225,7 +1138,6 @@ exports = []
             "the alternate bytes must be independently admissible"
         );
         drop(forged_cache);
-
         install_cache_ancestor_aba_hooks(
             trusted_user_root.clone(),
             forged_user_root,
@@ -1237,7 +1149,6 @@ exports = []
                 if reason == "resolver cache is empty"
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn descriptor_rooted_read_cannot_observe_forged_absence_from_an_aba_root() {
@@ -1249,7 +1160,6 @@ exports = []
             .publish(image("apps.sora", 10, 10))
             .expect("publish trusted catalog");
         drop(ResolverIndexCacheV1::open(&empty_user_root).expect("empty alternate cache"));
-
         install_cache_ancestor_aba_hooks(
             trusted_user_root.clone(),
             empty_user_root,
@@ -1259,7 +1169,6 @@ exports = []
             .sources(None)
             .expect("descriptor-rooted read sees retained genuine catalog");
         assert_eq!(sources[0].snapshot(), snapshot(10, 10));
-
         drop(cache);
         let reopened = ResolverIndexCacheV1::open(&trusted_user_root)
             .expect("restart binds the restored genuine root");
@@ -1268,7 +1177,6 @@ exports = []
             snapshot(10, 10)
         );
     }
-
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
     #[test]
     fn offline_cache_read_fails_closed_without_descriptor_rooted_open() {
@@ -1280,7 +1188,6 @@ exports = []
                 if error.code() == AtomicWriteErrorCode::UnsupportedPlatform
         ));
     }
-
     #[cfg(not(unix))]
     #[test]
     fn resolver_cache_open_fails_closed_without_a_safe_root_handle() {
@@ -1294,7 +1201,6 @@ exports = []
             _ => panic!("unexpected non-Unix cache-open error: {error}"),
         }
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn newest_snapshot_is_selected_without_mixing() {
@@ -1307,7 +1213,6 @@ exports = []
         assert_eq!(sources[0].account_chain_discriminant(), 369);
         assert_eq!(sources[1].snapshot(), snapshot(10, 10));
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn same_finalized_block_requires_the_exact_locked_index_revision() {
@@ -1325,7 +1230,6 @@ exports = []
         let mut equivocated = stable.clone();
         equivocated.snapshot.index_revision += 1;
         equivocated.ordered_pages[0].response.snapshot = equivocated.snapshot;
-
         assert!(stable.is_not_older_than(&lock));
         assert!(
             !equivocated.is_not_older_than(&lock),
@@ -1341,7 +1245,6 @@ exports = []
             Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn higher_finalized_height_cannot_roll_back_the_resolver_index_revision() {
@@ -1359,7 +1262,6 @@ exports = []
             Vec::new(),
         )
         .expect("stable lock");
-
         for height in 12_u64..=26 {
             cache
                 .publish(image(
@@ -1375,7 +1277,6 @@ exports = []
             .join("registry-v1")
             .join(CACHE_FILE);
         let stable_bytes = fs::read(&cache_file).expect("stable cache bytes");
-
         let mut rollback = image("apps.sora", 11, 11);
         rollback.snapshot.index_revision = 9;
         rollback.ordered_pages[0].response.snapshot = rollback.snapshot;
@@ -1392,7 +1293,6 @@ exports = []
             stable_bytes,
             "failed rollback publication must not replace the durable catalog"
         );
-
         let sources = cache
             .sources(Some(&lock))
             .expect("rejected rollback leaves durable cache unchanged");
@@ -1404,7 +1304,6 @@ exports = []
             "pre-retention validation must preserve the oldest stable anchor"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn offline_fresh_and_frozen_resolution_use_only_complete_cached_pages() {
@@ -1418,7 +1317,6 @@ exports = []
         cache
             .publish(image("apps.sora", 10, 10))
             .expect("publish snapshot");
-
         let fresh = resolve_workspace_offline_cached(
             &cache,
             &workspace,
@@ -1429,7 +1327,6 @@ exports = []
         )
         .expect("fresh offline graph");
         assert!(fresh.outcome.changed);
-
         let frozen = resolve_workspace_offline_cached(
             &cache,
             &workspace,
@@ -1442,7 +1339,6 @@ exports = []
         assert!(!frozen.outcome.changed);
         assert_eq!(frozen.outcome.lockfile, fresh.outcome.lockfile);
     }
-
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn offline_source_rejects_ambiguous_deployments_and_snapshots_older_than_lock() {
@@ -1451,7 +1347,6 @@ exports = []
         cache
             .publish(image("apps.sora", 10, 10))
             .expect("first deployment");
-
         let stale_lock = LockfileV1::new(
             network_id(),
             snapshot(20, 20),
@@ -1467,7 +1362,6 @@ exports = []
             cache.sources(Some(&stale_lock)),
             Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
         ));
-
         let mut other = image("apps.sora", 11, 11);
         other.network_id = other_network_id();
         other.ordered_pages[0].response.network_id = other.network_id;

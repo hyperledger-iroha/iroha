@@ -43,6 +43,7 @@ export {
 } from "./numericV1.js";
 
 export { NetworkId } from "./networkId.js";
+export { OperatorSigningContext } from "./operatorRequest.browser.js";
 
 export {
   computeIvmArtifactHashes,

@@ -4,15 +4,6 @@
 //! source-chain verifier. Consensus evidence is never routed through an opaque
 //! byte field inside this envelope: every native DTO is decoded as its concrete
 //! Rust/Norito type before verifier dispatch.
-
-use alloc::{boxed::Box, vec::Vec};
-use core::fmt;
-
-use iroha_data_model::bridge::{
-    BridgeNativeProofBackendV1, BridgeNativeProtocolProofV1, SccpInboundMessageKeyV1, SccpLaneIdV1,
-    SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSourceIdentityV1,
-};
-
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
     EthereumNativeSourceProofV1, H256, SccpPayloadV1, SccpSolanaAgaveSourceProofV1,
@@ -23,7 +14,12 @@ use super::{
     verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
     verify_sccp_payload_structure, verify_sccp_solana_agave_source_v1, verify_tron_native_source,
 };
-
+use alloc::{boxed::Box, vec::Vec};
+use core::fmt;
+use iroha_data_model::bridge::{
+    BridgeNativeProofBackendV1, BridgeNativeProtocolProofV1, SccpInboundMessageKeyV1, SccpLaneIdV1,
+    SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSourceIdentityV1,
+};
 /// Maximum canonical Norito size of a native source envelope or inbound proof.
 ///
 /// This bound is checked before decoding, after decoding by canonical
@@ -44,11 +40,9 @@ pub const SCCP_NATIVE_ADMISSION_MAX_JSON_BYTES_V1: usize = 40 * 1024 * 1024;
 /// Maximum canonical SCCP application-payload size admitted by the wrapper.
 pub const SCCP_NATIVE_ADMISSION_MAX_PAYLOAD_BYTES_V1: usize =
     iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1;
-
 const SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_U64_V1: u64 = 16 * 1024 * 1024;
 const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
 const NORITO_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
-
 /// One closed, typed protocol-native source proof.
 #[derive(
     Clone,
@@ -71,7 +65,6 @@ pub enum SccpNativeSourceProofV1 {
     /// TRON `DPoS` replay and transaction-inclusion proof.
     TronDpos(Box<TronNativeSourceProofV1>),
 }
-
 impl SccpNativeSourceProofV1 {
     /// Return the closed bridge backend selected by this typed variant.
     #[must_use]
@@ -83,7 +76,6 @@ impl SccpNativeSourceProofV1 {
             Self::TronDpos(_) => BridgeNativeProofBackendV1::TronDpos,
         }
     }
-
     fn embedded_source_network(&self) -> SccpNetworkV1 {
         match self {
             Self::EthereumBeacon(proof) => proof.source_identity.lane.source,
@@ -93,7 +85,6 @@ impl SccpNativeSourceProofV1 {
         }
     }
 }
-
 /// Exact-lane native proof statement authenticated by SCCP governance.
 #[derive(
     Clone,
@@ -132,7 +123,6 @@ pub struct SccpNativeSourceProofEnvelopeV1 {
     /// Concrete native consensus and event-inclusion proof.
     pub proof: SccpNativeSourceProofV1,
 }
-
 /// Compact native SCCP inbound proof.
 ///
 /// Native source events directly authenticate the message statement, so this
@@ -155,7 +145,6 @@ pub struct SccpNativeInboundMessageProofV1 {
     /// Typed native source proof and exact message statement.
     pub source: SccpNativeSourceProofEnvelopeV1,
 }
-
 /// Normalized source-finality point containing the native event.
 #[derive(
     Clone,
@@ -176,7 +165,6 @@ pub struct SccpNativeFinalityPointV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub block_hash: H256,
 }
-
 /// Chain-independent result of complete native SCCP admission.
 #[derive(
     Clone,
@@ -217,7 +205,6 @@ pub struct ValidatedSccpNativeInboundMessageV1 {
     #[norito(with = "crate::json_utils::u64_string")]
     pub anchor_interval_height: u64,
 }
-
 /// Fail-closed native admission error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SccpNativeAdmissionErrorV1 {
@@ -274,7 +261,6 @@ pub enum SccpNativeAdmissionErrorV1 {
     /// A native verifier returned fields inconsistent with the admitted statement.
     NormalizedResultMismatch(&'static str),
 }
-
 impl fmt::Display for SccpNativeAdmissionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -328,9 +314,7 @@ impl fmt::Display for SccpNativeAdmissionErrorV1 {
         }
     }
 }
-
 impl std::error::Error for SccpNativeAdmissionErrorV1 {}
-
 /// Return whether V1 safely admits an exact external profile as an inbound source.
 ///
 /// This capability is intentionally directional. A `false` result does not
@@ -339,7 +323,6 @@ impl std::error::Error for SccpNativeAdmissionErrorV1 {}
 pub const fn sccp_native_inbound_source_available_v1(network: SccpNetworkV1) -> bool {
     network.supports_native_inbound_source()
 }
-
 /// Map one admitted external source profile to its only native backend.
 ///
 /// Networks outside the first-release Ethereum/BSC/TRON set return `None`.
@@ -361,7 +344,6 @@ pub const fn sccp_native_backend_for_source_network_v1(
         SccpNetworkV1::SoraTaira => None,
     }
 }
-
 fn hashes_are_nonzero_and_distinct(hashes: &[H256]) -> bool {
     for (index, hash) in hashes.iter().enumerate() {
         if hash.iter().all(|byte| *byte == 0) || hashes[..index].contains(hash) {
@@ -370,7 +352,6 @@ fn hashes_are_nonzero_and_distinct(hashes: &[H256]) -> bool {
     }
     true
 }
-
 fn validate_source_envelope_shape(
     envelope: &SccpNativeSourceProofEnvelopeV1,
 ) -> Result<H256, SccpNativeAdmissionErrorV1> {
@@ -444,7 +425,6 @@ fn validate_source_envelope_shape(
     }
     Ok(lane_hash)
 }
-
 fn validate_inbound_statement(
     proof: &SccpNativeInboundMessageProofV1,
 ) -> Result<H256, SccpNativeAdmissionErrorV1> {
@@ -486,7 +466,6 @@ fn validate_inbound_statement(
     }
     Ok(lane_hash)
 }
-
 fn check_encoded_size(bytes: &[u8]) -> Result<(), SccpNativeAdmissionErrorV1> {
     if bytes.is_empty() {
         return Err(SccpNativeAdmissionErrorV1::EmptyEncoding);
@@ -499,7 +478,6 @@ fn check_encoded_size(bytes: &[u8]) -> Result<(), SccpNativeAdmissionErrorV1> {
     }
     Ok(())
 }
-
 fn preflight_canonical_norito(bytes: &[u8]) -> Result<(), SccpNativeAdmissionErrorV1> {
     check_encoded_size(bytes)?;
     // V1 admits one uncompressed encoding. Rejecting compression and a large
@@ -524,7 +502,6 @@ fn preflight_canonical_norito(bytes: &[u8]) -> Result<(), SccpNativeAdmissionErr
     }
     Ok(())
 }
-
 /// Encode one structurally valid source envelope as canonical Norito bytes.
 ///
 /// # Errors
@@ -540,7 +517,6 @@ pub fn encode_sccp_native_source_proof_envelope_v1(
     check_encoded_size(&encoded)?;
     Ok(encoded)
 }
-
 /// Decode exactly one canonical, size-bounded native source envelope.
 ///
 /// # Errors
@@ -559,7 +535,6 @@ pub fn decode_sccp_native_source_proof_envelope_v1(
     }
     Ok(envelope)
 }
-
 /// Decode one strict, size-bounded JSON native source envelope.
 ///
 /// # Errors
@@ -588,7 +563,6 @@ pub fn decode_sccp_native_source_proof_envelope_json_v1(
     encode_sccp_native_source_proof_envelope_v1(&envelope)?;
     Ok(envelope)
 }
-
 /// Encode one structurally valid native inbound proof as canonical Norito bytes.
 ///
 /// # Errors
@@ -604,7 +578,6 @@ pub fn encode_sccp_native_inbound_message_proof_v1(
     check_encoded_size(&encoded)?;
     Ok(encoded)
 }
-
 /// Decode exactly one canonical, size-bounded native inbound proof.
 ///
 /// # Errors
@@ -623,7 +596,6 @@ pub fn decode_sccp_native_inbound_message_proof_v1(
     }
     Ok(proof)
 }
-
 /// Decode one strict, size-bounded JSON native inbound proof.
 ///
 /// # Errors
@@ -652,7 +624,6 @@ pub fn decode_sccp_native_inbound_message_proof_json_v1(
     encode_sccp_native_inbound_message_proof_v1(&proof)?;
     Ok(proof)
 }
-
 /// Build the data-model container for one canonical native inbound proof.
 ///
 /// # Errors
@@ -673,7 +644,6 @@ pub fn bridge_native_protocol_proof_v1(
         encoded_envelope,
     })
 }
-
 /// Decode a data-model native container and require its outer backend to match.
 ///
 /// # Errors
@@ -692,7 +662,6 @@ pub fn decode_bridge_native_protocol_proof_v1(
     }
     Ok(decoded)
 }
-
 fn validate_governed_context(
     proof: &SccpNativeInboundMessageProofV1,
     governed_source_identity: &SccpSourceIdentityV1,
@@ -714,7 +683,6 @@ fn validate_governed_context(
     }
     Ok(())
 }
-
 fn normalized_result(
     proof: &SccpNativeInboundMessageProofV1,
     lane_hash: H256,
@@ -748,20 +716,17 @@ fn normalized_result(
         anchor_interval_height,
     })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct VerifiedNativeFinalityV1 {
     source_finality: SccpNativeFinalityPointV1,
     anchor_interval_height: u64,
 }
-
 struct GovernedNativeAdmissionContextV1<'a> {
     proof: &'a SccpNativeInboundMessageProofV1,
     source_identity: &'a SccpSourceIdentityV1,
     trust_anchor: SccpNativeTrustAnchorV1,
     lane_hash: H256,
 }
-
 fn verify_ethereum_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &EthereumNativeSourceProofV1,
@@ -802,7 +767,6 @@ fn verify_ethereum_native_admission_v1(
         anchor_interval_height: validated.finalized_beacon_slot,
     })
 }
-
 fn verify_bsc_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &BscNativeSourceProofV1,
@@ -845,7 +809,6 @@ fn verify_bsc_native_admission_v1(
         anchor_interval_height: validated.finality.block_number,
     })
 }
-
 fn verify_tron_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &TronNativeSourceProofV1,
@@ -883,7 +846,6 @@ fn verify_tron_native_admission_v1(
         anchor_interval_height: validated.finality.block_number,
     })
 }
-
 fn verify_solana_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &SccpSolanaAgaveSourceProofV1,
@@ -919,7 +881,6 @@ fn verify_solana_native_admission_v1(
         anchor_interval_height: validated.rooted_slot,
     })
 }
-
 /// Verify a complete native inbound proof against governed lane material.
 ///
 /// Every branch invokes its full protocol-native verifier. Success is returned
@@ -958,13 +919,11 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
             verify_tron_native_admission_v1(&context, native)?
         }
     };
-
     if verified_finality.source_finality != proof.source.source_finality {
         return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
             "source finality",
         ));
     }
-
     normalized_result(
         proof,
         lane_hash,
@@ -972,7 +931,6 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
         verified_finality.anchor_interval_height,
     )
 }
-
 /// Build a complete positive Ethereum native inbound fixture for one payload.
 ///
 /// The payload must be a structurally valid Ethereum-to-SORA SCCP message. The
@@ -1073,7 +1031,6 @@ pub fn sccp_native_ethereum_inbound_test_fixture_for_payload_v1(
     validate_inbound_statement(&proof)?;
     Ok((proof, identity, trust_anchor))
 }
-
 /// Build a complete positive Ethereum native transfer fixture.
 ///
 /// This helper exists only for crate and downstream integration tests compiled
@@ -1089,7 +1046,6 @@ pub fn sccp_native_ethereum_inbound_test_fixture_v1() -> (
     sccp_native_ethereum_inbound_test_fixture_for_payload_v1(payload)
         .expect("fixed Ethereum transfer test fixture is valid")
 }
-
 /// Build a complete positive Ethereum native transfer fixture.
 ///
 /// The returned message is an Ethereum mainnet to SORA Taira transfer and is
@@ -1103,7 +1059,6 @@ pub fn sccp_native_ethereum_transfer_inbound_test_fixture_v1() -> (
 ) {
     sccp_native_ethereum_inbound_test_fixture_v1()
 }
-
 #[cfg(any(test, feature = "test-fixtures"))]
 fn ethereum_transfer_test_payload() -> SccpPayloadV1 {
     let recipient = iroha_data_model::account::AccountId::new(
@@ -1133,13 +1088,11 @@ fn ethereum_transfer_test_payload() -> SccpPayloadV1 {
         route_id: crate::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{EthereumNativeMptRoleV1, SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA};
     use norito::codec::{DecodeAll as _, Encode as _};
-
     fn inbound_fixture() -> (
         SccpNativeInboundMessageProofV1,
         SccpSourceIdentityV1,
@@ -1147,7 +1100,6 @@ mod tests {
     ) {
         sccp_native_ethereum_inbound_test_fixture_v1()
     }
-
     fn ethereum_proof_mut(
         proof: &mut SccpNativeInboundMessageProofV1,
     ) -> &mut EthereumNativeSourceProofV1 {
@@ -1156,7 +1108,6 @@ mod tests {
         };
         native.as_mut()
     }
-
     #[test]
     fn full_ethereum_dispatch_normalizes_exact_lane_statement() {
         let (proof, identity, trust_anchor) = inbound_fixture();
@@ -1187,7 +1138,6 @@ mod tests {
             "Ethereum anchor intervals use finalized beacon slots, not execution block numbers"
         );
     }
-
     #[test]
     fn exported_ethereum_transfer_fixture_rebuilds_and_verifies() {
         let (proof, identity, trust_anchor) =
@@ -1202,7 +1152,6 @@ mod tests {
         assert_eq!(validated.message_key.lane, identity.lane);
         assert_eq!(validated.message_key.message_id, proof.source.message_id);
     }
-
     #[test]
     fn canonical_binary_json_and_bridge_container_roundtrip() {
         let (proof, _, _) = inbound_fixture();
@@ -1218,13 +1167,11 @@ mod tests {
             decode_sccp_native_source_proof_envelope_v1(&envelope),
             Ok(proof.source.clone())
         );
-
         let json = norito::json::to_json(&proof).expect("native proof JSON encodes");
         assert_eq!(
             decode_sccp_native_inbound_message_proof_json_v1(&json),
             Ok(proof.clone())
         );
-
         let route_configuration_hash = [0x91; 32];
         let container = bridge_native_protocol_proof_v1(&proof, route_configuration_hash)
             .expect("native data-model container is canonical");
@@ -1242,7 +1189,6 @@ mod tests {
             BridgeNativeProtocolProofV1::decode_all(&mut encoded_container.as_slice())
                 .expect("data-model native container decodes");
         assert_eq!(decoded_container, container);
-
         let anchor_bytes = proof.source.trust_anchor.encode();
         let decoded_anchor = SccpNativeTrustAnchorV1::decode_all(&mut anchor_bytes.as_slice())
             .expect("data-model native trust anchor decodes");
@@ -1262,19 +1208,16 @@ mod tests {
             }
             .is_well_formed()
         );
-
         let mut unknown_backend = BridgeNativeProofBackendV1::EthereumBeacon.encode();
         let unknown_tag = u32::MAX.encode();
         unknown_backend[..unknown_tag.len()].copy_from_slice(&unknown_tag);
         assert!(BridgeNativeProofBackendV1::decode_all(&mut unknown_backend.as_slice()).is_err());
-
         let mut wrong_backend = container;
         wrong_backend.backend = BridgeNativeProofBackendV1::BscParlia;
         assert_eq!(
             decode_bridge_native_protocol_proof_v1(&wrong_backend),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
         );
-
         assert_eq!(
             bridge_native_protocol_proof_v1(&proof, [0; 32]),
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
@@ -1287,12 +1230,10 @@ mod tests {
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
     }
-
     #[test]
     fn canonical_binary_decoder_rejects_truncation_trailing_compression_and_bombs() {
         let (proof, _, _) = inbound_fixture();
         let encoded = encode_sccp_native_inbound_message_proof_v1(&proof).unwrap();
-
         assert_eq!(
             decode_sccp_native_inbound_message_proof_v1(&[]),
             Err(SccpNativeAdmissionErrorV1::EmptyEncoding)
@@ -1305,7 +1246,6 @@ mod tests {
             SccpNativeAdmissionErrorV1::EmptyEncoding.to_string(),
             "encoded native proof is empty"
         );
-
         let truncated = &encoded[..encoded.len() - 1];
         assert_eq!(
             decode_sccp_native_inbound_message_proof_v1(truncated),
@@ -1317,14 +1257,12 @@ mod tests {
             decode_sccp_native_inbound_message_proof_v1(&trailing),
             Err(SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)
         );
-
         let mut compressed = encoded.clone();
         compressed[NORITO_COMPRESSION_OFFSET] = 1;
         assert_eq!(
             decode_sccp_native_inbound_message_proof_v1(&compressed),
             Err(SccpNativeAdmissionErrorV1::InvalidNoritoEncoding)
         );
-
         let mut declared_bomb = encoded;
         declared_bomb[NORITO_LENGTH_OFFSET..NORITO_LENGTH_OFFSET + 8]
             .copy_from_slice(&(SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_U64_V1 + 1).to_le_bytes());
@@ -1341,12 +1279,10 @@ mod tests {
             Err(SccpNativeAdmissionErrorV1::EncodedSize { .. })
         ));
     }
-
     #[test]
     fn strict_json_rejects_unknown_variant_field_alias_order_and_trailing() {
         let (proof, _, _) = inbound_fixture();
         let json = norito::json::to_json(&proof).unwrap();
-
         assert_eq!(
             decode_sccp_native_inbound_message_proof_json_v1(""),
             Err(SccpNativeAdmissionErrorV1::EmptyEncoding)
@@ -1355,27 +1291,23 @@ mod tests {
             decode_sccp_native_source_proof_envelope_json_v1(""),
             Err(SccpNativeAdmissionErrorV1::EmptyEncoding)
         );
-
         let unknown_variant = json.replace("ethereum_beacon", "unknown_native_backend");
         assert_ne!(unknown_variant, json);
         assert_eq!(
             decode_sccp_native_inbound_message_proof_json_v1(&unknown_variant),
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
         );
-
         let unknown_field = format!("{{\"unknown\":0,{}", &json[1..]);
         assert_eq!(
             decode_sccp_native_inbound_message_proof_json_v1(&unknown_field),
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
         );
-
         let numeric_alias = json.replace("\"nonce\":\"11\"", "\"nonce\":11");
         assert_ne!(numeric_alias, json);
         assert_eq!(
             decode_sccp_native_inbound_message_proof_json_v1(&numeric_alias),
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
         );
-
         let without_first = json.replacen("{\"version\":1,\"payload\":", "{\"payload\":", 1);
         let reordered = without_first.replacen(",\"source\":", ",\"version\":1,\"source\":", 1);
         assert_ne!(reordered, json);
@@ -1383,7 +1315,6 @@ mod tests {
             decode_sccp_native_inbound_message_proof_json_v1(&reordered),
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
         );
-
         assert_eq!(
             decode_sccp_native_inbound_message_proof_json_v1(&format!(" {json}")),
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
@@ -1393,11 +1324,9 @@ mod tests {
             Err(SccpNativeAdmissionErrorV1::InvalidJsonEncoding)
         );
     }
-
     #[test]
     fn lane_backend_identity_and_anchor_substitutions_fail_closed() {
         let (proof, identity, trust_anchor) = inbound_fixture();
-
         let mut wrong_backend = proof.clone();
         wrong_backend.source.trust_anchor.backend = BridgeNativeProofBackendV1::BscParlia;
         assert_eq!(
@@ -1408,21 +1337,18 @@ mod tests {
             ),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
         );
-
         let mut cross_sora = proof.clone();
         cross_sora.source.lane.source = SccpNetworkV1::SoraTaira;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&cross_sora, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::InvalidLane)
         );
-
         let mut cross_network = proof.clone();
         cross_network.source.lane.source = SccpNetworkV1::EthereumSepolia;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&cross_network, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
         );
-
         let mut cross_family = proof.clone();
         cross_family.source.lane.source = SccpNetworkV1::BscTestnet;
         cross_family.source.trust_anchor.backend = BridgeNativeProofBackendV1::BscParlia;
@@ -1434,7 +1360,6 @@ mod tests {
             ),
             Err(SccpNativeAdmissionErrorV1::BackendMismatch)
         );
-
         let mut wrong_identity = identity;
         let iroha_data_model::bridge::SccpSourceEmitterV1::Evm(emitter) =
             &mut wrong_identity.emitter
@@ -1446,7 +1371,6 @@ mod tests {
             verify_sccp_native_inbound_message_proof_v1(&proof, &wrong_identity, trust_anchor,),
             Err(SccpNativeAdmissionErrorV1::SourceIdentityHashMismatch)
         );
-
         let wrong_anchor = SccpNativeTrustAnchorV1 {
             backend: trust_anchor.backend,
             checkpoint_height: trust_anchor.checkpoint_height,
@@ -1456,7 +1380,6 @@ mod tests {
             verify_sccp_native_inbound_message_proof_v1(&proof, &identity, wrong_anchor),
             Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch)
         );
-
         let wrong_height_anchor = SccpNativeTrustAnchorV1 {
             checkpoint_height: trust_anchor.checkpoint_height + 1,
             ..trust_anchor
@@ -1466,7 +1389,6 @@ mod tests {
             Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch)
         );
     }
-
     #[test]
     fn self_contained_source_finality_claim_is_exact_and_role_separated() {
         let (proof, identity, trust_anchor) = inbound_fixture();
@@ -1474,28 +1396,24 @@ mod tests {
             verify_sccp_native_inbound_message_proof_v1(&proof, &identity, trust_anchor)
                 .expect("fixture native proof verifies");
         assert_eq!(validated.source_finality, proof.source.source_finality);
-
         let mut zero_height = proof.clone();
         zero_height.source.source_finality.height = 0;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&zero_height, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
-
         let mut zero_hash = proof.clone();
         zero_hash.source.source_finality.block_hash = [0; 32];
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&zero_hash, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
-
         let mut collided_hash = proof.clone();
         collided_hash.source.source_finality.block_hash = collided_hash.source.payload_hash;
         assert_eq!(
             verify_sccp_native_inbound_message_proof_v1(&collided_hash, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
-
         let mut wrong_height = proof.clone();
         wrong_height.source.source_finality.height += 1;
         assert_eq!(
@@ -1504,7 +1422,6 @@ mod tests {
                 "source finality"
             ))
         );
-
         let mut wrong_hash = proof;
         wrong_hash.source.source_finality.block_hash[0] ^= 1;
         assert_eq!(
@@ -1514,11 +1431,9 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn message_payload_digest_zero_and_collision_substitutions_fail_closed() {
         let (proof, identity, trust_anchor) = inbound_fixture();
-
         let mut wrong_message = proof.clone();
         let SccpPayloadV1::Transfer(payload) = &mut wrong_message.payload;
         payload.nonce += 1;
@@ -1526,7 +1441,6 @@ mod tests {
             verify_sccp_native_inbound_message_proof_v1(&wrong_message, &identity, trust_anchor,),
             Err(SccpNativeAdmissionErrorV1::MessageIdMismatch)
         );
-
         let mut wrong_payload_lane = proof.clone();
         let SccpPayloadV1::Transfer(payload) = &mut wrong_payload_lane.payload;
         payload.source_domain = crate::SCCP_DOMAIN_BSC;
@@ -1538,7 +1452,6 @@ mod tests {
             ),
             Err(SccpNativeAdmissionErrorV1::PayloadLaneMismatch)
         );
-
         let mut wrong_payload_hash = proof.clone();
         wrong_payload_hash.source.payload_hash = [0xb1; 32];
         ethereum_proof_mut(&mut wrong_payload_hash).payload_hash = [0xb1; 32];
@@ -1550,7 +1463,6 @@ mod tests {
             ),
             Err(SccpNativeAdmissionErrorV1::PayloadHashMismatch)
         );
-
         let mut wrong_digest = proof.clone();
         wrong_digest.source.source_event_digest = [0xb2; 32];
         ethereum_proof_mut(&mut wrong_digest).source_event_digest = [0xb2; 32];
@@ -1558,7 +1470,6 @@ mod tests {
             verify_sccp_native_inbound_message_proof_v1(&wrong_digest, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::SourceEventDigestMismatch)
         );
-
         let mut zero_identity = proof.clone();
         zero_identity.source.source_identity_hash = [0; 32];
         ethereum_proof_mut(&mut zero_identity).source_identity_hash = [0; 32];
@@ -1566,7 +1477,6 @@ mod tests {
             verify_sccp_native_inbound_message_proof_v1(&zero_identity, &identity, trust_anchor),
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
-
         let mut colliding_roles = proof.clone();
         colliding_roles.source.payload_hash = colliding_roles.source.message_id;
         let collision = colliding_roles.source.message_id;
@@ -1576,7 +1486,6 @@ mod tests {
             Err(SccpNativeAdmissionErrorV1::HashRoleCollision)
         );
     }
-
     #[test]
     fn oversized_nested_native_vector_reaches_family_bound_and_fails() {
         let (mut proof, identity, trust_anchor) = inbound_fixture();
@@ -1588,7 +1497,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn native_backend_selection_is_closed_by_exact_network() {
         let mappings = [

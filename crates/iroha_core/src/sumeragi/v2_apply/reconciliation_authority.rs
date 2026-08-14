@@ -32,7 +32,6 @@ fn recover_pending_canonical_terminal_outcome(
             "Kura Pending canonical recovery application/group cardinality differs",
         ));
     }
-
     let mut authenticated_groups = BTreeMap::new();
     for group in authenticated.groups {
         if authenticated_groups
@@ -44,7 +43,6 @@ fn recover_pending_canonical_terminal_outcome(
             ));
         }
     }
-
     // Complete members are part of the same authenticated carrier set but
     // require no Queue mutation. The carrier preflight already validated every
     // application transition and the full group set; matching this exact group
@@ -74,7 +72,6 @@ fn recover_pending_canonical_terminal_outcome(
             ));
         }
     }
-
     let expected_terminal_evidence = pending_sources.len();
     let mut queue_groups = Vec::with_capacity(expected_terminal_evidence);
     for (pending_group, source_authorization) in pending_sources {
@@ -100,7 +97,6 @@ fn recover_pending_canonical_terminal_outcome(
             "Kura lifecycle source-outcome set does not exactly cover its carrier",
         ));
     }
-
     let cleanup = queue
         .authenticate_autonomous_lifecycle_pending_canonical_queue_terminal_outcomes(
             queue_groups,
@@ -122,7 +118,6 @@ fn recover_pending_canonical_terminal_outcome(
     )?;
     Ok(finalized_reservations)
 }
-
 fn recover_pending_release_terminal_outcome(
     queue: &Queue,
     kura: &Kura,
@@ -174,7 +169,6 @@ fn recover_pending_release_terminal_outcome(
     kura.complete_autonomous_lifecycle_release_terminal_outcome(terminal_evidence)?;
     Ok(finalized_reservations)
 }
-
 /// Consume one bounded, source-revalidated Kura Pending outcome and close its
 /// exact Queue/Kura terminal join.
 pub(crate) fn recover_pending_autonomous_lifecycle_terminal_outcome(
@@ -200,7 +194,6 @@ pub(crate) fn recover_pending_autonomous_lifecycle_terminal_outcome(
         ),
     }
 }
-
 struct ReservationReconciliationGroupInput {
     group: LaneQueueReservationReconciliationGroupV1,
     /// Queue owners which remain after an earlier grouped Commit-prefix or
@@ -212,7 +205,6 @@ struct ReservationReconciliationGroupInput {
     committed: bool,
     commit_authorization: Option<AutonomousLaneQueueCarrierCleanupAuthorization>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ReservationRetainDisposition {
     Current,
@@ -220,7 +212,6 @@ enum ReservationRetainDisposition {
     PendingMerge,
     HistoricalRecovery(HistoricalAutonomousReservationInstallV1),
 }
-
 enum ReservationReconciliationAction {
     Commit {
         keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
@@ -241,7 +232,6 @@ enum ReservationReconciliationAction {
         authorization: StrictAbsenceDirectReleaseAuthorization,
     },
 }
-
 /// Move-only proof that one exact planner-classified pre-Kura group may return to ordinary FIFO.
 #[must_use = "strict-absence direct-release authority must reach the Queue journal sink"]
 pub(crate) struct StrictAbsenceDirectReleaseAuthorization {
@@ -250,7 +240,6 @@ pub(crate) struct StrictAbsenceDirectReleaseAuthorization {
     checked_release:
         CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
 }
-
 impl StrictAbsenceDirectReleaseAuthorization {
     fn from_snapshot(
         snapshot: &LaneQueueReservationReconciliationSnapshotV1,
@@ -291,7 +280,6 @@ impl StrictAbsenceDirectReleaseAuthorization {
             checked_release,
         })
     }
-
     /// Borrow the exact ordered group for Queue's global-FIFO union preflight.
     pub(crate) fn queue_group(
         &self,
@@ -320,7 +308,6 @@ impl StrictAbsenceDirectReleaseAuthorization {
                 projection,
             ))
     }
-
     /// Consume the checked transition immediately beside Queue's durable release append.
     pub(crate) fn consume_for_queue(
         self,
@@ -330,7 +317,6 @@ impl StrictAbsenceDirectReleaseAuthorization {
         (projection == expected).then_some(projection)
     }
 }
-
 /// Read-only startup classification result.
 ///
 /// A recovery outcome contains only immutable, finality-authenticated body
@@ -346,7 +332,6 @@ pub(crate) enum LaneReservationReconciliationPlanning {
     /// installation boundary before Queue publication may resume.
     InstallHistoricalAutonomousRecoveries(Vec<HistoricalAutonomousReservationInstallV1>),
 }
-
 /// Complete immutable mutation plan for one Queue/Kura/State startup cut.
 pub(crate) struct LaneReservationReconciliationPlan {
     snapshot: LaneQueueReservationReconciliationSnapshotV1,
@@ -357,7 +342,6 @@ pub(crate) struct LaneReservationReconciliationPlan {
     network_id: NetworkId,
     recovered: usize,
 }
-
 /// Planner-authenticated source for a Queue snapshot group which legitimately has no active local
 /// lifecycle cursor.
 pub(crate) enum LaneReservationSnapshotPlannerProjectionKind {
@@ -378,7 +362,6 @@ pub(crate) enum LaneReservationSnapshotPlannerProjectionKind {
         evidence: AutonomousLaneRetirementSnapshotEvidenceV1,
     },
 }
-
 /// One group inside an opaque planner-authenticated snapshot recovery batch.
 #[must_use = "planner snapshot evidence must be consumed by Queue recovery"]
 pub(crate) struct LaneReservationSnapshotPlannerGroupEvidence {
@@ -386,14 +369,12 @@ pub(crate) struct LaneReservationSnapshotPlannerGroupEvidence {
     ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
     kind: LaneReservationSnapshotPlannerProjectionKind,
 }
-
 impl LaneReservationSnapshotPlannerGroupEvidence {
     /// Return the exact reservation-group identity bound by this planner proof.
     #[must_use]
     pub(crate) const fn reservation_group_identity(&self) -> LaneQueueReservationGroupIdentityV1 {
         self.reservation_group.identity
     }
-
     /// Return whether this planner group still requires a signed lifecycle identity anchor.
     #[must_use]
     pub(crate) fn requires_lifecycle_pair(&self) -> bool {
@@ -402,7 +383,6 @@ impl LaneReservationSnapshotPlannerGroupEvidence {
             LaneReservationSnapshotPlannerProjectionKind::RetiredRelease { .. }
         )
     }
-
     /// Consume the opaque group into Queue-visible immutable facts.
     pub(crate) fn into_queue_parts(
         self,
@@ -414,14 +394,12 @@ impl LaneReservationSnapshotPlannerGroupEvidence {
         (self.reservation_group, self.ordered_keys, self.kind)
     }
 }
-
 /// Snapshot-bound non-lifecycle evidence derived only by the complete immutable startup planner.
 #[must_use = "planner snapshot evidence must be consumed by Queue recovery"]
 pub(crate) struct LaneReservationSnapshotPlannerEvidence {
     snapshot: LaneQueueReservationReconciliationSnapshotV1,
     groups: Vec<LaneReservationSnapshotPlannerGroupEvidence>,
 }
-
 impl LaneReservationSnapshotPlannerEvidence {
     /// Construct deliberately arbitrary planner evidence for Queue's adversarial unit tests.
     ///
@@ -451,7 +429,6 @@ impl LaneReservationSnapshotPlannerEvidence {
                 .collect(),
         }
     }
-
     /// Borrow terminal reservation-group identities which replace signed cursor coverage.
     ///
     /// The coordinator uses this set only to avoid also minting cursor coverage or rehydrating a
@@ -469,7 +446,6 @@ impl LaneReservationSnapshotPlannerEvidence {
                 .collect()
         })
     }
-
     /// Borrow release-barrier identities which must be paired with signed lifecycle anchors.
     pub(crate) fn paired_lifecycle_group_identities(
         &self,
@@ -483,7 +459,6 @@ impl LaneReservationSnapshotPlannerEvidence {
                 .collect()
         })
     }
-
     /// Borrow every exact terminal group binding covered by this immutable plan.
     ///
     /// Startup uses these non-authorizing identities only to prove that a
@@ -500,7 +475,6 @@ impl LaneReservationSnapshotPlannerEvidence {
                 .collect()
         })
     }
-
     /// Consume this batch only for the byte-identical Queue snapshot classified by the planner.
     pub(crate) fn into_queue_groups(
         self,
@@ -509,7 +483,6 @@ impl LaneReservationSnapshotPlannerEvidence {
         (self.snapshot == *expected_snapshot).then_some(self.groups)
     }
 }
-
 impl LaneReservationReconciliationPlan {
     /// Consume the first immutable plan into snapshot-bound recovery evidence.
     ///
@@ -679,7 +652,6 @@ impl LaneReservationReconciliationPlan {
         Ok(LaneReservationSnapshotPlannerEvidence { snapshot, groups })
     }
 }
-
 fn exact_pending_merge_for_group(
     group: &LaneQueueReservationReconciliationGroupV1,
     pending_by_transaction: &BTreeMap<
@@ -736,7 +708,6 @@ fn exact_pending_merge_for_group(
     }
     Ok(true)
 }
-
 fn exact_committed_carrier_height_for_group(
     group: &LaneQueueReservationReconciliationGroupV1,
     carrier_heights: &[BTreeSet<NonZeroUsize>],

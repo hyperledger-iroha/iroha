@@ -1,8 +1,6 @@
 //! Runtime trace-mode coverage for compiled Kotodama contracts.
-
 use ivm::{CoreHost, IVM, KotodamaCompiler, TraceMode};
 mod common;
-
 #[test]
 fn runtime_trace_mode_collects_pcs_and_register_deltas() {
     let code = KotodamaCompiler::new()
@@ -18,7 +16,6 @@ fn runtime_trace_mode_collects_pcs_and_register_deltas() {
             "#,
         )
         .expect("compile kotodama program");
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");
@@ -30,7 +27,6 @@ fn runtime_trace_mode_collects_pcs_and_register_deltas() {
         vm.delta_register_trace().is_empty(),
         "pc-only mode should not record deltas"
     );
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");

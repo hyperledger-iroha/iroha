@@ -1,5 +1,4 @@
 use super::*;
-
 /// Managed mutable paths bound to the immutable generation selected by
 /// `current-generation`.
 ///
@@ -14,7 +13,6 @@ pub struct SelectedPeerStoragePaths {
     snapshot_dir: PathBuf,
     _selection_lock: Arc<fs::File>,
 }
-
 /// Canonical peer paths validated while the caller holds either the shared
 /// generation lease or the exclusive generation transaction.
 #[derive(Debug)]
@@ -25,7 +23,6 @@ pub(super) struct ValidatedSelectedPeerStoragePaths {
     pub(super) storage_dir: PathBuf,
     pub(super) snapshot_dir: PathBuf,
 }
-
 impl PartialEq for SelectedPeerStoragePaths {
     fn eq(&self, other: &Self) -> bool {
         self.config_generation_id == other.config_generation_id
@@ -34,31 +31,25 @@ impl PartialEq for SelectedPeerStoragePaths {
             && self.snapshot_dir == other.snapshot_dir
     }
 }
-
 impl Eq for SelectedPeerStoragePaths {}
-
 impl SelectedPeerStoragePaths {
     /// Immutable configuration generation selected by `current-generation`.
     pub fn config_generation_id(&self) -> &str {
         &self.config_generation_id
     }
-
     /// Generation that owns the mutable storage selected by the peer config.
     pub fn storage_generation_id(&self) -> &str {
         &self.storage_generation_id
     }
-
     /// Selected mutable storage root for the peer.
     pub fn storage_dir(&self) -> &Path {
         &self.storage_dir
     }
-
     /// Selected snapshot root nested under the peer storage root.
     pub fn snapshot_dir(&self) -> &Path {
         &self.snapshot_dir
     }
 }
-
 /// Resolve a peer's mutable storage only after validating the published
 /// immutable generation and every managed directory in the selected path.
 ///
@@ -71,7 +62,6 @@ pub fn resolve_selected_peer_storage_paths(
 ) -> Result<Option<SelectedPeerStoragePaths>> {
     resolve_selected_peer_storage_paths_inner(network_root, alias, || {})
 }
-
 #[cfg(test)]
 pub(super) fn resolve_selected_peer_storage_paths_with_hook<F>(
     network_root: &Path,
@@ -83,7 +73,6 @@ where
 {
     resolve_selected_peer_storage_paths_inner(network_root, alias, after_initial_selection)
 }
-
 fn resolve_selected_peer_storage_paths_inner<F>(
     network_root: &Path,
     alias: &str,
@@ -93,7 +82,6 @@ where
     F: FnOnce(),
 {
     validate_peer_alias(alias)?;
-
     let Some(observed_generation_id) = current_generation_id(network_root)? else {
         return Ok(None);
     };
@@ -109,7 +97,6 @@ where
     let selected = verify_selected_generation(network_root, &observed_generation_id)?;
     let validated =
         validate_selected_peer_storage_paths_under_lock(network_root, alias, &selected)?;
-
     Ok(Some(SelectedPeerStoragePaths {
         config_generation_id: validated.config_generation_id,
         storage_generation_id: validated.storage_generation_id,
@@ -118,7 +105,6 @@ where
         _selection_lock: selection_lock,
     }))
 }
-
 fn validate_peer_alias(alias: &str) -> Result<()> {
     let alias_path = Path::new(alias);
     let mut alias_components = alias_path.components();
@@ -133,7 +119,6 @@ fn validate_peer_alias(alias: &str) -> Result<()> {
     }
     Ok(())
 }
-
 /// Strictly validate the selected immutable config and mutable peer hierarchy.
 ///
 /// The caller must retain either a shared selection lease or the exclusive
@@ -147,7 +132,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
 ) -> Result<ValidatedSelectedPeerStoragePaths> {
     validate_peer_alias(alias)?;
     let config_generation_id = selected.generation_id.clone();
-
     let immutable_peers = validate_selected_direct_child_directory(
         &selected.root,
         &selected.root.join("peers"),
@@ -166,7 +150,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
             config_path.display()
         ))
     })?;
-
     let generations = selected.root.parent().ok_or_else(|| {
         SupervisorError::GenerationValidation(
             "selected immutable generation has no generations parent".to_owned(),
@@ -246,7 +229,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
         ))
     })?
     .to_owned();
-
     let storage_generation = verify_selected_generation(network_root, &storage_generation_id)?;
     if storage_generation.chain_id != selected.chain_id
         || storage_generation.chain_discriminant != selected.chain_discriminant
@@ -257,7 +239,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
             "selected config generation `{config_generation_id}` and storage generation `{storage_generation_id}` have different genesis metadata"
         )));
     }
-
     let runtime_peers = validate_selected_direct_child_directory(
         canonical_network_root,
         &canonical_network_root.join("peers"),
@@ -341,7 +322,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
         &immutable_peer.join(MANAGED_RANS_TABLE_RELATIVE_PATH),
         "selected rANS table",
     )?;
-
     Ok(ValidatedSelectedPeerStoragePaths {
         config_generation_id,
         storage_generation_id,
@@ -350,7 +330,6 @@ pub(super) fn validate_selected_peer_storage_paths_under_lock(
         snapshot_dir,
     })
 }
-
 fn validate_selected_direct_child_directory(
     parent: &Path,
     path: &Path,
@@ -378,7 +357,6 @@ fn validate_selected_direct_child_directory(
     }
     Ok(canonical)
 }
-
 fn validate_selected_direct_child_file(parent: &Path, path: &Path, label: &str) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         SupervisorError::GenerationValidation(format!(
@@ -402,7 +380,6 @@ fn validate_selected_direct_child_file(parent: &Path, path: &Path, label: &str) 
     }
     Ok(())
 }
-
 fn validate_optional_managed_descendant_directory(
     root: &Path,
     path: &Path,
@@ -410,15 +387,12 @@ fn validate_optional_managed_descendant_directory(
 ) -> Result<()> {
     validate_managed_descendant(root, path, label, false, false)
 }
-
 fn validate_optional_managed_descendant_file(root: &Path, path: &Path, label: &str) -> Result<()> {
     validate_managed_descendant(root, path, label, true, false)
 }
-
 fn validate_required_managed_descendant_file(root: &Path, path: &Path, label: &str) -> Result<()> {
     validate_managed_descendant(root, path, label, true, true)
 }
-
 fn validate_managed_descendant(
     root: &Path,
     path: &Path,
@@ -445,7 +419,6 @@ fn validate_managed_descendant(
             path.display()
         )));
     }
-
     let mut parent = canonical_root;
     for (index, component) in components.iter().enumerate() {
         let child = parent.join(component.as_os_str());

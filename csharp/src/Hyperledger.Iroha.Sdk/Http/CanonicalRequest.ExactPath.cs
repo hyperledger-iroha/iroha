@@ -55,6 +55,7 @@ public static partial class CanonicalRequest
     private static string RequireCallerValidatedExactPath(string? value, string paramName)
     {
         var exact = RequireExactNonBlank(value, paramName);
+        RequireCanonicalPathByteLength(exact, paramName);
         if (exact[0] != '/' || (exact.Length > 1 && exact[1] == '/'))
         {
             throw new ArgumentException(

@@ -3,7 +3,7 @@
 //! Private-input records are bounded before Norito decoding. Successful
 //! decoding yields an opaque private numeric TLV; only the explicitly approved
 //! full-width commitment path below may declassify it.
-
+use crate::{PointerType, VMError, numeric_tlv, pointer_abi};
 use blstrs::Scalar;
 use crypto_bigint::{
     Encoding, U256,
@@ -23,12 +23,8 @@ use ivm_abi::private_input::{
     PRIVATE_NUMERIC_PROJECTION_DOMAIN_V1, PRIVATE_NUMERIC_VALCOM_DOMAIN_V1, PrivateInputKindV1,
     PrivateInputRecordV1,
 };
-
-use crate::{PointerType, VMError, numeric_tlv, pointer_abi};
-
 const BLS_SCALAR_MODULUS: U256 =
     U256::from_be_hex("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001");
-
 /// A fully validated private input ready to be published into opaque VM memory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValidatedPrivateInput {
@@ -37,11 +33,9 @@ pub(crate) struct ValidatedPrivateInput {
     /// Complete canonical pointer-ABI envelope.
     pub envelope: Vec<u8>,
 }
-
 fn canonical_record_bytes(record: &PrivateInputRecordV1) -> Result<Vec<u8>, VMError> {
     norito::encode_canonical(record).map_err(|_| VMError::NoritoInvalid)
 }
-
 /// Encode a canonical integer private-input record.
 pub fn int_record(value: BigInt) -> Result<PrivateInputRecordV1, VMError> {
     let payload = IntValueV1::try_new(value)
@@ -50,7 +44,6 @@ pub fn int_record(value: BigInt) -> Result<PrivateInputRecordV1, VMError> {
         .map_err(|_| VMError::NoritoInvalid)?;
     Ok(PrivateInputRecordV1::new(PrivateInputKindV1::Int, payload))
 }
-
 /// Encode a canonical decimal private-input record.
 pub fn decimal_record(value: Numeric) -> Result<PrivateInputRecordV1, VMError> {
     let payload = DecimalValueV1::try_from_numeric(value)
@@ -62,7 +55,6 @@ pub fn decimal_record(value: Numeric) -> Result<PrivateInputRecordV1, VMError> {
         payload,
     ))
 }
-
 /// Encode a canonical quantity private-input record.
 pub fn quantity_record(value: Quantity) -> Result<PrivateInputRecordV1, VMError> {
     let payload = QuantityValueV1::new(value)
@@ -73,7 +65,6 @@ pub fn quantity_record(value: Quantity) -> Result<PrivateInputRecordV1, VMError>
         payload,
     ))
 }
-
 /// Encode a typed record into the canonical outer Norito frame accepted by the host.
 pub fn encode_record(record: &PrivateInputRecordV1) -> Result<Vec<u8>, VMError> {
     // This check must precede Norito serialization: an untrusted typed record
@@ -94,7 +85,6 @@ pub fn encode_record(record: &PrivateInputRecordV1) -> Result<Vec<u8>, VMError> 
     }
     Ok(encoded)
 }
-
 fn validate_frame(kind: PrivateInputKindV1, frame: &[u8]) -> Result<(), VMError> {
     let canonical = match kind {
         PrivateInputKindV1::Int => {
@@ -127,7 +117,6 @@ fn validate_frame(kind: PrivateInputKindV1, frame: &[u8]) -> Result<(), VMError>
     }
     Ok(())
 }
-
 /// Decode and validate one untrusted outer record for an exact requested kind.
 ///
 /// Callers must debit the fixed private-input quote before invoking this
@@ -151,7 +140,6 @@ pub(crate) fn decode_record(
         envelope,
     })
 }
-
 /// Validate a complete opaque numeric TLV snapshot after the host quote is debited.
 pub(crate) fn validate_private_numeric_envelope(
     envelope: &[u8],
@@ -166,7 +154,6 @@ pub(crate) fn validate_private_numeric_envelope(
     validate_frame(kind, tlv.payload)?;
     Ok(kind)
 }
-
 /// Compute the canonical full-width, still-private numeric projection.
 ///
 /// This value is not a public commitment and must never be returned to guest
@@ -191,7 +178,6 @@ pub(crate) fn private_numeric_projection_v1(
     material.extend_from_slice(canonical_envelope);
     Hash::new(&material).into()
 }
-
 /// Reduce one 256-bit digest modulo the BLS12-381 scalar order with a fixed
 /// operation count.
 ///
@@ -206,7 +192,6 @@ fn reduce_bls_scalar(integer: U256) -> U256 {
     };
     subtract_once(subtract_once(integer))
 }
-
 fn valcom_scalar(role: u8, kind: PrivateInputKindV1, envelope: &[u8]) -> Scalar {
     let projection = private_numeric_projection_v1(kind, envelope);
     let mut material = Vec::with_capacity(PRIVATE_NUMERIC_VALCOM_DOMAIN_V1.len() + 2 + 1 + 32);
@@ -221,7 +206,6 @@ fn valcom_scalar(role: u8, kind: PrivateInputKindV1, envelope: &[u8]) -> Scalar 
         .into_option()
         .expect("modular reduction produces a canonical BLS scalar")
 }
-
 /// Commit two complete canonical private numeric envelopes without truncation.
 ///
 /// Both domain-separated projections remain private. Only the full compressed
@@ -242,18 +226,15 @@ pub(crate) fn valcom(
     }
     BigInt::from_twos_bytes(&unsigned_le).map_err(|_| VMError::NoritoInvalid)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn envelope(record: PrivateInputRecordV1) -> Vec<u8> {
         let raw = encode_record(&record).expect("encode private record");
         decode_record(&raw, record.kind)
             .expect("decode private record")
             .envelope
     }
-
     #[test]
     fn kind_and_complete_payload_are_bound_into_projection() {
         let int = envelope(int_record(BigInt::from(1_u64)).unwrap());
@@ -267,20 +248,17 @@ mod tests {
         assert_ne!(int_projection, decimal_projection);
         assert_ne!(int_projection, quantity_projection);
         assert_ne!(decimal_projection, quantity_projection);
-
         let other = envelope(int_record(BigInt::from(2_u64)).unwrap());
         assert_ne!(
             int_projection,
             private_numeric_projection_v1(PrivateInputKindV1::Int, &other)
         );
     }
-
     #[test]
     fn wrong_kind_fails_before_an_envelope_is_returned() {
         let raw = encode_record(&decimal_record("1.5".parse().unwrap()).unwrap()).unwrap();
         assert!(decode_record(&raw, PrivateInputKindV1::Int).is_err());
     }
-
     #[test]
     fn private_input_boundary_is_canonical_and_ambient_independent() {
         let record = quantity_record(Quantity::from(17_u32)).expect("valid quantity record");
@@ -299,7 +277,6 @@ mod tests {
             decode_record(&alternate, PrivateInputKindV1::Quantity),
             Err(VMError::NoritoInvalid)
         );
-
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         assert_eq!(
             encode_record(&record).expect("encode under alternate ambient layout"),
@@ -310,7 +287,6 @@ mod tests {
             "canonical admission must ignore the caller's ambient layout"
         );
     }
-
     #[test]
     fn negative_quantity_frame_is_rejected() {
         let negative_decimal = DecimalValueV1::new("-1".parse().unwrap())
@@ -320,7 +296,6 @@ mod tests {
         let raw = encode_record(&record).unwrap();
         assert!(decode_record(&raw, PrivateInputKindV1::Quantity).is_err());
     }
-
     #[test]
     fn typed_record_payload_is_rejected_before_outer_serialization() {
         let oversized = PrivateInputRecordV1::new(
@@ -333,7 +308,6 @@ mod tests {
         );
         assert_eq!(encode_record(&oversized), Err(VMError::NoritoInvalid));
     }
-
     #[test]
     fn commitment_preserves_the_full_compressed_point() {
         let value = envelope(int_record(BigInt::from(7_u64)).unwrap());
@@ -351,7 +325,6 @@ mod tests {
         );
         assert!(commitment.bit_len() <= 384);
     }
-
     #[test]
     fn fixed_operation_scalar_reduction_matches_reference_boundaries() {
         let q_minus_one = BLS_SCALAR_MODULUS.wrapping_sub(&U256::ONE);
@@ -359,7 +332,6 @@ mod tests {
         let twice_q_minus_one = twice_q.wrapping_sub(&U256::ONE);
         let modulus = crypto_bigint::NonZero::new(BLS_SCALAR_MODULUS)
             .expect("BLS scalar modulus is non-zero");
-
         for input in [
             U256::ZERO,
             q_minus_one,

@@ -1,31 +1,23 @@
 //! Reproduces the domain-id truncation observed in `SignedBlock` roundtrip tests.
-
 use iroha_data_model::account::AccountId;
 use norito::NoritoDeserialize;
-
 #[test]
 fn account_id_roundtrip_via_codec() {
     use iroha_crypto::{Algorithm, KeyPair};
-
     let key_pair = KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
         .expect("fixture Ed25519 account key");
     let id = AccountId::new(key_pair.public_key().clone());
-
     let framed = norito::to_bytes(&id).expect("encode account id");
     let archived = norito::core::from_bytes::<AccountId>(&framed).expect("decode via header");
     let header_decoded = AccountId::deserialize(archived);
-
     let decoded = norito::core::decode_from_bytes::<AccountId>(&framed).expect("decode payload");
-
     assert_eq!(header_decoded, id);
     assert_eq!(decoded, id);
 }
-
 #[cfg(feature = "gost")]
 #[test]
 fn account_id_roundtrip_supports_gost_public_key() {
     use iroha_crypto::{Algorithm, KeyPair};
-
     let seed = b"iroha-gost-account-id";
     let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Gost3410_2012_256ParamSetA)
         .expect("fixture GOST account key");
@@ -40,7 +32,6 @@ fn account_id_roundtrip_supports_gost_public_key() {
     let rendered = id.to_string();
     iroha_data_model::account::AccountAddress::parse_encoded(&rendered, None)
         .expect("I105 encoding should parse");
-
     let framed = norito::to_bytes(&id).expect("encode account id");
     let decoded = norito::core::decode_from_bytes::<AccountId>(&framed).expect("decode payload");
     assert_eq!(decoded, id);

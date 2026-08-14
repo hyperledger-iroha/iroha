@@ -1,7 +1,5 @@
 //! Ensure pretty JSON formatting and position-aware errors work.
-
 use norito::json::{Parser, to_json_pretty};
-
 #[test]
 fn pretty_vec_numbers() {
     let v = vec![1u64, 2, 3, 10, 20];
@@ -17,7 +15,6 @@ fn pretty_vec_numbers() {
 ]";
     assert_eq!(s, expected);
 }
-
 #[test]
 fn pretty_preserves_escapes() {
     let s = String::from("line1\nline2\t\"q\"");
@@ -26,7 +23,6 @@ fn pretty_preserves_escapes() {
     // The entire value is a JSON string; pretty has nothing to indent here.
     assert_eq!(out, "\"line1\\nline2\\t\\\"q\\\"\"");
 }
-
 #[test]
 fn parser_error_positions_basic() {
     // parse_u64 on non-digit should error with a position near the first non-whitespace
@@ -41,7 +37,6 @@ fn parser_error_positions_basic() {
     assert!(msg.contains("byte"), "{msg}");
     assert!(msg.contains("line 1, col"), "{msg}");
 }
-
 #[test]
 fn parser_string_controls_error_position() {
     // Newline inside a string should report a control error with a byte offset

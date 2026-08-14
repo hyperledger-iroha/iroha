@@ -13,17 +13,14 @@
 // Production inlines this private gate; changing it to borrowed wrappers would
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
-
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
-};
-
 use super::{
     ConsensusMessageV2, ContextId, Digest, DurableState, HeightContext, Reducer, Round,
     SignedTimeoutVote, Subject, TimeoutCertificate, ValidatorId, reducer::PendingPersistence,
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+};
 /// Maximum number of effects one reducer input can emit.
 ///
 /// Retransmission is the largest branch: the seven canonical control-message
@@ -32,7 +29,6 @@ use super::{
 /// closed at the refinement boundary until this limit is deliberately revised
 /// and re-verified.
 pub const MAX_EFFECTS_PER_STEP: usize = 8;
-
 /// Maximum causal candidates emitted by one abstract command transition.
 ///
 /// This is the exact closed `CommandSuccessors` bound in
@@ -40,17 +36,14 @@ pub const MAX_EFFECTS_PER_STEP: usize = 8;
 /// transport or diagnostic effects, but only the candidate-producing subset
 /// can acquire Completion capacity.
 pub const MAX_CAUSAL_SUCCESSORS_PER_COMMAND: usize = 3;
-
 /// Radix for the Completion-capacity product rank.
 ///
 /// One root-position descent must dominate resetting the successor component
 /// to any value in `0..=MAX_CAUSAL_SUCCESSORS_PER_COMMAND`.
 pub const COMPLETION_CAPACITY_RANK_RADIX: u64 = 4;
-
 const _: [(); MAX_EFFECTS_PER_STEP] = [(); 8];
 const _: [(); MAX_CAUSAL_SUCCESSORS_PER_COMMAND] = [(); 3];
 const _: [(); COMPLETION_CAPACITY_RANK_RADIX as usize] = [(); 4];
-
 pub const EFFECT_NONE: u8 = 0;
 pub const EFFECT_PERSIST: u8 = 1;
 pub const EFFECT_FETCH: u8 = 2;
@@ -61,7 +54,6 @@ pub const EFFECT_BROADCAST: u8 = 6;
 pub const EFFECT_APPLY: u8 = 7;
 pub const EFFECT_ENTER_VIEW: u8 = 8;
 pub const EFFECT_REPORT: u8 = 9;
-
 pub const EVENT_BODY_AVAILABLE: u8 = 8;
 pub const EVENT_BODY_STORED: u8 = 9;
 pub const EVENT_PERSISTED: u8 = 11;
@@ -69,12 +61,10 @@ pub const EVENT_PERSISTED: u8 = 11;
 pub const EVENT_PERSISTENCE_FAILED: u8 = 12;
 pub const EVENT_SIGNED: u8 = 13;
 pub const EVENT_RESUME_AFTER_REPLAY: u8 = 15;
-
 pub const CONTINUATION_NONE: u8 = 0;
 pub const CONTINUATION_SIGN: u8 = 1;
 pub const CONTINUATION_INSTALL_TIMEOUT: u8 = 2;
 pub const CONTINUATION_DECIDE: u8 = 3;
-
 /// Prepend one persisted reducer continuation without reversing its order.
 ///
 /// `V2Adapter::drive_effects` removes a `Persist` effect from the head of its
@@ -93,7 +83,6 @@ pub fn prepend_causal_continuation<T>(pending: &mut VecDeque<T>, continuation: V
         pending.push_front(item);
     }
 }
-
 /// Caller-visible reducer action classes checked at the commit boundary.
 ///
 /// WAL begin/acknowledgement actions carry the exact [`WAL_RECORD_*`] class;
@@ -116,7 +105,6 @@ pub const ACTION_COMPLETE_APPLICATION: u8 = 5;
 /// Consume the one recovery-pending transition created by successful replay.
 #[allow(dead_code)]
 pub const ACTION_RESUME_AFTER_REPLAY: u8 = 6;
-
 /// No WAL record participates in this reducer action.
 pub const WAL_RECORD_NONE: u8 = 0;
 /// `WalRecord::ProposalIntent`.
@@ -133,7 +121,6 @@ pub const WAL_RECORD_TIMEOUT_INTENT: u8 = 5;
 pub const WAL_RECORD_INSTALL_TIMEOUT: u8 = 6;
 /// `WalRecord::Decision`.
 pub const WAL_RECORD_DECISION: u8 = 7;
-
 /// No successfully completed signature participates in this action.
 pub const SIGNED_MESSAGE_NONE: u8 = 0;
 /// Completion of a proposal signature.
@@ -144,7 +131,6 @@ pub const SIGNED_MESSAGE_PREPARE: u8 = 2;
 pub const SIGNED_MESSAGE_COMMIT: u8 = 3;
 /// Completion of a timeout-vote signature.
 pub const SIGNED_MESSAGE_TIMEOUT: u8 = 4;
-
 /// Replay's first item is absent because no durable work needs reconstruction.
 pub const REPLAY_EFFECT_NONE: u8 = 0;
 /// Replay's first item resumes an already-durable proposal intent.
@@ -157,7 +143,6 @@ pub const REPLAY_EFFECT_COMMIT: u8 = 3;
 pub const REPLAY_EFFECT_TIMEOUT: u8 = 4;
 /// Replay's sole item resumes acquisition of a durably decided body.
 pub const REPLAY_EFFECT_DECISION: u8 = 5;
-
 /// No durable-boundary capability is claimed by a transition.
 pub const BOUNDARY_NONE: u8 = 0;
 /// Capability to create one pending WAL append.
@@ -168,7 +153,6 @@ pub const BOUNDARY_ACKNOWLEDGE_WAL: u8 = 2;
 pub const BOUNDARY_COMPLETE_APPLICATION: u8 = 3;
 /// Capability to consume the one recovery-resumption transition.
 pub const BOUNDARY_RESUME_AFTER_REPLAY: u8 = 4;
-
 /// No bounded runtime ingress class was selected.
 #[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
 pub const SERVICE_CLASS_NONE: u8 = 0;
@@ -181,12 +165,10 @@ pub const SERVICE_CLASS_PROGRESS: u8 = 2;
 /// Ordinary proposal and vote ingress class.
 #[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
 pub const SERVICE_CLASS_NORMAL: u8 = 3;
-
 /// Effect/candidate binding inherited the selected scheduler root.
 pub(crate) const RUNTIME_EFFECT_CAUSALITY_INHERIT: u8 = 1;
 /// Effect/candidate binding owns an independently reconstructed local root.
 pub(crate) const RUNTIME_EFFECT_CAUSALITY_FRESH: u8 = 2;
-
 /// No TLA causal candidate is created by this production effect.
 pub(crate) const RUNTIME_CANDIDATE_KIND_NONE: u8 = 0;
 /// `SignProposal` Completion candidate.
@@ -203,7 +185,6 @@ pub(crate) const RUNTIME_CANDIDATE_KIND_STORE_BODY: u8 = 5;
 pub(crate) const RUNTIME_CANDIDATE_KIND_VALIDATE_BODY: u8 = 6;
 /// `Apply` Completion candidate.
 pub(crate) const RUNTIME_CANDIDATE_KIND_APPLY: u8 = 7;
-
 /// Exact production `Sign(Proposal)` effect.
 pub(crate) const RUNTIME_EFFECT_KIND_SIGN_PROPOSAL: u8 = 1;
 /// Exact production `Sign(Vote)` effect.
@@ -228,7 +209,6 @@ pub(crate) const RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION: u8 = 10;
 pub(crate) const RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY: u8 = 11;
 /// Opaque effect kind used only by generic unit-test runtime drivers.
 pub(crate) const RUNTIME_EFFECT_KIND_OPAQUE_TEST: u8 = u8::MAX;
-
 /// No leader-wire lifecycle occupied the addressed bounded slot.
 pub(crate) const LEADER_WIRE_LIFECYCLE_ABSENT: u8 = 0;
 /// A restart-restored lifecycle owns anti-ABA state but no selector turn.
@@ -241,7 +221,6 @@ pub(crate) const LEADER_WIRE_LIFECYCLE_RUNTIME: u8 = 3;
 pub(crate) const LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL: u8 = 4;
 /// Independently verified durable evidence permanently retires the lifecycle.
 pub(crate) const LEADER_WIRE_LIFECYCLE_TERMINAL: u8 = 5;
-
 /// Insert a previously absent bounded lifecycle slot.
 pub(crate) const LEADER_WIRE_ADMISSION_INSERT: u8 = 1;
 /// Atomically reactivate an exact restart-dormant lifecycle.
@@ -250,7 +229,6 @@ pub(crate) const LEADER_WIRE_ADMISSION_REACTIVATE: u8 = 2;
 pub(crate) const LEADER_WIRE_ADMISSION_COALESCE: u8 = 3;
 /// Replace a terminal slot with a strictly newer view and both new ordinals.
 pub(crate) const LEADER_WIRE_ADMISSION_REPLACE_TERMINAL: u8 = 4;
-
 /// A persisted view transition selected the effective lock and its fetch.
 pub const EFFECTIVE_LOCK_TRACE_ENTER_VIEW: u8 = 1;
 /// The body pipeline bound or monotonically enriched its exact owner.
@@ -259,7 +237,6 @@ pub const EFFECTIVE_LOCK_TRACE_OWNER: u8 = 2;
 pub const EFFECTIVE_LOCK_TRACE_RETIRE: u8 = 3;
 /// One bounded ingress invocation selected an exact ready service class.
 pub const EFFECTIVE_LOCK_TRACE_SERVICE: u8 = 4;
-
 /// No quorum-certificate evidence is present at this projection position.
 pub(crate) const CERTIFICATE_EVIDENCE_ABSENT: u8 = 0;
 /// The certificate is byte-for-byte equal to the transition's local lock.
@@ -268,7 +245,6 @@ pub(crate) const CERTIFICATE_EVIDENCE_LOCAL: u8 = 1;
 pub(crate) const CERTIFICATE_EVIDENCE_INCOMING: u8 = 2;
 /// The certificate is not owned by either authenticated transition source.
 pub(crate) const CERTIFICATE_EVIDENCE_FOREIGN: u8 = 3;
-
 /// Domain for a frozen consensus context digest.
 pub(crate) const IDENTITY_DOMAIN_CONTEXT: u8 = 1;
 /// Domain for a canonical block or consensus subject component.
@@ -359,7 +335,6 @@ pub(crate) const IDENTITY_KIND_LANE_QUEUE_RESERVATION: u8 = 4;
 pub(crate) const IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER: u8 = 5;
 /// Canonical identity kind for one authenticated peer.
 pub(crate) const IDENTITY_KIND_PEER: u8 = 1;
-
 /// No durable queue owner exists for the projected reservation.
 pub(crate) const IN_FLIGHT_RESERVATION_STATE_ABSENT: u8 = 0;
 /// The exact reservation owns its transaction outside the ordinary queue.
@@ -370,7 +345,6 @@ pub(crate) const IN_FLIGHT_RESERVATION_STATE_COMMITTED: u8 = 2;
 pub(crate) const IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED: u8 = 3;
 /// The exact released record is retained pending FIFO restoration cleanup.
 pub(crate) const IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED: u8 = 4;
-
 /// Install retained ownership from one validated checksummed V5 journal snapshot.
 pub(crate) const IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT: u8 = 1;
 /// Persist one exact live reservation.
@@ -388,14 +362,12 @@ pub(crate) const IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE: u8 = 7;
 pub(crate) const IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE: u8 = 8;
 /// Forget an exact completed release after FIFO restoration.
 pub(crate) const IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE: u8 = 9;
-
 /// No selected QueuePlan conjunction is durable in the composed projection.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT: u8 = 0;
 /// Every selected transaction has one exact live QueuePlan V4 claim.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED: u8 = 1;
 /// Every selected QueuePlan V4 claim has been durably tombstoned.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED: u8 = 2;
-
 /// No reservation owner exists in the composed in-flight projection.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT: u8 = 0;
 /// The selected batch is owned by durable reservation journal V5 records.
@@ -412,7 +384,6 @@ pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED: u8 = 5;
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN: u8 = 6;
 /// Aborted or recovery-orphaned work was directly restored to ordinary FIFO.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED: u8 = 7;
-
 /// Observe one exact selected QueuePlan V4 claim conjunction.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4: u8 = 1;
 /// Fsync the selected batch's exact reservation journal V5 records.
@@ -467,14 +438,12 @@ pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT: u8
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT: u8 = 26;
 /// Restore one validator's volatile body custody from its exact durable Kura payload.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY: u8 = 27;
-
 /// Successor authority derived from an applied predecessor in this process.
 pub(crate) const SUCCESSOR_AUTHORITY_APPLIED: u8 = 1;
 /// Successor authority reconstructed from an exact complete durable tip.
 pub(crate) const SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP: u8 = 2;
 /// First executable context authenticated by an audited snapshot envelope.
 pub(crate) const SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP: u8 = 3;
-
 /// No successor-work stage participates in a lifecycle projection.
 pub(crate) const SUCCESSOR_STAGE_NONE: u8 = 0;
 /// Successor construction is queued behind durable application.
@@ -483,7 +452,6 @@ pub(crate) const SUCCESSOR_STAGE_QUEUED: u8 = 1;
 pub(crate) const SUCCESSOR_STAGE_RUNNING: u8 = 2;
 /// Successor publication completed.
 pub(crate) const SUCCESSOR_STAGE_COMPLETE: u8 = 3;
-
 /// Begin the applied predecessor's fallible successor construction.
 pub(crate) const SUCCESSOR_LIFECYCLE_BEGIN: u8 = 1;
 /// Latch a startup failure without fabricating completion.
@@ -492,10 +460,8 @@ pub(crate) const SUCCESSOR_LIFECYCLE_FAIL: u8 = 2;
 pub(crate) const SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP: u8 = 3;
 /// Enter the first executable height from audited snapshot authority.
 pub(crate) const SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP: u8 = 4;
-
 /// Exact successor-activation progress marker.
 pub(crate) const SUCCESSOR_MARKER_ACTIVATED: u8 = 1;
-
 // Verus cannot read an ordinary Rust `const` from inside `verus!`: it treats
 // that item as an opaque external function. Keep the reviewed wire/refinement
 // tags as literal macro arms so the shared production decision bodies and
@@ -906,13 +872,11 @@ macro_rules! refinement_tag_value {
         1u8
     };
 }
-
 macro_rules! assert_refinement_tag_values {
     ($($tag:ident),+ $(,)?) => {
         $(const _: [(); $tag as usize] = [(); refinement_tag_value!($tag) as usize];)+
     };
 }
-
 assert_refinement_tag_values!(
     EFFECT_PERSIST,
     EVENT_PERSISTED,
@@ -1049,7 +1013,6 @@ assert_refinement_tag_values!(
     SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
     SUCCESSOR_MARKER_ACTIVATED,
 );
-
 /// Lossless fixed-width view of one existing canonical 256-bit identity.
 ///
 /// `domain` and `kind` are kept outside the digest so projections of equal
@@ -1064,7 +1027,6 @@ pub(crate) struct CanonicalIdentityProjection {
     pub(crate) word2: u64,
     pub(crate) word3: u64,
 }
-
 impl CanonicalIdentityProjection {
     /// Canonical absent identity used by fixed-width optional projections.
     #[must_use]
@@ -1078,7 +1040,6 @@ impl CanonicalIdentityProjection {
             word3: 0,
         }
     }
-
     /// Project all 32 canonical bytes into four big-endian words.
     #[must_use]
     pub(crate) const fn from_bytes(domain: u8, kind: u8, bytes: [u8; 32]) -> Self {
@@ -1103,7 +1064,6 @@ impl CanonicalIdentityProjection {
         }
     }
 }
-
 macro_rules! canonical_identity_equal_body {
     ($left:expr, $right:expr) => {{
         $left.domain == $right.domain
@@ -1114,11 +1074,9 @@ macro_rules! canonical_identity_equal_body {
             && $left.word3 == $right.word3
     }};
 }
-
 macro_rules! canonical_identity_is_typed_body {
     ($identity:expr, $domain:expr, $kind:expr) => {{ $identity.domain == $domain && $identity.kind == $kind }};
 }
-
 macro_rules! canonical_identity_is_zero_body {
     ($identity:expr) => {{
         $identity.domain == 0u8
@@ -1129,7 +1087,6 @@ macro_rules! canonical_identity_is_zero_body {
             && $identity.word3 == 0u64
     }};
 }
-
 // Exact signable-vote statement identity shared by production and Verus.
 // Authenticated signer identity is deliberately absent: distinct roster
 // members must be able to contribute signatures to one semantic statement.
@@ -1160,7 +1117,6 @@ macro_rules! vote_statement_identity_equal_body {
             && $left_subject == $right_subject
     }};
 }
-
 // Stable certificate body identity used only after the caller has validated
 // the certificate phase. Reproposal/finality rounds and signer evidence are
 // representation details; context, height, and subject are semantic.
@@ -1178,7 +1134,6 @@ macro_rules! certificate_height_subject_identity_equal_body {
             && $left_subject == $right_subject
     }};
 }
-
 // One fixed-width predicate decides whether an already-installed timeout
 // round may be replayed as a lock-only upgrade. Production WAL replay,
 // reducer admission/acknowledgement, and the Verus WAL relation instantiate
@@ -1199,7 +1154,6 @@ macro_rules! strict_same_round_timeout_upgrade_body {
                 || projection.selected_prepare_view > projection.locked_prepare_view)
     }};
 }
-
 /// Primitive production projection for a strict same-round timeout upgrade.
 ///
 /// The caller derives presence and exact installed-round identity from the
@@ -1217,7 +1171,6 @@ pub(crate) struct StrictSameRoundTimeoutUpgradeProjection {
     pub(crate) locked_prepare_present: bool,
     pub(crate) locked_prepare_view: u64,
 }
-
 /// Decide whether a second certificate for the installed timeout round may
 /// update only the durable lock while retaining the current view.
 #[must_use]
@@ -1228,7 +1181,6 @@ pub(crate) const fn strict_same_round_timeout_upgrade_is_allowed(
     let one: u64 = 1;
     strict_same_round_timeout_upgrade_body!(projection, zero, one)
 }
-
 // A locally generated proposal in a non-zero view must carry the exact latest
 // durable timeout certificate, rather than merely some valid certificate for
 // the predecessor round. The full concrete equality classification below
@@ -1258,7 +1210,6 @@ macro_rules! local_proposal_timeout_justification_body {
                 == projection.durable_timeout_evidence_identity
     }};
 }
-
 /// Fixed-width production projection of one local proposal's timeout
 /// justification and the latest certificate reconstructed from the safety
 /// WAL.
@@ -1285,10 +1236,8 @@ pub(crate) struct LocalProposalTimeoutJustificationProjection {
     pub(crate) durable_timeout_high_subject: Subject,
     pub(crate) durable_timeout_evidence_identity: u8,
 }
-
 const LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_MATCHED: u8 = 1;
 const LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_FOREIGN: u8 = 2;
-
 fn local_proposal_timeout_projection(
     expected_context_id: ContextId,
     expected_height: u64,
@@ -1331,7 +1280,6 @@ fn local_proposal_timeout_projection(
         durable_timeout_evidence_identity: LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_MATCHED,
     }
 }
-
 /// Decide whether a non-zero-view local proposal carries the exact latest
 /// timeout certificate recovered from durable state.
 ///
@@ -1363,7 +1311,6 @@ pub(crate) fn local_proposal_timeout_justification_is_exact(
     let absent_evidence: u8 = 0;
     local_proposal_timeout_justification_body!(projection, zero, one, absent_evidence)
 }
-
 // These expressions are instantiated by both the executable production
 // decision gates below and their exact Verus mirrors. Every authorization
 // decision is derived from lossless identities, heights, stages, and marker
@@ -1384,7 +1331,6 @@ macro_rules! durable_predecessor_is_canonical_body {
             )
     }};
 }
-
 macro_rules! durable_predecessor_is_zero_body {
     ($predecessor:expr) => {{
         $predecessor.height == 0u64
@@ -1392,7 +1338,6 @@ macro_rules! durable_predecessor_is_zero_body {
             && canonical_identity_is_zero_body!($predecessor.artifact_hash)
     }};
 }
-
 macro_rules! durable_predecessor_equal_body {
     ($left:expr, $right:expr) => {{
         durable_predecessor_is_canonical_body!($left)
@@ -1402,7 +1347,6 @@ macro_rules! durable_predecessor_equal_body {
             && canonical_identity_equal_body!($left.artifact_hash, $right.artifact_hash)
     }};
 }
-
 macro_rules! production_successor_snapshot_body {
     ($predecessor_height:expr, $snapshot:expr) => {{
         $predecessor_height > 0u64
@@ -1429,7 +1373,6 @@ macro_rules! production_successor_snapshot_body {
             && $snapshot.marker_age_ms == 0u64
     }};
 }
-
 macro_rules! production_successor_predecessor_binding_body {
     ($projection:expr) => {{
         durable_predecessor_equal_body!(
@@ -1442,7 +1385,6 @@ macro_rules! production_successor_predecessor_binding_body {
         )
     }};
 }
-
 macro_rules! production_applied_successor_trace_body {
     ($projection:expr) => {{
         $projection.authority_kind == refinement_tag_value!(SUCCESSOR_AUTHORITY_APPLIED)
@@ -1463,7 +1405,6 @@ macro_rules! production_applied_successor_trace_body {
             )
     }};
 }
-
 macro_rules! production_recovered_successor_trace_body {
     ($projection:expr) => {{
         $projection.published_status_height_before == 0u64
@@ -1504,7 +1445,6 @@ macro_rules! production_recovered_successor_trace_body {
             })
     }};
 }
-
 macro_rules! production_startup_failure_and_restart_trace_body {
     ($projection:expr) => {{
         $projection.status_height > 0u64
@@ -1552,7 +1492,6 @@ macro_rules! production_startup_failure_and_restart_trace_body {
             })
     }};
 }
-
 // Historical catch-up is admitted only through two exact ownership seams.
 // The first consumes an authenticated CommitQC discovery request only after
 // the exact certificate envelope entered reducer ingress. The second consumes
@@ -1603,7 +1542,6 @@ macro_rules! production_historical_certificate_trace_body {
             && !$projection.request_present_after
     }};
 }
-
 macro_rules! production_historical_body_pipeline_trace_body {
     ($projection:expr) => {{
         $projection.context_height > 0u64
@@ -1673,7 +1611,6 @@ macro_rules! production_historical_body_pipeline_trace_body {
             && !$projection.request_present_after
     }};
 }
-
 // One exact body-pipeline identity is carried unchanged through FetchBody,
 // BodyAvailable, StoreBody, and ValidateBody. These macros are instantiated by
 // typed production helpers below and by Verus over mathematical identities.
@@ -1687,7 +1624,6 @@ macro_rules! exact_body_owner_equal_body {
             && $left.manifest_hash == $right.manifest_hash
     }};
 }
-
 macro_rules! exact_body_owner_binding_body {
     ($current:expr, $incoming:expr, $owner_type:ident, $binding_type:ident) => {{
         match $current {
@@ -1727,7 +1663,6 @@ macro_rules! exact_body_owner_binding_body {
         }
     }};
 }
-
 macro_rules! tag_projection_strictly_advances_body {
     ($later:expr, $previous:expr) => {{
         $later.height == $previous.height
@@ -1735,7 +1670,6 @@ macro_rules! tag_projection_strictly_advances_body {
                 || ($later.view == $previous.view && $later.generation > $previous.generation))
     }};
 }
-
 macro_rules! exact_body_owner_rebind_body {
     ($current:expr, $previous:expr, $rebound_tag:expr, $owner_type:ident) => {{
         if !exact_body_owner_equal_body!($current, $previous)
@@ -1751,7 +1685,6 @@ macro_rules! exact_body_owner_rebind_body {
         }
     }};
 }
-
 // Runtime ingress and the Busy-deferred lane jointly own each logical
 // completion slot. Exactly one lane may own one exact evidence value.
 macro_rules! exact_body_completion_ownership_body {
@@ -1785,7 +1718,6 @@ macro_rules! exact_body_completion_ownership_body {
         }
     }};
 }
-
 // Supersession retires two independently bounded byte classes. Sequential
 // subtraction makes both the no-underflow precondition and the exact residual
 // explicit without relying on an overflowing `retained + ready` sum.
@@ -1813,7 +1745,6 @@ macro_rules! exact_body_retirement_accounting_body {
         }
     }};
 }
-
 // Exact three-class round-robin branch relation used by runtime ingress.
 // Every call examines all classes from the persistent cursor and advances the
 // cursor past the selected class; an empty call makes one full rotation.
@@ -1899,7 +1830,6 @@ macro_rules! bounded_service_selection_body {
         }
     }};
 }
-
 // A compact discriminated trace ties the four production effective-lock seams
 // to one executable relation. Each producer fills only its action branch and
 // must use canonical zeroes for every unrelated field. Verus instantiates this
@@ -2005,11 +1935,9 @@ macro_rules! effective_lock_trace_step_body {
         }
     }};
 }
-
 macro_rules! effective_lock_trace_claim_body {
     ($projection:expr, $kind:expr) => {{ $projection.kind == $kind && effective_lock_trace_step_is_valid($projection) }};
 }
-
 macro_rules! pending_projection_is_absent_body {
     ($pending:expr) => {{
         $pending.record_kind == refinement_tag_value!(WAL_RECORD_NONE)
@@ -2024,7 +1952,6 @@ macro_rules! pending_projection_is_absent_body {
             && canonical_identity_is_zero_body!($pending.subject)
     }};
 }
-
 macro_rules! pending_projection_equal_body {
     ($left:expr, $right:expr) => {{
         $left.record_kind == $right.record_kind
@@ -2039,7 +1966,6 @@ macro_rules! pending_projection_equal_body {
             && canonical_identity_equal_body!($left.subject, $right.subject)
     }};
 }
-
 // A boundary tag names the reducer owner of the WAL operation, while the
 // pending projection names the round carried by the record. Those rounds are
 // intentionally distinct for a future TC, an immediate-predecessor TC carrying
@@ -2059,7 +1985,6 @@ macro_rules! pending_projection_matches_boundary_body {
             && canonical_identity_equal_body!($pending.subject, $boundary.subject_identity)
     }};
 }
-
 macro_rules! pending_round_can_begin_body {
     ($pending:expr, $owner:expr) => {{
         $pending.height == $owner.height
@@ -2081,7 +2006,6 @@ macro_rules! pending_round_can_begin_body {
             }
     }};
 }
-
 macro_rules! pending_round_can_acknowledge_body {
     ($pending:expr, $owner_before:expr, $owner_after:expr) => {{
         if $pending.record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) {
@@ -2101,7 +2025,6 @@ macro_rules! pending_round_can_acknowledge_body {
         }
     }};
 }
-
 macro_rules! wal_record_proposal_round_is_exact_body {
     ($record_kind:expr, $pending:expr, $boundary:expr) => {{
         match $record_kind {
@@ -2140,7 +2063,6 @@ macro_rules! wal_record_proposal_round_is_exact_body {
         }
     }};
 }
-
 // An InstallTimeout record may be owned by its timeout round or by the
 // immediate successor while an alternate TC supplies a newly learned high
 // PrepareQC. Keep that predecessor exception tied to the full, internally
@@ -2163,7 +2085,6 @@ macro_rules! install_timeout_boundary_is_exact_body {
             })
     }};
 }
-
 macro_rules! wal_record_continuation_is_exact_body {
     ($record_kind:expr, $continuation:expr) => {{
         match $record_kind {
@@ -2186,7 +2107,6 @@ macro_rules! wal_record_continuation_is_exact_body {
         }
     }};
 }
-
 macro_rules! wal_record_round_matches_owner_body {
     ($record_kind:expr, $pending:expr, $owner:expr) => {{
         $pending.height == $owner.height
@@ -2205,7 +2125,6 @@ macro_rules! wal_record_round_matches_owner_body {
             }
     }};
 }
-
 macro_rules! event_can_start_wal_record_body {
     ($event_kind:expr, $record_kind:expr) => {{
         match $event_kind {
@@ -2235,7 +2154,6 @@ macro_rules! event_can_start_wal_record_body {
         }
     }};
 }
-
 macro_rules! persist_slot_matches_boundary_body {
     ($slot:expr, $pending:expr, $boundary:expr) => {{
         if $slot.kind == refinement_tag_value!(EFFECT_PERSIST) {
@@ -2263,7 +2181,6 @@ macro_rules! persist_slot_matches_boundary_body {
         }
     }};
 }
-
 macro_rules! tag_projection_equal_body {
     ($left:expr, $right:expr) => {{
         $left.height == $right.height
@@ -2271,7 +2188,6 @@ macro_rules! tag_projection_equal_body {
             && $left.generation == $right.generation
     }};
 }
-
 // A validated lock must retain exactly one durable reconstruction witness.
 // The expression is shared verbatim with Verus and derives exactness from
 // primitive round, context, subject, signer, and persistence observations.
@@ -2354,7 +2270,6 @@ macro_rules! locked_commit_progress_witness_body {
             || durable_reproposal_is_exact
     }};
 }
-
 // These seven expressions are the source-shared production/Verus kernels for
 // the progress-witness refinement.  Every field is a primitive observation at
 // the enforcing production seam; in particular, callers cannot supply an
@@ -2652,7 +2567,6 @@ macro_rules! production_durable_intent_trace_body {
             })
     }};
 }
-
 macro_rules! production_decision_identity_is_canonical_body {
     ($decision:expr) => {{
         canonical_identity_is_typed_body!(
@@ -2690,7 +2604,6 @@ macro_rules! production_decision_identity_is_canonical_body {
             )
     }};
 }
-
 // Semantic Commit identity is independent of the same-round QC that witnessed
 // it. Canonicality above still requires each individual QC to use one round;
 // equality here retains every immutable body and execution commitment while
@@ -2716,7 +2629,6 @@ macro_rules! production_decision_identity_equal_body {
             )
     }};
 }
-
 macro_rules! production_quorum_certificate_is_canonical_body {
     ($certificate:expr) => {{
         production_decision_identity_is_canonical_body!($certificate.decision)
@@ -2729,7 +2641,6 @@ macro_rules! production_quorum_certificate_is_canonical_body {
             && $certificate.aggregate_signature_len > 0u64
     }};
 }
-
 macro_rules! production_quorum_certificate_equal_body {
     ($left:expr, $right:expr) => {{
         production_quorum_certificate_is_canonical_body!($left)
@@ -2740,7 +2651,6 @@ macro_rules! production_quorum_certificate_equal_body {
             && $left.aggregate_signature_len == $right.aggregate_signature_len
     }};
 }
-
 macro_rules! production_durable_body_is_canonical_body {
     ($body:expr) => {{
         canonical_identity_is_typed_body!(
@@ -2775,7 +2685,6 @@ macro_rules! production_durable_body_is_canonical_body {
             )
     }};
 }
-
 macro_rules! production_durable_body_equal_body {
     ($left:expr, $right:expr) => {{
         production_durable_body_is_canonical_body!($left)
@@ -2790,7 +2699,6 @@ macro_rules! production_durable_body_equal_body {
             && canonical_identity_equal_body!($left.frame, $right.frame)
     }};
 }
-
 macro_rules! production_decision_recovery_trace_body {
     ($projection:expr) => {{
         $projection.expected_height > 0u64
@@ -2866,7 +2774,6 @@ macro_rules! production_decision_recovery_trace_body {
             && $projection.stage == 1u8
     }};
 }
-
 macro_rules! production_scheduler_trace_body {
     ($projection:expr) => {{
         if $projection.timeout_due {
@@ -2882,7 +2789,6 @@ macro_rules! production_scheduler_trace_body {
         }
     }};
 }
-
 macro_rules! production_ingress_identity_and_class_trace_body {
     ($projection:expr) => {{
         let exact_ordinal_transition = $projection.ordinal_minted
@@ -2918,7 +2824,6 @@ macro_rules! production_ingress_identity_and_class_trace_body {
             && exact_dormant_transition
     }};
 }
-
 macro_rules! production_ingress_reservation_materialization_trace_body {
     ($projection:expr) => {{
         let exact_dormant_transition = if $projection.dormant_owner_ordinal == 0u128 {
@@ -2952,7 +2857,6 @@ macro_rules! production_ingress_reservation_materialization_trace_body {
             && exact_dormant_transition
     }};
 }
-
 /// Shared total relation between one concrete adapter effect and the exact
 /// causal-candidate ownership it contributes to the abstract scheduler.
 ///
@@ -3068,7 +2972,6 @@ macro_rules! production_effect_to_candidate_trace_body {
             && $projection.producer_episode_retained
     }};
 }
-
 macro_rules! production_leader_wire_admission_trace_body {
     ($projection:expr) => {{
         let incoming_identity_is_typed = canonical_identity_is_typed_body!(
@@ -3232,7 +3135,6 @@ macro_rules! production_leader_wire_admission_trace_body {
             }
     }};
 }
-
 macro_rules! production_two_stage_relay_retry_trace_body {
     ($projection:expr) => {{
         $projection.daemon_source_capacity_matches_two_upstream_lanes
@@ -3262,7 +3164,6 @@ macro_rules! production_two_stage_relay_retry_trace_body {
             && $projection.ready_sources_after <= $projection.total_depth_after
     }};
 }
-
 macro_rules! production_reliable_flush_trace_body {
     ($projection:expr) => {{
         canonical_identity_is_typed_body!(
@@ -3372,7 +3273,6 @@ macro_rules! production_reliable_flush_trace_body {
             })
     }};
 }
-
 // This second reliable-flush kernel is deliberately separate from the worker
 // queue kernel above. The worker proves which immutable response occurrence
 // crossed the peer writer; this kernel proves how that occurrence is applied
@@ -3662,7 +3562,6 @@ macro_rules! production_reliable_flush_application_body {
             })
     }};
 }
-
 // The cross-tool proof consumes this exact bridge: a writer-flush projection
 // and a lane-application projection are related only when every immutable
 // request, ticket, response, and cursor field is the same flushed occurrence.
@@ -3742,7 +3641,6 @@ macro_rules! production_reliable_flush_two_phase_link_body {
             && $worker.chunk_cursor_after == $application.chunk_cursor_after
     }};
 }
-
 macro_rules! production_application_trace_body {
     ($projection:expr) => {{
         $projection.context_height > 0u64
@@ -3839,7 +3737,6 @@ macro_rules! production_application_trace_body {
             && $projection.completion_work_id == $projection.task_work_id
     }};
 }
-
 // Exact application finalization is a distinct production boundary from
 // successor construction.  This relation deliberately has no `MaxHeight`
 // input: the finite terminal horizon is a TLA+ projection, while production
@@ -3894,7 +3791,6 @@ macro_rules! production_terminal_application_without_successor_activation_body {
             && !$projection.pending_successor_activation_present
     }};
 }
-
 // Primitive reservation ownership is deliberately narrower than the
 // first-release in-flight TLA+ state. It binds one journal-owned transaction
 // identity to one local durable state and, for ordered release, to one exact
@@ -3930,7 +3826,6 @@ macro_rules! in_flight_reservation_owner_is_well_formed_body {
                 ))
     }};
 }
-
 macro_rules! in_flight_reservation_owner_equal_body {
     ($left:expr, $right:expr) => {{
         $left.state == $right.state
@@ -3941,7 +3836,6 @@ macro_rules! in_flight_reservation_owner_equal_body {
             && canonical_identity_equal_body!($left.release_identity, $right.release_identity)
     }};
 }
-
 macro_rules! in_flight_reservation_owner_names_request_body {
     ($owner:expr, $projection:expr) => {{
         canonical_identity_equal_body!(
@@ -3950,7 +3844,6 @@ macro_rules! in_flight_reservation_owner_names_request_body {
         )
     }};
 }
-
 macro_rules! in_flight_reservation_owner_names_release_request_body {
     ($owner:expr, $projection:expr) => {{
         in_flight_reservation_owner_names_request_body!($owner, $projection)
@@ -3960,7 +3853,6 @@ macro_rules! in_flight_reservation_owner_names_release_request_body {
             )
     }};
 }
-
 // This identity-preserving primitive journal relation is composed by the
 // total fixed-width state/action relation below. Snapshot reconstruction maps
 // to a named abstract stutter and direct release maps to its terminal FIFO
@@ -4178,7 +4070,6 @@ macro_rules! production_in_flight_reservation_transition_body {
             }
     }};
 }
-
 // The composed first-release projection below mirrors every field in
 // `SumeragiV2InFlightFirstRelease.tla` with fixed-width primitives.  It is
 // intentionally separate from the per-transaction journal seam above: the
@@ -4200,7 +4091,6 @@ macro_rules! in_flight_first_release_bitmap_count_body {
         (words128 & 0xffu128) as u8
     }};
 }
-
 macro_rules! in_flight_first_release_validator_mask_body {
     ($validator_count:expr) => {{
         if $validator_count >= 128u8 {
@@ -4210,7 +4100,6 @@ macro_rules! in_flight_first_release_validator_mask_body {
         }
     }};
 }
-
 macro_rules! in_flight_first_release_ready_quorum_body {
     ($validator_count:expr) => {{
         if $validator_count == 0u8 {
@@ -4220,7 +4109,6 @@ macro_rules! in_flight_first_release_ready_quorum_body {
         }
     }};
 }
-
 macro_rules! in_flight_first_release_single_validator_body {
     ($validator:expr, $validator_mask:expr) => {{
         $validator != 0u128
@@ -4228,7 +4116,6 @@ macro_rules! in_flight_first_release_single_validator_body {
             && ($validator & ($validator - 1u128)) == 0u128
     }};
 }
-
 macro_rules! in_flight_first_release_queue_equal_body {
     ($left:expr, $right:expr) => {{
         $left.plan_state == $right.plan_state
@@ -4236,7 +4123,6 @@ macro_rules! in_flight_first_release_queue_equal_body {
             && $left.reservation_state == $right.reservation_state
     }};
 }
-
 macro_rules! in_flight_first_release_carrier_equal_body {
     ($left:expr, $right:expr) => {{
         $left.kura_active == $right.kura_active
@@ -4244,7 +4130,6 @@ macro_rules! in_flight_first_release_carrier_equal_body {
             && $left.ready_qc_durable == $right.ready_qc_durable
     }};
 }
-
 macro_rules! in_flight_first_release_session_equal_body {
     ($left:expr, $right:expr) => {{
         $left.bodies == $right.bodies
@@ -4253,7 +4138,6 @@ macro_rules! in_flight_first_release_session_equal_body {
             && $left.producer_alive == $right.producer_alive
     }};
 }
-
 macro_rules! in_flight_first_release_history_equal_body {
     ($left:expr, $right:expr) => {{
         $left.ever_queue_plan_v4 == $right.ever_queue_plan_v4
@@ -4270,7 +4154,6 @@ macro_rules! in_flight_first_release_history_equal_body {
             && $left.released_high_water == $right.released_high_water
     }};
 }
-
 macro_rules! in_flight_first_release_commit_prefixes_equal_body {
     ($left:expr, $right:expr) => {{
         $left.reservation_committed_prefix == $right.reservation_committed_prefix
@@ -4279,7 +4162,6 @@ macro_rules! in_flight_first_release_commit_prefixes_equal_body {
                 == $right.reservation_commit_forgotten_prefix
     }};
 }
-
 macro_rules! in_flight_first_release_decision_equal_body {
     ($left:expr, $right:expr) => {{
         canonical_identity_equal_body!($left.lane_commit_scope, $right.lane_commit_scope)
@@ -4291,7 +4173,6 @@ macro_rules! in_flight_first_release_decision_equal_body {
             && $left.applied_by == $right.applied_by
     }};
 }
-
 macro_rules! in_flight_first_release_release_equal_body {
     ($left:expr, $right:expr) => {{
         $left.kura_retired == $right.kura_retired
@@ -4300,7 +4181,6 @@ macro_rules! in_flight_first_release_release_equal_body {
             && $left.fifo_restored == $right.fifo_restored
     }};
 }
-
 macro_rules! in_flight_first_release_static_equal_body {
     ($left:expr, $right:expr) => {{
         $left.validator_count == $right.validator_count
@@ -4311,7 +4191,6 @@ macro_rules! in_flight_first_release_static_equal_body {
             && canonical_identity_equal_body!($left.binding_a, $right.binding_a)
     }};
 }
-
 macro_rules! in_flight_first_release_state_equal_body {
     ($left:expr, $right:expr) => {{
         in_flight_first_release_static_equal_body!($left, $right)
@@ -4323,7 +4202,6 @@ macro_rules! in_flight_first_release_state_equal_body {
             && in_flight_first_release_release_equal_body!($left.release, $right.release)
     }};
 }
-
 macro_rules! in_flight_first_release_reservation_state_is_valid_body {
     ($state:expr) => {{
         $state == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT)
@@ -4338,7 +4216,6 @@ macro_rules! in_flight_first_release_reservation_state_is_valid_body {
             || $state == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
     }};
 }
-
 macro_rules! production_in_flight_first_release_state_body {
     ($state:expr) => {{
         let state = $state;
@@ -4537,7 +4414,6 @@ macro_rules! production_in_flight_first_release_state_body {
             }
     }};
 }
-
 macro_rules! production_in_flight_first_release_transition_body {
     ($projection:expr) => {{
         let projection = $projection;
@@ -5268,7 +5144,6 @@ macro_rules! production_in_flight_first_release_transition_body {
             }
     }};
 }
-
 // Keep the durability acknowledgement predicate shared between the ordinary
 // Rust WAL lifecycle and its Verus proof.  An append receipt is minted only
 // after all three adapter completions have happened in this order; the
@@ -5277,7 +5152,6 @@ macro_rules! production_in_flight_first_release_transition_body {
 macro_rules! wal_append_acknowledged_body {
     ($write_complete:expr, $flush_complete:expr, $sync_complete:expr $(,)?) => {{ $write_complete && $flush_complete && $sync_complete }};
 }
-
 // Canonical header acceptance is also a shared production/Verus expression.
 // The byte parser still returns field-specific errors, then crosses this final
 // fail-closed gate before exposing any recovered frame.
@@ -5303,7 +5177,6 @@ macro_rules! wal_header_accepted_body {
             && $checksum_matches
     }};
 }
-
 // Complete-frame acceptance is intentionally expressed only over parsed
 // primitives.  Production and Verus therefore agree on the exact sequence,
 // size, hash-link, and checksum corridor even though BLAKE3 itself stays in the
@@ -5331,7 +5204,6 @@ macro_rules! wal_complete_frame_valid_body {
             && $encoded_hash == $calculated_hash
     }};
 }
-
 // This is the fixed-width retirement rule used by the executable lifecycle
 // projection and Verus.  Presence bits are derived from typed production
 // state: a closed FinalizedHeight and its trusted Kura durability receipt.
@@ -5385,7 +5257,6 @@ macro_rules! wal_retirement_authorized_body {
             && $decision_subject == $decision_certificate_subject
     }};
 }
-
 /// Primitive `(height, view, generation)` lifecycle projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TagProjection {
@@ -5393,7 +5264,6 @@ pub struct TagProjection {
     pub(crate) view: u64,
     pub(crate) generation: u64,
 }
-
 /// Typed identity of the sole reducer consumer for one exact body pipeline.
 ///
 /// `K` is the complete `(round, subject)` key and `M` is the canonical
@@ -5405,7 +5275,6 @@ pub struct ExactBodyOwnerProjection<K, M> {
     pub(crate) key: K,
     pub(crate) manifest_hash: Option<M>,
 }
-
 /// Preflighted exact owner binding derived from typed identities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Constructed by the production executor and refinement tests.
@@ -5413,7 +5282,6 @@ pub struct ExactBodyOwnerBindingProjection<K, M> {
     pub(crate) owner: ExactBodyOwnerProjection<K, M>,
     pub(crate) already_owned: bool,
 }
-
 /// Bind or monotonically enrich one exact body-pipeline owner.
 ///
 /// The only permitted enrichment changes an absent manifest identity to a
@@ -5435,7 +5303,6 @@ where
         ExactBodyOwnerBindingProjection
     )
 }
-
 /// Return whether a pipeline stage carries the exact immutable owner identity.
 #[must_use]
 #[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
@@ -5449,7 +5316,6 @@ where
 {
     exact_body_owner_equal_body!(owner, stage)
 }
-
 /// Rebind one exact body-pipeline consumer to a strictly newer incarnation.
 ///
 /// The height, round/subject key, and manifest identity remain immutable;
@@ -5469,7 +5335,6 @@ where
 {
     exact_body_owner_rebind_body!(current, previous, rebound_tag, ExactBodyOwnerProjection)
 }
-
 /// Classification of one logical completion stage across serialized owners.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Consumed by the production runtime and refinement tests.
@@ -5481,7 +5346,6 @@ pub enum ExactBodyCompletionOwnership {
     /// Evidence conflicts, is duplicated, or its owner count is inconsistent.
     Invalid,
 }
-
 /// Classify exact completion ownership across runtime and deferred lanes.
 #[must_use]
 #[allow(dead_code)] // Called by the production runtime, outside the pure harness crate.
@@ -5501,7 +5365,6 @@ pub fn classify_exact_body_completion_ownership(
         ExactBodyCompletionOwnership::Invalid,
     )
 }
-
 /// Exact residual counters after superseding body-pipeline ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Constructed by the production executor and refinement tests.
@@ -5509,7 +5372,6 @@ pub struct ExactBodyRetirementAccounting {
     pub(crate) ready_after: u64,
     pub(crate) store_after: u64,
 }
-
 /// Compute exact body-byte residuals, rejecting any underflow or leakage.
 #[must_use]
 #[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
@@ -5529,7 +5391,6 @@ pub fn plan_exact_body_retirement_accounting(
         ExactBodyRetirementAccounting,
     )
 }
-
 /// One exact selection made by the bounded three-class ingress kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Constructed by the production runtime and refinement tests.
@@ -5537,7 +5398,6 @@ pub struct BoundedServiceSelection {
     pub(crate) selected: u8,
     pub(crate) next: u8,
 }
-
 /// Select one ready runtime class from the persistent round-robin cursor.
 ///
 /// Invalid cursors fail closed as `(NONE, NONE)`. This function proves only the
@@ -5559,7 +5419,6 @@ pub fn select_bounded_service_class(
         BoundedServiceSelection,
     )
 }
-
 /// Primitive production trace spanning the effective-lock acquisition seams.
 ///
 /// Each action uses one discriminant and canonical zeroes for unrelated
@@ -5589,7 +5448,6 @@ pub struct EffectiveLockTraceProjection {
     pub(crate) selected: u8,
     pub(crate) cursor_after: u8,
 }
-
 /// Complete immutable identity of one durable predecessor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionDurablePredecessorIdentityProjection {
@@ -5597,7 +5455,6 @@ pub struct ProductionDurablePredecessorIdentityProjection {
     pub(crate) block_hash: CanonicalIdentityProjection,
     pub(crate) artifact_hash: CanonicalIdentityProjection,
 }
-
 /// Expected and returned ownership at the fallible successor-construction seam.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionSuccessorPredecessorBindingProjection {
@@ -5605,7 +5462,6 @@ pub struct ProductionSuccessorPredecessorBindingProjection {
     pub(crate) authority_predecessor: ProductionDurablePredecessorIdentityProjection,
     pub(crate) successor_context_id: CanonicalIdentityProjection,
 }
-
 /// Primitive fields of the prepared successor status and activation marker.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionSuccessorSnapshotProjection {
@@ -5622,7 +5478,6 @@ pub struct ProductionSuccessorSnapshotProjection {
     pub(crate) marker_kind: u8,
     pub(crate) marker_age_ms: u64,
 }
-
 /// Applied-predecessor successor activation observed at the publication gate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionAppliedSuccessorTraceProjection {
@@ -5633,7 +5488,6 @@ pub struct ProductionAppliedSuccessorTraceProjection {
     pub(crate) predecessor_stage_after: u8,
     pub(crate) successor: ProductionSuccessorSnapshotProjection,
 }
-
 /// Complete-tip or snapshot recovery activation at an empty registry boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionRecoveredSuccessorTraceProjection {
@@ -5646,7 +5500,6 @@ pub struct ProductionRecoveredSuccessorTraceProjection {
     pub(crate) published_status_height_before: u64,
     pub(crate) successor: ProductionSuccessorSnapshotProjection,
 }
-
 /// Primitive successor startup lifecycle transition.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionSuccessorStartupLifecycleProjection {
@@ -5660,7 +5513,6 @@ pub struct ProductionSuccessorStartupLifecycleProjection {
     pub(crate) restart_required_before: bool,
     pub(crate) restart_required_after: bool,
 }
-
 /// Exact block-sync CommitQC handoff from authenticated discovery to reducer ingress.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionHistoricalCertificateTraceProjection {
@@ -5677,7 +5529,6 @@ pub struct ProductionHistoricalCertificateTraceProjection {
     pub(crate) request_present_before: bool,
     pub(crate) request_present_after: bool,
 }
-
 /// Exact certified historical body handoff into the ordinary body pipeline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionHistoricalBodyPipelineTraceProjection {
@@ -5708,7 +5559,6 @@ pub struct ProductionHistoricalBodyPipelineTraceProjection {
     pub(crate) pending_fetch_present_after: bool,
     pub(crate) request_present_after: bool,
 }
-
 /// Primitive durable-intent ownership observed around one reducer step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionDurableIntentTraceProjection {
@@ -5725,7 +5575,6 @@ pub struct ProductionDurableIntentTraceProjection {
     pub(crate) durable_sequence_before: u64,
     pub(crate) durable_sequence_after: u64,
 }
-
 /// Primitive ownership facts for one validated, undecided durable lock.
 ///
 /// The kernel accepts an active same-round Commit, an exact pending
@@ -5769,7 +5618,6 @@ pub struct LockedCommitProgressWitnessProjection {
     pub(crate) installed_timeout_height: u64,
     pub(crate) installed_timeout_view: u64,
 }
-
 /// Check that a validated lock retains one exact durable progress witness.
 #[must_use]
 pub(crate) fn locked_commit_progress_witness_is_valid(
@@ -5777,7 +5625,6 @@ pub(crate) fn locked_commit_progress_witness_is_valid(
 ) -> bool {
     locked_commit_progress_witness_body!(projection)
 }
-
 /// Complete semantic decision identity repeated by a certificate or receipt.
 ///
 /// Every digest is a lossless four-word projection of an existing canonical
@@ -5797,7 +5644,6 @@ pub struct ProductionDecisionIdentityProjection {
     pub(crate) execution_commitment: CanonicalIdentityProjection,
     pub(crate) executed_block_wire_hash: CanonicalIdentityProjection,
 }
-
 /// Complete quorum-certificate identity at a production refinement seam.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionQuorumCertificateIdentityProjection {
@@ -5806,7 +5652,6 @@ pub struct ProductionQuorumCertificateIdentityProjection {
     pub(crate) signer_count: u64,
     pub(crate) aggregate_signature_len: u64,
 }
-
 /// Exact durable-body identity shared by recovery and application.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionDurableBodyIdentityProjection {
@@ -5819,7 +5664,6 @@ pub struct ProductionDurableBodyIdentityProjection {
     pub(crate) manifest: CanonicalIdentityProjection,
     pub(crate) frame: CanonicalIdentityProjection,
 }
-
 /// Primitive pending-Decision recovery boundary selected during startup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionDecisionRecoveryTraceProjection {
@@ -5841,7 +5685,6 @@ pub struct ProductionDecisionRecoveryTraceProjection {
     pub(crate) validated_execution_commitment: CanonicalIdentityProjection,
     pub(crate) stage: u8,
 }
-
 /// Primitive scheduler input and its concrete selected owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionSchedulerTraceProjection {
@@ -5852,7 +5695,6 @@ pub struct ProductionSchedulerTraceProjection {
     pub(crate) selected: u8,
     pub(crate) fifo_owed_after: bool,
 }
-
 /// Primitive identity, queue-class, ordinal, and dormant-owner observation for
 /// one newly admitted physical owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -5882,7 +5724,6 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     /// separate occupancy-preserving projection below.
     pub(crate) ordinal_minted: bool,
 }
-
 /// Primitive exact-token observation for replacing one unpublished ingress
 /// reservation with its reducer-visible command. The shared ordinal source
 /// and effective occupied-slot count both remain unchanged.
@@ -5913,7 +5754,6 @@ pub struct ProductionIngressReservationMaterializationTraceProjection {
     /// removed when its aliased token becomes a physical command.
     pub(crate) dormant_owner_ordinal: u128,
 }
-
 /// Lossless production observation for one effect-to-candidate handoff.
 ///
 /// `incoming_*` values are recomputed from the concrete `AdapterEffect` and
@@ -5954,7 +5794,6 @@ pub(crate) struct ProductionEffectToCandidateTraceProjection {
     pub(crate) candidate_owner_admitted: bool,
     pub(crate) producer_episode_retained: bool,
 }
-
 /// Total prospective state transition for one durable leader-wire admission.
 ///
 /// The projection retains the complete hashed lifecycle identity, both
@@ -5993,7 +5832,6 @@ pub(crate) struct ProductionLeaderWireAdmissionTraceProjection {
     pub(crate) terminal_evidence_before: bool,
     pub(crate) terminal_evidence_after: bool,
 }
-
 /// Primitive observation of one exact daemon retry across its source-fair
 /// outer queue and source-fair inner Sumeragi ingress.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -6035,7 +5873,6 @@ pub struct ProductionTwoStageRelayRetryTraceProjection {
     /// Total retained capacity across authenticated sources.
     pub total_capacity: u64,
 }
-
 /// Primitive per-source sidecar-flush cursor movement.
 ///
 /// `stream_epoch` retains the non-zero durable request-stream incarnation,
@@ -6086,7 +5923,6 @@ pub struct ProductionReliableFlushTraceProjection {
     pub(crate) admitted_after: u64,
     pub(crate) capacity: u64,
 }
-
 /// Exact lane-side application of one actor-confirmed sidecar writer flush.
 ///
 /// Identity fields mirror the worker projection so the formal harness can
@@ -6194,7 +6030,6 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub(crate) sibling_state_before: CanonicalIdentityProjection,
     pub(crate) sibling_state_after: CanonicalIdentityProjection,
 }
-
 /// Primitive durable application completion returned to the reducer owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionApplicationTraceProjection {
@@ -6222,7 +6057,6 @@ pub struct ProductionApplicationTraceProjection {
     pub(crate) task_work_id: u64,
     pub(crate) completion_work_id: u64,
 }
-
 /// Exact applied-height handoff before successor construction begins.
 ///
 /// This projection separates one authenticated application boundary from the
@@ -6243,7 +6077,6 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub(crate) predecessor: ProductionDurablePredecessorIdentityProjection,
     pub(crate) pending_successor_activation_present: bool,
 }
-
 /// Primitive durable owner of one exact lane queue reservation.
 ///
 /// The zero identity is permitted only for [`IN_FLIGHT_RESERVATION_STATE_ABSENT`].
@@ -6255,7 +6088,6 @@ pub(crate) struct ProductionInFlightReservationOwnerProjection {
     pub(crate) reservation_identity: CanonicalIdentityProjection,
     pub(crate) release_identity: CanonicalIdentityProjection,
 }
-
 /// One exact reservation-journal action and its primitive owner transition.
 ///
 /// This projection intentionally excludes the queue collection, QueuePlan,
@@ -6272,7 +6104,6 @@ pub(crate) struct ProductionInFlightReservationTransitionProjection {
     pub(crate) before: ProductionInFlightReservationOwnerProjection,
     pub(crate) after: ProductionInFlightReservationOwnerProjection,
 }
-
 /// QueuePlan V4 and reservation journal V5 state in the composed carrier model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseQueueProjection {
@@ -6280,7 +6111,6 @@ pub(crate) struct ProductionInFlightFirstReleaseQueueProjection {
     pub(crate) selected_count: u64,
     pub(crate) reservation_state: u8,
 }
-
 /// Durable Kura/input/QC facts in the composed carrier model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseCarrierProjection {
@@ -6288,7 +6118,6 @@ pub(crate) struct ProductionInFlightFirstReleaseCarrierProjection {
     pub(crate) execution_input_durable: u128,
     pub(crate) ready_qc_durable: bool,
 }
-
 /// Volatile body and READY authorization custody.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseSessionProjection {
@@ -6297,7 +6126,6 @@ pub(crate) struct ProductionInFlightFirstReleaseSessionProjection {
     pub(crate) crashed: u128,
     pub(crate) producer_alive: bool,
 }
-
 /// Monotonic durable history used to validate crash reconstruction and order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseHistoryProjection {
@@ -6316,7 +6144,6 @@ pub(crate) struct ProductionInFlightFirstReleaseHistoryProjection {
     pub(crate) pending_high_water: u64,
     pub(crate) released_high_water: u64,
 }
-
 /// Lane decision, canonical WSV application, and mutually exclusive release owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseDecisionProjection {
@@ -6328,7 +6155,6 @@ pub(crate) struct ProductionInFlightFirstReleaseDecisionProjection {
     pub(crate) application_count: u8,
     pub(crate) applied_by: u128,
 }
-
 /// Durable four-stage release progress and ordinary FIFO publication.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseReleaseProjection {
@@ -6337,7 +6163,6 @@ pub(crate) struct ProductionInFlightFirstReleaseReleaseProjection {
     pub(crate) released_prefix: u64,
     pub(crate) fifo_restored: bool,
 }
-
 /// Total fixed-width safety state for a first-release carrier committee.
 ///
 /// Validator sets use the same 1..=128 canonical-order bitmap geometry as the
@@ -6364,7 +6189,6 @@ pub(crate) struct ProductionInFlightFirstReleaseStateProjection {
     pub(crate) decision: ProductionInFlightFirstReleaseDecisionProjection,
     pub(crate) release: ProductionInFlightFirstReleaseReleaseProjection,
 }
-
 /// One named `Next` action over the total first-release carrier projection.
 ///
 /// `actor` and `target` are zero for actor-free actions, one-hot for ordinary
@@ -6377,13 +6201,10 @@ pub(crate) struct ProductionInFlightFirstReleaseTransitionProjection {
     pub(crate) before: ProductionInFlightFirstReleaseStateProjection,
     pub(crate) after: ProductionInFlightFirstReleaseStateProjection,
 }
-
 include!("refinement/first_release_witness.rs");
-
 const fn effective_lock_trace_step_is_valid(projection: EffectiveLockTraceProjection) -> bool {
     effective_lock_trace_step_body!(projection)
 }
-
 /// Primitive identity of one optional quorum certificate.
 ///
 /// The signer bitmap is indexed by the frozen, canonically ordered voting
@@ -6405,7 +6226,6 @@ pub struct CertificateIdentityProjection {
     pub(crate) voting_power: u64,
     pub(crate) evidence_class: u8,
 }
-
 /// Primitive identity of one optional timeout certificate and its selected
 /// highest `PrepareQC`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -6416,7 +6236,6 @@ pub struct TimeoutIdentityProjection {
     pub(crate) view: u64,
     pub(crate) highest_prepare: CertificateIdentityProjection,
 }
-
 /// Exact production projection of a persisted-TC `EnterView` macro-step.
 ///
 /// This relation is deliberately limited to the reducer-owned transition. It
@@ -6449,21 +6268,18 @@ pub struct EnterViewProjection {
     pub(crate) enter_index: u8,
     pub(crate) following_fetch_index: u8,
 }
-
 /// Primitive optional validator identity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ValidatorProjection {
     pub(crate) present: bool,
     pub(crate) id: ValidatorId,
 }
-
 /// Primitive optional subject identity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SubjectProjection {
     pub(crate) present: bool,
     pub(crate) subject: Subject,
 }
-
 /// Concrete invariant violations extracted from one reducer state.
 ///
 /// These are counts, not caller-provided truth values.  The verified kernel
@@ -6480,7 +6296,6 @@ pub struct SafetyProjection {
     pub(crate) unauthorized_signables: u64,
     pub(crate) invalid_application: u64,
 }
-
 /// Safety identity of one pending WAL append and its continuation.
 ///
 /// `record_kind == WAL_RECORD_NONE` is the sole absent value.  The remaining
@@ -6501,7 +6316,6 @@ pub struct PendingProjection {
     pub(crate) proposal_view: u64,
     pub(crate) subject: CanonicalIdentityProjection,
 }
-
 /// Concrete capability key used for one reducer effect.
 ///
 /// The key contains only fixed-width, safety-relevant primitives.  Signature
@@ -6535,7 +6349,6 @@ pub struct EffectCapabilityKey {
     pub(crate) manifest_len: u64,
     pub(crate) manifest_count: u64,
 }
-
 impl EffectCapabilityKey {
     /// Canonical absent key.
     pub(crate) const fn none() -> Self {
@@ -6571,7 +6384,6 @@ impl EffectCapabilityKey {
         }
     }
 }
-
 /// Exact requested/granted capability pair for one effect vector slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EffectSlotProjection {
@@ -6579,7 +6391,6 @@ pub struct EffectSlotProjection {
     pub(crate) requested: EffectCapabilityKey,
     pub(crate) granted: EffectCapabilityKey,
 }
-
 /// One exact item in the durable replay FIFO.
 ///
 /// `kind` uses the [`REPLAY_EFFECT_*`] discriminants.  Proposal, Prepare,
@@ -6590,7 +6401,6 @@ pub struct ReplayPlanSlotProjection {
     pub(crate) kind: u8,
     pub(crate) capability: EffectCapabilityKey,
 }
-
 impl ReplayPlanSlotProjection {
     /// Canonical absent replay-plan slot.
     pub(crate) const fn none() -> Self {
@@ -6600,7 +6410,6 @@ impl ReplayPlanSlotProjection {
         }
     }
 }
-
 /// Fixed projection of the complete reducer-owned replay FIFO.
 ///
 /// Recovery can reconstruct at most three signable intents, in this order:
@@ -6613,7 +6422,6 @@ pub struct ReplayPlanProjection {
     pub(crate) slot1: ReplayPlanSlotProjection,
     pub(crate) slot2: ReplayPlanSlotProjection,
 }
-
 impl ReplayPlanProjection {
     /// Construct an empty canonical replay plan.
     pub(crate) const fn empty() -> Self {
@@ -6624,7 +6432,6 @@ impl ReplayPlanProjection {
             slot2: ReplayPlanSlotProjection::none(),
         }
     }
-
     /// Append one exact replay item, failing closed beyond the protocol bound.
     pub(crate) fn push(&mut self, kind: u8, capability: EffectCapabilityKey) -> bool {
         let slot = ReplayPlanSlotProjection { kind, capability };
@@ -6638,7 +6445,6 @@ impl ReplayPlanProjection {
         true
     }
 }
-
 /// Primitive identity of a durable-boundary action.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoundaryCapabilityKey {
@@ -6669,7 +6475,6 @@ pub struct BoundaryCapabilityKey {
     pub(crate) auxiliary_subject: Subject,
     pub(crate) replay_plan: ReplayPlanProjection,
 }
-
 impl BoundaryCapabilityKey {
     /// Canonical absent boundary capability.
     pub(crate) const fn none() -> Self {
@@ -6706,7 +6511,6 @@ impl BoundaryCapabilityKey {
         }
     }
 }
-
 /// Exact cardinality projection of the reducer's volatile collections.
 ///
 /// This summary is not a replacement for verifying the collection extraction
@@ -6735,7 +6539,6 @@ pub struct VolatileSummary {
     pub(crate) durable_signable_limit: u64,
     pub(crate) replay_resumed: bool,
 }
-
 /// Fixed, exact projection of one reducer effect vector.
 ///
 /// Each active slot carries a capability requested by the concrete effect and
@@ -6756,7 +6559,6 @@ pub struct EffectTrace {
     pub(crate) slot6: EffectSlotProjection,
     pub(crate) slot7: EffectSlotProjection,
 }
-
 impl EffectTrace {
     /// Construct an empty canonical trace.
     pub(crate) const fn empty() -> Self {
@@ -6804,7 +6606,6 @@ impl EffectTrace {
             },
         }
     }
-
     /// Append one exact effect projection.
     pub(crate) fn push(
         &mut self,
@@ -6835,7 +6636,6 @@ impl EffectTrace {
         true
     }
 }
-
 /// Concrete primitive projection consumed by the verified transition kernel.
 ///
 /// Exact reducer and durable-state references are compared directly by the
@@ -6882,7 +6682,6 @@ pub struct TransitionProjection<'a> {
     pub(crate) enter_view: EnterViewProjection,
     pub(crate) effects: EffectTrace,
 }
-
 /// Internal facts derived by the kernel from one primitive transition.
 ///
 /// This type never crosses the module boundary; in particular, the reducer
@@ -6921,7 +6720,6 @@ struct TransitionFacts {
     enter_view_exact: bool,
     effects: EffectTrace,
 }
-
 /// Classification fields derived independently of durable/effect deltas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -6939,7 +6737,6 @@ struct TransitionClassificationFacts {
     replay_effect_kind: u8,
     validator_count: u64,
 }
-
 /// Durable, volatile, capability, and effect fields derived independently of
 /// transition classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6964,7 +6761,6 @@ struct TransitionDeltaFacts {
     replay_boundary_exact: bool,
     effects: EffectTrace,
 }
-
 // Keep this expression free of calls into production code.  It is expanded
 // both below and inside `verus!`, so Verus proves the actual decision logic
 // used by the production reducer rather than a separately transcribed checker.
@@ -7005,7 +6801,6 @@ macro_rules! effect_count_body {
         })
     }};
 }
-
 macro_rules! capability_key_equal_body {
     ($left:expr, $right:expr) => {{
         $left.kind == $right.kind
@@ -7036,11 +6831,9 @@ macro_rules! capability_key_equal_body {
             && $left.manifest_count == $right.manifest_count
     }};
 }
-
 macro_rules! capability_key_is_none_body {
     ($key:expr) => {{ $key.kind == 0u8 }};
 }
-
 macro_rules! active_effect_slot_body {
     ($slot:expr) => {{
         $slot.kind >= 1u8
@@ -7050,7 +6843,6 @@ macro_rules! active_effect_slot_body {
             && capability_key_equal_body!($slot.requested, $slot.granted)
     }};
 }
-
 macro_rules! inactive_effect_slot_body {
     ($slot:expr) => {{
         $slot.kind == 0u8
@@ -7058,7 +6850,6 @@ macro_rules! inactive_effect_slot_body {
             && capability_key_is_none_body!($slot.granted)
     }};
 }
-
 macro_rules! effect_slots_authorized_body {
     ($trace:expr) => {{
         $trace.len <= 8u8
@@ -7104,7 +6895,6 @@ macro_rules! effect_slots_authorized_body {
             })
     }};
 }
-
 macro_rules! final_effect_kind_body {
     ($trace:expr, $kind:expr) => {{
         match $trace.len {
@@ -7120,7 +6910,6 @@ macro_rules! final_effect_kind_body {
         }
     }};
 }
-
 macro_rules! effect_order_constraints_body {
     (
         $trace:expr,
@@ -7219,7 +7008,6 @@ macro_rules! effect_order_constraints_body {
                             && final_effect_kind_body!($trace, 7u8)))))
     }};
 }
-
 macro_rules! effect_ordering_gate_body {
     ($trace:expr, $event_kind:expr, $count_gate:ident, $constraints_gate:ident $(,)?) => {{
         let persist_count = $count_gate($trace, 1u8);
@@ -7242,11 +7030,9 @@ macro_rules! effect_ordering_gate_body {
         )
     }};
 }
-
 macro_rules! effect_trace_gate_body {
     ($trace:expr, $event_kind:expr, $slot_gate:ident, $order_gate:ident $(,)?) => {{ $slot_gate($trace) && $order_gate($trace, $event_kind) }};
 }
-
 macro_rules! volatile_summary_well_formed_body {
     ($summary:expr, $validator_count:expr) => {{
         $validator_count > 0u64
@@ -7286,7 +7072,6 @@ macro_rules! volatile_summary_well_formed_body {
                 || $summary.signature_queue < $summary.durable_signable_limit)
     }};
 }
-
 macro_rules! volatile_summaries_equal_body {
     ($before:expr, $after:expr) => {{
         $before.candidate_present == $after.candidate_present
@@ -7307,7 +7092,6 @@ macro_rules! volatile_summaries_equal_body {
             && $before.replay_resumed == $after.replay_resumed
     }};
 }
-
 macro_rules! safety_projection_accepts_body {
     ($safety:expr) => {{
         $safety.durable_identity_mismatches == 0u64
@@ -7321,15 +7105,12 @@ macro_rules! safety_projection_accepts_body {
             && $safety.invalid_application == 0u64
     }};
 }
-
 macro_rules! validator_projection_equal_body {
     ($left:expr, $right:expr) => {{ $left.present == $right.present && (!$left.present || $left.id == $right.id) }};
 }
-
 macro_rules! subject_projection_equal_body {
     ($left:expr, $right:expr) => {{ $left.present == $right.present && (!$left.present || $left.subject == $right.subject) }};
 }
-
 macro_rules! replay_plan_slot_well_formed_body {
     ($slot:expr, $active:expr) => {{
         if $active {
@@ -7341,7 +7122,6 @@ macro_rules! replay_plan_slot_well_formed_body {
         }
     }};
 }
-
 macro_rules! replay_plan_well_formed_body {
     ($plan:expr, $effect_kind:expr) => {{
         $plan.len <= 3u8
@@ -7355,7 +7135,6 @@ macro_rules! replay_plan_well_formed_body {
             })
     }};
 }
-
 macro_rules! replay_plan_equal_body {
     ($left:expr, $right:expr) => {{
         $left.len == $right.len
@@ -7367,7 +7146,6 @@ macro_rules! replay_plan_equal_body {
             && capability_key_equal_body!($left.slot2.capability, $right.slot2.capability)
     }};
 }
-
 macro_rules! boundary_capability_equal_body {
     ($left:expr, $right:expr) => {{
         $left.kind == $right.kind
@@ -7398,7 +7176,6 @@ macro_rules! boundary_capability_equal_body {
             && replay_plan_equal_body!($left.replay_plan, $right.replay_plan)
     }};
 }
-
 macro_rules! boundary_capability_is_absent_body {
     ($boundary:expr) => {{
         $boundary.kind == refinement_tag_value!(BOUNDARY_NONE)
@@ -7423,7 +7200,6 @@ macro_rules! boundary_capability_is_absent_body {
             )
     }};
 }
-
 macro_rules! boundary_identity_is_canonical_body {
     ($boundary:expr) => {{
         canonical_identity_is_typed_body!(
@@ -7450,7 +7226,6 @@ macro_rules! boundary_identity_is_canonical_body {
         })
     }};
 }
-
 macro_rules! certificate_identity_is_canonical_body {
     ($certificate:expr) => {{
         if !$certificate.present {
@@ -7486,7 +7261,6 @@ macro_rules! certificate_identity_is_canonical_body {
         }
     }};
 }
-
 macro_rules! certificate_identity_equal_body {
     ($left:expr, $right:expr) => {{
         certificate_identity_is_canonical_body!($left)
@@ -7505,7 +7279,6 @@ macro_rules! certificate_identity_equal_body {
                     && $left.evidence_class == $right.evidence_class))
     }};
 }
-
 // Compare the complete fixed-width certificate material while deliberately
 // ignoring `evidence_class`. The same concrete incoming certificate can be
 // labelled INCOMING in the lock projection and LOCAL in the high-QC
@@ -7528,7 +7301,6 @@ macro_rules! certificate_identity_same_material_body {
                     && $left.voting_power == $right.voting_power))
     }};
 }
-
 macro_rules! timeout_identity_equal_body {
     ($left:expr, $right:expr) => {{
         certificate_identity_is_canonical_body!($left.highest_prepare)
@@ -7546,7 +7318,6 @@ macro_rules! timeout_identity_equal_body {
                     )))
     }};
 }
-
 macro_rules! prepare_identity_in_context_body {
     ($certificate:expr, $context_id:expr, $height:expr, $maximum_view:expr) => {{
         certificate_identity_is_canonical_body!($certificate)
@@ -7557,7 +7328,6 @@ macro_rules! prepare_identity_in_context_body {
                     && $certificate.view <= $maximum_view))
     }};
 }
-
 // Preserve the reducer's one exact durable-high PrepareQC control owner across
 // the post-WAL InstallTimeout seam. Highest and lock are intentionally
 // separate: an observed PrepareQC may be strictly above the current lock.
@@ -7593,7 +7363,6 @@ macro_rules! enter_view_high_prepare_qc_control_identity_body {
             )
     }};
 }
-
 // Preserve every PrepareQC position through the post-WAL EnterView seam. The
 // local and incoming anchors are independently authenticated by the concrete
 // reducer. Their evidence classes are then copied through pending,
@@ -7632,7 +7401,6 @@ macro_rules! enter_view_locked_prepare_qc_identity_body {
             })
     }};
 }
-
 // This expression is instantiated both by the concrete reducer and Verus. It
 // describes the exact post-install lock choice, without claiming anything
 // about asynchronous executor ownership or temporal fairness.
@@ -7714,7 +7482,6 @@ macro_rules! enter_view_projection_gate_body {
         }
     }};
 }
-
 // Derive the durable, volatile, capability, and effect portion of the checked
 // transition facts. Production and Verus instantiate this exact expression
 // with their corresponding primitive projection types.
@@ -7776,7 +7543,6 @@ macro_rules! transition_delta_facts_from_projection_body {
         }
     }};
 }
-
 // Derive invariant, fence, and action-classification fields from primitive
 // state plus the exact delta facts above.
 macro_rules! transition_classification_facts_from_projection_body {
@@ -7844,7 +7610,6 @@ macro_rules! transition_classification_facts_from_projection_body {
         }
     }};
 }
-
 // Compose independently derived facts without recomputing any predicate.
 macro_rules! transition_facts_from_components_body {
     ($classification:expr, $delta:expr, $enter_view_exact:expr, $facts_type:ident) => {{
@@ -7883,7 +7648,6 @@ macro_rules! transition_facts_from_components_body {
         }
     }};
 }
-
 // Derive every safety/action fact consumed by the production relation from
 // concrete primitive state, boundary, and capability projections.
 macro_rules! transition_facts_from_projection_body {
@@ -7905,7 +7669,6 @@ macro_rules! transition_facts_from_projection_body {
         transition_facts_from_components_body!(classification, delta, enter_view_exact, $facts_type)
     }};
 }
-
 macro_rules! volatile_replay_unchanged_body {
     ($before:expr, $after:expr) => {{
         $before.candidate_present == $after.candidate_present
@@ -7922,7 +7685,6 @@ macro_rules! volatile_replay_unchanged_body {
             && $before.durable_signable_limit == $after.durable_signable_limit
     }};
 }
-
 macro_rules! acknowledgement_record_matches_body {
     ($record_kind:expr, $continuation:expr) => {{
         match $continuation {
@@ -7934,7 +7696,6 @@ macro_rules! acknowledgement_record_matches_body {
         }
     }};
 }
-
 macro_rules! signed_message_class_body {
     ($facts:expr) => {{
         ($facts.signed_message_kind == 0u8
@@ -7945,7 +7706,6 @@ macro_rules! signed_message_class_body {
                 && $facts.signed_message_kind <= 4u8)
     }};
 }
-
 macro_rules! stutter_action_body {
     ($facts:expr) => {{
         $facts.wal_record_kind == 0u8
@@ -7960,7 +7720,6 @@ macro_rules! stutter_action_body {
             && $facts.effects.len == 0u8
     }};
 }
-
 macro_rules! begin_wal_action_body {
     ($facts:expr) => {{
         $facts.wal_record_kind >= 1u8
@@ -7969,7 +7728,6 @@ macro_rules! begin_wal_action_body {
             && !$facts.acknowledge_persist_exact
     }};
 }
-
 macro_rules! acknowledge_wal_action_body {
     ($facts:expr) => {{
         $facts.wal_record_kind >= 1u8
@@ -7986,7 +7744,6 @@ macro_rules! acknowledge_wal_action_body {
             && effect_count_body!($facts.effects, 4u8) == 0u64
     }};
 }
-
 macro_rules! validation_completed_action_body {
     ($facts:expr, $count_gate:ident $(,)?) => {{
         $count_gate($facts.effects, 1u8) == 0u64
@@ -7998,7 +7755,6 @@ macro_rules! validation_completed_action_body {
             && $count_gate($facts.effects, 8u8) == 0u64
     }};
 }
-
 macro_rules! body_progress_action_body {
     ($facts:expr, $validation_gate:ident $(,)?) => {{
         $facts.wal_record_kind == 0u8
@@ -8018,7 +7774,6 @@ macro_rules! body_progress_action_body {
             })
     }};
 }
-
 macro_rules! volatile_protocol_action_body {
     ($facts:expr) => {{
         $facts.wal_record_kind == 0u8
@@ -8034,7 +7789,6 @@ macro_rules! volatile_protocol_action_body {
             && effect_count_body!($facts.effects, 8u8) == 0u64
     }};
 }
-
 macro_rules! complete_application_action_body {
     ($facts:expr) => {{
         $facts.wal_record_kind == 0u8
@@ -8049,7 +7803,6 @@ macro_rules! complete_application_action_body {
             && $facts.effects.len == 0u8
     }};
 }
-
 macro_rules! resume_after_replay_action_body {
     ($facts:expr, $count_gate:ident $(,)?) => {{
         $facts.wal_record_kind == 0u8
@@ -8097,7 +7850,6 @@ macro_rules! resume_after_replay_action_body {
             }
     }};
 }
-
 macro_rules! action_kind_relation_body {
     (
         $facts:expr,
@@ -8121,7 +7873,6 @@ macro_rules! action_kind_relation_body {
         }
     }};
 }
-
 macro_rules! production_action_relation_body {
     ($facts:expr, $signed_gate:ident, $action_gate:ident $(,)?) => {{
         $signed_gate($facts)
@@ -8141,7 +7892,6 @@ macro_rules! production_action_relation_body {
             && $action_gate($facts)
     }};
 }
-
 macro_rules! transition_branch_constraints_body {
     (
         $facts:expr,
@@ -8310,7 +8060,6 @@ macro_rules! transition_branch_constraints_body {
         }
     }};
 }
-
 macro_rules! transition_branch_gate_body {
     ($facts:expr, $count_gate:ident, $constraints_gate:ident $(,)?) => {{
         let persist_count = $count_gate($facts.effects, 1u8);
@@ -8328,7 +8077,6 @@ macro_rules! transition_branch_gate_body {
         )
     }};
 }
-
 macro_rules! production_transition_gate_body {
     (
         $facts:expr,
@@ -8348,7 +8096,6 @@ macro_rules! production_transition_gate_body {
             && $branch_gate($facts)
     }};
 }
-
 /// Validate the exact post-WAL effective-lock selection trace.
 pub(crate) const fn production_enter_view_uses_post_install_effective_lock_kernel(
     trace: EffectiveLockTraceProjection,
@@ -8358,28 +8105,24 @@ pub(crate) const fn production_enter_view_uses_post_install_effective_lock_kerne
         && enter_view_locked_prepare_qc_identity_body!(enter_view)
         && enter_view_high_prepare_qc_control_identity_body!(enter_view)
 }
-
 /// Validate monotonic exact body-pipeline ownership.
 pub(crate) const fn production_body_ownership_preserves_effective_lock_kernel(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_claim_body!(projection, 2u8)
 }
-
 /// Validate exact byte/capacity retirement for superseded body ownership.
 pub(crate) const fn production_body_capacity_retirement_preserves_effective_lock_kernel(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_claim_body!(projection, 3u8)
 }
-
 /// Validate one exact bounded fair-service selection.
 pub(crate) const fn production_body_service_refines_async_fairness_kernel(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_claim_body!(projection, 4u8)
 }
-
 /// Check the exact post-WAL effective-lock selection before reducer commit.
 #[must_use]
 pub(crate) fn check_production_enter_view_effective_lock_transition(
@@ -8394,7 +8137,6 @@ pub(crate) fn check_production_enter_view_effective_lock_transition(
         None
     }
 }
-
 /// Check one exact body-pipeline ownership transition before map mutation.
 #[must_use]
 pub(crate) fn check_production_body_ownership_effective_lock_transition(
@@ -8406,7 +8148,6 @@ pub(crate) fn check_production_body_ownership_effective_lock_transition(
         None
     }
 }
-
 /// Check exact body-capacity retirement before retiring its live owners.
 #[must_use]
 pub(crate) fn check_production_body_capacity_retirement_effective_lock_transition(
@@ -8418,7 +8159,6 @@ pub(crate) fn check_production_body_capacity_retirement_effective_lock_transitio
         None
     }
 }
-
 /// Check one bounded fair-service selection before queue mutation.
 #[must_use]
 pub(crate) fn check_production_body_service_effective_lock_transition(
@@ -8430,42 +8170,36 @@ pub(crate) fn check_production_body_service_effective_lock_transition(
         None
     }
 }
-
 /// Validate exact predecessor ownership returned by successor construction.
 pub(crate) const fn production_durable_predecessor_identity_kernel(
     projection: ProductionDurablePredecessorIdentityProjection,
 ) -> bool {
     durable_predecessor_is_canonical_body!(projection)
 }
-
 /// Validate exact predecessor ownership returned by successor construction.
 pub(crate) const fn production_successor_predecessor_binding_kernel(
     projection: ProductionSuccessorPredecessorBindingProjection,
 ) -> bool {
     production_successor_predecessor_binding_body!(projection)
 }
-
 /// Validate applied-predecessor activation through the exact prepared status.
 pub(crate) const fn production_applied_successor_trace_refines_indexed_activation_kernel(
     projection: ProductionAppliedSuccessorTraceProjection,
 ) -> bool {
     production_applied_successor_trace_body!(projection)
 }
-
 /// Validate complete-tip or distinct snapshot recovery activation.
 pub(crate) const fn production_recovered_successor_trace_refines_indexed_activation_kernel(
     projection: ProductionRecoveredSuccessorTraceProjection,
 ) -> bool {
     production_recovered_successor_trace_body!(projection)
 }
-
 /// Validate begin, fail-closed, and authenticated restart lifecycle steps.
 pub(crate) const fn production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
     projection: ProductionSuccessorStartupLifecycleProjection,
 ) -> bool {
     production_startup_failure_and_restart_trace_body!(projection)
 }
-
 /// Validate one authenticated, internally same-round historical CommitQC's
 /// exact reducer admission. Historical refers only to the local reducer view.
 pub(crate) const fn production_historical_certificate_trace_refines_indexed_async_kernel(
@@ -8473,42 +8207,36 @@ pub(crate) const fn production_historical_certificate_trace_refines_indexed_asyn
 ) -> bool {
     production_historical_certificate_trace_body!(projection)
 }
-
 /// Validate one authenticated historical body entering its exact body pipeline.
 pub(crate) const fn production_historical_body_pipeline_trace_refines_indexed_async_kernel(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
 ) -> bool {
     production_historical_body_pipeline_trace_body!(projection)
 }
-
 /// Validate one reducer step's durable intent owner and WAL cursor movement.
 pub(crate) fn production_durable_intent_trace_refines_progress_witness_kernel(
     projection: ProductionDurableIntentTraceProjection,
 ) -> bool {
     production_durable_intent_trace_body!(projection)
 }
-
 /// Validate startup reconstruction of one durable pending Decision.
 pub(crate) const fn production_decision_trace_refines_recovery_witness_kernel(
     projection: ProductionDecisionRecoveryTraceProjection,
 ) -> bool {
     production_decision_recovery_trace_body!(projection)
 }
-
 /// Validate exact scheduler selection and the resulting FIFO debt owner.
 pub(crate) const fn production_scheduler_trace_refines_protected_ownership_kernel(
     projection: ProductionSchedulerTraceProjection,
 ) -> bool {
     production_scheduler_trace_body!(projection)
 }
-
 /// Validate ingress identity preservation and its admitted service class.
 pub(crate) const fn production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> bool {
     production_ingress_identity_and_class_trace_body!(projection)
 }
-
 /// Validate exact, occupancy-preserving materialization of one reserved
 /// ingress owner.
 pub(crate) const fn production_ingress_reservation_materialization_refines_protected_ownership_kernel(
@@ -8516,7 +8244,6 @@ pub(crate) const fn production_ingress_reservation_materialization_refines_prote
 ) -> bool {
     production_ingress_reservation_materialization_trace_body!(projection)
 }
-
 /// Validate exact effect identity, lifecycle lineage, causal-candidate mapping,
 /// positional bounds, and first-owner/coalesced-retry accounting.
 pub(crate) const fn production_effect_to_candidate_refines_async_ownership_kernel(
@@ -8524,14 +8251,12 @@ pub(crate) const fn production_effect_to_candidate_refines_async_ownership_kerne
 ) -> bool {
     production_effect_to_candidate_trace_body!(projection)
 }
-
 /// Validate one exact durable leader-wire admission before persistence.
 pub(crate) const fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
     projection: ProductionLeaderWireAdmissionTraceProjection,
 ) -> bool {
     production_leader_wire_admission_trace_body!(projection)
 }
-
 /// Validate that an exact inner-ingress retry rotates both its authenticated
 /// source and its item to the respective fair-service tails.
 pub const fn production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
@@ -8539,21 +8264,18 @@ pub const fn production_two_stage_relay_retry_trace_refines_source_fairness_kern
 ) -> bool {
     production_two_stage_relay_retry_trace_body!(projection)
 }
-
 /// Validate that sidecar delivery ownership moves only after exact flush.
 pub(crate) const fn production_reliable_flush_trace_refines_outbound_ownership_kernel(
     projection: ProductionReliableFlushTraceProjection,
 ) -> bool {
     production_reliable_flush_trace_body!(projection)
 }
-
 /// Validate the exact one-shot lane mutation caused by a writer flush.
 pub(crate) const fn production_reliable_flush_application_refines_source_lane_kernel(
     projection: ProductionReliableFlushApplicationProjection,
 ) -> bool {
     production_reliable_flush_application_body!(projection)
 }
-
 /// Validate that worker confirmation and lane application name one occurrence.
 pub(crate) const fn production_reliable_flush_two_phase_link_kernel(
     worker: ProductionReliableFlushTraceProjection,
@@ -8561,21 +8283,18 @@ pub(crate) const fn production_reliable_flush_two_phase_link_kernel(
 ) -> bool {
     production_reliable_flush_two_phase_link_body!(worker, application)
 }
-
 /// Validate the exact durable application completion exposed to the reducer.
 pub(crate) const fn production_application_trace_refines_decision_completion_kernel(
     projection: ProductionApplicationTraceProjection,
 ) -> bool {
     production_application_trace_body!(projection)
 }
-
 /// Validate one exact application handoff before successor construction.
 pub(crate) const fn production_terminal_application_without_successor_activation_kernel(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> bool {
     production_terminal_application_without_successor_activation_body!(projection)
 }
-
 /// Validate one exact primitive reservation-journal owner transition.
 ///
 /// This kernel does not establish the surrounding QueuePlan, Kura, carrier,
@@ -8585,21 +8304,18 @@ pub(crate) const fn production_in_flight_reservation_transition_kernel(
 ) -> bool {
     production_in_flight_reservation_transition_body!(projection)
 }
-
 /// Validate one complete bounded first-release carrier safety state.
 pub(crate) const fn production_in_flight_first_release_state_kernel(
     projection: ProductionInFlightFirstReleaseStateProjection,
 ) -> bool {
     production_in_flight_first_release_state_body!(projection)
 }
-
 /// Validate one named action of the complete bounded first-release carrier.
 pub(crate) const fn production_in_flight_first_release_transition_kernel(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> bool {
     production_in_flight_first_release_transition_body!(projection)
 }
-
 /// Validate the version, exact parameters, and reviewed model-source identity
 /// carried by one first-release transition witness.
 pub(crate) const fn production_in_flight_first_release_witness_binding_kernel(
@@ -8608,7 +8324,6 @@ pub(crate) const fn production_in_flight_first_release_witness_binding_kernel(
 ) -> bool {
     production_in_flight_first_release_witness_binding_body!(projection, witness)
 }
-
 /// Extract the sole terminal economic owner from a valid composed state.
 ///
 /// Commit cleanup leaves the effect owned only by canonical WSV. Ordered and
@@ -8644,7 +8359,6 @@ pub(crate) const fn production_in_flight_first_release_terminal_owner(
         None
     }
 }
-
 /// Check an applied-predecessor successor transition and mint opaque evidence
 /// only for an accepted projection.
 #[must_use]
@@ -8657,7 +8371,6 @@ pub(crate) fn check_production_applied_successor_transition(
         None
     }
 }
-
 /// Check a recovered successor transition and mint opaque evidence only for
 /// an accepted projection.
 #[must_use]
@@ -8670,7 +8383,6 @@ pub(crate) fn check_production_recovered_successor_transition(
         None
     }
 }
-
 /// Check one successor startup lifecycle transition.
 #[must_use]
 pub(crate) fn check_production_successor_startup_lifecycle_transition(
@@ -8682,7 +8394,6 @@ pub(crate) fn check_production_successor_startup_lifecycle_transition(
         None
     }
 }
-
 /// Check one authenticated historical certificate handoff.
 #[must_use]
 pub(crate) fn check_production_historical_certificate_transition(
@@ -8694,7 +8405,6 @@ pub(crate) fn check_production_historical_certificate_transition(
         None
     }
 }
-
 /// Check one authenticated historical body-pipeline handoff.
 #[must_use]
 pub(crate) fn check_production_historical_body_pipeline_transition(
@@ -8706,7 +8416,6 @@ pub(crate) fn check_production_historical_body_pipeline_transition(
         None
     }
 }
-
 /// Check one reducer durable-intent transition.
 #[must_use]
 pub(crate) fn check_production_durable_intent_transition(
@@ -8718,7 +8427,6 @@ pub(crate) fn check_production_durable_intent_transition(
         None
     }
 }
-
 /// Check one pending-Decision recovery transition.
 #[must_use]
 pub(crate) fn check_production_decision_recovery_transition(
@@ -8730,7 +8438,6 @@ pub(crate) fn check_production_decision_recovery_transition(
         None
     }
 }
-
 /// Check one protected scheduler selection.
 #[must_use]
 pub(crate) fn check_production_scheduler_transition(
@@ -8742,7 +8449,6 @@ pub(crate) fn check_production_scheduler_transition(
         None
     }
 }
-
 /// Check one bounded ingress admission before queue mutation.
 #[must_use]
 pub(crate) fn check_production_ingress_transition(
@@ -8754,7 +8460,6 @@ pub(crate) fn check_production_ingress_transition(
         None
     }
 }
-
 /// Check replacement of one exact unpublished reservation by its physical
 /// reducer command without minting or consuming another occupied slot.
 #[must_use]
@@ -8769,7 +8474,6 @@ pub(crate) fn check_production_ingress_reservation_materialization_transition(
         None
     }
 }
-
 /// Check one effect-to-candidate handoff before retaining its producer episode
 /// or publishing a new asynchronous owner.
 #[must_use]
@@ -8782,7 +8486,6 @@ pub(crate) fn check_production_effect_to_candidate_transition(
         None
     }
 }
-
 /// Check a complete leader-wire admission and mint opaque evidence only for
 /// the exact prospective lifecycle transition.
 #[must_use]
@@ -8795,7 +8498,6 @@ pub(crate) fn check_production_leader_wire_admission_transition(
         None
     }
 }
-
 /// Check one two-stage relay retry before reinserting it.
 #[must_use]
 pub fn check_production_two_stage_relay_retry_transition(
@@ -8807,7 +8509,6 @@ pub fn check_production_two_stage_relay_retry_transition(
         None
     }
 }
-
 /// Check the worker-side half of a reliable writer-flush transition.
 #[must_use]
 pub(crate) fn check_production_reliable_flush_worker_transition(
@@ -8819,7 +8520,6 @@ pub(crate) fn check_production_reliable_flush_worker_transition(
         None
     }
 }
-
 /// Check the lane-application half of a reliable writer-flush transition.
 #[must_use]
 pub(crate) fn check_production_reliable_flush_application_transition(
@@ -8831,7 +8531,6 @@ pub(crate) fn check_production_reliable_flush_application_transition(
         None
     }
 }
-
 /// Check that the two halves of a reliable writer flush name the same exact
 /// occurrence.
 #[must_use]
@@ -8853,7 +8552,6 @@ pub(crate) fn check_production_reliable_flush_link_transition(
         None
     }
 }
-
 /// Check one durable application completion transition.
 #[must_use]
 pub(crate) fn check_production_application_transition(
@@ -8865,7 +8563,6 @@ pub(crate) fn check_production_application_transition(
         None
     }
 }
-
 /// Check the terminal application boundary before successor construction.
 #[must_use]
 pub(crate) fn check_production_terminal_application_transition(
@@ -8879,7 +8576,6 @@ pub(crate) fn check_production_terminal_application_transition(
         None
     }
 }
-
 /// Check one primitive reservation-journal owner transition.
 #[must_use]
 pub(crate) fn check_production_in_flight_reservation_transition(
@@ -8891,7 +8587,6 @@ pub(crate) fn check_production_in_flight_reservation_transition(
         None
     }
 }
-
 /// Check one complete bounded first-release carrier transition.
 #[must_use]
 #[allow(dead_code)] // Consumed by the verification harness and refinement tests.
@@ -8904,7 +8599,6 @@ pub(crate) fn check_production_in_flight_first_release_transition(
         None
     }
 }
-
 fn check_derived_production_in_flight_first_release_transition(
     action: u8,
     actor: u128,
@@ -8922,7 +8616,6 @@ fn check_derived_production_in_flight_first_release_transition(
         },
     )
 }
-
 /// Derive and check one `FanoutFromProducer` action.
 ///
 /// `replica` is the one-hot validator bitmap receiving volatile body custody.
@@ -8943,7 +8636,6 @@ pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_tran
         after,
     )
 }
-
 /// Derive and check one `ServeLateBody` action.
 ///
 /// `source` and `target` are one-hot validator bitmaps. The transition checker
@@ -8964,7 +8656,6 @@ pub(crate) fn check_production_in_flight_first_release_serve_late_body_transitio
         after,
     )
 }
-
 /// Derive and check one `Crash` action.
 ///
 /// A crash removes exactly the actor's volatile body and READY custody, marks
@@ -8987,7 +8678,6 @@ pub(crate) fn check_production_in_flight_first_release_crash_transition(
         after,
     )
 }
-
 /// Derive and check one `Recover` action.
 ///
 /// Recovery removes only the actor's crashed bit. It cannot fabricate volatile
@@ -9007,7 +8697,6 @@ pub(crate) fn check_production_in_flight_first_release_recover_transition(
         after,
     )
 }
-
 /// Derive and check the exact `RecoverReservationSnapshot` stutter.
 ///
 /// Snapshot replay rebuilds process-local indexes only, so no composed safety
@@ -9024,7 +8713,6 @@ pub(crate) fn check_production_in_flight_first_release_recover_reservation_snaps
         before,
     )
 }
-
 /// Derive and check one `RehydrateLocalKuraCustody` action.
 ///
 /// The actor is a one-hot local validator with exact durable Kura payload
@@ -9049,7 +8737,6 @@ pub(crate) fn check_production_in_flight_first_release_rehydrate_local_kura_cust
         after,
     )
 }
-
 /// Derive and check the exact `RepairPostCarrierEvidence` stutter.
 ///
 /// Post-carrier repair is authorized only after canonical WSV application and
@@ -9066,12 +8753,9 @@ pub(crate) fn check_production_in_flight_first_release_repair_post_carrier_evide
         before,
     )
 }
-
 #[cfg(test)]
 include!("refinement_constructor_test_helpers.rs");
-
 include!("refinement/transition_gate_tail.rs");
-
 #[cfg(test)]
 #[path = "refinement_cases.rs"]
 mod tests;

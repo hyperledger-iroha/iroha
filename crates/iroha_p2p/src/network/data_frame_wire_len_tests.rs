@@ -1,32 +1,25 @@
+use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 use norito::codec::{Decode, Encode};
-
-use super::*;
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy {
     tag: u8,
 }
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct DynamicDummy {
     body: Vec<u8>,
 }
-
 impl message::ClassifyTopic for DynamicDummy {
     const HAS_INBOUND_DECODE_LIMITS: bool = true;
-
     fn topic(&self) -> message::Topic {
         message::Topic::Control
     }
-
     fn inbound_topic(payload: &[u8], _flags: u8) -> Result<Option<message::Topic>, ncore::Error> {
         if payload.is_empty() {
             return Err(ncore::Error::LengthMismatch);
         }
         Ok(Some(message::Topic::Control))
     }
-
     fn inbound_decode_limits(
         payload: &[u8],
         _framed_len: usize,
@@ -38,16 +31,13 @@ impl message::ClassifyTopic for DynamicDummy {
         Ok(Some(norito::DecodeLimits::new(8, 64, 16, 128, 8)))
     }
 }
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct DeniedDummy;
-
 impl message::ClassifyTopic for DeniedDummy {
     fn is_outbound_allowed(&self) -> bool {
         false
     }
 }
-
 fn assert_relay_origin_signature_roundtrip(
     algorithm: Algorithm,
     seed_tag: u8,
@@ -56,7 +46,6 @@ fn assert_relay_origin_signature_roundtrip(
     let key_pair = KeyPair::try_from_seed(vec![seed_tag; 32], algorithm)
         .unwrap_or_else(|error| panic!("derive deterministic {algorithm:?} key pair: {error}"));
     assert_eq!(key_pair.algorithm(), algorithm);
-
     let target_key_pair =
         KeyPair::try_from_seed(vec![seed_tag.wrapping_add(0x40); 32], Algorithm::Ed25519)
             .expect("derive deterministic relay target");
@@ -72,7 +61,6 @@ fn assert_relay_origin_signature_roundtrip(
         payload.clone(),
     )
     .unwrap_or_else(|error| panic!("sign {algorithm:?} relay origin: {error}"));
-
     assert_eq!(
         frame.origin_signature.len(),
         expected_signature_len,
@@ -86,7 +74,6 @@ fn assert_relay_origin_signature_roundtrip(
     frame
         .verify_origin_signature()
         .unwrap_or_else(|error| panic!("verify fresh {algorithm:?} relay: {error}"));
-
     let materialized_wire_len = crate::peer::materialized_data_message_wire_len(frame.clone())
         .expect("materialize signed relay frame");
     assert_eq!(
@@ -109,7 +96,6 @@ fn assert_relay_origin_signature_roundtrip(
         materialized_wire_len,
         "{algorithm:?} payload-length geometry must match the signed frame"
     );
-
     let encoded = frame.encode();
     let (decoded, used) =
         <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
@@ -128,7 +114,6 @@ fn assert_relay_origin_signature_roundtrip(
     decoded
         .verify_origin_signature()
         .unwrap_or_else(|error| panic!("verify round-tripped {algorithm:?} relay: {error}"));
-
     let mut payload_tampered = decoded;
     payload_tampered.payload.body.push(0xFF);
     assert!(
@@ -136,27 +121,22 @@ fn assert_relay_origin_signature_roundtrip(
         "{algorithm:?} relay signature must bind the immutable payload"
     );
 }
-
 #[test]
 fn relay_origin_signature_roundtrips_with_ed25519() {
     assert_relay_origin_signature_roundtrip(Algorithm::Ed25519, 0x11, 64);
 }
-
 #[test]
 fn relay_origin_signature_roundtrips_with_secp256k1() {
     assert_relay_origin_signature_roundtrip(Algorithm::Secp256k1, 0x12, 64);
 }
-
 #[test]
 fn relay_origin_signature_roundtrips_with_bls_normal() {
     assert_relay_origin_signature_roundtrip(Algorithm::BlsNormal, 0x13, 96);
 }
-
 #[test]
 fn relay_origin_signature_roundtrips_with_bls_small() {
     assert_relay_origin_signature_roundtrip(Algorithm::BlsSmall, 0x14, 48);
 }
-
 #[test]
 fn relay_origin_signature_roundtrips_with_ml_dsa_65() {
     assert_relay_origin_signature_roundtrip(
@@ -165,49 +145,41 @@ fn relay_origin_signature_roundtrips_with_ml_dsa_65() {
         MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
     );
 }
-
 #[cfg(feature = "gost")]
 #[test]
 fn relay_origin_signature_roundtrips_with_gost_256_param_set_a() {
     assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetA, 0x21, 64);
 }
-
 #[cfg(feature = "gost")]
 #[test]
 fn relay_origin_signature_roundtrips_with_gost_256_param_set_b() {
     assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetB, 0x22, 64);
 }
-
 #[cfg(feature = "gost")]
 #[test]
 fn relay_origin_signature_roundtrips_with_gost_256_param_set_c() {
     assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetC, 0x23, 64);
 }
-
 #[cfg(feature = "gost")]
 #[test]
 fn relay_origin_signature_roundtrips_with_gost_512_param_set_a() {
     assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetA, 0x24, 128);
 }
-
 #[cfg(feature = "gost")]
 #[test]
 fn relay_origin_signature_roundtrips_with_gost_512_param_set_b() {
     assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetB, 0x25, 128);
 }
-
 #[cfg(feature = "sm")]
 #[test]
 fn relay_origin_signature_roundtrips_with_sm2() {
     assert_relay_origin_signature_roundtrip(Algorithm::Sm2, 0x31, 64);
 }
-
 #[test]
 fn data_frame_wire_len_matches_manual_envelope() {
     let origin = PeerId::from(KeyPair::random().public_key().clone());
     let target = PeerId::from(KeyPair::random().public_key().clone());
     let payload = Dummy { tag: 7 };
-
     let direct = data_frame_wire_len(&origin, Some(&target), 8, message::Priority::High, &payload);
     let direct_from_len = data_frame_wire_len_from_payload_len::<Dummy>(
         &origin,
@@ -228,7 +200,6 @@ fn data_frame_wire_len_matches_manual_envelope() {
         direct, direct_expected,
         "direct frame size should match envelope"
     );
-
     let broadcast = data_frame_wire_len(&origin, None, 8, message::Priority::Low, &payload);
     let broadcast_from_len =
         data_frame_wire_len_from_payload_len::<Dummy>(&origin, None, payload.encoded_len());
@@ -247,7 +218,6 @@ fn data_frame_wire_len_matches_manual_envelope() {
         "broadcast frame size should match envelope"
     );
 }
-
 #[test]
 fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer_ids() {
     let key_pair = KeyPair::from_seed(vec![0x51; 32], Algorithm::MlDsa);
@@ -259,7 +229,6 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
     assert_eq!(raw_key_bytes, 1_952, "ML-DSA-65 key width changed");
     let origin = PeerId::from(key_pair.public_key().clone());
     let target = origin.clone();
-
     for body_len in [0, 1, 127, 128, 16_383, 16_384] {
         let payload = DynamicDummy {
             body: vec![0xA5; body_len],
@@ -273,7 +242,6 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
             &payload,
         );
         let broadcast = data_frame_wire_len(&origin, None, 0, message::Priority::Low, &payload);
-
         assert_eq!(
             data_frame_wire_len_from_payload_len::<DynamicDummy>(
                 &origin,
@@ -310,7 +278,6 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
         );
         assert!(direct > broadcast);
     }
-
     assert_eq!(
         data_frame_wire_len_from_payload_len::<DynamicDummy>(&origin, Some(&target), usize::MAX,),
         usize::MAX,
@@ -357,7 +324,6 @@ fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer
         "protocol-maximum public-key geometry must remain representable"
     );
 }
-
 #[cfg(feature = "sm")]
 #[test]
 fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
@@ -375,7 +341,6 @@ fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
         .try_to_bytes()
         .expect("maximum SM2 public key has canonical bytes");
     assert_eq!(raw_key.len(), iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
-
     let origin = PeerId::from(public_key);
     let target = origin.clone();
     assert!(
@@ -386,7 +351,6 @@ fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
         body: vec![0x5A; 128],
     };
     let payload_len = payload.encoded_len();
-
     let direct_frame = RelayMessage::new(
         origin.clone(),
         RelayTarget::Direct(target.clone()),
@@ -419,7 +383,6 @@ fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
         ),
         direct_materialized
     );
-
     let broadcast_frame = RelayMessage::new(
         origin.clone(),
         RelayTarget::Broadcast,
@@ -447,7 +410,6 @@ fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
         broadcast_materialized
     );
 }
-
 #[test]
 fn relay_message_decode_from_slice_roundtrip() {
     let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -460,12 +422,10 @@ fn relay_message_decode_from_slice_roundtrip() {
         message::Priority::High,
         payload.clone(),
     );
-
     let bytes = frame.encode();
     let (decoded, used) =
         <RelayMessage<Dummy> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect("decode relay message");
-
     assert_eq!(used, bytes.len(), "should consume full payload");
     assert_eq!(decoded.origin, origin);
     assert_eq!(decoded.ttl, 5);
@@ -476,7 +436,6 @@ fn relay_message_decode_from_slice_roundtrip() {
         RelayTarget::Broadcast => panic!("expected direct relay target"),
     }
 }
-
 #[test]
 fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
     let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -491,12 +450,10 @@ fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
         message::Priority::Low,
         payload.clone(),
     );
-
     let bytes = frame.encode();
     let (decoded, used) =
         <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect("decode relay message");
-
     assert_eq!(used, bytes.len(), "should consume full payload");
     assert_eq!(decoded.origin, origin);
     assert_eq!(decoded.ttl, 6);
@@ -507,7 +464,6 @@ fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
         RelayTarget::Broadcast => panic!("expected direct relay target"),
     }
 }
-
 #[test]
 fn relay_envelope_delegates_policy_to_exact_nested_payload() {
     let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -524,7 +480,6 @@ fn relay_envelope_delegates_policy_to_exact_nested_payload() {
     );
     let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
     let nested_bare = nested.encode();
-
     assert_eq!(
         relay_message_payload_field(&bare, flags).expect("extract nested relay payload"),
         nested_bare,
@@ -544,7 +499,6 @@ fn relay_envelope_delegates_policy_to_exact_nested_payload() {
         "the relay wrapper must classify the exact nested application field"
     );
 }
-
 #[test]
 fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
     let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -556,7 +510,6 @@ fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
         DynamicDummy { body: vec![9] },
     );
     let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
-
     assert!(
         relay_message_payload_field(&bare[..bare.len() - 1], flags).is_err(),
         "truncated relay layout must fail before typed decode"
@@ -581,7 +534,6 @@ fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
         "the raw topic wrapper must fail closed on relay trailing bytes"
     );
 }
-
 #[test]
 fn relay_message_preserves_outbound_admission_policy() {
     let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -592,6 +544,5 @@ fn relay_message_preserves_outbound_admission_policy() {
         message::Priority::High,
         DeniedDummy,
     );
-
     assert!(!message::ClassifyTopic::is_outbound_allowed(&frame));
 }

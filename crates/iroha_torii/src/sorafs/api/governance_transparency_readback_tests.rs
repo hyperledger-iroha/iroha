@@ -202,14 +202,12 @@ fn governance_dag_source_payload_bytes_uses_external_inner_payload() {
             encoded_payload: encoded_payload.clone(),
             metadata: Vec::new(),
         });
-
     assert_eq!(
         governance_dag_source_payload_bytes(&payload)
             .expect("derive external governance source bytes"),
         encoded_payload
     );
 }
-
 #[test]
 fn governance_dag_raw_ipfs_cid_commits_exact_bytes() {
     assert_eq!(
@@ -221,7 +219,6 @@ fn governance_dag_raw_ipfs_cid_commits_exact_bytes() {
         governance_dag_raw_ipfs_cid(b"payload")
     );
 }
-
 #[test]
 fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
     let source = include_str!("../api.rs");
@@ -265,7 +262,6 @@ fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
             "file-backed handler `{handler_name}` must use heavy admitted blocking I/O"
         );
     }
-
     let helper_start = source
         .find("async fn governance_dag_blocking_response")
         .expect("governance DAG blocking helper");
@@ -277,7 +273,6 @@ fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
     assert!(helper.contains("acquire_query_admission(state.as_ref(), true)"));
     assert!(helper.contains("tokio::task::spawn_blocking"));
 }
-
 #[test]
 fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
     let source = include_str!("../api.rs");
@@ -304,7 +299,6 @@ fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
             "governance DAG readback must not use path-based `{forbidden}`"
         );
     }
-
     let producer = include_str!("../../../../sorafs_node/src/governance.rs");
     assert!(producer.contains("const GOVERNANCE_DAG_LOGICAL_ROOT: &str = \".\";"));
     assert!(
@@ -312,14 +306,12 @@ fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
         "public Governance DAG indexes must not persist the host filesystem root"
     );
 }
-
 #[test]
 fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
     assert_eq!(MAX_LOCAL_MANIFEST_RESPONSE_BYTES, 16 * 1024 * 1024);
     assert_eq!(MAX_STORAGE_FETCH_RESPONSE_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_CAR_RANGE_PAYLOAD_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_CAR_RANGE_RESPONSE_BYTES, 16 * 1024 * 1024);
-
     let source = include_str!("../api.rs");
     for (start_marker, end_marker, io_marker) in [
         (
@@ -374,7 +366,6 @@ fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
             "file-backed SoraFS handler `{start_marker}` performs I/O before entering its heavy worker"
         );
     }
-
     let car_start = source
         .find("pub(crate) async fn handle_get_sorafs_storage_car_range(")
         .expect("CAR range handler");
@@ -405,11 +396,9 @@ fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
         );
     }
 }
-
 #[tokio::test]
 async fn governance_dag_indexes_reject_unknown_host_path_fields() {
     const FORBIDDEN_PATH: &str = "/private/retained/governance/state";
-
     let (runtime_app, _temp, mut mirror, metadata, ..) = governance_mirror_fixture();
     mirror
         .as_object_mut()
@@ -424,7 +413,6 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body_bytes = api_test_response_body(response).await;
     assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
-
     let runtime_snapshot = runtime_app
         .sorafs_node
         .governance_dag_runtime_snapshot()
@@ -450,7 +438,6 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body_bytes = api_test_response_body(response).await;
     assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
-
     let (publication_app, _temp, _digest, _archive) = sorafs_app_state_with_governance_car_queue();
     let mut state = read_publication_state_fixture(&publication_app);
     publication_state_section_mut(&mut state, "car_queue")
@@ -477,7 +464,6 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
     let body_bytes = api_test_response_body(response).await;
     assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
 }
-
 #[test]
 fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
     let (app, _temp, _digest, car_archive_digest) = sorafs_app_state_with_governance_car_queue();
@@ -518,12 +504,10 @@ fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
         .and_then(Value::as_object_mut)
         .expect("CAR archive lookup")
         .remove(&car_archive_digest);
-
     let response = validate_governance_dag_car_queue(&queue)
         .expect_err("pending segment cannot smuggle an artifact path");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
-
 #[test]
 fn public_conditional_etags_use_case_sensitive_http_entity_tags() {
     let etag = format!("\"{}\"", "ab".repeat(32));
@@ -538,7 +522,6 @@ fn public_conditional_etags_use_case_sensitive_http_entity_tags() {
             "valid conditional token did not match: {matching}"
         );
     }
-
     for non_matching in [
         etag.to_ascii_uppercase(),
         format!("\"{etag}\""),
@@ -557,7 +540,6 @@ fn public_conditional_etags_use_case_sensitive_http_entity_tags() {
         );
     }
 }
-
 #[test]
 fn governance_source_etag_commits_record_and_checkpoint_identity() {
     let canonical_bytes = br#"{"schema":"fixture"}"#;
@@ -597,7 +579,6 @@ fn governance_source_etag_commits_record_and_checkpoint_identity() {
         canonical_bytes,
         None,
     );
-
     for changed in [
         &changed_record_generation,
         &changed_record_digest,
@@ -607,7 +588,6 @@ fn governance_source_etag_commits_record_and_checkpoint_identity() {
     ] {
         assert_ne!(base.etag, changed.etag);
     }
-
     let mut headers = HeaderMap::new();
     headers.insert(
         IF_NONE_MATCH,
@@ -619,7 +599,6 @@ fn governance_source_etag_commits_record_and_checkpoint_identity() {
         "a stale conditional tag must not conceal changed checkpoint authentication metadata"
     );
 }
-
 #[tokio::test]
 async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
     let (_app, _temp, index, metadata, block_cid_hex, node_cid_hex, head_block_cid_hex) =
@@ -632,7 +611,6 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
     let publisher = AccountId::new(publisher_key.public_key().clone());
     let publisher_digest_hex =
         encode(sorafs_manifest::governance_dag_submission_account_digest_v1(&publisher.encode()));
-
     let response = governance_dag_dashboard_response_from_index(
         index.clone(),
         metadata.clone(),
@@ -660,7 +638,6 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
     let response =
         governance_dag_dashboard_response_from_index(index.clone(), metadata.clone(), headers);
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
     let response =
@@ -675,7 +652,6 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
         value.json_str(&["head", "head_block_cid_hex"]),
         Some(head_block_cid_hex.as_str())
     );
-
     let response = governance_dag_lookup_response_from_index(
         index.clone(),
         metadata.clone(),
@@ -694,7 +670,6 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
         value.json_str(&["block", "submission_publisher_account_digest_hex"]),
         Some(publisher_digest_hex.as_str())
     );
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, block_etag);
     let response = governance_dag_lookup_response_from_index(
@@ -707,7 +682,6 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
         "ff".repeat(32),
     );
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
     let response = governance_dag_lookup_response_from_index(
         index,
         metadata,
@@ -725,7 +699,6 @@ async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
         Some(node_cid_hex.as_str())
     );
 }
-
 #[test]
 fn governance_dag_mirror_rejects_history_not_ending_at_head() {
     let (_app, _temp, mut index, _metadata, ..) = governance_mirror_fixture();
@@ -738,12 +711,10 @@ fn governance_dag_mirror_rejects_history_not_ending_at_head() {
         .as_object_mut()
         .expect("mirror root")
         .insert("indexed_block_count".into(), Value::from(1_u64));
-
     let response = validate_governance_dag_mirror_index(&index)
         .expect_err("truncated mirror history must fail");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
-
 #[test]
 fn governance_dag_mirror_rejects_sequence_overflow() {
     let (_app, _temp, mut index, _metadata, ..) = governance_mirror_fixture();
@@ -759,16 +730,13 @@ fn governance_dag_mirror_rejects_sequence_overflow() {
         .as_object_mut()
         .expect("second mirror block")
         .insert("sequence".into(), Value::from(0_u64));
-
     let response = validate_governance_dag_mirror_index(&index)
         .expect_err("overflowing mirror sequence continuity must fail closed");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
-
 #[tokio::test]
 async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
     let (app, _temp, index, metadata, ..) = governance_mirror_fixture();
-
     let response = handle_get_sorafs_governance_dag_block(
         State(app.clone()),
         HeaderMap::new(),
@@ -776,7 +744,6 @@ async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
     let response = handle_get_sorafs_governance_dag_block(
         State(app.clone()),
         HeaderMap::new(),
@@ -784,7 +751,6 @@ async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
     let response =
         handle_get_sorafs_governance_dag_block(State(app), HeaderMap::new(), Path("ff".repeat(32)))
             .await;
@@ -793,7 +759,6 @@ async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
         StatusCode::NOT_FOUND,
         "a node without an installed mirror capability must fail closed"
     );
-
     let response = governance_dag_lookup_response_from_index(
         index,
         metadata,
@@ -805,7 +770,6 @@ async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
     );
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 fn api_test_governance_request_public_key(seed: u8) -> [u8; 32] {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("derive Governance DAG request-auth public key");
@@ -816,7 +780,6 @@ fn api_test_governance_request_public_key(seed: u8) -> [u8; 32] {
     assert_eq!(algorithm, Algorithm::Ed25519);
     bytes.try_into().expect("Ed25519 public key width")
 }
-
 fn api_test_governance_ingress_qualification(
     scope: sorafs_node::GovernanceDagAuthenticationScope,
     endpoint: &str,
@@ -847,14 +810,12 @@ fn api_test_governance_ingress_qualification(
     )
     .expect("construct live test request-ingress qualification")
 }
-
 #[tokio::test]
 async fn running_governance_dag_service_installs_authenticated_mirror_for_torii() {
     const IPFS_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-ipfs-ingress";
     const HEAD_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-head-ingress";
     const IPFS_AUTH_SEED: u8 = 0x61;
     const HEAD_AUTH_SEED: u8 = 0x62;
-
     let temp_dir = tempfile::tempdir().expect("create Governance DAG service temp dir");
     let temp_root = temp_dir
         .path()
@@ -876,7 +837,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
     let publisher = AccountId::new(publisher_key.public_key().clone());
     node.publish_authenticated_appeal_finance_report(appeal_finance_report_fixture(), publisher)
         .expect("publish signed Governance DAG source block");
-
     let runtime_snapshot = node
         .governance_dag_runtime_snapshot()
         .expect("read signed local Governance DAG")
@@ -894,7 +854,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
     )
     .expect("decode signed local Governance DAG head");
     let expected_head_cid_hex = encode(expected_head.head_block_cid);
-
     let (publication_base, publication_state, publication_shutdown, publication_task) =
         spawn_api_test_governance_publication_http().await;
     let signed_head_url = format!("{publication_base}/head");
@@ -928,7 +887,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
     service.allow_private_head_endpoint = true;
     service.allow_head_bootstrap = true;
     service.listen_addr = "127.0.0.1:0".to_owned();
-
     let ipfs_provider_qualification =
         GovernanceDagRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
     let head_provider_qualification =
@@ -992,7 +950,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
             })
             .await
     });
-
     let mirror_snapshot = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if service_task.is_finished() {
@@ -1036,14 +993,12 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
             .is_some(),
         "the running service must commit the public head before exposing the mirror"
     );
-
     node.install_governance_dag_mirror_read_handle(mirror_reader)
         .expect("install the real service-owned mirror capability into NodeHandle");
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique Torii app state")
         .sorafs_node = node;
-
     let response =
         handle_get_sorafs_governance_dag_head(State(app.clone()), HeaderMap::new()).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -1074,7 +1029,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
         response.json_str(&["head", "head_block_cid_hex"]),
         Some(expected_head_cid_hex.as_str())
     );
-
     let response = handle_get_sorafs_governance_dag_block(
         State(app.clone()),
         HeaderMap::new(),
@@ -1093,7 +1047,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
         response.json_str(&["source_checkpoint_revision"]),
         Some(encode(checkpoint_identity.revision()).as_str())
     );
-
     {
         let mut state = publication_state
             .0
@@ -1127,7 +1080,6 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
     })
     .await
     .expect("steady reconciliation repairs post-commit IPFS loss");
-
     service_shutdown
         .send(())
         .expect("request Governance DAG service shutdown");
@@ -1150,11 +1102,9 @@ async fn running_governance_dag_service_installs_authenticated_mirror_for_torii(
         .expect("Governance DAG publication fixture shuts down")
         .expect("join Governance DAG publication fixture");
 }
-
 #[tokio::test]
 async fn governance_dag_publish_index_and_lookups_read_local_index() {
     let (app, _temp_dir, digest_hex) = sorafs_app_state_with_governance_publish_index();
-
     let response = handle_get_sorafs_governance_dag_publish_index(
         State(app.clone()),
         HeaderMap::new(),
@@ -1193,7 +1143,6 @@ async fn governance_dag_publish_index_and_lookups_read_local_index() {
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let response = handle_get_sorafs_governance_dag_publish_index(
         State(app.clone()),
         HeaderMap::new(),
@@ -1221,7 +1170,6 @@ async fn governance_dag_publish_index_and_lookups_read_local_index() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(response.headers().get(ETAG), Some(&index_etag));
-
     let response = handle_get_sorafs_governance_dag_publish_digest(
         State(app.clone()),
         HeaderMap::new(),
@@ -1247,7 +1195,6 @@ async fn governance_dag_publish_index_and_lookups_read_local_index() {
             .and_then(Value::as_str),
         Some(APPEAL_FINANCE_REPORT_KIND)
     );
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, digest_lookup_etag.clone());
     let response = handle_get_sorafs_governance_dag_publish_kind(
@@ -1270,7 +1217,6 @@ async fn governance_dag_publish_index_and_lookups_read_local_index() {
             .and_then(Value::as_str),
         Some(digest_hex.as_str())
     );
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, digest_lookup_etag);
     let response = handle_get_sorafs_governance_dag_publish_digest(
@@ -1282,7 +1228,6 @@ async fn governance_dag_publish_index_and_lookups_read_local_index() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn transparency_proof_token_verify_accepts_signature_and_digest() {
     let signing = SigningKey::from_bytes(&[0x47; 32]);
@@ -1313,7 +1258,6 @@ async fn transparency_proof_token_verify_accepts_signature_and_digest() {
         digest_key_hex: Some(hex::encode([0x22; 32])),
         now_unix: Some(1_700_000_120),
     };
-
     let app = mk_app_state_for_tests();
     let response = handle_post_sorafs_transparency_token_verify(
         State(app),
@@ -1338,7 +1282,6 @@ async fn transparency_proof_token_verify_accepts_signature_and_digest() {
     );
     assert_eq!(value.json_str(&["moderation_action"]), Some("block"));
 }
-
 #[tokio::test]
 async fn transparency_proof_token_verify_reports_invalid_inputs() {
     let signing = SigningKey::from_bytes(&[0x47; 32]);
@@ -1368,7 +1311,6 @@ async fn transparency_proof_token_verify_reports_invalid_inputs() {
         digest_key_hex: Some(hex::encode([0x22; 32])),
         now_unix: Some(1_700_000_120),
     };
-
     let app = mk_app_state_for_tests();
     let response = handle_post_sorafs_transparency_token_verify(
         State(app.clone()),
@@ -1398,7 +1340,6 @@ async fn transparency_proof_token_verify_reports_invalid_inputs() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
     let request = TransparencyProofTokenVerifyRequestDto {
         token_b64: token.encode_base64(),
         verifying_key_hex: hex::encode([0u8; 32]),
@@ -1415,7 +1356,6 @@ async fn transparency_proof_token_verify_reports_invalid_inputs() {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn transparency_proof_token_verify_rejects_noncanonical_verifying_key() {
     const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
@@ -1423,10 +1363,8 @@ async fn transparency_proof_token_verify_rejects_noncanonical_verifying_key() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let mut request = valid_transparency_proof_token_verify_request(0xA9);
     request.verifying_key_hex = hex::encode(ED25519_NONCANONICAL_IDENTITY);
-
     let app = mk_app_state_for_tests();
     let response = handle_post_sorafs_transparency_token_verify(
         State(app),
@@ -1443,7 +1381,6 @@ async fn transparency_proof_token_verify_rejects_noncanonical_verifying_key() {
         "unexpected proof-token verification error body: {body_text}"
     );
 }
-
 #[tokio::test]
 async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
     let mut app = mk_app_state_for_tests();
@@ -1452,7 +1389,6 @@ async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
         state.proof_rate_limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
         state.proof_limits.retry_after = Duration::from_secs(7);
     }
-
     let first = handle_post_sorafs_transparency_token_verify(
         State(app.clone()),
         HeaderMap::new(),
@@ -1461,7 +1397,6 @@ async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
     )
     .await;
     assert_eq!(first.status(), StatusCode::OK);
-
     let second = handle_post_sorafs_transparency_token_verify(
         State(app),
         HeaderMap::new(),
@@ -1478,7 +1413,6 @@ async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
         Some("7")
     );
 }
-
 #[tokio::test]
 async fn transparency_proof_token_verify_honors_api_token_enforcement() {
     let mut app = mk_app_state_for_tests();
@@ -1489,7 +1423,6 @@ async fn transparency_proof_token_verify_honors_api_token_enforcement() {
         tokens.insert("secret".to_string());
         state.api_tokens_set = Arc::new(tokens);
     }
-
     let denied = handle_post_sorafs_transparency_token_verify(
         State(app.clone()),
         HeaderMap::new(),
@@ -1498,7 +1431,6 @@ async fn transparency_proof_token_verify_honors_api_token_enforcement() {
     )
     .await;
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
-
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("secret"));
     let allowed = handle_post_sorafs_transparency_token_verify(
@@ -1510,12 +1442,10 @@ async fn transparency_proof_token_verify_honors_api_token_enforcement() {
     .await;
     assert_eq!(allowed.status(), StatusCode::OK);
 }
-
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let body = proof_token_issuance_body(transparency_proof_token_issuance_request(0xAD));
-
     let response = handle_post_sorafs_transparency_token_issuance(
         State(app),
         HeaderMap::new(),
@@ -1524,27 +1454,21 @@ async fn transparency_proof_token_issuance_endpoint_requires_canonical_request_a
         body,
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_requires_source_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let body = proof_token_issuance_body(transparency_proof_token_issuance_request(0xAD));
-
     let response = post_transparency_proof_token_issuance(app.clone(), &auth.buyer, body).await;
-
     assert_forbidden_role(response, SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
 }
-
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let request = transparency_proof_token_issuance_request(0xAE);
     let signer_key_hex = request.signer_key_hex.clone();
-
     let response = post_transparency_proof_token_issuance(
         app.clone(),
         &auth.provider,
@@ -1579,7 +1503,6 @@ async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
         &auth.provider.account,
         "transparency_token_issuance",
     );
-
     let response = handle_get_sorafs_transparency_token_issuances(
         State(app),
         HeaderMap::new(),
@@ -1597,29 +1520,24 @@ async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
         Some(signer_key_hex.as_str())
     );
 }
-
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_rejects_bad_signer() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let mut request = transparency_proof_token_issuance_request(0xAF);
     let wrong_signing = SigningKey::from_bytes(&[0x48; 32]);
     request.signer_key_hex = hex::encode(wrong_signing.verifying_key().to_bytes());
-
     let response = post_transparency_proof_token_issuance(
         app,
         &auth.provider,
         proof_token_issuance_body(request),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn transparency_cycle_api_reads_and_verifies_local_publication() {
     let (app, _temp_dir, cycle_id_hex, entry_id_hex, digest_hex) =
         sorafs_app_state_with_transparency_publication();
-
     let response = handle_get_sorafs_transparency_cycles(
         State(app.clone()),
         HeaderMap::new(),
@@ -1643,7 +1561,6 @@ async fn transparency_cycle_api_reads_and_verifies_local_publication() {
             .and_then(Value::as_str),
         Some(cycle_id_hex.as_str())
     );
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, etag.clone());
     let response = handle_get_sorafs_transparency_cycles(
@@ -1654,7 +1571,6 @@ async fn transparency_cycle_api_reads_and_verifies_local_publication() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(response.headers().get(ETAG), Some(&etag));
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, etag.clone());
     let response = handle_get_sorafs_transparency_cycle(
@@ -1730,7 +1646,6 @@ async fn transparency_cycle_api_reads_and_verifies_local_publication() {
         value.json_bool(&["verification", "all_proofs_verified"]),
         Some(true)
     );
-
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, entry_etag);
     let response = handle_get_sorafs_transparency_cycle_entry(
@@ -1741,12 +1656,10 @@ async fn transparency_cycle_api_reads_and_verifies_local_publication() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape() {
     let (app, temp_dir, cycle_id_hex, _entry_id_hex, _digest_hex) =
         sorafs_app_state_with_transparency_publication();
-
     let response = handle_get_sorafs_transparency_cycle(
         State(app.clone()),
         HeaderMap::new(),
@@ -1755,7 +1668,6 @@ async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape(
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
     let response = handle_get_sorafs_transparency_cycle_entry(
         State(app.clone()),
         HeaderMap::new(),
@@ -1763,7 +1675,6 @@ async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape(
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
     let governance_dir = temp_dir.path().join("governance");
     let mut index = read_publication_section_fixture(&app, "publish_index");
     let response = handle_get_sorafs_transparency_cycles(
@@ -1794,7 +1705,6 @@ async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape(
     )
     .await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
-
     let entries = index
         .get_mut("entries")
         .and_then(Value::as_array_mut)

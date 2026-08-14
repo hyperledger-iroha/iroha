@@ -1,7 +1,6 @@
 //! Tests for `ZK_ROOTS_GET` respecting request max and configured cap.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
-
 use iroha_config::parameters::{actual as cfg, defaults};
 use iroha_core::{
     kura::Kura,
@@ -14,7 +13,6 @@ use iroha_data_model::{account::NewAccount, prelude::*};
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -25,21 +23,17 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn checked_random_zk_roots_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked zk roots keypair")
 }
-
 fn checked_random_zk_roots_account_id() -> AccountId {
     AccountId::new(checked_random_zk_roots_keypair().public_key().clone())
 }
-
 #[test]
 fn zk_roots_get_fixture_uses_checked_randomness() {
     let key_pair = checked_random_zk_roots_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
-
 #[test]
 fn zk_roots_get_respects_cap_and_max() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -126,7 +120,6 @@ fn zk_roots_get_respects_cap_and_max() {
             },
         })
         .expect("empty SCCP outbox accepts roots-cap test configuration");
-
     // Seed world: domain/account/asset and mint
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -181,7 +174,6 @@ fn zk_roots_get_respects_cap_and_max() {
         .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
         .collect();
     stx.apply();
-
     // Build CoreHost and snapshot roots
     let mut vm = ivm::IVM::new(1_000_000);
     let mut host = CoreHost::new(owner.clone());
@@ -189,7 +181,6 @@ fn zk_roots_get_respects_cap_and_max() {
     host.set_zk_roots_snapshot(zk_snapshot)
         .expect("canonical confidential tree snapshot");
     let mut host = host;
-
     // Case 1: max=0 => bounded by cap
     let req = zk_verify::RootsGetRequest {
         asset_id: asset_def_id.to_string(),
@@ -207,7 +198,6 @@ fn zk_roots_get_respects_cap_and_max() {
         norito::decode_from_bytes(tlv.payload).expect("decode response");
     assert!(resp.roots.len() <= 4);
     assert_eq!(resp.roots.len(), 4);
-
     // Case 2: max=2 => bounded by 2
     let req = zk_verify::RootsGetRequest {
         asset_id: asset_def_id.to_string(),

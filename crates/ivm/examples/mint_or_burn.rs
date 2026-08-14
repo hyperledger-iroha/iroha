@@ -1,24 +1,21 @@
 //! Demonstrates mint and burn operations using canonical pointer-ABI account,
 //! asset-definition, and `QuantityValueV1` TLVs.
-use std::{
-    any::Any,
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
-
 use iroha_data_model::{account::AccountId, asset::AssetDefinitionId, domain::DomainId};
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, PointerType, VMError, encoding, host::IVMHost, instruction, kotodama::wide as kwide,
     syscalls,
 };
-
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 #[derive(Clone)]
 struct AssetHost {
     balances: Arc<Mutex<HashMap<(AccountId, AssetDefinitionId), u64>>>,
     supply: Arc<Mutex<u64>>,
 }
-
 impl AssetHost {
     fn new() -> Self {
         AssetHost {
@@ -26,18 +23,15 @@ impl AssetHost {
             supply: Arc::new(Mutex::new(0)),
         }
     }
-
     fn balance(&self, account: &AccountId, asset: &AssetDefinitionId) -> u64 {
         let balances = self.balances.lock().expect("balance mutex poisoned");
         *balances
             .get(&(account.clone(), asset.clone()))
             .unwrap_or(&0)
     }
-
     fn supply(&self) -> u64 {
         *self.supply.lock().expect("supply mutex poisoned")
     }
-
     fn decode_account(vm: &IVM) -> Result<AccountId, VMError> {
         let tlv = vm.validate_tlv(vm.register(10))?;
         if tlv.type_id != PointerType::AccountId {
@@ -45,7 +39,6 @@ impl AssetHost {
         }
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
     }
-
     fn decode_asset(vm: &IVM) -> Result<AssetDefinitionId, VMError> {
         let tlv = vm.validate_tlv(vm.register(11))?;
         if tlv.type_id != PointerType::AssetDefinitionId {
@@ -53,7 +46,6 @@ impl AssetHost {
         }
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
     }
-
     fn decode_amount(vm: &IVM) -> Result<u64, VMError> {
         let tlv = vm.validate_tlv(vm.register(12))?;
         if tlv.type_id != PointerType::Quantity {
@@ -65,7 +57,6 @@ impl AssetHost {
         u64::try_from(quantity.into_numeric()).map_err(|_| VMError::DecodeError)
     }
 }
-
 impl IVMHost for AssetHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         match number {
@@ -73,7 +64,6 @@ impl IVMHost for AssetHost {
             _ => Err(VMError::UnknownSyscall(number)),
         }
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if !matches!(
             number,
@@ -107,13 +97,11 @@ impl IVMHost for AssetHost {
             _ => unreachable!("mutation syscall filtered above"),
         }
     }
-
     /// Downcast support for hosts with extra methods/state.
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
 }
-
 fn build_program() -> Vec<u8> {
     let mut prog = ivm::ProgramMetadata::default().encode();
     // if current_supply >= cap -> burn instead of mint (skip next two instructions)
@@ -138,7 +126,6 @@ fn build_program() -> Vec<u8> {
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog
 }
-
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut envelope = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
     envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -152,7 +139,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
     envelope
 }
-
 fn main() {
     let host = AssetHost::new();
     let mut vm = IVM::new(u64::MAX);

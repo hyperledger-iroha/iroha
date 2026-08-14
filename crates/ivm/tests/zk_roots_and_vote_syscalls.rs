@@ -1,5 +1,4 @@
 use ivm::{IVM, IVMHost, Memory, PointerType, syscalls, zk_verify};
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -10,7 +9,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 #[test]
 fn zk_roots_get_roundtrip() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -19,7 +17,6 @@ fn zk_roots_get_roundtrip() {
     }
     let mut vm = IVM::new(1_000_000);
     let mut host = ivm::host::DefaultHost::new();
-
     // Build request
     let req = zk_verify::RootsGetRequest {
         asset_id: "rose#domain".to_string(),
@@ -30,7 +27,6 @@ fn zk_roots_get_roundtrip() {
     // Place TLV into INPUT region and pass pointer in r10
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-
     // Call syscall; r10 becomes pointer to NoritoBytes TLV response
     host.syscall(syscalls::SYSCALL_ZK_ROOTS_GET, &mut vm)
         .expect("syscall ok");
@@ -44,7 +40,6 @@ fn zk_roots_get_roundtrip() {
     assert!(resp.roots.is_empty());
     assert_eq!(resp.height, 0);
 }
-
 #[test]
 fn zk_vote_get_tally_roundtrip() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -53,7 +48,6 @@ fn zk_vote_get_tally_roundtrip() {
     }
     let mut vm = IVM::new(1_000_000);
     let mut host = ivm::host::DefaultHost::new();
-
     let req = zk_verify::VoteGetTallyRequest {
         election_id: "election#domain".to_string(),
     };

@@ -1,16 +1,13 @@
 //! Consensus surface must remain stable across mixed hardware configurations.
-
 use ivm::{ExecutionProof, IVM, encoding, instruction, runtime};
 mod common;
 use common::assemble_with_mode;
-
 #[derive(Debug, PartialEq, Eq)]
 struct RunOutcome {
     register_value: u64,
     gas_used: u64,
     execution_proof: ExecutionProof,
 }
-
 fn build_add_program() -> Vec<u8> {
     let mut code = Vec::new();
     let mut push = |word: u32| code.extend_from_slice(&word.to_le_bytes());
@@ -24,7 +21,6 @@ fn build_add_program() -> Vec<u8> {
     push(encoding::wide::encode_halt());
     assemble_with_mode(&code, 0)
 }
-
 fn run_with(
     policy: runtime::AccelerationPolicy,
     caps: runtime::HardwareCapabilities,
@@ -44,7 +40,6 @@ fn run_with(
         execution_proof: vm.execution_proof(),
     }
 }
-
 #[test]
 fn consensus_across_mixed_hardware_configs() {
     // Simulate a node with all accelerators enabled vs. a deterministic fallback node.
@@ -56,7 +51,6 @@ fn consensus_across_mixed_hardware_configs() {
         runtime::AccelerationPolicy::deterministic(),
         runtime::HardwareCapabilities::none(),
     );
-
     // Results must not diverge across hardware configurations.
     assert_eq!(hw_enabled, hw_disabled);
     assert_eq!(hw_enabled.register_value, 579);

@@ -1,7 +1,4 @@
 //! Finalized-state adapter for the production SFM-4b3 evidence viewer.
-
-use std::{fmt, sync::Arc};
-
 use iroha_core::{
     smartcontracts::ValidSingularQuery,
     state::{State, StateReadOnly, WorldReadOnly, WorldStateSnapshot},
@@ -14,10 +11,9 @@ use sorafs_node::evidence_viewer::{
     EvidenceViewerAuthorizationErrorV1, EvidenceViewerFinalizedAuthorizationReaderV1,
     EvidenceViewerFinalizedAuthorizationV1, EvidenceViewerRoleV1,
 };
-
+use std::{fmt, sync::Arc};
 const EVIDENCE_AUDITOR_ROLE_V1: &str = "sorafs_evidence_auditor";
 const LEGAL_REVIEWER_ROLE_V1: &str = "sorafs_legal_reviewer";
-
 /// Reads one exact case, role assignment, and finalized block anchor from a
 /// single immutable state view.
 pub(crate) struct ToriiEvidenceViewerFinalizedAuthorizationReaderV1 {
@@ -25,7 +21,6 @@ pub(crate) struct ToriiEvidenceViewerFinalizedAuthorizationReaderV1 {
     auditor_role: RoleId,
     legal_role: RoleId,
 }
-
 impl fmt::Debug for ToriiEvidenceViewerFinalizedAuthorizationReaderV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -36,7 +31,6 @@ impl fmt::Debug for ToriiEvidenceViewerFinalizedAuthorizationReaderV1 {
             .finish()
     }
 }
-
 impl ToriiEvidenceViewerFinalizedAuthorizationReaderV1 {
     /// Construct the reader with the fixed V1 explicit role identifiers.
     pub(crate) fn new(state: Arc<State>) -> Self {
@@ -51,7 +45,6 @@ impl ToriiEvidenceViewerFinalizedAuthorizationReaderV1 {
         }
     }
 }
-
 impl EvidenceViewerFinalizedAuthorizationReaderV1
     for ToriiEvidenceViewerFinalizedAuthorizationReaderV1
 {

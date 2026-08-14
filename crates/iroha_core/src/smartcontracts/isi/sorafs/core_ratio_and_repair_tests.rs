@@ -1,11 +1,9 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
     let zero = Quantity::zero();
     let one_nano = xor_quantity_nanos(1);
     let two_nanos = xor_quantity_nanos(2);
-
     assert_eq!(
         round_xor_quantity_ratio(&xor_quantity_nanos(8), 5_000, 10_000)
             .expect("bounded exact ratio"),
@@ -30,7 +28,6 @@ fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
             .expect("zero remains zero for any bounded multiplier"),
         Quantity::zero()
     );
-
     let fractional: Quantity = "1.234567891"
         .parse()
         .expect("canonical fractional Quantity");
@@ -53,7 +50,6 @@ fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
         Err(NumericOperationError::MantissaOverflow)
     );
 }
-
 #[test]
 fn integer_ratio_helper_rejects_invalid_or_overflowing_economic_inputs() {
     assert_eq!(checked_mul_div_round_u128(5, 1, 2), Ok(3));
@@ -70,13 +66,11 @@ fn integer_ratio_helper_rejects_invalid_or_overflowing_economic_inputs() {
         ))
     );
 }
-
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
 }
-
 fn block_header_at_epoch(epoch: u64) -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         nonzero!(1_u64),
@@ -89,11 +83,9 @@ fn block_header_at_epoch(epoch: u64) -> iroha_data_model::block::BlockHeader {
         0,
     )
 }
-
 pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
     block_header_at_epoch(5)
 }
-
 fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         nonzero!(1_u64),
@@ -104,7 +96,6 @@ fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
         0,
     )
 }
-
 fn activate_reputation_policy(
     stx: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -124,7 +115,6 @@ fn activate_reputation_policy(
         .expect("activate reputation recorder policy");
     digest
 }
-
 fn repair_block_header(height: u64, creation_time_ms: u64) -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(height).expect("non-zero test block height"),
@@ -135,7 +125,6 @@ fn repair_block_header(height: u64, creation_time_ms: u64) -> iroha_data_model::
         0,
     )
 }
-
 fn transact_repair(
     state: &mut State,
     height: u64,
@@ -154,7 +143,6 @@ fn transact_repair(
     state.push_block_hash_for_testing(block_hash);
     Ok(())
 }
-
 fn committed_repair_fixture(
     ticket_id: &str,
     source_identity: [u8; 32],

@@ -3,10 +3,8 @@ use norito::{
     codec::{Decode as _, Encode as _},
     prelude::*,
 };
-
 #[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
 struct ViaPrelude(u64);
-
 #[test]
 fn prelude_exports_macros() {
     let value = ViaPrelude(42);

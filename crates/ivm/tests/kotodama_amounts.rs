@@ -1,8 +1,6 @@
 //! End-to-end coverage for nominal Kotodama `quantity` lowering and execution.
-
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{IVM, KotodamaCompiler, PointerType, ProgramMetadata};
-
 fn execute_rounded(mode: &str) -> Quantity {
     let source = format!(
         r#"
@@ -41,7 +39,6 @@ fn execute_rounded(mode: &str) -> Quantity {
     vm.set_program_counter(entrypoint_pc)
         .expect("select main entrypoint");
     vm.run().expect("execute rounded quantity program");
-
     let tlv = vm
         .validate_tlv(vm.register(10))
         .expect("returned quantity pointer");
@@ -50,7 +47,6 @@ fn execute_rounded(mode: &str) -> Quantity {
         .expect("decode returned canonical quantity")
         .into_quantity()
 }
-
 #[test]
 fn rounded_quantity_modes_execute_through_the_extended_syscall() {
     for (mode, expected) in [

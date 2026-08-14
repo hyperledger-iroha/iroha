@@ -133,6 +133,14 @@ class PrivacyCapabilitiesV1Test {
         assertEquals(0, executor.request.body.size)
         assertCanonicalSignature(executor.request, networkId, true)
         assertCanonicalSignature(executor.request, otherNetworkId, false)
+        assertCanonicalSignature(executor.request, networkId, false, method = "POST")
+        assertCanonicalSignature(
+            executor.request,
+            networkId,
+            false,
+            uri = URI.create("https://torii.example/v1/privacy/other"),
+        )
+        assertCanonicalSignature(executor.request, networkId, false, body = byteArrayOf(0))
         assertEquals(
             PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES.toLong(),
             executor.request.maximumResponseBytes,
@@ -212,6 +220,49 @@ class PrivacyCapabilitiesV1Test {
         }
     }
 
+    @Test
+    fun privacyAdmissionRequiresNetworkContextAndCanonicalHeaderOwnership() {
+        val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
+        val response = response(
+            body = body,
+            headers = mapOf("Content-Type" to listOf("application/x-norito")),
+        )
+        val missingContextExecutor = OneResponseExecutor(response)
+        val missingContextClient = HttpClientTransport.withExecutor(
+            missingContextExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<IllegalStateException> {
+            missingContextClient.getPrivacyCapabilities(canonicalAuth())
+        }
+        assertEquals(0, missingContextExecutor.requestCount)
+
+        val forgedHeaderExecutor = OneResponseExecutor(response)
+        val forgedHeaderClient = HttpClientTransport.withExecutor(
+            forgedHeaderExecutor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .putDefaultHeader("x-IROHA-signature", "forged")
+                .build(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            forgedHeaderClient.getPrivacyCapabilities(canonicalAuth())
+        }
+        assertEquals(0, forgedHeaderExecutor.requestCount)
+
+        val admissionExecutor = OneResponseExecutor(response)
+        val admissionClient = HttpClientTransport.withExecutor(admissionExecutor, signedConfig())
+        assertFailsWith<CompletionException> {
+            admissionClient.requirePrivacyExact12CapabilityAdmission(
+                PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1,
+                canonicalAuth(),
+            ).join()
+        }
+        assertEquals(1, admissionExecutor.requestCount)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, admissionExecutor.request.replayPolicy)
+    }
+
     private fun unavailableSnapshot(height: String): String =
         """{"version":1,"committed_height":$height,"consensus_policy":{"current_limits":${consensusLimits()},"pending_tightening":null},"protocols":[${PrivacyProtocolIdV1.values().joinToString(",") { unavailableRow(it) }}]}"""
 
@@ -272,6 +323,9 @@ class PrivacyCapabilitiesV1Test {
         request: TransportRequest,
         expectedNetworkId: NetworkId,
         expected: Boolean,
+        method: String = request.method,
+        uri: URI = request.uri,
+        body: ByteArray = request.body,
     ) {
         val encoded = assertNotNull(
             request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.singleOrNull(),
@@ -281,9 +335,9 @@ class PrivacyCapabilitiesV1Test {
         verifier.update(
             CanonicalRequestSigner.canonicalRequestSignatureMessage(
                 expectedNetworkId,
-                request.method,
-                request.uri,
-                request.body,
+                method,
+                uri,
+                body,
                 1_700_000_000_000L,
                 "privacy-capabilities-1",
             ),

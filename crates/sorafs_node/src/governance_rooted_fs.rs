@@ -6,7 +6,11 @@
 //! family. Windows uses `NtCreateFile` for root-directory-relative opens and
 //! `SetFileInformationByHandle` for rename/disposition. Other targets fail
 //! closed because they are not V1 native release targets.
-
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
 use std::{
     ffi::{OsStr, OsString},
     fmt,
@@ -19,19 +23,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as _;
-
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
 }
-
 const DEFAULT_CHILD_ENTRY_LIMIT: usize = 1_000_000;
 const TWO_SLOT_FORMAT_VERSION_V1: u8 = 1;
 const TWO_SLOT_HEADER_RESERVED_BYTES_V1: usize = 128;
@@ -56,11 +51,9 @@ const ATOMIC_RETAINED_SLOT_WIDTH_V1: usize = 4;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 /// Aggregate retained-predecessor byte ceiling for one directory.
 pub(super) const ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
-
 #[cfg(any(windows, test))]
 mod windows_dacl {
     use std::{io, mem::size_of};
-
     const ACL_HEADER_BYTES: usize = 8;
     const ACE_HEADER_BYTES: usize = 4;
     const BASIC_ACE_SID_OFFSET: usize = 8;
@@ -105,12 +98,10 @@ mod windows_dacl {
         | MAXIMUM_ALLOWED
         | GENERIC_WRITE
         | GENERIC_ALL;
-
     const LOCAL_SYSTEM_SID: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
     const BUILTIN_ADMINISTRATORS_SID: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
     const CREATOR_OWNER_SID: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0];
     const OWNER_RIGHTS_SID: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0];
-
     pub(super) fn sid_encoded_length(bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() < 8 {
             return Err(invalid_data("Windows SID header is truncated"));
@@ -134,7 +125,6 @@ mod windows_dacl {
         }
         Ok(length)
     }
-
     pub(super) fn dacl_encoded_length(bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() < ACL_HEADER_BYTES {
             return Err(invalid_data("Windows DACL header is truncated"));
@@ -147,7 +137,6 @@ mod windows_dacl {
         }
         Ok(length)
     }
-
     pub(super) fn validate(owner_sid: Option<&[u8]>, dacl: Option<&[u8]>) -> io::Result<()> {
         let owner_sid =
             owner_sid.ok_or_else(|| invalid_data("Windows governance owner SID is null"))?;
@@ -182,7 +171,6 @@ mod windows_dacl {
                 "Windows governance DACL exceeds its ACE bound",
             ));
         }
-
         let mut offset = ACL_HEADER_BYTES;
         for _ in 0..ace_count {
             let header_end = offset
@@ -251,7 +239,6 @@ mod windows_dacl {
         }
         Ok(())
     }
-
     fn object_sid_offset(ace: &[u8]) -> io::Result<usize> {
         if ace.len() < OBJECT_ACE_BASE_SID_OFFSET {
             return Err(invalid_data("Windows object ACE header is truncated"));
@@ -270,7 +257,6 @@ mod windows_dacl {
             )
             .ok_or_else(|| invalid_data("Windows object ACE SID offset overflow"))
     }
-
     fn is_administrative_sid(sid: &[u8], owner_sid: &[u8]) -> bool {
         sid == owner_sid
             || sid == LOCAL_SYSTEM_SID
@@ -278,7 +264,6 @@ mod windows_dacl {
             || sid == CREATOR_OWNER_SID
             || sid == OWNER_RIGHTS_SID
     }
-
     fn read_u16(bytes: &[u8], offset: usize) -> io::Result<u16> {
         let end = offset
             .checked_add(size_of::<u16>())
@@ -288,7 +273,6 @@ mod windows_dacl {
             .ok_or_else(|| invalid_data("Windows ACL integer is truncated"))?;
         Ok(u16::from_le_bytes([raw[0], raw[1]]))
     }
-
     fn read_u32(bytes: &[u8], offset: usize) -> io::Result<u32> {
         let end = offset
             .checked_add(size_of::<u32>())
@@ -298,18 +282,14 @@ mod windows_dacl {
             .ok_or_else(|| invalid_data("Windows ACL integer is truncated"))?;
         Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
     }
-
     fn invalid_data(message: &'static str) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidData, message)
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         const OWNER_SID: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 7, 0, 0, 0];
         const EVERYONE_SID: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
-
         fn basic_ace(ace_type: u8, mask: u32, sid: &[u8]) -> Vec<u8> {
             let length = BASIC_ACE_SID_OFFSET + sid.len();
             let mut ace = Vec::with_capacity(length);
@@ -323,7 +303,6 @@ mod windows_dacl {
             ace.extend_from_slice(sid);
             ace
         }
-
         fn acl(aces: &[Vec<u8>]) -> Vec<u8> {
             let length = ACL_HEADER_BYTES + aces.iter().map(Vec::len).sum::<usize>();
             let mut acl = vec![ACL_REVISION, 0];
@@ -343,7 +322,6 @@ mod windows_dacl {
             }
             acl
         }
-
         #[test]
         fn source_contract_accepts_owner_system_and_read_only_grants() {
             let dacl = acl(&[
@@ -358,7 +336,6 @@ mod windows_dacl {
             validate(Some(OWNER_SID), Some(&dacl))
                 .expect("owner, system, and read-only grants are canonical");
         }
-
         #[test]
         fn source_contract_rejects_untrusted_mutation_null_and_truncation() {
             let untrusted = acl(&[basic_ace(
@@ -397,7 +374,6 @@ mod windows_dacl {
                 io::ErrorKind::InvalidData
             );
         }
-
         #[test]
         fn source_contract_rejects_unknown_ace_type() {
             let dacl = acl(&[basic_ace(0xff, 0, EVERYONE_SID)]);
@@ -408,7 +384,6 @@ mod windows_dacl {
                 io::ErrorKind::InvalidData
             );
         }
-
         #[test]
         fn source_contract_rejects_undeclared_aligned_acl_bytes() {
             let mut dacl = acl(&[basic_ace(
@@ -430,7 +405,6 @@ mod windows_dacl {
         }
     }
 }
-
 /// Reject descriptor-bound extended ACLs that can grant mutation authority.
 ///
 /// Linux POSIX/NFSv4-style ACL attributes and macOS extended ACL entries are
@@ -438,14 +412,12 @@ mod windows_dacl {
 pub(super) fn validate_retained_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
     platform::validate_directory_acl(handle, path)
 }
-
 #[cfg(any(target_os = "linux", test))]
 fn stable_linux_acl_attribute_names<F>(path: &Path, mut read: F) -> io::Result<Vec<u8>>
 where
     F: FnMut() -> io::Result<Option<Vec<u8>>>,
 {
     const MAX_RETRIES: usize = 3;
-
     for _ in 0..MAX_RETRIES {
         let Some(first) = read()? else {
             continue;
@@ -465,7 +437,6 @@ where
         ),
     ))
 }
-
 /// Stable identity of one opened filesystem object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FileIdentity {
@@ -478,7 +449,6 @@ pub(super) struct FileIdentity {
     #[cfg(windows)]
     file_index: u64,
 }
-
 include!("governance_rooted_fs/two_slot_store.rs");
 fn verify_expected_file(
     directory: &RootedDirectory,
@@ -505,7 +475,6 @@ fn verify_expected_file(
         )),
     }
 }
-
 fn validate_component(name: &OsStr) -> io::Result<()> {
     if name.is_empty() || name == OsStr::new(".") || name == OsStr::new("..") {
         return Err(io::Error::new(
@@ -515,7 +484,6 @@ fn validate_component(name: &OsStr) -> io::Result<()> {
     }
     platform::validate_component(name)
 }
-
 fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(io::Error::other(format!(
@@ -534,7 +502,6 @@ fn validate_directory_metadata(path: &Path, metadata: &fs::Metadata) -> io::Resu
     let _ = file_identity(metadata)?;
     Ok(())
 }
-
 fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
@@ -560,7 +527,6 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::R
     let _ = file_identity(metadata)?;
     Ok(())
 }
-
 fn validate_private_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     validate_regular_file_metadata(path, metadata)?;
     #[cfg(unix)]
@@ -578,7 +544,6 @@ fn validate_private_regular_file_metadata(path: &Path, metadata: &fs::Metadata) 
     }
     Ok(())
 }
-
 fn validate_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -603,7 +568,6 @@ fn validate_file_metadata(
     }
     Ok(())
 }
-
 fn file_identity(metadata: &fs::Metadata) -> io::Result<FileIdentity> {
     #[cfg(unix)]
     {
@@ -629,7 +593,6 @@ fn file_identity(metadata: &fs::Metadata) -> io::Result<FileIdentity> {
         Err(platform::unsupported())
     }
 }
-
 #[cfg(unix)]
 fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     file_identity(before).ok() == file_identity(after).ok()
@@ -639,7 +602,6 @@ fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> b
         && before.ctime() == after.ctime()
         && before.ctime_nsec() == after.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     file_identity(before).ok() == file_identity(after).ok()
@@ -647,12 +609,10 @@ fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> b
         && before.last_write_time() == after.last_write_time()
         && before.creation_time() == after.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn metadata_stable_during_read(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
     false
 }
-
 /// Return whether a name claims the legacy atomic-temporary namespace for
 /// `target`, including malformed names that require offline inspection.
 pub(super) fn is_atomic_temp_candidate_for(name: &str, target: &str) -> bool {
@@ -660,7 +620,6 @@ pub(super) fn is_atomic_temp_candidate_for(name: &str, target: &str) -> bool {
         .and_then(|name| name.strip_prefix(target))
         .is_some_and(|suffix| suffix.starts_with(".tmp-"))
 }
-
 #[cfg(any(windows, test))]
 fn atomic_temp_target_name(name: &str) -> Option<&str> {
     let name = name.strip_prefix('.')?;
@@ -680,7 +639,6 @@ fn atomic_temp_target_name(name: &str) -> Option<&str> {
     }
     Some(target_name)
 }
-
 /// Return one bounded V1 sibling slot used to retain an exact predecessor.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn atomic_retained_name(name: &OsStr, slot: usize) -> io::Result<OsString> {
@@ -701,7 +659,6 @@ fn atomic_retained_name(name: &OsStr, slot: usize) -> io::Result<OsString> {
     validate_component(&retained)?;
     Ok(retained)
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn atomic_retained_target_and_slot(name: &str) -> Option<(&str, usize)> {
     let name = name.strip_prefix('.')?;
@@ -715,16 +672,15 @@ fn atomic_retained_target_and_slot(name: &str) -> Option<(&str, usize)> {
     let slot = slot.parse::<usize>().ok()?;
     (slot < ATOMIC_RETAINED_SLOT_COUNT_V1).then_some((target, slot))
 }
-
 /// Return whether a name claims the V1 retained namespace for `target`.
 pub(super) fn is_atomic_retained_candidate_for(name: &str, target: &str) -> bool {
     name.strip_prefix('.')
         .and_then(|name| name.strip_prefix(target))
         .is_some_and(|suffix| suffix.starts_with(ATOMIC_RETAINED_SUFFIX_V1))
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
+    use super::{FileIdentity, RootedDirectory, file_identity};
     #[cfg(target_os = "macos")]
     use std::os::raw::c_void;
     use std::{
@@ -738,9 +694,6 @@ mod platform {
         },
         path::Path,
     };
-
-    use super::{FileIdentity, RootedDirectory, file_identity};
-
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
     #[cfg(target_os = "macos")]
@@ -775,13 +728,11 @@ mod platform {
     const RENAME_EXCL: c_uint = 0x0000_0004;
     #[cfg(target_os = "macos")]
     const RENAME_SWAP: c_uint = 0x0000_0002;
-
     unsafe extern "C" {
         fn openat(directory: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
         fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
         fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     }
-
     #[cfg(target_os = "linux")]
     unsafe extern "C" {
         fn renameat2(
@@ -792,7 +743,6 @@ mod platform {
             flags: c_uint,
         ) -> c_int;
     }
-
     #[cfg(target_os = "macos")]
     unsafe extern "C" {
         fn renameatx_np(
@@ -808,16 +758,13 @@ mod platform {
         fn acl_get_permset_mask_np(entry: *mut c_void, mask: *mut u64) -> c_int;
         fn acl_free(value: *mut c_void) -> c_int;
     }
-
     #[cfg(target_os = "linux")]
     unsafe extern "C" {
         fn flistxattr(fd: c_int, list: *mut c_char, size: usize) -> isize;
     }
-
     pub(super) fn ensure_supported() -> io::Result<()> {
         Ok(())
     }
-
     pub(super) fn validate_component(name: &OsStr) -> io::Result<()> {
         let bytes = name.as_bytes();
         if bytes.contains(&0) || bytes.contains(&b'/') {
@@ -828,11 +775,9 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn validate_non_reparse(_metadata: &fs::Metadata) -> io::Result<()> {
         Ok(())
     }
-
     pub(super) fn validate_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -843,7 +788,6 @@ mod platform {
             validate_macos_directory_acl(handle, path)
         }
     }
-
     #[cfg(target_os = "linux")]
     fn validate_linux_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
         let names = super::stable_linux_acl_attribute_names(path, || {
@@ -851,12 +795,10 @@ mod platform {
         })?;
         validate_linux_acl_attribute_names(&names, path)
     }
-
     #[cfg(target_os = "linux")]
     fn read_linux_xattr_names_once(handle: &File, path: &Path) -> io::Result<Option<Vec<u8>>> {
         const MAX_XATTR_LIST_BYTES: usize = 64 * 1024;
         const ERANGE: i32 = 34;
-
         // SAFETY: the descriptor is retained and a null buffer with zero size
         // requests the exact descriptor-bound xattr-list length.
         let required = unsafe { flistxattr(handle.as_raw_fd(), std::ptr::null_mut(), 0) };
@@ -918,7 +860,6 @@ mod platform {
         names.truncate(read);
         Ok(Some(names))
     }
-
     #[cfg(target_os = "linux")]
     fn validate_linux_acl_attribute_names(names: &[u8], path: &Path) -> io::Result<()> {
         if names.is_empty() {
@@ -956,7 +897,6 @@ mod platform {
         }
         Ok(())
     }
-
     #[cfg(target_os = "macos")]
     fn validate_macos_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
         const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
@@ -975,7 +915,6 @@ mod platform {
             | (1 << 10)
             | (1 << 12)
             | (1 << 13);
-
         struct Acl(*mut c_void);
         impl Drop for Acl {
             fn drop(&mut self) {
@@ -984,7 +923,6 @@ mod platform {
                 let _ = unsafe { acl_free(self.0) };
             }
         }
-
         // SAFETY: the retained descriptor stays valid and the ACL type is the
         // macOS extended ACL type from `<sys/acl.h>`.
         let raw_acl = unsafe { acl_get_fd_np(handle.as_raw_fd(), ACL_TYPE_EXTENDED) };
@@ -1082,7 +1020,6 @@ mod platform {
             entry_id = ACL_NEXT_ENTRY;
         }
     }
-
     fn c_name(name: &OsStr) -> io::Result<CString> {
         validate_component(name)?;
         CString::new(name.as_bytes()).map_err(|_| {
@@ -1092,7 +1029,6 @@ mod platform {
             )
         })
     }
-
     fn file_from_fd(fd: RawFd) -> io::Result<File> {
         if fd < 0 {
             return Err(io::Error::last_os_error());
@@ -1100,7 +1036,6 @@ mod platform {
         // SAFETY: `openat` returned a fresh owned descriptor on success.
         Ok(unsafe { File::from_raw_fd(fd) })
     }
-
     pub(super) fn open_directory(parent: &File, name: &OsStr, _writable: bool) -> io::Result<File> {
         let name = c_name(name)?;
         // SAFETY: the parent descriptor and NUL-terminated component are valid
@@ -1115,7 +1050,6 @@ mod platform {
         };
         file_from_fd(fd)
     }
-
     pub(super) fn create_directory(parent: &File, name: &OsStr) -> io::Result<()> {
         let name = c_name(name)?;
         // SAFETY: the parent descriptor and component pointer remain valid for
@@ -1126,7 +1060,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn open_file(parent: &File, name: &OsStr, _delete_access: bool) -> io::Result<File> {
         let name = c_name(name)?;
         // SAFETY: arguments remain valid for the call and the returned
@@ -1141,7 +1074,6 @@ mod platform {
         };
         file_from_fd(fd)
     }
-
     pub(super) fn open_read_write_file(parent: &File, name: &OsStr) -> io::Result<File> {
         let name = c_name(name)?;
         // SAFETY: arguments remain valid for the call and the returned
@@ -1156,7 +1088,6 @@ mod platform {
         };
         file_from_fd(fd)
     }
-
     pub(super) fn create_file(parent: &File, name: &OsStr) -> io::Result<File> {
         let name = c_name(name)?;
         // SAFETY: arguments remain valid and O_EXCL prevents an attacker-owned
@@ -1171,7 +1102,6 @@ mod platform {
         };
         file_from_fd(fd)
     }
-
     pub(super) fn rename_open_file(
         parent: &File,
         _temporary: &File,
@@ -1180,7 +1110,6 @@ mod platform {
     ) -> io::Result<()> {
         rename_exclusive(parent, temporary_name, parent, target_name)
     }
-
     pub(super) fn exchange_open_file(
         parent: &File,
         _temporary: &File,
@@ -1218,7 +1147,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn rename_exclusive(
         source_parent: &File,
         source_name: &OsStr,
@@ -1258,7 +1186,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     #[cfg(test)]
     pub(super) fn remove_open_file(
         parent: &File,
@@ -1290,7 +1217,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn remove_open_directory(
         parent: &File,
         directory: &File,
@@ -1323,7 +1249,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn child_names(
         directory: &RootedDirectory,
         max_entries: usize,
@@ -1353,9 +1278,9 @@ mod platform {
         Ok(names)
     }
 }
-
 #[cfg(windows)]
 mod platform {
+    use super::{FileIdentity, RootedDirectory, file_identity, windows_dacl};
     use std::{
         ffi::{OsStr, OsString, c_void},
         fs::{self, File, OpenOptions},
@@ -1369,12 +1294,8 @@ mod platform {
         path::{Component, Path, PathBuf},
         ptr,
     };
-
-    use super::{FileIdentity, RootedDirectory, file_identity, windows_dacl};
-
     type Handle = *mut c_void;
     type NtStatus = i32;
-
     const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
@@ -1410,14 +1331,12 @@ mod platform {
     const SECURITY_DESCRIPTOR_OWNER_OFFSET: usize = 4;
     const SECURITY_DESCRIPTOR_DACL_OFFSET: usize = 16;
     const MAX_SECURITY_DESCRIPTOR_BYTES: usize = 1024 * 1024;
-
     #[repr(C)]
     struct UnicodeString {
         length: u16,
         maximum_length: u16,
         buffer: *mut u16,
     }
-
     #[repr(C)]
     struct ObjectAttributes {
         length: u32,
@@ -1427,13 +1346,11 @@ mod platform {
         security_descriptor: *mut c_void,
         security_quality_of_service: *mut c_void,
     }
-
     #[repr(C)]
     struct IoStatusBlock {
         status_or_pointer: isize,
         information: usize,
     }
-
     #[repr(C)]
     struct FileRenameInfo {
         replace_or_flags: u32,
@@ -1441,21 +1358,17 @@ mod platform {
         file_name_length: u32,
         file_name: [u16; 1],
     }
-
     #[repr(C)]
     struct FileDispositionInfo {
         delete_file: u8,
     }
-
     #[derive(Debug, PartialEq, Eq)]
     struct WindowsDaclSnapshot {
         control: u16,
         owner_sid: Vec<u8>,
         dacl: Vec<u8>,
     }
-
     struct LocalSecurityDescriptor(Handle);
-
     impl Drop for LocalSecurityDescriptor {
         fn drop(&mut self) {
             if !self.0.is_null() {
@@ -1465,7 +1378,6 @@ mod platform {
             }
         }
     }
-
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct FileIdBothDirectoryInfo {
@@ -1485,7 +1397,6 @@ mod platform {
         file_id: i64,
         file_name: [u16; 1],
     }
-
     #[link(name = "ntdll")]
     unsafe extern "system" {
         #[link_name = "NtCreateFile"]
@@ -1505,7 +1416,6 @@ mod platform {
         #[link_name = "RtlNtStatusToDosError"]
         fn rtl_nt_status_to_dos_error(status: NtStatus) -> u32;
     }
-
     #[link(name = "kernel32")]
     unsafe extern "system" {
         #[link_name = "GetFileInformationByHandleEx"]
@@ -1525,7 +1435,6 @@ mod platform {
         #[link_name = "LocalFree"]
         fn local_free(memory: Handle) -> Handle;
     }
-
     #[link(name = "advapi32")]
     unsafe extern "system" {
         #[link_name = "GetSecurityInfo"]
@@ -1550,11 +1459,9 @@ mod platform {
         #[link_name = "IsValidSecurityDescriptor"]
         fn is_valid_security_descriptor(security_descriptor: Handle) -> i32;
     }
-
     pub(super) fn ensure_supported() -> io::Result<()> {
         Ok(())
     }
-
     pub(super) fn validate_component(name: &OsStr) -> io::Result<()> {
         let mut saw_unit = false;
         for unit in name.encode_wide() {
@@ -1578,7 +1485,6 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn validate_non_reparse(metadata: &fs::Metadata) -> io::Result<()> {
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(io::Error::other(
@@ -1587,15 +1493,12 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn validate_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
         qualified_directory_dacl_snapshot(handle, path).map(drop)
     }
-
     pub(super) fn directory_owner_sid(handle: &File, path: &Path) -> io::Result<Vec<u8>> {
         qualified_directory_dacl_snapshot(handle, path).map(|snapshot| snapshot.owner_sid)
     }
-
     fn qualified_directory_dacl_snapshot(
         handle: &File,
         path: &Path,
@@ -1615,7 +1518,6 @@ mod platform {
         }
         Ok(second)
     }
-
     fn read_directory_dacl_snapshot(handle: &File, path: &Path) -> io::Result<WindowsDaclSnapshot> {
         let mut owner = ptr::null_mut();
         let mut dacl = ptr::null_mut();
@@ -1764,7 +1666,6 @@ mod platform {
             dacl: descriptor_bytes[dacl_offset..dacl_end].to_vec(),
         })
     }
-
     fn descriptor_u32(bytes: &[u8], offset: usize) -> io::Result<u32> {
         let end = offset
             .checked_add(size_of::<u32>())
@@ -1777,7 +1678,6 @@ mod platform {
         })?;
         Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
     }
-
     fn descriptor_pointer_offset(
         descriptor: Handle,
         descriptor_length: usize,
@@ -1801,7 +1701,6 @@ mod platform {
             .checked_sub(descriptor_start)
             .ok_or_else(|| io::Error::other("Windows security descriptor pointer underflow"))
     }
-
     pub(super) fn open_root(path: &Path, writable: bool) -> io::Result<File> {
         if !path.is_absolute() {
             return Err(io::Error::new(
@@ -1855,7 +1754,6 @@ mod platform {
         }
         validate_non_reparse(&volume_metadata)?;
         let _ = file_identity(&volume_metadata)?;
-
         for (position, component) in components[first_normal..].iter().enumerate() {
             let Component::Normal(name) = component else {
                 return Err(io::Error::new(
@@ -1891,13 +1789,11 @@ mod platform {
         }
         Ok(directory)
     }
-
     fn nt_error(status: NtStatus) -> io::Error {
         // SAFETY: conversion is a pure ntdll status mapping.
         let win32 = unsafe { rtl_nt_status_to_dos_error(status) };
         io::Error::from_raw_os_error(i32::try_from(win32).unwrap_or(i32::MAX))
     }
-
     fn nt_open_relative(
         parent: &File,
         name: &OsStr,
@@ -1914,7 +1810,6 @@ mod platform {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         )
     }
-
     fn nt_open_relative_with_share(
         parent: &File,
         name: &OsStr,
@@ -1982,7 +1877,6 @@ mod platform {
         // SAFETY: `NtCreateFile` returned a fresh owned handle above.
         Ok(unsafe { File::from_raw_handle(handle as RawHandle) })
     }
-
     pub(super) fn open_directory(parent: &File, name: &OsStr, writable: bool) -> io::Result<File> {
         let access = GENERIC_READ
             | SYNCHRONIZE
@@ -1999,7 +1893,6 @@ mod platform {
             FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT,
         )
     }
-
     pub(super) fn create_directory(parent: &File, name: &OsStr) -> io::Result<()> {
         nt_open_relative(
             parent,
@@ -2010,7 +1903,6 @@ mod platform {
         )
         .map(drop)
     }
-
     pub(super) fn open_file(parent: &File, name: &OsStr, delete_access: bool) -> io::Result<File> {
         nt_open_relative(
             parent,
@@ -2020,7 +1912,6 @@ mod platform {
             FILE_NON_DIRECTORY_FILE,
         )
     }
-
     pub(super) fn open_read_write_file(parent: &File, name: &OsStr) -> io::Result<File> {
         nt_open_relative(
             parent,
@@ -2030,7 +1921,6 @@ mod platform {
             FILE_NON_DIRECTORY_FILE,
         )
     }
-
     pub(super) fn create_file(parent: &File, name: &OsStr) -> io::Result<File> {
         nt_open_relative(
             parent,
@@ -2040,7 +1930,6 @@ mod platform {
             FILE_NON_DIRECTORY_FILE,
         )
     }
-
     pub(super) fn rename_open_file(
         parent: &File,
         temporary: &File,
@@ -2109,7 +1998,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn remove_open_file(
         _parent: &File,
         file: &File,
@@ -2141,7 +2029,6 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn remove_open_directory(
         parent: &File,
         directory: &File,
@@ -2182,20 +2069,17 @@ mod platform {
             Err(io::Error::last_os_error())
         }
     }
-
     pub(super) fn child_names(
         directory: &RootedDirectory,
         max_entries: usize,
     ) -> io::Result<Vec<OsString>> {
         enumerate_directory_handle(&directory.handle, max_entries)
     }
-
     fn enumerate_directory_handle(
         directory: &File,
         max_entries: usize,
     ) -> io::Result<Vec<OsString>> {
         const BUFFER_BYTES: usize = 64 * 1024;
-
         let word_count = BUFFER_BYTES.div_ceil(size_of::<usize>());
         let mut storage = vec![0usize; word_count];
         let mut restart = true;
@@ -2233,7 +2117,6 @@ mod platform {
         }
         Ok(names)
     }
-
     fn parse_directory_buffer(
         buffer: &[u8],
         names: &mut Vec<OsString>,
@@ -2364,14 +2247,11 @@ mod platform {
         }
         Ok(())
     }
-
     #[cfg(test)]
     mod tests {
-        use std::process::Command;
-
         use super::*;
+        use std::process::Command;
         use tempfile::tempdir;
-
         fn write_entry(
             buffer: &mut [u8],
             offset: usize,
@@ -2406,7 +2286,6 @@ mod platform {
                 }
             }
         }
-
         #[test]
         fn directory_buffer_parser_rejects_odd_and_overlapping_bounds() {
             let mut odd = vec![0_u8; size_of::<FileIdBothDirectoryInfo>() + 16];
@@ -2417,7 +2296,6 @@ mod platform {
                     .kind(),
                 io::ErrorKind::InvalidData
             );
-
             let file_name_offset = offset_of!(FileIdBothDirectoryInfo, file_name);
             let mut overlapping = vec![0_u8; size_of::<FileIdBothDirectoryInfo>() + 32];
             write_entry(
@@ -2434,14 +2312,12 @@ mod platform {
                 io::ErrorKind::InvalidData
             );
         }
-
         #[test]
         fn directory_buffer_parser_enforces_bound_across_restart_pages() {
             let mut names = Vec::new();
             let mut first = vec![0_u8; size_of::<FileIdBothDirectoryInfo>() + 16];
             write_entry(&mut first, 0, &[u16::from(b'a')], 0, 2);
             parse_directory_buffer(&first, &mut names, 1).expect("parse first page");
-
             let mut restarted = vec![0_u8; size_of::<FileIdBothDirectoryInfo>() + 16];
             write_entry(&mut restarted, 0, &[u16::from(b'b')], 0, 2);
             assert_eq!(
@@ -2451,14 +2327,12 @@ mod platform {
                 io::ErrorKind::InvalidData
             );
         }
-
         #[test]
         fn descriptor_bound_dacl_rejects_post_open_everyone_mutation_grant() {
             let temp = tempdir().expect("create Windows ACL test directory");
             let handle = open_root(temp.path(), false).expect("retain Windows ACL test directory");
             validate_directory_acl(&handle, temp.path())
                 .expect("default temporary-directory DACL must be release-qualified");
-
             let grant = Command::new("icacls")
                 .arg(temp.path())
                 .arg("/grant")
@@ -2486,43 +2360,35 @@ mod platform {
         }
     }
 }
-
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod platform {
+    use super::{FileIdentity, RootedDirectory};
     use std::{
         ffi::{OsStr, OsString},
         fs::{self, File},
         io,
     };
-
-    use super::{FileIdentity, RootedDirectory};
-
     pub(super) fn unsupported() -> io::Error {
         io::Error::new(
             io::ErrorKind::Unsupported,
             "rooted Governance DAG filesystem operations are unsupported on this platform",
         )
     }
-
     pub(super) fn ensure_supported() -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn validate_component(_name: &OsStr) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn validate_non_reparse(_metadata: &fs::Metadata) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn validate_directory_acl(
         _handle: &File,
         _path: &std::path::Path,
     ) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn open_directory(
         _parent: &File,
         _name: &OsStr,
@@ -2530,11 +2396,9 @@ mod platform {
     ) -> io::Result<File> {
         Err(unsupported())
     }
-
     pub(super) fn create_directory(_parent: &File, _name: &OsStr) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn open_file(
         _parent: &File,
         _name: &OsStr,
@@ -2542,15 +2406,12 @@ mod platform {
     ) -> io::Result<File> {
         Err(unsupported())
     }
-
     pub(super) fn open_read_write_file(_parent: &File, _name: &OsStr) -> io::Result<File> {
         Err(unsupported())
     }
-
     pub(super) fn create_file(_parent: &File, _name: &OsStr) -> io::Result<File> {
         Err(unsupported())
     }
-
     pub(super) fn rename_open_file(
         _parent: &File,
         _temporary: &File,
@@ -2559,7 +2420,6 @@ mod platform {
     ) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn remove_open_file(
         _parent: &File,
         _file: &File,
@@ -2568,7 +2428,6 @@ mod platform {
     ) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn remove_open_directory(
         _parent: &File,
         _directory: &File,
@@ -2577,7 +2436,6 @@ mod platform {
     ) -> io::Result<()> {
         Err(unsupported())
     }
-
     pub(super) fn child_names(
         _directory: &RootedDirectory,
         _max_entries: usize,
@@ -2585,5 +2443,4 @@ mod platform {
         Err(unsupported())
     }
 }
-
 include!("governance_rooted_fs/tests.rs");

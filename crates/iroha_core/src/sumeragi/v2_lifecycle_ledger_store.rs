@@ -11,7 +11,6 @@ pub(in crate::sumeragi) enum LifecycleLedgerError {
     #[error("invalid LifecycleLedgerV1 state: {0}")]
     InvalidLedger(String),
 }
-
 /// Post-fsync receipt for one exact WAL-ahead Validate-to-Sign ledger repair.
 ///
 /// Construction is private to [`LifecycleLedgerStoreV1`]. The receipt binds
@@ -27,7 +26,6 @@ pub(super) struct DurableWalVoteLedgerRepairReceipt {
     child_ordinal: u128,
     ledger_frame_hash: LifecycleDigest,
 }
-
 impl DurableWalVoteLedgerRepairReceipt {
     /// Return whether this receipt names one exact authenticated repair.
     pub(super) fn matches(&self, repair: &AuthenticatedWalVoteLifecycleRepair) -> bool {
@@ -38,17 +36,14 @@ impl DurableWalVoteLedgerRepairReceipt {
             && self.edge == repair.edge()
             && self.child_ordinal != 0
     }
-
     /// Return the durable child ordinal named by the published ledger.
     pub(super) const fn child_ordinal(&self) -> u128 {
         self.child_ordinal
     }
-
     /// Return the hash of the complete canonical ledger frame.
     pub(super) const fn ledger_frame_hash(&self) -> LifecycleDigest {
         self.ledger_frame_hash
     }
-
     /// Return whether the receipt belongs to this exact opened ledger store.
     pub(super) fn belongs_to(&self, store: &LifecycleLedgerStoreV1) -> bool {
         store
@@ -56,7 +51,6 @@ impl DurableWalVoteLedgerRepairReceipt {
             .ok()
             .is_some_and(|ledger| self.belongs_to_loaded(store, &ledger))
     }
-
     /// Validate this receipt against one already-loaded frame from its store.
     /// Keeping this comparison load-free lets the Sign-install preflight bind
     /// the frame hash and repaired-pair shape to the same read.
@@ -75,7 +69,6 @@ impl DurableWalVoteLedgerRepairReceipt {
                 })
     }
 }
-
 /// Crash-safe, bounded store for one height-local LifecycleLedgerV1.
 #[derive(Clone, Debug)]
 pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
@@ -84,7 +77,6 @@ pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
     max_records: usize,
     max_frame_bytes: u64,
 }
-
 impl LifecycleLedgerStoreV1 {
     fn is_authorized_complete_tip_predecessor_target(
         &self,
@@ -95,7 +87,6 @@ impl LifecycleLedgerStoreV1 {
                 && self.path == root.join(LEDGER_FILE)
         })
     }
-
     /// Compare the complete immutable publication target of two open handles.
     pub(super) fn same_publication_target(&self, other: &Self) -> bool {
         self.path == other.path
@@ -103,7 +94,6 @@ impl LifecycleLedgerStoreV1 {
             && self.max_records == other.max_records
             && self.max_frame_bytes == other.max_frame_bytes
     }
-
     /// Open a height-local ledger under the coordinator's sealed size bounds.
     pub(in crate::sumeragi) fn open(
         root: &Path,
@@ -119,7 +109,6 @@ impl LifecycleLedgerStoreV1 {
         let ledger = store.load()?;
         Ok((store, ledger))
     }
-
     pub(super) fn load(&self) -> Result<LifecycleLedgerV1, LifecycleLedgerError> {
         let metadata = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
@@ -164,7 +153,6 @@ impl LifecycleLedgerStoreV1 {
         ledger.validate(self.max_records)?;
         Ok(ledger)
     }
-
     /// Persist one exact staged successor only while the attached frame still
     /// equals the coordinator state from which it was derived.
     ///
@@ -188,7 +176,6 @@ impl LifecycleLedgerStoreV1 {
         }
         self.persist(successor)
     }
-
     /// Reload and authenticate one already-fsynced WAL repair as an exact
     /// repaired-pair stutter.
     ///
@@ -213,7 +200,6 @@ impl LifecycleLedgerStoreV1 {
         };
         !changed && observed_child_ordinal == durable.child_ordinal() && staged == loaded
     }
-
     /// Reopen and compare the complete exact control-Sign row without exposing it.
     pub(super) fn revalidates_authenticated_wal_control_sign(
         &self,
@@ -233,7 +219,6 @@ impl LifecycleLedgerStoreV1 {
             && staged == loaded
             && projection.exactly_matches_ledger_at(&loaded, ordinal)
     }
-
     /// Reopen and authenticate one Advanced control Sign with its live Broadcast.
     pub(super) fn revalidates_recovered_control_signed_broadcast(
         &self,
@@ -254,7 +239,6 @@ impl LifecycleLedgerStoreV1 {
                     && recovered.exactly_matches(broadcast)
             })
     }
-
     /// Reload and reauthenticate one control-owned Broadcast-plus-Sign pair.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn revalidates_recovered_control_signed_broadcast_and_sign(
@@ -272,7 +256,6 @@ impl LifecycleLedgerStoreV1 {
                 .is_ok_and(|observed| observed == *expected)
         })
     }
-
     /// Reload and reauthenticate one phase-owned Broadcast-plus-Sign pair.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn revalidates_recovered_phase_signed_broadcast_and_sign(
@@ -288,7 +271,6 @@ impl LifecycleLedgerStoreV1 {
                 .is_ok_and(|observed| observed == *expected)
         })
     }
-
     /// Reopen and compare one already-fsynced Decision Fetch row.
     pub(super) fn revalidates_authenticated_wal_decision_fetch(
         &self,
@@ -308,7 +290,6 @@ impl LifecycleLedgerStoreV1 {
             && staged == loaded
             && projection.exactly_matches_ledger_at(&loaded, ordinal)
     }
-
     /// Reopen and compare one already-fsynced advanced Fetch plus live Store cut.
     pub(super) fn revalidates_recovered_decision_fetch_store(
         &self,
@@ -322,7 +303,6 @@ impl LifecycleLedgerStoreV1 {
                 .is_ok_and(|(observed_fetch, _)| observed_fetch == fetch_ordinal)
         })
     }
-
     /// Atomically replace the ledger after validating all durable invariants.
     pub(super) fn persist(&self, ledger: &LifecycleLedgerV1) -> Result<(), LifecycleLedgerError> {
         if ledger.context() != self.context {
@@ -387,7 +367,6 @@ impl LifecycleLedgerStoreV1 {
         sync_ledger_directory(parent)?;
         Ok(())
     }
-
     /// Stage and fsync one authenticated WAL-ahead lifecycle repair.
     ///
     /// The receipt is minted only after the complete replacement frame and
@@ -454,7 +433,6 @@ impl LifecycleLedgerStoreV1 {
         };
         Ok((staged, durable, changed))
     }
-
     /// Bind an already-persisted Validate→Sign repair beneath a live Broadcast.
     ///
     /// This is a read-only crash-recovery counterpart to the repair fsync
@@ -520,7 +498,6 @@ impl LifecycleLedgerStoreV1 {
         }
     }
 }
-
 fn sync_ledger_directory(directory: &Path) -> Result<(), LifecycleLedgerError> {
     File::open(directory)
         .and_then(|file| file.sync_all())
@@ -531,11 +508,9 @@ fn sync_ledger_directory(directory: &Path) -> Result<(), LifecycleLedgerError> {
             ))
         })
 }
-
 fn ensure_durable_ledger_directory(root: &Path) -> Result<(), LifecycleLedgerError> {
     ensure_durable_ledger_directory_with(root, &mut sync_ledger_directory)
 }
-
 fn ensure_durable_ledger_directory_with<Sync>(
     root: &Path,
     sync: &mut Sync,
@@ -568,7 +543,6 @@ where
             )));
         }
     }
-
     ensure_durable_ledger_directory_with(parent, sync)?;
     match fs::create_dir(root) {
         Ok(()) => {}
@@ -595,7 +569,6 @@ where
     sync(parent)?;
     Ok(())
 }
-
 impl LifecycleCoordinator {
     pub(super) fn stage_durable_transaction(&self) -> Self {
         Self {
@@ -619,14 +592,12 @@ impl LifecycleCoordinator {
             fault: self.fault,
         }
     }
-
     pub(super) fn persist_durable_projection(&self) -> Result<(), LifecycleLedgerError> {
         let Some(store) = self.ledger_store.as_ref() else {
             return Ok(());
         };
         store.persist(&LifecycleLedgerV1::from_coordinator(self)?)
     }
-
     /// Fsync one staged successor against this coordinator's exact attached
     /// LedgerV1 frame.
     ///
@@ -657,7 +628,6 @@ impl LifecycleCoordinator {
         let successor = LifecycleLedgerV1::from_coordinator(staged)?;
         store.persist_exact_successor(&current, &successor)
     }
-
     /// Fsync one all-row finalized successor against this exact live owner.
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn persist_exact_finalization_successor(
         self,
@@ -715,7 +685,6 @@ impl LifecycleCoordinator {
         self.ledger_store = Some(store);
         Ok(())
     }
-
     #[cfg(test)]
     pub(super) fn redirect_test_ledger_to_missing_parent(&mut self, root: &Path) {
         self.ledger_store
@@ -724,7 +693,6 @@ impl LifecycleCoordinator {
             .path = root.join("missing-parent").join(LEDGER_FILE);
     }
 }
-
 fn encode_frame(
     ledger: &LifecycleLedgerV1,
     max_frame_bytes: u64,
@@ -754,7 +722,6 @@ fn encode_frame(
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
-
 fn decode_frame(
     bytes: &[u8],
     max_frame_bytes: u64,
@@ -810,7 +777,6 @@ fn decode_frame(
     }
     Ok(ledger)
 }
-
 fn work_shape_is_valid(
     work_class: LifecycleWorkClass,
     key: LifecycleKey,
@@ -818,7 +784,6 @@ fn work_shape_is_valid(
 ) -> bool {
     work_class.accepts_stage(key.phase(), stage)
 }
-
 fn phase_code(phase: LifecyclePhase) -> u16 {
     match phase {
         LifecyclePhase::Proposal => 1,
@@ -845,7 +810,6 @@ fn phase_code(phase: LifecyclePhase) -> u16 {
         LifecyclePhase::ProducerTurn => 22,
     }
 }
-
 fn decode_phase(code: u16) -> Option<LifecyclePhase> {
     Some(match code {
         1 => LifecyclePhase::Proposal,
@@ -873,7 +837,6 @@ fn decode_phase(code: u16) -> Option<LifecyclePhase> {
         _ => return None,
     })
 }
-
 fn work_class_code(work_class: LifecycleWorkClass) -> u16 {
     match work_class {
         LifecycleWorkClass::SignProposal => 1,
@@ -891,7 +854,6 @@ fn work_class_code(work_class: LifecycleWorkClass) -> u16 {
         LifecycleWorkClass::ProducerTurn => 13,
     }
 }
-
 fn decode_work_class(code: u16) -> Option<LifecycleWorkClass> {
     Some(match code {
         1 => LifecycleWorkClass::SignProposal,
@@ -910,7 +872,6 @@ fn decode_work_class(code: u16) -> Option<LifecycleWorkClass> {
         _ => return None,
     })
 }
-
 fn stage_kind_code(kind: LifecycleStageKind) -> u16 {
     match kind {
         LifecycleStageKind::SignProposal => 1,
@@ -937,7 +898,6 @@ fn stage_kind_code(kind: LifecycleStageKind) -> u16 {
         LifecycleStageKind::ProducerTurn => 22,
     }
 }
-
 fn decode_stage_kind(code: u16) -> Option<LifecycleStageKind> {
     Some(match code {
         1 => LifecycleStageKind::SignProposal,
@@ -965,7 +925,6 @@ fn decode_stage_kind(code: u16) -> Option<LifecycleStageKind> {
         _ => return None,
     })
 }
-
 const fn predecessor_code(scope: PredecessorScope) -> u8 {
     match scope {
         PredecessorScope::Independent => 0,
@@ -973,7 +932,6 @@ const fn predecessor_code(scope: PredecessorScope) -> u8 {
         PredecessorScope::ProducerHandoffBarrier => 2,
     }
 }
-
 const fn decode_predecessor(code: u8) -> Option<PredecessorScope> {
     match code {
         0 => Some(PredecessorScope::Independent),
@@ -982,7 +940,6 @@ const fn decode_predecessor(code: u8) -> Option<PredecessorScope> {
         _ => None,
     }
 }
-
 /// Substitute one structurally valid but foreign control replay authority in a test frame.
 #[cfg(test)]
 pub(crate) fn substitute_recovered_control_replay_authority_for_test(
@@ -1016,7 +973,6 @@ pub(crate) fn substitute_recovered_control_replay_authority_for_test(
     ledger.records[*index].replay_authority = foreign;
     ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_ok() && store.persist(&ledger).is_ok()
 }
-
 /// Substitute a structurally valid foreign replay origin on the WAL Decision Fetch row.
 #[cfg(test)]
 pub(crate) fn substitute_recovered_decision_fetch_replay_authority_for_test(
@@ -1048,7 +1004,6 @@ pub(crate) fn substitute_recovered_decision_fetch_replay_authority_for_test(
     ledger.records[*index].replay_authority = foreign;
     ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_ok() && store.persist(&ledger).is_ok()
 }
-
 /// Substitute a valid foreign owner while retaining the exact Decision Fetch key.
 #[cfg(test)]
 pub(crate) fn substitute_recovered_decision_fetch_owner_for_test(
@@ -1078,7 +1033,6 @@ pub(crate) fn substitute_recovered_decision_fetch_owner_for_test(
     ledger.records[*index].reconstruction_source = *owner.causal_root().digest().as_bytes();
     ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_ok() && store.persist(&ledger).is_ok()
 }
-
 /// Append a valid foreign terminal row which aliases the control row's owner.
 #[cfg(test)]
 pub(crate) fn append_same_owner_foreign_terminal_for_test(

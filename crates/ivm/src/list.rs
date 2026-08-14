@@ -4,18 +4,14 @@
 //! owned heap allocation whose exact element shape and capacity come from the
 //! compiler-emitted schema. Hosts must therefore validate the complete range
 //! against that schema before reading it.
-
+use crate::{IVM, VMError};
 #[cfg(test)]
 use ivm_abi::list::LIST_HEADER_WORDS_V1;
 use ivm_abi::list::LIST_WORD_BYTES_V1;
 pub use ivm_abi::list::ListLayoutV1;
-
-use crate::{IVM, VMError};
-
 fn layout_error() -> VMError {
     VMError::DecodeError
 }
-
 fn validate_header(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<u64, VMError> {
     if !base.is_multiple_of(LIST_WORD_BYTES_V1) {
         return Err(layout_error());
@@ -31,12 +27,10 @@ fn validate_header(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<u64, VME
     }
     Ok(len)
 }
-
 fn element_slot(base: u64, layout: ListLayoutV1, index: u64) -> Result<u64, VMError> {
     base.checked_add(layout.slot_offset(index).map_err(|_| layout_error())?)
         .ok_or_else(layout_error)
 }
-
 fn read_element(vm: &IVM, slot: u64, element_words: u64) -> Result<Vec<u64>, VMError> {
     let mut element =
         Vec::with_capacity(usize::try_from(element_words).map_err(|_| layout_error())?);
@@ -52,7 +46,6 @@ fn read_element(vm: &IVM, slot: u64, element_words: u64) -> Result<Vec<u64>, VME
     }
     Ok(element)
 }
-
 fn write_element(vm: &mut IVM, slot: u64, element: &[u64]) -> Result<(), VMError> {
     for (word_index, word) in element.iter().copied().enumerate() {
         let address = slot
@@ -67,7 +60,6 @@ fn write_element(vm: &mut IVM, slot: u64, element: &[u64]) -> Result<(), VMError
     }
     Ok(())
 }
-
 /// Allocate and initialise one contiguous list from flattened element words.
 ///
 /// Only active elements are written. Inactive capacity never requires a
@@ -85,7 +77,6 @@ pub fn allocate_words(
     {
         return Err(layout_error());
     }
-
     let bytes = layout.allocation_bytes().map_err(|_| layout_error())?;
     let base = vm.alloc_heap(bytes)?;
     vm.store_u64(
@@ -119,11 +110,9 @@ pub fn allocate_words(
     }
     Ok(base)
 }
-
 /// Validate and read the active elements of one compiler-owned list.
 pub fn read_words(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<Vec<Vec<u64>>, VMError> {
     let len = validate_header(vm, base, layout)?;
-
     let mut elements = Vec::with_capacity(usize::try_from(len).map_err(|_| layout_error())?);
     for index in 0..len {
         let offset = layout
@@ -134,12 +123,10 @@ pub fn read_words(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<Vec<Vec<u
     }
     Ok(elements)
 }
-
 /// Return the validated active length of a compiler-owned list.
 pub fn len(vm: &IVM, base: u64, layout: ListLayoutV1) -> Result<u64, VMError> {
     validate_header(vm, base, layout)
 }
-
 /// Read one present element, returning `None` for an out-of-range index.
 pub fn get_words(
     vm: &IVM,
@@ -154,7 +141,6 @@ pub fn get_words(
     let slot = element_slot(base, layout, index)?;
     read_element(vm, slot, layout.element_words()).map(Some)
 }
-
 /// Replace one present element without changing the list on failure.
 pub fn try_set_words(
     vm: &mut IVM,
@@ -174,7 +160,6 @@ pub fn try_set_words(
     write_element(vm, slot, element)?;
     Ok(true)
 }
-
 /// Append one element when capacity remains.
 ///
 /// The length word is committed last, so a failed precondition leaves every
@@ -197,7 +182,6 @@ pub fn try_push_words(
     vm.store_u64(base, len.checked_add(1).ok_or_else(layout_error)?)?;
     Ok(true)
 }
-
 /// Remove and return the last element, or `None` when the list is empty.
 pub fn pop_words(
     vm: &mut IVM,
@@ -215,7 +199,6 @@ pub fn pop_words(
     vm.store_u64(base, index)?;
     Ok(Some(element))
 }
-
 /// Test whether an active element has exactly the supplied flattened words.
 pub fn contains_words(
     vm: &IVM,
@@ -230,26 +213,22 @@ pub fn contains_words(
         .iter()
         .any(|candidate| candidate == element))
 }
-
 /// Return the fixed byte offset of the list capacity word.
 #[must_use]
 #[cfg(test)]
 pub(crate) const fn capacity_word_offset() -> u64 {
     (LIST_HEADER_WORDS_V1 - 1) * LIST_WORD_BYTES_V1
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::Memory;
-
     #[test]
     fn list_roundtrip_uses_one_owned_allocation() {
         let mut vm = IVM::new(0);
         let layout = ListLayoutV1::try_new(4, 2).expect("layout");
         let base =
             allocate_words(&mut vm, layout, &[vec![1, 2], vec![3, 4]]).expect("allocate list");
-
         assert_eq!(base, Memory::HEAP_START);
         assert_eq!(vm.load_u64(base), Ok(2));
         assert_eq!(
@@ -261,7 +240,6 @@ mod tests {
             Ok(vec![vec![1, 2], vec![3, 4]])
         );
     }
-
     #[test]
     fn allocation_rejects_capacity_and_element_width_before_mutating_vm() {
         let mut vm = IVM::new(0);
@@ -276,42 +254,35 @@ mod tests {
         );
         assert_eq!(allocate_words(&mut vm, layout, &[]), Ok(Memory::HEAP_START));
     }
-
     #[test]
     fn forged_headers_and_unowned_ranges_fail_closed() {
         let mut vm = IVM::new(0);
         let layout = ListLayoutV1::try_new(2, 1).expect("layout");
         let base = allocate_words(&mut vm, layout, &[vec![7]]).expect("list");
-
         vm.store_u64(base + capacity_word_offset(), 3)
             .expect("forge capacity");
         assert_eq!(read_words(&vm, base, layout), Err(VMError::DecodeError));
-
         vm.store_u64(base + capacity_word_offset(), 2)
             .expect("restore capacity");
         vm.store_u64(base, 3).expect("forge length");
         assert_eq!(read_words(&vm, base, layout), Err(VMError::DecodeError));
-
         assert_eq!(
             read_words(&vm, Memory::HEAP_START + 4096, layout),
             Err(VMError::DecodeError)
         );
         assert_eq!(read_words(&vm, base + 1, layout), Err(VMError::DecodeError));
     }
-
     #[test]
     fn safe_list_operations_preserve_capacity_and_element_order() {
         let mut vm = IVM::new(0);
         let layout = ListLayoutV1::try_new(3, 2).expect("layout");
         let base =
             allocate_words(&mut vm, layout, &[vec![1, 2], vec![3, 4]]).expect("allocate list");
-
         assert_eq!(len(&vm, base, layout), Ok(2));
         assert_eq!(get_words(&vm, base, layout, 0), Ok(Some(vec![1, 2])));
         assert_eq!(get_words(&vm, base, layout, 2), Ok(None));
         assert_eq!(contains_words(&vm, base, layout, &[3, 4]), Ok(true));
         assert_eq!(contains_words(&vm, base, layout, &[4, 3]), Ok(false));
-
         assert_eq!(try_set_words(&mut vm, base, layout, 1, &[5, 6]), Ok(true));
         assert_eq!(try_push_words(&mut vm, base, layout, &[7, 8]), Ok(true));
         assert_eq!(
@@ -329,7 +300,6 @@ mod tests {
             "pop clears inactive storage"
         );
     }
-
     #[test]
     fn failed_mutations_leave_every_reserved_word_unchanged() {
         let mut vm = IVM::new(0);
@@ -342,7 +312,6 @@ mod tests {
             let before = (0..layout.allocation_bytes().expect("allocation bytes") / 8)
                 .map(|word| vm.load_u64(base + word * 8).expect("reserved word"))
                 .collect::<Vec<_>>();
-
             assert_eq!(
                 try_set_words(&mut vm, base, layout, capacity, &[999, 1000]),
                 Ok(false)
@@ -357,7 +326,6 @@ mod tests {
             assert_eq!(after, before, "capacity {capacity}");
         }
     }
-
     #[test]
     fn list_operations_match_a_vec_model_for_every_capacity_and_active_length() {
         fn snapshot(vm: &IVM, base: u64, layout: ListLayoutV1) -> Vec<u64> {
@@ -365,7 +333,6 @@ mod tests {
                 .map(|word| vm.load_u64(base + word * 8).expect("reserved word"))
                 .collect()
         }
-
         for element_words in [1_u64, 2, 4] {
             let mut vm = IVM::new(0);
             let template = vm.runtime_template();
@@ -386,7 +353,6 @@ mod tests {
                         })
                         .collect::<Vec<_>>();
                     let base = allocate_words(&mut vm, layout, &model).expect("allocate list");
-
                     assert_eq!(read_words(&vm, base, layout), Ok(model.clone()));
                     assert_eq!(len(&vm, base, layout), Ok(active_len));
                     for index in 0..active_len {
@@ -398,7 +364,6 @@ mod tests {
                         );
                     }
                     assert_eq!(get_words(&vm, base, layout, active_len), Ok(None));
-
                     let width = usize::try_from(element_words).expect("bounded element width");
                     let replacement = vec![9_000 + active_len; width];
                     let before_failed_set = snapshot(&vm, base, layout);
@@ -411,7 +376,6 @@ mod tests {
                         before_failed_set,
                         "failed set mutated capacity {capacity}, length {active_len}, width {element_words}"
                     );
-
                     if active_len == 0 {
                         let before_empty_pop = snapshot(&vm, base, layout);
                         assert_eq!(pop_words(&mut vm, base, layout), Ok(None));
@@ -421,7 +385,6 @@ mod tests {
                             "empty pop mutated capacity {capacity}, width {element_words}"
                         );
                     }
-
                     if active_len == capacity {
                         let before_failed_push = snapshot(&vm, base, layout);
                         assert_eq!(
@@ -441,13 +404,11 @@ mod tests {
                         model.push(replacement.clone());
                         assert_eq!(read_words(&vm, base, layout), Ok(model.clone()));
                     }
-
                     if let Some(first) = model.first() {
                         assert_eq!(contains_words(&vm, base, layout, first), Ok(true));
                     }
                     let absent = vec![u64::MAX; width];
                     assert_eq!(contains_words(&vm, base, layout, &absent), Ok(false));
-
                     let expected = model.pop();
                     assert_eq!(pop_words(&mut vm, base, layout), Ok(expected));
                     assert_eq!(read_words(&vm, base, layout), Ok(model));
@@ -455,14 +416,12 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn malformed_element_width_fails_before_mutation() {
         let mut vm = IVM::new(0);
         let layout = ListLayoutV1::try_new(2, 2).expect("layout");
         let base = allocate_words(&mut vm, layout, &[vec![1, 2]]).expect("allocate list");
         let before = read_words(&vm, base, layout).expect("read before");
-
         assert_eq!(
             try_set_words(&mut vm, base, layout, 0, &[9]),
             Err(VMError::DecodeError)

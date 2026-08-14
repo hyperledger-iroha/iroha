@@ -1,11 +1,4 @@
 //! Public-boundary regression tests for state-backed native FX routing plans.
-
-use std::{
-    collections::BTreeSet,
-    num::{NonZeroU32, NonZeroU64},
-    time::Duration,
-};
-
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_core::{
     kura::Kura,
@@ -40,7 +33,11 @@ use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID,
 };
-
+use std::{
+    collections::BTreeSet,
+    num::{NonZeroU32, NonZeroU64},
+    time::Duration,
+};
 const LEDGER_TIME_MS: u64 = 0;
 const SOURCE_DATASPACE: DataSpaceId = DataSpaceId::new(10);
 const DESTINATION_DATASPACE: DataSpaceId = DataSpaceId::new(12);
@@ -50,13 +47,11 @@ const SOURCE_LANE: LaneId = LaneId::new(3);
 const DESTINATION_LANE: LaneId = LaneId::new(4);
 const CONTRACT_LANE: LaneId = LaneId::new(5);
 const DEPLOY_POLICY_LANE: LaneId = LaneId::new(6);
-
 struct Fixture {
     state: State,
     router: ConfigLaneRouter,
     corridor: FxCorridorPolicy,
 }
-
 fn lane_catalog() -> LaneCatalog {
     LaneCatalog::new(
         NonZeroU32::new(7).expect("nonzero lane bound"),
@@ -90,7 +85,6 @@ fn lane_catalog() -> LaneCatalog {
     )
     .expect("valid deterministic lane catalog")
 }
-
 fn dataspace_catalog() -> DataSpaceCatalog {
     DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -121,7 +115,6 @@ fn dataspace_catalog() -> DataSpaceCatalog {
     ])
     .expect("valid deterministic dataspace catalog")
 }
-
 fn routing_policy() -> LaneRoutingPolicy {
     LaneRoutingPolicy {
         default_lane: LaneId::SINGLE,
@@ -137,21 +130,18 @@ fn routing_policy() -> LaneRoutingPolicy {
         }],
     }
 }
-
 fn source_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("cbuae", "universal").expect("source asset domain"),
         "aed".parse().expect("source asset name"),
     )
 }
-
 fn destination_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("sbp", "universal").expect("destination asset domain"),
         "pkr".parse().expect("destination asset name"),
     )
 }
-
 fn corridor() -> FxCorridorPolicy {
     FxCorridorPolicy {
         policy_id: "mobile_aed_pkr".parse().expect("FX policy id"),
@@ -176,7 +166,6 @@ fn corridor() -> FxCorridorPolicy {
         enabled: true,
     }
 }
-
 fn seed_active_sns_dataspace(world: &mut World, alias: &str) {
     let selector =
         iroha_core::sns::selector_for_dataspace_alias(alias).expect("valid SNS dataspace selector");
@@ -198,7 +187,6 @@ fn seed_active_sns_dataspace(world: &mut World, alias: &str) {
         record.encode(),
     );
 }
-
 fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     let source_domain = DomainId::try_new("cbuae", "universal").expect("source domain");
     let destination_domain = DomainId::try_new("sbp", "universal").expect("destination domain");
@@ -242,7 +230,6 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     if let Some(alias) = active_sns_alias {
         seed_active_sns_dataspace(&mut world, alias);
     }
-
     let corridor = corridor();
     let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
     feed.feed_id = corridor.oracle_feed_id.clone();
@@ -263,7 +250,6 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     state
         .set_nexus(nexus)
         .expect("pre-genesis Nexus configuration must be valid");
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero block height"),
         None,
@@ -284,14 +270,12 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     .expect("exact CanManageFxCorridors grant must install the valid policy");
     transaction.apply();
     block.commit().expect("policy setup block must commit");
-
     Fixture {
         state,
         router: ConfigLaneRouter::new(policy, dataspaces, lanes),
         corridor,
     }
 }
-
 fn accepted_transaction(
     state: &State,
     instructions: Vec<InstructionBox>,
@@ -320,7 +304,6 @@ fn accepted_transaction(
     )
     .expect("deterministic transaction must pass stateless admission")
 }
-
 fn settlement_instruction(corridor: &FxCorridorPolicy, settlement_id: &str) -> InstructionBox {
     let request_hash = Hash::new(b"fx-routing-review-oracle-request");
     let oracle_event = FeedEvent {
@@ -353,7 +336,6 @@ fn settlement_instruction(corridor: &FxCorridorPolicy, settlement_id: &str) -> I
         },
     ))
 }
-
 fn queue_and_block_plans(
     fixture: &Fixture,
     transaction: &AcceptedTransaction<'_>,
@@ -372,7 +354,6 @@ fn queue_and_block_plans(
     .expect("block-time FX plan must resolve");
     (queue_plan, block_plan)
 }
-
 fn participant_routes(plan: &RoutingPlan) -> BTreeSet<(LaneId, DataSpaceId)> {
     let RoutingPlan::NativeAmx(native) = plan else {
         panic!("FX transaction must produce a native AMX plan");
@@ -383,7 +364,6 @@ fn participant_routes(plan: &RoutingPlan) -> BTreeSet<(LaneId, DataSpaceId)> {
         .map(|leg| (leg.route.lane_id, leg.route.dataspace_id))
         .collect()
 }
-
 #[test]
 fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
     let fixture = fixture(None);
@@ -411,7 +391,6 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
             settlement_instruction(&fixture.corridor, "fx_deploy_boundary"),
         ],
     );
-
     let (queue_plan, block_plan) = queue_and_block_plans(&fixture, &transaction);
     assert_eq!(queue_plan, block_plan);
     assert_eq!(queue_plan.digest(), block_plan.digest());
@@ -425,7 +404,6 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
         ])
     );
 }
-
 #[test]
 fn fx_state_view_uses_ledger_time_for_active_sns_only_dataspace() {
     const SNS_ALIAS: &str = "alpha";
@@ -441,7 +419,6 @@ fn fx_state_view_uses_ledger_time_for_active_sns_only_dataspace() {
             settlement_instruction(&fixture.corridor, "fx_sns_boundary"),
         ],
     );
-
     let (queue_plan, block_plan) = queue_and_block_plans(&fixture, &transaction);
     assert_eq!(queue_plan, block_plan);
     assert_eq!(queue_plan.digest(), block_plan.digest());

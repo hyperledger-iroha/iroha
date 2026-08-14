@@ -1,14 +1,11 @@
 //! Regression test for reading blocks from large sparse files without loading the entire file into memory.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::time::{Duration, Instant};
-
 use iroha_config::kura::FsyncMode;
 use iroha_core::kura::BlockStore;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
-
 #[test]
 #[cfg_attr(
     not(target_pointer_width = "64"),
@@ -22,10 +19,8 @@ fn block_bytes_sparse_file_reads_requested_slice() {
     store
         .create_files_if_they_do_not_exist()
         .expect("initialize block store");
-
     let payload = b"block-bytes-regression";
     let offset = FILE_LEN - payload.len() as u64;
-
     store
         .write_block_data(offset, payload)
         .expect("write sparse payload");
@@ -38,13 +33,11 @@ fn block_bytes_sparse_file_reads_requested_slice() {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH])),
         )
         .expect("write sparse hash");
-
     let start = Instant::now();
     let slice = store
         .block_bytes(offset, payload.len() as u64)
         .expect("read sparse payload");
     let elapsed = start.elapsed();
-
     assert_eq!(slice, payload);
     assert!(
         elapsed < Duration::from_secs(5),

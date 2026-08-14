@@ -3,15 +3,11 @@
 //! Keeping these cases in the `refinement::tests` module preserves their
 //! source-linked release inventory while the production refinement relation
 //! remains small enough for repository source-budget enforcement.
-
 use super::*;
-
 fn successor_identity(domain: u8, kind: u8, byte: u8) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, [byte; 32])
 }
-
 include!("refinement_cases/effect_candidate.rs");
-
 fn in_flight_reservation_identity(byte: u8) -> CanonicalIdentityProjection {
     successor_identity(
         IDENTITY_DOMAIN_DURABLE_ARTIFACT,
@@ -19,7 +15,6 @@ fn in_flight_reservation_identity(byte: u8) -> CanonicalIdentityProjection {
         byte,
     )
 }
-
 fn in_flight_release_identity(byte: u8) -> CanonicalIdentityProjection {
     successor_identity(
         IDENTITY_DOMAIN_DURABLE_ARTIFACT,
@@ -27,7 +22,6 @@ fn in_flight_release_identity(byte: u8) -> CanonicalIdentityProjection {
         byte,
     )
 }
-
 fn in_flight_owner(
     state: u8,
     reservation_identity: CanonicalIdentityProjection,
@@ -39,7 +33,6 @@ fn in_flight_owner(
         release_identity,
     }
 }
-
 #[test]
 fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() {
     let absent = ProductionInFlightReservationOwnerProjection::default();
@@ -80,7 +73,6 @@ fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() 
             after,
         }
     };
-
     let reserve = transition(
         IN_FLIGHT_RESERVATION_ACTION_RESERVE,
         CanonicalIdentityProjection::zero(),
@@ -93,7 +85,6 @@ fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() 
             .into_projection(),
         reserve
     );
-
     for accepted in [
         transition(
             IN_FLIGHT_RESERVATION_ACTION_RESERVE,
@@ -218,7 +209,6 @@ fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() 
             "expected accepted primitive transition: {accepted:?}"
         );
     }
-
     for rejected in [
         transition(
             IN_FLIGHT_RESERVATION_ACTION_COMMIT,
@@ -279,7 +269,6 @@ fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() 
         );
     }
 }
-
 fn in_flight_first_release_validator_mask(validator_count: u8) -> u128 {
     assert!((1..=128).contains(&validator_count));
     if validator_count == 128 {
@@ -288,7 +277,6 @@ fn in_flight_first_release_validator_mask(validator_count: u8) -> u128 {
         (1u128 << u32::from(validator_count)) - 1
     }
 }
-
 fn in_flight_first_release_initial_state_with_validator_count(
     validator_count: u8,
 ) -> ProductionInFlightFirstReleaseStateProjection {
@@ -317,11 +305,9 @@ fn in_flight_first_release_initial_state_with_validator_count(
         release: ProductionInFlightFirstReleaseReleaseProjection::default(),
     }
 }
-
 fn in_flight_first_release_initial_state() -> ProductionInFlightFirstReleaseStateProjection {
     in_flight_first_release_initial_state_with_validator_count(3)
 }
-
 #[test]
 fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum() {
     for (validator_count, expected_quorum) in [(1u8, 1u8), (3, 3), (4, 3), (128, 86)] {
@@ -339,7 +325,6 @@ fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_q
             initial.payload_binding_a, initial.producer,
             "authenticated producer custody must not imply all-validator knowledge"
         );
-
         let ready_signers = in_flight_first_release_validator_mask(expected_quorum);
         let mut before = initial;
         before.history.ever_ready_authorized = ready_signers;
@@ -354,7 +339,6 @@ fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_q
             before,
             after,
         );
-
         let one_short = ready_signers & !(1u128 << u32::from(expected_quorum - 1));
         let mut insufficient_before = initial;
         insufficient_before.history.ever_ready_authorized = one_short;
@@ -375,7 +359,6 @@ fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_q
             .is_none(),
             "{validator_count}-validator READY QC must reject {one_short:#034x} below canonical quorum {expected_quorum}"
         );
-
         let mut missing_producer_custody = initial;
         missing_producer_custody.payload_binding_a = validator_mask & !initial.producer;
         assert!(
@@ -392,7 +375,6 @@ fn in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_q
         }
     }
 }
-
 fn checked_in_flight_first_release_step(
     action: u8,
     actor: u128,
@@ -415,14 +397,12 @@ fn checked_in_flight_first_release_step(
     );
     after
 }
-
 fn in_flight_first_release_reserved_state_with_selected_count(
     selected_count: u64,
 ) -> ProductionInFlightFirstReleaseStateProjection {
     assert!((1..=4096).contains(&selected_count));
     let mut state = in_flight_first_release_initial_state();
     assert!(production_in_flight_first_release_state_kernel(state));
-
     let before = state;
     state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
     state.queue.selected_count = selected_count;
@@ -434,7 +414,6 @@ fn in_flight_first_release_reserved_state_with_selected_count(
         before,
         state,
     );
-
     let before = state;
     state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
     state.history.ever_reservation_v5 = true;
@@ -446,26 +425,21 @@ fn in_flight_first_release_reserved_state_with_selected_count(
         state,
     )
 }
-
 fn in_flight_first_release_reserved_state() -> ProductionInFlightFirstReleaseStateProjection {
     in_flight_first_release_reserved_state_with_selected_count(2)
 }
-
 fn in_flight_first_release_ready_state_with_selected_count(
     selected_count: u64,
 ) -> ProductionInFlightFirstReleaseStateProjection {
     let mut state = in_flight_first_release_reserved_state_with_selected_count(selected_count);
-
     state = check_production_in_flight_first_release_fanout_from_producer_transition(state, 2)
         .expect("producer fanout must derive checked replica custody")
         .into_projection()
         .after;
-
     state = check_production_in_flight_first_release_serve_late_body_transition(state, 2, 4)
         .expect("late-body service must derive checked target custody")
         .into_projection()
         .after;
-
     for actor in [1u128, 2, 4] {
         let before = state;
         state.carrier.kura_active |= actor;
@@ -476,7 +450,6 @@ fn in_flight_first_release_ready_state_with_selected_count(
             before,
             state,
         );
-
         let before = state;
         state.carrier.execution_input_durable |= actor;
         state.history.ever_execution_input_durable |= actor;
@@ -487,7 +460,6 @@ fn in_flight_first_release_ready_state_with_selected_count(
             before,
             state,
         );
-
         let before = state;
         state.session.ready_authorized |= actor;
         state.history.ever_ready_authorized |= actor;
@@ -498,7 +470,6 @@ fn in_flight_first_release_ready_state_with_selected_count(
             before,
             state,
         );
-
         let before = state;
         state.history.ready_signed |= actor;
         state = checked_in_flight_first_release_step(
@@ -509,7 +480,6 @@ fn in_flight_first_release_ready_state_with_selected_count(
             state,
         );
     }
-
     let before = state;
     state.carrier.ready_qc_durable = true;
     state.history.ever_ready_qc_durable = true;
@@ -521,16 +491,13 @@ fn in_flight_first_release_ready_state_with_selected_count(
         state,
     )
 }
-
 fn in_flight_first_release_ready_state() -> ProductionInFlightFirstReleaseStateProjection {
     in_flight_first_release_ready_state_with_selected_count(2)
 }
-
 fn in_flight_first_release_applied_state_with_selected_count(
     selected_count: u64,
 ) -> ProductionInFlightFirstReleaseStateProjection {
     let mut state = in_flight_first_release_ready_state_with_selected_count(selected_count);
-
     let before = state;
     state.decision.lane_commit_owner = 1;
     state.decision.lane_commit_scope = state.binding_a;
@@ -541,7 +508,6 @@ fn in_flight_first_release_applied_state_with_selected_count(
         before,
         state,
     );
-
     let before = state;
     state.decision.wsv_committed = true;
     state.decision.application_count = 1;
@@ -554,7 +520,6 @@ fn in_flight_first_release_applied_state_with_selected_count(
         state,
     )
 }
-
 fn in_flight_first_release_advance_commit_cleanup_prefixes(
     mut state: ProductionInFlightFirstReleaseStateProjection,
 ) -> ProductionInFlightFirstReleaseStateProjection {
@@ -602,21 +567,17 @@ fn in_flight_first_release_advance_commit_cleanup_prefixes(
     }
     state
 }
-
 #[test]
 fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
     let mut state = in_flight_first_release_ready_state();
-
     state = check_production_in_flight_first_release_crash_transition(state, 4)
         .expect("crash must derive exact volatile-custody loss")
         .into_projection()
         .after;
-
     state = check_production_in_flight_first_release_recover_transition(state, 4)
         .expect("recovery must derive exact crashed-bit removal")
         .into_projection()
         .after;
-
     let before = state;
     state.decision.lane_commit_owner = 1;
     state.decision.lane_commit_scope = state.binding_a;
@@ -627,7 +588,6 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
         before,
         state,
     );
-
     let before = state;
     state.decision.wsv_committed = true;
     state.decision.application_count = 1;
@@ -639,7 +599,6 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
         before,
         state,
     );
-
     for prefix in 1..=state.queue.selected_count {
         let before = state;
         state.history.reservation_committed_prefix = prefix;
@@ -658,7 +617,6 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
             "Commit prefix alone must not publish terminal WSV ownership"
         );
     }
-
     for prefix in 1..=state.queue.selected_count {
         let before = state;
         state.history.queue_plan_tombstoned_prefix = prefix;
@@ -677,7 +635,6 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
             "QueuePlan tombstone prefix alone must not publish terminal WSV ownership"
         );
     }
-
     for prefix in 1..=state.queue.selected_count {
         let before = state;
         state.history.reservation_commit_forgotten_prefix = prefix;
@@ -698,12 +655,10 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
             );
         }
     }
-
     state = check_production_in_flight_first_release_repair_post_carrier_evidence_transition(state)
         .expect("post-carrier repair must derive an exact checked stutter")
         .into_projection()
         .after;
-
     assert_eq!(
         production_in_flight_first_release_terminal_owner(state),
         Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
@@ -714,7 +669,6 @@ fn in_flight_first_release_composed_commit_path_is_exact_and_terminal() {
         })
     );
 }
-
 #[test]
 fn in_flight_first_release_commit_cleanup_prefixes_cover_bounds_and_crash_recovery() {
     for selected_count in [1, 4096] {
@@ -738,7 +692,6 @@ fn in_flight_first_release_commit_cleanup_prefixes_cover_bounds_and_crash_recove
             "the complete {selected_count}-key cleanup must end in WSV-only ownership"
         );
     }
-
     let mut state = in_flight_first_release_applied_state_with_selected_count(4);
     let before = state;
     state.history.reservation_committed_prefix = 1;
@@ -773,11 +726,9 @@ fn in_flight_first_release_commit_cleanup_prefixes_cover_bounds_and_crash_recove
     assert_eq!(state.history.reservation_committed_prefix, 1);
     assert!(production_in_flight_first_release_terminal_owner(state).is_none());
 }
-
 #[test]
 fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reordering() {
     let applied = in_flight_first_release_applied_state_with_selected_count(4);
-
     let mut skipped_commit = applied;
     skipped_commit.history.reservation_committed_prefix = 2;
     assert!(production_in_flight_first_release_state_kernel(
@@ -795,7 +746,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         )
         .is_none()
     );
-
     let mut committed = applied;
     for prefix in 1..=4 {
         let before = committed;
@@ -811,7 +761,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
             committed,
         );
     }
-
     let mut decreasing_commit = committed;
     decreasing_commit.history.reservation_committed_prefix = 3;
     decreasing_commit.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
@@ -830,7 +779,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         )
         .is_none()
     );
-
     let mut skipped_tombstone = committed;
     skipped_tombstone.history.queue_plan_tombstoned_prefix = 2;
     assert!(production_in_flight_first_release_state_kernel(
@@ -848,7 +796,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         )
         .is_none()
     );
-
     let mut tombstoned = committed;
     for prefix in 1..=4 {
         let before = tombstoned;
@@ -864,7 +811,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
             tombstoned,
         );
     }
-
     let mut decreasing_tombstone = tombstoned;
     decreasing_tombstone.history.queue_plan_tombstoned_prefix = 3;
     decreasing_tombstone.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
@@ -883,7 +829,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         )
         .is_none()
     );
-
     let mut skipped_forget = tombstoned;
     skipped_forget.history.reservation_commit_forgotten_prefix = 2;
     assert!(production_in_flight_first_release_state_kernel(
@@ -901,7 +846,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         )
         .is_none()
     );
-
     let mut forgotten = tombstoned;
     for prefix in 1..=4 {
         let before = forgotten;
@@ -918,7 +862,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
             forgotten,
         );
     }
-
     let mut decreasing_forget = forgotten;
     decreasing_forget
         .history
@@ -939,7 +882,6 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         )
         .is_none()
     );
-
     let mut tombstone_before_commit = applied;
     tombstone_before_commit.history.queue_plan_tombstoned_prefix = 1;
     assert!(!production_in_flight_first_release_state_kernel(
@@ -953,11 +895,9 @@ fn in_flight_first_release_commit_cleanup_rejects_skips_decreases_and_stage_reor
         forget_before_tombstone
     ));
 }
-
 #[test]
 fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
     let mut state = in_flight_first_release_ready_state();
-
     let before = state;
     state.decision.release_owner = 1;
     state.decision.release_scope = state.binding_a;
@@ -969,7 +909,6 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
         before,
         state,
     );
-
     for prefix in 1..=2 {
         let before = state;
         state.release.pending_prefix = prefix;
@@ -982,7 +921,6 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
             state,
         );
     }
-
     let before = state;
     state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED;
     state = checked_in_flight_first_release_step(
@@ -992,7 +930,6 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
         before,
         state,
     );
-
     for prefix in 1..=2 {
         let before = state;
         state.release.released_prefix = prefix;
@@ -1005,7 +942,6 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
             state,
         );
     }
-
     let before = state;
     state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED;
     state = checked_in_flight_first_release_step(
@@ -1015,7 +951,6 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
         before,
         state,
     );
-
     let before = state;
     state.release.fifo_restored = true;
     state = checked_in_flight_first_release_step(
@@ -1025,7 +960,6 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
         before,
         state,
     );
-
     let before = state;
     state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN;
     state = checked_in_flight_first_release_step(
@@ -1035,14 +969,12 @@ fn in_flight_first_release_composed_four_stage_release_is_exact_and_terminal() {
         before,
         state,
     );
-
     let terminal = production_in_flight_first_release_terminal_owner(state)
         .expect("ordered release must expose its terminal FIFO owner");
     assert!(terminal.ordinary_fifo_owner);
     assert!(!terminal.canonical_wsv_owner);
     assert!(terminal.release_terminal);
 }
-
 #[test]
 fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
     let reserved = in_flight_first_release_reserved_state();
@@ -1054,7 +986,6 @@ fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
         reserved,
         in_flight_first_release_applied_state_with_selected_count(2),
     );
-
     let mut after = reserved;
     after.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
     after.release.fifo_restored = true;
@@ -1069,7 +1000,6 @@ fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
         .expect("direct release must expose its terminal FIFO owner");
     assert!(terminal.ordinary_fifo_owner);
     assert!(!terminal.canonical_wsv_owner);
-
     let mut fabricated = reserved;
     fabricated.decision.wsv_committed = true;
     fabricated.decision.application_count = 1;
@@ -1088,11 +1018,9 @@ fn in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned() {
         "WSV application without a lane-commit owner must fail closed"
     );
 }
-
 #[test]
 fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
     let ready = in_flight_first_release_ready_state();
-
     let crashed_replica = check_production_in_flight_first_release_crash_transition(ready, 4)
         .expect("a Kura-owning replica can lose volatile custody")
         .into_projection()
@@ -1125,7 +1053,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         0,
         "body rehydration must not recreate READY authorization"
     );
-
     let crashed_producer =
         check_production_in_flight_first_release_crash_transition(ready, ready.producer)
             .expect("the frozen producer can lose volatile custody")
@@ -1156,7 +1083,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         0,
         "producer rehydration must not recreate READY authorization"
     );
-
     for invalid_actor in [0, 3, 8] {
         assert!(
             check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
@@ -1195,7 +1121,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         .is_none(),
         "rehydration must require the actor's exact durable Kura payload"
     );
-
     let accepted = replica_rehydration;
     let mut omitted_body = accepted;
     omitted_body.after.session.bodies = omitted_body.before.session.bodies;
@@ -1210,7 +1135,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         "rehydration must reject invented READY authorization"
     );
     assert_in_flight_first_release_actor_target_tampering_fails(accepted, 0, 1);
-
     let mut producer_down_replica = recovered_producer;
     producer_down_replica.session.bodies &= !4;
     assert!(production_in_flight_first_release_state_kernel(
@@ -1227,7 +1151,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         !replica_while_producer_down.after.session.producer_alive,
         "a replica must not revive the frozen producer"
     );
-
     let mut committed = in_flight_first_release_applied_state_with_selected_count(2);
     committed.session.bodies &= !committed.producer;
     committed.session.ready_authorized &= !committed.producer;
@@ -1241,7 +1164,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         .is_none(),
         "canonical WSV application must prevent volatile custody resurrection"
     );
-
     let mut terminal = ready;
     terminal.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED;
     terminal.release.fifo_restored = true;
@@ -1255,7 +1177,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         .is_none(),
         "terminal FIFO ownership must prevent volatile custody resurrection"
     );
-
     let mut retired = ready;
     retired.decision.release_owner = retired.producer;
     retired.decision.release_scope = retired.binding_a;
@@ -1273,7 +1194,6 @@ fn in_flight_first_release_local_kura_rehydration_is_exact_and_fail_closed() {
         "retired Kura custody must not be resurrected"
     );
 }
-
 fn retirement_projection_accepts(
     decision_view: u64,
     decision_proposal_view: u64,
@@ -1307,7 +1227,6 @@ fn retirement_projection_accepts(
         7u64,
     )
 }
-
 fn assert_strict_same_round_timeout_upgrade_kernel_boundaries() {
     let admitted = StrictSameRoundTimeoutUpgradeProjection {
         current_view: 6,
@@ -1321,7 +1240,6 @@ fn assert_strict_same_round_timeout_upgrade_kernel_boundaries() {
         locked_prepare_view: 3,
     };
     assert!(strict_same_round_timeout_upgrade_is_allowed(admitted));
-
     assert!(!strict_same_round_timeout_upgrade_is_allowed(
         StrictSameRoundTimeoutUpgradeProjection {
             current_view: 7,
@@ -1367,11 +1285,9 @@ fn assert_strict_same_round_timeout_upgrade_kernel_boundaries() {
         }
     ));
 }
-
 #[test]
 fn strict_same_round_refinement_kernels_reject_split_round_mutations() {
     assert_strict_same_round_timeout_upgrade_kernel_boundaries();
-
     let pending = PendingProjection {
         record_kind: WAL_RECORD_LOCK_AND_COMMIT,
         continuation: CONTINUATION_SIGN,
@@ -1397,7 +1313,6 @@ fn strict_same_round_refinement_kernels_reject_split_round_mutations() {
         pending,
         boundary
     ));
-
     let split_lock = PendingProjection {
         proposal_view: 3,
         ..pending
@@ -1412,7 +1327,6 @@ fn strict_same_round_refinement_kernels_reject_split_round_mutations() {
         split_lock,
         split_lock_boundary
     ));
-
     let decision = PendingProjection {
         record_kind: WAL_RECORD_DECISION,
         continuation: CONTINUATION_DECIDE,
@@ -1432,14 +1346,12 @@ fn strict_same_round_refinement_kernels_reject_split_round_mutations() {
         BoundaryCapabilityKey::none()
     ));
 }
-
 #[test]
 fn wal_retirement_authorization_rejects_split_round_decision_and_receipt() {
     assert!(retirement_projection_accepts(4, 4, 4, 4));
     assert!(!retirement_projection_accepts(4, 3, 4, 3));
     assert!(!retirement_projection_accepts(4, 4, 5, 5));
 }
-
 #[test]
 fn semantic_commit_decision_identity_ignores_only_qc_rounds() {
     let context = successor_identity(
@@ -1490,7 +1402,6 @@ fn semantic_commit_decision_identity_ignores_only_qc_rounds() {
         old_round,
         later_reproposal
     ));
-
     let split_round = ProductionDecisionIdentityProjection {
         proposal_view: 4,
         ..later_reproposal
@@ -1502,7 +1413,6 @@ fn semantic_commit_decision_identity_ignores_only_qc_rounds() {
         old_round,
         split_round
     ));
-
     let altered_subject = ProductionDecisionIdentityProjection {
         subject: successor_identity(
             IDENTITY_DOMAIN_SUBJECT,
@@ -1515,7 +1425,6 @@ fn semantic_commit_decision_identity_ignores_only_qc_rounds() {
         old_round,
         altered_subject
     ));
-
     let altered_execution = ProductionDecisionIdentityProjection {
         execution_commitment: successor_identity(
             IDENTITY_DOMAIN_PAYLOAD,
@@ -1529,7 +1438,6 @@ fn semantic_commit_decision_identity_ignores_only_qc_rounds() {
         altered_execution
     ));
 }
-
 fn durable_predecessor(byte: u8) -> ProductionDurablePredecessorIdentityProjection {
     ProductionDurablePredecessorIdentityProjection {
         height: 7,
@@ -1541,7 +1449,6 @@ fn durable_predecessor(byte: u8) -> ProductionDurablePredecessorIdentityProjecti
         ),
     }
 }
-
 fn successor_snapshot(
     parent_height: u64,
     context_byte: u8,
@@ -1566,7 +1473,6 @@ fn successor_snapshot(
         marker_age_ms: 0,
     }
 }
-
 #[test]
 fn applied_successor_kernel_rejects_foreign_same_height_authority_and_status_mutations() {
     let predecessor = durable_predecessor(0x21);
@@ -1600,7 +1506,6 @@ fn applied_successor_kernel_rejects_foreign_same_height_authority_and_status_mut
     assert!(production_successor_predecessor_binding_kernel(
         trace.binding
     ));
-
     let mut foreign_block = trace;
     foreign_block.binding.authority_predecessor.block_hash.word0 ^= 1;
     assert!(check_production_applied_successor_transition(foreign_block).is_none());
@@ -1608,7 +1513,6 @@ fn applied_successor_kernel_rejects_foreign_same_height_authority_and_status_mut
         foreign_block.binding
     ));
     assert!(!production_applied_successor_trace_refines_indexed_activation_kernel(foreign_block));
-
     let mut foreign_artifact = trace;
     foreign_artifact
         .binding
@@ -1618,20 +1522,16 @@ fn applied_successor_kernel_rejects_foreign_same_height_authority_and_status_mut
     assert!(!production_successor_predecessor_binding_kernel(
         foreign_artifact.binding
     ));
-
     let mut reset_rank = trace;
     reset_rank.predecessor_stage_before = SUCCESSOR_STAGE_QUEUED;
     assert!(!production_applied_successor_trace_refines_indexed_activation_kernel(reset_rank));
-
     let mut retargeted = trace;
     retargeted.successor.published_context_id.word2 ^= 1;
     assert!(!production_applied_successor_trace_refines_indexed_activation_kernel(retargeted));
-
     let mut wrong_parent = trace;
     wrong_parent.successor.last_committed_height -= 1;
     assert!(!production_applied_successor_trace_refines_indexed_activation_kernel(wrong_parent));
 }
-
 #[test]
 fn two_stage_relay_retry_kernel_rejects_source_rotation_eligibility_and_fifo_mutations() {
     let trace = ProductionTwoStageRelayRetryTraceProjection {
@@ -1670,7 +1570,6 @@ fn two_stage_relay_retry_kernel_rejects_source_rotation_eligibility_and_fifo_mut
     );
     assert_eq!(trace.selected_item_rank_after, trace.source_depth_after - 1);
     assert!(trace.source_depth_after <= trace.source_capacity);
-
     for mutant in [
         ProductionTwoStageRelayRetryTraceProjection {
             daemon_source_capacity_matches_two_upstream_lanes: false,
@@ -1701,7 +1600,6 @@ fn two_stage_relay_retry_kernel_rejects_source_rotation_eligibility_and_fifo_mut
         assert!(check_production_two_stage_relay_retry_transition(mutant).is_none());
     }
 }
-
 #[test]
 fn recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint() {
     let predecessor = durable_predecessor(0x41);
@@ -1728,7 +1626,6 @@ fn recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint
         complete_tip.successor.height,
         complete_tip.successor.last_committed_height + 1
     );
-
     let snapshot = ProductionRecoveredSuccessorTraceProjection {
         authority_kind: SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
         predecessor: ProductionDurablePredecessorIdentityProjection::default(),
@@ -1753,26 +1650,22 @@ fn recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint
         snapshot.snapshot_height,
         snapshot.successor.last_committed_height
     );
-
     let mut snapshot_as_tip = snapshot;
     snapshot_as_tip.authority_kind = SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP;
     assert!(
         !production_recovered_successor_trace_refines_indexed_activation_kernel(snapshot_as_tip)
     );
-
     let mut tip_as_snapshot = complete_tip;
     tip_as_snapshot.authority_kind = SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP;
     assert!(
         !production_recovered_successor_trace_refines_indexed_activation_kernel(tip_as_snapshot)
     );
-
     let mut occupied_registry = complete_tip;
     occupied_registry.published_status_height_before = predecessor.height;
     assert!(check_production_recovered_successor_transition(occupied_registry).is_none());
     assert!(
         !production_recovered_successor_trace_refines_indexed_activation_kernel(occupied_registry)
     );
-
     let mut stale_snapshot_anchor = snapshot;
     stale_snapshot_anchor.snapshot_height -= 1;
     assert!(
@@ -1781,7 +1674,6 @@ fn recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint
         )
     );
 }
-
 #[test]
 fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restart_sources() {
     let begin = ProductionSuccessorStartupLifecycleProjection {
@@ -1804,7 +1696,6 @@ fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restar
     );
     assert_eq!(begin.published_height_after, begin.published_height_before);
     assert!(!begin.restart_required_after);
-
     let failure = ProductionSuccessorStartupLifecycleProjection {
         transition_kind: SUCCESSOR_LIFECYCLE_FAIL,
         authority_kind: SUCCESSOR_AUTHORITY_APPLIED,
@@ -1816,7 +1707,6 @@ fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restar
     assert!(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(failure));
     assert_eq!(failure.stage_after, failure.stage_before);
     assert!(failure.restart_required_after);
-
     let mut fabricated_completion = failure;
     fabricated_completion.stage_after = SUCCESSOR_STAGE_COMPLETE;
     assert!(
@@ -1827,7 +1717,6 @@ fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restar
             fabricated_completion
         )
     );
-
     let recovered_retry = ProductionSuccessorStartupLifecycleProjection {
         transition_kind: SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
         authority_kind: SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
@@ -1842,13 +1731,11 @@ fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restar
     assert!(
         production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(recovered_retry)
     );
-
     let mut snapshot_as_retry = recovered_retry;
     snapshot_as_retry.authority_kind = SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP;
     assert!(
         !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(snapshot_as_retry)
     );
-
     let snapshot_bootstrap = ProductionSuccessorStartupLifecycleProjection {
         transition_kind: SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
         authority_kind: SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
@@ -1858,7 +1745,6 @@ fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restar
         production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(snapshot_bootstrap)
     );
 }
-
 #[test]
 fn historical_certificate_kernel_rejects_foreign_admission_and_unretired_request() {
     let context = successor_identity(
@@ -1906,19 +1792,16 @@ fn historical_certificate_kernel_rejects_foreign_admission_and_unretired_request
     assert!(trace.request_present_before);
     assert!(!trace.request_present_after);
     assert_eq!(trace.message_hash, trace.admitted_message_hash);
-
     let mut foreign_admission = trace;
     foreign_admission.admitted_message_hash.word1 ^= 1;
     assert!(check_production_historical_certificate_transition(foreign_admission).is_none());
     assert!(
         !production_historical_certificate_trace_refines_indexed_async_kernel(foreign_admission)
     );
-
     let mut unretired = trace;
     unretired.request_present_after = true;
     assert!(!production_historical_certificate_trace_refines_indexed_async_kernel(unretired));
 }
-
 #[test]
 fn historical_body_pipeline_kernel_rejects_request_subject_and_owner_substitution() {
     let context = successor_identity(
@@ -1990,25 +1873,21 @@ fn historical_body_pipeline_kernel_rejects_request_subject_and_owner_substitutio
     assert_eq!(trace.owner_tag, trace.fetch_tag);
     assert!(!trace.pending_fetch_present_after);
     assert!(!trace.request_present_after);
-
     let mut replayed_request = trace;
     replayed_request.request_present_after = true;
     assert!(check_production_historical_body_pipeline_transition(replayed_request).is_none());
     assert!(
         !production_historical_body_pipeline_trace_refines_indexed_async_kernel(replayed_request)
     );
-
     let mut retargeted_subject = trace;
     retargeted_subject.manifest_subject.word2 ^= 1;
     assert!(
         !production_historical_body_pipeline_trace_refines_indexed_async_kernel(retargeted_subject)
     );
-
     let mut foreign_owner = trace;
     foreign_owner.owner_tag.generation += 1;
     assert!(!production_historical_body_pipeline_trace_refines_indexed_async_kernel(foreign_owner));
 }
-
 fn progress_identity(byte: u64) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection {
         domain: 1,
@@ -2019,7 +1898,6 @@ fn progress_identity(byte: u64) -> CanonicalIdentityProjection {
         word3: byte,
     }
 }
-
 fn durable_timeout_progress_witness() -> LockedCommitProgressWitnessProjection {
     LockedCommitProgressWitnessProjection {
         context_id: progress_identity(1),
@@ -2040,7 +1918,6 @@ fn durable_timeout_progress_witness() -> LockedCommitProgressWitnessProjection {
         ..LockedCommitProgressWitnessProjection::default()
     }
 }
-
 fn durable_reproposal_progress_witness() -> LockedCommitProgressWitnessProjection {
     LockedCommitProgressWitnessProjection {
         context_id: progress_identity(1),
@@ -2060,67 +1937,53 @@ fn durable_reproposal_progress_witness() -> LockedCommitProgressWitnessProjectio
         ..LockedCommitProgressWitnessProjection::default()
     }
 }
-
 #[test]
 fn locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations() {
     let timeout = durable_timeout_progress_witness();
     assert!(locked_commit_progress_witness_is_valid(timeout));
-
     let mut stale_timeout = timeout;
     stale_timeout.timeout_view -= 1;
     assert!(!locked_commit_progress_witness_is_valid(stale_timeout));
-
     let mut wrong_timeout = timeout;
     wrong_timeout.timeout_signer = ValidatorId::repeat(5);
     assert!(!locked_commit_progress_witness_is_valid(wrong_timeout));
-
     let mut wrong_lock_context = timeout;
     wrong_lock_context.locked_context_id = progress_identity(9);
     assert!(!locked_commit_progress_witness_is_valid(wrong_lock_context));
-
     let mut wrong_lock_height = timeout;
     wrong_lock_height.locked_height += 1;
     assert!(!locked_commit_progress_witness_is_valid(wrong_lock_height));
-
     let mut volatile_timeout = timeout;
     volatile_timeout.timeout_intent_durable = false;
     assert!(!locked_commit_progress_witness_is_valid(volatile_timeout));
-
     let reproposal = durable_reproposal_progress_witness();
     assert!(locked_commit_progress_witness_is_valid(reproposal));
-
     let mut absent_reproposal = reproposal;
     absent_reproposal.installed_timeout_present = false;
     assert!(!locked_commit_progress_witness_is_valid(absent_reproposal));
-
     let mut volatile_reproposal = reproposal;
     volatile_reproposal.installed_timeout_durable = false;
     assert!(!locked_commit_progress_witness_is_valid(
         volatile_reproposal
     ));
-
     let mut foreign_reproposal_context = reproposal;
     foreign_reproposal_context.installed_timeout_context_id = progress_identity(9);
     assert!(!locked_commit_progress_witness_is_valid(
         foreign_reproposal_context
     ));
-
     let mut foreign_reproposal_height = reproposal;
     foreign_reproposal_height.installed_timeout_height += 1;
     assert!(!locked_commit_progress_witness_is_valid(
         foreign_reproposal_height
     ));
-
     let mut stale_reproposal = reproposal;
     stale_reproposal.installed_timeout_view -= 1;
     assert!(!locked_commit_progress_witness_is_valid(stale_reproposal));
-
     let mut nonhistorical_reproposal = reproposal;
     nonhistorical_reproposal.locked_view = nonhistorical_reproposal.current_view;
     assert!(!locked_commit_progress_witness_is_valid(
         nonhistorical_reproposal
     ));
-
     let mut pending = timeout;
     pending.timeout_intent_present = false;
     pending.timeout_intent_durable = false;
@@ -2138,25 +2001,21 @@ fn locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations() {
         subject: pending.locked_subject,
     };
     assert!(locked_commit_progress_witness_is_valid(pending));
-
     let mut closed_origin_pending = pending;
     closed_origin_pending.current_view += 1;
     closed_origin_pending.pending.view = closed_origin_pending.current_view;
     assert!(!locked_commit_progress_witness_is_valid(
         closed_origin_pending
     ));
-
     let mut nonexact_pending = pending;
     nonexact_pending.pending.proposal_view += 1;
     assert!(!locked_commit_progress_witness_is_valid(nonexact_pending));
-
     let mut foreign_height_pending = pending;
     foreign_height_pending.locked_height += 1;
     foreign_height_pending.pending.proposal_height = foreign_height_pending.locked_height;
     assert!(!locked_commit_progress_witness_is_valid(
         foreign_height_pending
     ));
-
     let mut commit = timeout;
     commit.timeout_intent_present = false;
     commit.timeout_intent_durable = false;
@@ -2172,18 +2031,15 @@ fn locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations() {
     commit.commit_signer = commit.local_validator;
     commit.commit_signature_pending = true;
     assert!(locked_commit_progress_witness_is_valid(commit));
-
     let mut closed_origin_commit = commit;
     closed_origin_commit.current_view += 1;
     closed_origin_commit.commit_view = closed_origin_commit.current_view;
     assert!(!locked_commit_progress_witness_is_valid(
         closed_origin_commit
     ));
-
     let mut nonexact_commit = commit;
     nonexact_commit.commit_subject.word0 ^= 1;
     assert!(!locked_commit_progress_witness_is_valid(nonexact_commit));
-
     let mut foreign_height_commit = commit;
     foreign_height_commit.locked_height += 1;
     foreign_height_commit.commit_proposal_height = foreign_height_commit.locked_height;
@@ -2191,38 +2047,30 @@ fn locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations() {
         foreign_height_commit
     ));
 }
-
 #[test]
 fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
     let durable_intent = durable_begin_trace();
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(durable_intent));
     assert!(durable_intent.durable_sequence_after >= durable_intent.durable_sequence_before);
     assert!(effect_count(durable_intent.effects, EFFECT_PERSIST) <= 1);
-
     let mut wrong_event = durable_intent;
     wrong_event.event_kind = EVENT_PERSISTED;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_event));
-
     let mut wrong_event_tag = durable_intent;
     wrong_event_tag.event_tag.generation += 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_event_tag));
-
     let mut wrong_context = durable_intent;
     wrong_context.pending_after.context_id.word3 ^= 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_context));
-
     let mut wrong_subject = durable_intent;
     wrong_subject.pending_after.subject.word0 ^= 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_subject));
-
     let mut wrong_continuation = durable_intent;
     wrong_continuation.boundary_granted.continuation = CONTINUATION_NONE;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_continuation));
-
     let mut wrong_wal_id = durable_intent;
     wrong_wal_id.boundary_granted.persistence_id += 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_wal_id));
-
     let mut consistently_skipped_wal_id = durable_intent;
     consistently_skipped_wal_id.pending_after.persistence_id += 1;
     consistently_skipped_wal_id.boundary_claimed.persistence_id += 1;
@@ -2243,11 +2091,9 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
         ),
         "a mutually consistent projection must not skip the next durable WAL id"
     );
-
     let mut wrong_effect = durable_intent;
     wrong_effect.effects.slot0.granted.persistence_id += 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_effect));
-
     let mut timeout_with_high_qc = durable_intent;
     timeout_with_high_qc.event_kind = 5;
     timeout_with_high_qc.boundary_claimed.record_kind = WAL_RECORD_INSTALL_TIMEOUT;
@@ -2325,14 +2171,12 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
         .auxiliary_subject = timeout_with_high_qc.boundary_claimed.subject.subject;
     timeout_with_high_qc.effects.slot0.granted = timeout_with_high_qc.effects.slot0.requested;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(timeout_with_high_qc));
-
     let mut wrong_timeout_high_qc = timeout_with_high_qc;
     wrong_timeout_high_qc.effects.slot0.requested.subject = Subject::repeat(9);
     wrong_timeout_high_qc.effects.slot0.granted.subject = Subject::repeat(9);
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(wrong_timeout_high_qc)
     );
-
     let mut substituted_timeout_evidence = timeout_with_high_qc;
     substituted_timeout_evidence
         .effects
@@ -2349,7 +2193,6 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
             substituted_timeout_evidence
         )
     );
-
     let mut timeout_without_high_qc = timeout_with_high_qc;
     let absent_subject = Subject::default();
     let absent_subject_identity = CanonicalIdentityProjection::from_bytes(
@@ -2420,7 +2263,6 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
     assert!(
         production_durable_intent_trace_refines_progress_witness_kernel(timeout_without_high_qc)
     );
-
     let mut regressive_timeout = timeout_with_high_qc;
     // The immediately preceding timeout round may carry a strict
     // higher-PrepareQC upgrade; two rounds behind is genuinely stale.
@@ -2429,19 +2271,16 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
     regressive_timeout.effects.slot0.requested.view = regressive_timeout.pending_after.view;
     regressive_timeout.effects.slot0.granted.view = regressive_timeout.pending_after.view;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(regressive_timeout));
-
     let mut overflowing_timeout = timeout_with_high_qc;
     overflowing_timeout.pending_after.view = u64::MAX;
     overflowing_timeout.effects.slot0.requested.view = u64::MAX;
     overflowing_timeout.effects.slot0.granted.view = u64::MAX;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(overflowing_timeout));
-
     let mut wrong_record_height = durable_intent;
     wrong_record_height.pending_after.height += 1;
     wrong_record_height.effects.slot0.requested.height += 1;
     wrong_record_height.effects.slot0.granted.height += 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_record_height));
-
     let mut stale_generation = durable_intent;
     stale_generation.event_tag.generation += 1;
     stale_generation.pending_after = stale_generation.pending_before;
@@ -2449,68 +2288,55 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
     stale_generation.boundary_granted = BoundaryCapabilityKey::none();
     stale_generation.effects = EffectTrace::empty();
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_generation));
-
     let mut stale_height = stale_generation;
     stale_height.event_tag = stale_height.owner_tag_before;
     stale_height.event_tag.height += 1;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_height));
-
     let mut stale_view = stale_generation;
     stale_view.event_tag = stale_view.owner_tag_before;
     stale_view.event_tag.view += 1;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_view));
-
     let mut stale_while_pending = stale_generation;
     stale_while_pending.pending_before = durable_intent.pending_after;
     stale_while_pending.pending_after = durable_intent.pending_after;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_while_pending));
-
     let mut stale_owner_mutation = stale_generation;
     stale_owner_mutation.owner_tag_after.generation += 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(stale_owner_mutation));
-
     let mut stale_pending_mutation = stale_generation;
     stale_pending_mutation.pending_after.persistence_id += 1;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(stale_pending_mutation)
     );
-
     let mut stale_sequence_mutation = stale_generation;
     stale_sequence_mutation.durable_sequence_after += 1;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(stale_sequence_mutation)
     );
-
     let mut stale_boundary = stale_generation;
     stale_boundary.boundary_claimed = durable_intent.boundary_claimed;
     stale_boundary.boundary_granted = durable_intent.boundary_granted;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(stale_boundary));
-
     let mut stale_effect = stale_generation;
     assert!(push_authorized(&mut stale_effect.effects, EFFECT_REPORT));
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(stale_effect));
-
     let mut stale_non_completion_id = stale_generation;
     stale_non_completion_id.event_persistence_id = 91;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(stale_non_completion_id)
     );
-
     let mut stale_persisted = stale_generation;
     stale_persisted.event_kind = EVENT_PERSISTED;
     stale_persisted.event_persistence_id = 91;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_persisted));
-
     let mut stale_persistence_failed = stale_persisted;
     stale_persistence_failed.event_kind = EVENT_PERSISTENCE_FAILED;
     assert!(
         production_durable_intent_trace_refines_progress_witness_kernel(stale_persistence_failed)
     );
-
     let mut unmatched_persisted = stale_persisted;
     unmatched_persisted.event_tag = unmatched_persisted.owner_tag_before;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(unmatched_persisted));
-
     let mut unmatched_persistence_failed = unmatched_persisted;
     unmatched_persistence_failed.event_kind = EVENT_PERSISTENCE_FAILED;
     assert!(
@@ -2518,7 +2344,6 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
             unmatched_persistence_failed
         )
     );
-
     let mut completion_with_effect = unmatched_persisted;
     assert!(push_authorized(
         &mut completion_with_effect.effects,
@@ -2527,14 +2352,12 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(completion_with_effect)
     );
-
     let mut completion_while_pending = unmatched_persisted;
     completion_while_pending.pending_before = durable_intent.pending_after;
     completion_while_pending.pending_after = durable_intent.pending_after;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(completion_while_pending)
     );
-
     let mut matching_non_completion_id = unmatched_persisted;
     matching_non_completion_id.event_kind = 0;
     assert!(
@@ -2543,7 +2366,6 @@ fn durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations() {
         )
     );
 }
-
 #[test]
 fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
     let begin = lock_and_commit_begin_trace();
@@ -2554,7 +2376,6 @@ fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
             .into_projection(),
         begin
     );
-
     let mut split_round = begin;
     split_round.pending_after.proposal_view -= 1;
     split_round.boundary_claimed.proposal_view -= 1;
@@ -2570,7 +2391,6 @@ fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
         "a new Commit cannot combine the current vote round with an older proposal round"
     );
     assert!(check_production_durable_intent_transition(split_round).is_none());
-
     let mut substituted_primary_origin = begin;
     substituted_primary_origin
         .effects
@@ -2587,7 +2407,6 @@ fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
             substituted_primary_origin
         )
     );
-
     let mut substituted_auxiliary_origin = begin;
     substituted_auxiliary_origin
         .effects
@@ -2604,7 +2423,6 @@ fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
             substituted_auxiliary_origin
         )
     );
-
     let mut acknowledge = begin;
     acknowledge.event_kind = EVENT_PERSISTED;
     acknowledge.event_persistence_id = begin.pending_after.persistence_id;
@@ -2615,7 +2433,6 @@ fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
     acknowledge.effects = EffectTrace::empty();
     acknowledge.durable_sequence_after = acknowledge.durable_sequence_before + 1;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(acknowledge));
-
     let mut substituted_ack_origin = acknowledge;
     substituted_ack_origin.boundary_claimed.proposal_view += 1;
     substituted_ack_origin.boundary_granted.proposal_view += 1;
@@ -2624,7 +2441,6 @@ fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
         "acknowledgement must retain the same-round proposal field from the pending record"
     );
 }
-
 #[test]
 fn durable_intent_accepts_only_empty_persistence_completion_stutters() {
     let owner = TagProjection {
@@ -2645,48 +2461,39 @@ fn durable_intent_accepts_only_empty_persistence_completion_stutters() {
         ..ProductionDurableIntentTraceProjection::default()
     };
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale));
-
     let mut stale_persisted = stale;
     stale_persisted.event_kind = EVENT_PERSISTED;
     stale_persisted.event_persistence_id = 9;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(stale_persisted));
-
     let mut stale_persistence_failed = stale_persisted;
     stale_persistence_failed.event_kind = EVENT_PERSISTENCE_FAILED;
     assert!(
         production_durable_intent_trace_refines_progress_witness_kernel(stale_persistence_failed)
     );
-
     let mut current_owner_completion = stale_persisted;
     current_owner_completion.event_tag = owner;
     assert!(
         production_durable_intent_trace_refines_progress_witness_kernel(current_owner_completion)
     );
-
     let mut current_owner_failure = stale_persistence_failed;
     current_owner_failure.event_tag = owner;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(current_owner_failure));
-
     let mut zero_id_completion = current_owner_completion;
     zero_id_completion.event_persistence_id = 0;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(zero_id_completion));
-
     let mut non_persistence_payload = stale_persisted;
     non_persistence_payload.event_kind = EVENT_SIGNED;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(non_persistence_payload)
     );
-
     let mut changed_owner = stale;
     changed_owner.owner_tag_after.generation += 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(changed_owner));
-
     let mut invented_persist = stale;
     invented_persist.effects.slot0.kind = EFFECT_PERSIST;
     invented_persist.effects.len = 1;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(invented_persist));
 }
-
 #[test]
 fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
     let mut begin = durable_begin_trace();
@@ -2729,7 +2536,6 @@ fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
     begin.boundary_granted = begin.boundary_claimed;
     begin.effects.slot0.granted = begin.effects.slot0.requested;
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
-
     let immediate_predecessor_view = begin.owner_tag_before.view - 1;
     let mut predecessor_begin = begin;
     predecessor_begin.pending_after.view = immediate_predecessor_view;
@@ -2748,7 +2554,6 @@ fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
         production_durable_intent_trace_refines_progress_witness_kernel(predecessor_begin),
         "an exact immediate-predecessor TC with a same-round high PrepareQC is owned"
     );
-
     let mut predecessor_without_high = predecessor_begin;
     predecessor_without_high.boundary_claimed.auxiliary_present = false;
     predecessor_without_high.boundary_granted = predecessor_without_high.boundary_claimed;
@@ -2763,7 +2568,6 @@ fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
         !production_durable_intent_trace_refines_progress_witness_kernel(predecessor_without_high),
         "a no-high predecessor TC cannot claim the exceptional owner relation"
     );
-
     let mut missing_high_prepare_subject = begin;
     missing_high_prepare_subject
         .effects
@@ -2777,21 +2581,18 @@ fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
             missing_high_prepare_subject
         )
     );
-
     let mut missing_primary_subject = begin;
     missing_primary_subject.effects.slot0.requested.subject = Subject::default();
     missing_primary_subject.effects.slot0.granted = missing_primary_subject.effects.slot0.requested;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(missing_primary_subject)
     );
-
     let mut mismatched_persist_round = begin;
     mismatched_persist_round.effects.slot0.requested.view = 4;
     mismatched_persist_round.effects.slot0.granted.view = 4;
     assert!(
         !production_durable_intent_trace_refines_progress_witness_kernel(mismatched_persist_round)
     );
-
     let successor = TagProjection {
         height: begin.owner_tag_before.height,
         view: begin.pending_after.view + 1,
@@ -2815,7 +2616,6 @@ fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
         durable_sequence_after: begin.durable_sequence_before + 1,
     };
     assert!(production_durable_intent_trace_refines_progress_witness_kernel(acknowledge));
-
     let predecessor_successor = TagProjection {
         height: predecessor_begin.owner_tag_before.height,
         view: predecessor_begin.owner_tag_before.view,
@@ -2842,14 +2642,12 @@ fn durable_timeout_boundary_preserves_record_and_successor_owner_rounds() {
         production_durable_intent_trace_refines_progress_witness_kernel(predecessor_acknowledge),
         "acknowledging an immediate-predecessor TC changes generation, not view"
     );
-
     let mut wrong_successor = acknowledge;
     wrong_successor.owner_tag_after.view -= 1;
     wrong_successor.boundary_claimed.tag = wrong_successor.owner_tag_after;
     wrong_successor.boundary_granted.tag = wrong_successor.owner_tag_after;
     assert!(!production_durable_intent_trace_refines_progress_witness_kernel(wrong_successor));
 }
-
 #[test]
 fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
     let identity =
@@ -3052,7 +2850,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         replaced_recovery_owner
     ));
     assert!(check_production_decision_recovery_transition(replaced_recovery_owner).is_none());
-
     let scheduler = ProductionSchedulerTraceProjection {
         fifo_owed_before: false,
         timeout_due: false,
@@ -3079,7 +2876,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         !production_scheduler_trace_refines_protected_ownership_kernel(replaced_scheduler_owner)
     );
     assert!(check_production_scheduler_transition(replaced_scheduler_owner).is_none());
-
     let ingress = ProductionIngressIdentityAndClassTraceProjection {
         incoming_height: 4,
         incoming_view: 2,
@@ -3126,7 +2922,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(replaced_ingress_owner).is_none());
-
     let uncommitted_ingress_ordinal = ProductionIngressIdentityAndClassTraceProjection {
         ordinal_source_after: ingress.ordinal_source_before,
         ..ingress
@@ -3137,7 +2932,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(uncommitted_ingress_ordinal).is_none());
-
     let skipped_ingress_ordinal = ProductionIngressIdentityAndClassTraceProjection {
         ordinal_source_before: 10,
         ..ingress
@@ -3148,7 +2942,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(skipped_ingress_ordinal).is_none());
-
     let dormant_replacement = ProductionIngressIdentityAndClassTraceProjection {
         lifecycle_ordinal: 7,
         dormant_reservations_before: 2,
@@ -3162,7 +2955,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(dormant_replacement).is_some());
-
     let replaced_dormant_owner = ProductionIngressIdentityAndClassTraceProjection {
         lifecycle_ordinal: 7,
         dormant_reservations_before: 2,
@@ -3176,7 +2968,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(replaced_dormant_owner).is_none());
-
     let over_capacity_dormant_owner = ProductionIngressIdentityAndClassTraceProjection {
         dormant_reservations_before: 3,
         dormant_reservations_after: 3,
@@ -3188,7 +2979,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(over_capacity_dormant_owner).is_none());
-
     let materialized_reservation = ProductionIngressIdentityAndClassTraceProjection {
         ordinal_source_before: 12,
         physical_admission_ordinal: 11,
@@ -3203,7 +2993,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         "generic ingress admission cannot authorize a second, non-minting publication"
     );
     assert!(check_production_ingress_transition(materialized_reservation).is_none());
-
     let materialization = ProductionIngressReservationMaterializationTraceProjection {
         incoming_height: 4,
         incoming_view: 2,
@@ -3237,7 +3026,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
             .into_projection(),
         materialization,
     );
-
     for rejected in [
         ProductionIngressReservationMaterializationTraceProjection {
             queue_len_after: materialization.queue_len_before,
@@ -3263,7 +3051,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
             "materialization weakening must be rejected: {rejected:?}",
         );
     }
-
     let dormant_materialization = ProductionIngressReservationMaterializationTraceProjection {
         lifecycle_ordinal: 7,
         dormant_reservations_before: 2,
@@ -3276,7 +3063,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
             .is_some(),
         "exact dormant backing is consumed only at materialization",
     );
-
     let flush = ProductionReliableFlushTraceProjection {
         status: 2,
         semantic_target: identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, 20),
@@ -3394,7 +3180,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
             }
         )
     );
-
     let gate_residual = identity(
         IDENTITY_DOMAIN_PROCESS_LOCAL,
         IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
@@ -3562,7 +3347,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         disconnected_worker_timeout_attempt,
         lane_application
     ));
-
     let zero_stream_epoch_application = ProductionReliableFlushApplicationProjection {
         stream_epoch: 0,
         marker_stream_epoch: 0,
@@ -3623,7 +3407,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         disconnected_worker_stream_epoch,
         lane_application
     ));
-
     let zero_service_generation_application = ProductionReliableFlushApplicationProjection {
         service_generation: 0,
         marker_service_generation: 0,
@@ -3680,7 +3463,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         disconnected_worker_service_generation,
         lane_application
     ));
-
     let zero_semantic_sequence_application = ProductionReliableFlushApplicationProjection {
         semantic_sequence: 0,
         marker_semantic_sequence: 0,
@@ -3737,7 +3519,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         disconnected_worker_semantic_sequence,
         lane_application
     ));
-
     lane_application.marker_chunk_index = 1;
     assert!(!production_reliable_flush_application_refines_source_lane_kernel(lane_application));
     lane_application.marker_chunk_index = 0;
@@ -3771,7 +3552,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         disconnected_worker,
         lane_application
     ));
-
     let artifact_hash = identity(
         IDENTITY_DOMAIN_DURABLE_ARTIFACT,
         IDENTITY_KIND_FINALITY_ARTIFACT,
@@ -3897,7 +3677,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         !production_application_trace_refines_decision_completion_kernel(replaced_completion_owner)
     );
     assert!(check_production_application_transition(replaced_completion_owner).is_none());
-
     let terminal_application = ProductionTerminalApplicationWithoutSuccessorActivationProjection {
         context_id: context,
         context_height: 9,
@@ -3955,7 +3734,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
 }
-
 #[test]
 fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_replacement() {
     let lifecycle_identity = |byte| {
@@ -4005,7 +3783,6 @@ fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_repla
         .is_none(),
         "the prospective stored identity cannot be substituted"
     );
-
     let reactivate = ProductionLeaderWireAdmissionTraceProjection {
         operation: LEADER_WIRE_ADMISSION_REACTIVATE,
         incumbent_identity: first_identity,
@@ -4057,7 +3834,6 @@ fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_repla
         .is_none(),
         "an exact retry cannot publish a new scheduler position"
     );
-
     let coalesce = ProductionLeaderWireAdmissionTraceProjection {
         operation: LEADER_WIRE_ADMISSION_COALESCE,
         status_before: LEADER_WIRE_LIFECYCLE_INGRESS,
@@ -4074,7 +3850,6 @@ fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_repla
             .into_projection(),
         coalesce
     );
-
     let terminal_coalesce = ProductionLeaderWireAdmissionTraceProjection {
         status_before: LEADER_WIRE_LIFECYCLE_TERMINAL,
         status_after: LEADER_WIRE_LIFECYCLE_TERMINAL,
@@ -4086,7 +3861,6 @@ fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_repla
         production_leader_wire_admission_refines_lifecycle_ownership_kernel(terminal_coalesce),
         "an exact drained request remains coalesced by its stable tombstone"
     );
-
     let replacement = ProductionLeaderWireAdmissionTraceProjection {
         operation: LEADER_WIRE_ADMISSION_REPLACE_TERMINAL,
         incoming_identity: second_identity,
@@ -4146,7 +3920,6 @@ fn leader_wire_admission_gate_separates_insert_reactivation_coalescing_and_repla
         );
     }
 }
-
 #[test]
 fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
     let enter_view = EffectiveLockTraceProjection {
@@ -4201,7 +3974,6 @@ fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
         )
         .is_none()
     );
-
     let ownership = EffectiveLockTraceProjection {
         kind: EFFECTIVE_LOCK_TRACE_OWNER,
         relation_exact: true,
@@ -4234,7 +4006,6 @@ fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
         })
         .is_none()
     );
-
     let retirement = EffectiveLockTraceProjection {
         kind: EFFECTIVE_LOCK_TRACE_RETIRE,
         relation_exact: true,
@@ -4279,7 +4050,6 @@ fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
         )
         .is_none()
     );
-
     let service = EffectiveLockTraceProjection {
         kind: EFFECTIVE_LOCK_TRACE_SERVICE,
         relation_exact: true,
@@ -4316,7 +4086,6 @@ fn effective_lock_trace_wrappers_accept_only_their_exact_live_projection() {
         .is_none()
     );
 }
-
 fn capability(kind: u8, nonce: u64) -> EffectCapabilityKey {
     EffectCapabilityKey {
         kind,
@@ -4324,7 +4093,6 @@ fn capability(kind: u8, nonce: u64) -> EffectCapabilityKey {
         ..EffectCapabilityKey::default()
     }
 }
-
 fn durable_begin_trace() -> ProductionDurableIntentTraceProjection {
     let context = ContextId::repeat(1);
     let subject = Subject::repeat(2);
@@ -4402,7 +4170,6 @@ fn durable_begin_trace() -> ProductionDurableIntentTraceProjection {
         durable_sequence_after: 7,
     }
 }
-
 fn lock_and_commit_begin_trace() -> ProductionDurableIntentTraceProjection {
     let mut trace = durable_begin_trace();
     let proposal_view = trace.owner_tag_before.view;
@@ -4424,7 +4191,6 @@ fn lock_and_commit_begin_trace() -> ProductionDurableIntentTraceProjection {
     trace.boundary_claimed.auxiliary_phase = 1;
     trace.boundary_claimed.auxiliary_subject = trace.boundary_claimed.subject.subject;
     trace.boundary_granted = trace.boundary_claimed;
-
     let persist = {
         let persist = &mut trace.effects.slot0.requested;
         persist.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
@@ -4444,12 +4210,10 @@ fn lock_and_commit_begin_trace() -> ProductionDurableIntentTraceProjection {
     trace.effects.slot0.granted = persist;
     trace
 }
-
 fn push_authorized(trace: &mut EffectTrace, kind: u8) -> bool {
     let key = capability(kind, u64::from(trace.len) + 1);
     trace.push(key, key)
 }
-
 fn base_facts() -> TransitionFacts {
     let volatile = VolatileSummary {
         durable_signable_limit: 1,
@@ -4488,7 +4252,6 @@ fn base_facts() -> TransitionFacts {
         effects: EffectTrace::empty(),
     }
 }
-
 fn owner(
     height: u64,
     view: u64,
@@ -4506,7 +4269,6 @@ fn owner(
         manifest_hash,
     }
 }
-
 #[test]
 fn exact_body_owner_binding_rejects_stale_generation_and_conflicting_evidence() {
     let current = owner(9, 4, 7, 11, Some(23));
@@ -4528,14 +4290,12 @@ fn exact_body_owner_binding_rejects_stale_generation_and_conflicting_evidence() 
         plan_exact_body_owner_binding(Some(current), owner(9, 4, 7, 11, Some(24))).is_none(),
         "a different manifest identity cannot overwrite an exact owner"
     );
-
     let enriched =
         plan_exact_body_owner_binding(Some(owner(9, 4, 7, 11, None)), owner(9, 4, 7, 11, Some(23)))
             .expect("one certified fetch may acquire its exact manifest identity");
     assert!(enriched.already_owned);
     assert_eq!(enriched.owner, current);
 }
-
 #[test]
 fn exact_body_owner_rebind_preserves_key_and_evidence_and_advances_incarnation() {
     let previous = owner(9, 4, 7, 11, Some(23));
@@ -4551,7 +4311,6 @@ fn exact_body_owner_rebind_preserves_key_and_evidence_and_advances_incarnation()
     .expect("later-view generation reset is accepted");
     assert_eq!(rebound.key, previous.key);
     assert_eq!(rebound.manifest_hash, previous.manifest_hash);
-
     let same_view = plan_exact_body_owner_rebind(
         previous,
         previous,
@@ -4564,7 +4323,6 @@ fn exact_body_owner_rebind_preserves_key_and_evidence_and_advances_incarnation()
     .expect("same-view higher-generation rebind is accepted");
     assert_eq!(same_view.key, previous.key);
     assert_eq!(same_view.manifest_hash, previous.manifest_hash);
-
     for wrong in [
         TagProjection {
             height: 10,
@@ -4624,7 +4382,6 @@ fn exact_body_owner_rebind_preserves_key_and_evidence_and_advances_incarnation()
         "the previous stage tag must be the exact installed owner"
     );
 }
-
 #[test]
 fn exact_body_completion_classifier_rejects_duplicate_or_conflicting_owners() {
     for ingress_owners in 0..=2 {
@@ -4655,7 +4412,6 @@ fn exact_body_completion_classifier_rejects_duplicate_or_conflicting_owners() {
         }
     }
 }
-
 #[test]
 fn exact_body_retirement_accounting_rejects_capacity_leakage() {
     let accounting = plan_exact_body_retirement_accounting(100, 20, 30, 80, 35)
@@ -4683,7 +4439,6 @@ fn exact_body_retirement_accounting_rejects_capacity_leakage() {
         "sequential retirement rejects an overflowing combined claim"
     );
 }
-
 #[test]
 fn bounded_service_kernel_exhaustively_selects_each_readiness_combination() {
     let classes = [
@@ -4725,7 +4480,6 @@ fn bounded_service_kernel_exhaustively_selects_each_readiness_combination() {
             assert_eq!(selection.next, expected_next);
         }
     }
-
     let first = select_bounded_service_class(SERVICE_CLASS_COMPLETION, true, true, true);
     let second = select_bounded_service_class(first.next, true, true, true);
     let third = select_bounded_service_class(second.next, true, true, true);
@@ -4738,14 +4492,12 @@ fn bounded_service_kernel_exhaustively_selects_each_readiness_combination() {
         ]
     );
     assert_eq!(third.next, SERVICE_CLASS_COMPLETION);
-
     for invalid_cursor in [0, 4, 99, u8::MAX] {
         let invalid = select_bounded_service_class(invalid_cursor, true, true, true);
         assert_eq!(invalid.selected, SERVICE_CLASS_NONE);
         assert_eq!(invalid.next, SERVICE_CLASS_NONE);
     }
 }
-
 #[test]
 fn source_linked_effective_lock_body_kernels_reject_adversarial_inputs() {
     exact_body_owner_binding_rejects_stale_generation_and_conflicting_evidence();
@@ -4754,11 +4506,9 @@ fn source_linked_effective_lock_body_kernels_reject_adversarial_inputs() {
     exact_body_retirement_accounting_rejects_capacity_leakage();
     bounded_service_kernel_exhaustively_selects_each_readiness_combination();
 }
-
 #[test]
 fn stutter_and_exact_begin_are_accepted() {
     assert!(accepts_facts(base_facts()));
-
     let mut facts = base_facts();
     facts.action_kind = ACTION_BEGIN_WAL;
     facts.wal_record_kind = WAL_RECORD_PROPOSAL_INTENT;
@@ -4767,7 +4517,6 @@ fn stutter_and_exact_begin_are_accepted() {
     assert!(push_authorized(&mut facts.effects, EFFECT_PERSIST));
     assert!(accepts_facts(facts));
 }
-
 #[test]
 fn unauthorized_or_misordered_effects_fail_closed() {
     let mut unauthorized = base_facts();
@@ -4776,7 +4525,6 @@ fn unauthorized_or_misordered_effects_fail_closed() {
         capability(EFFECT_BROADCAST, 2),
     ));
     assert!(!accepts_facts(unauthorized));
-
     let mut signing_not_last = base_facts();
     signing_not_last.event_kind = EVENT_SIGNED;
     assert!(push_authorized(&mut signing_not_last.effects, EFFECT_SIGN));
@@ -4785,7 +4533,6 @@ fn unauthorized_or_misordered_effects_fail_closed() {
         EFFECT_BROADCAST
     ));
     assert!(!accepts_facts(signing_not_last));
-
     let mut persist_and_sign = base_facts();
     persist_and_sign.action_kind = ACTION_BEGIN_WAL;
     persist_and_sign.wal_record_kind = WAL_RECORD_PROPOSAL_INTENT;
@@ -4797,9 +4544,7 @@ fn unauthorized_or_misordered_effects_fail_closed() {
     ));
     assert!(push_authorized(&mut persist_and_sign.effects, EFFECT_SIGN));
     assert!(!accepts_facts(persist_and_sign));
-
     struct OpaqueOrderToken(&'static str);
-
     let mut pending = VecDeque::from([
         OpaqueOrderToken("old-tail-0"),
         OpaqueOrderToken("old-tail-1"),
@@ -4823,7 +4568,6 @@ fn unauthorized_or_misordered_effects_fail_closed() {
         ],
         "persisted continuation order is causal FIFO order"
     );
-
     let mut forward_iteration_mutant = VecDeque::from([
         OpaqueOrderToken("old-tail-0"),
         OpaqueOrderToken("old-tail-1"),
@@ -4850,23 +4594,19 @@ fn unauthorized_or_misordered_effects_fail_closed() {
         "the compact forward-iteration mutant reverses the continuation"
     );
 }
-
 #[test]
 fn stale_or_busy_input_must_be_an_exact_empty_stutter() {
     let mut stale = base_facts();
     stale.tag_matches = false;
     assert!(accepts_facts(stale));
-
     stale.application_transition_exact = false;
     stale.application_unchanged = false;
     assert!(!accepts_facts(stale));
-
     let mut busy = base_facts();
     busy.busy_fence_open = false;
     assert!(push_authorized(&mut busy.effects, EFFECT_FETCH));
     assert!(!accepts_facts(busy));
 }
-
 #[test]
 fn trace_capacity_is_fail_closed() {
     let mut trace = EffectTrace::empty();
@@ -4875,20 +4615,17 @@ fn trace_capacity_is_fail_closed() {
     }
     assert!(!push_authorized(&mut trace, EFFECT_BROADCAST));
 }
-
 #[test]
 fn volatile_bounds_and_action_record_pairs_fail_closed() {
     let mut too_many_vote_pools = base_facts();
     too_many_vote_pools.volatile_after.vote_pools = 3;
     assert!(!accepts_facts(too_many_vote_pools));
-
     let mut invented_signature = base_facts();
     invented_signature.volatile_before.awaiting_signature = true;
     invented_signature.volatile_after.awaiting_signature = true;
     invented_signature.volatile_before.durable_signable_limit = 0;
     invented_signature.volatile_after.durable_signable_limit = 0;
     assert!(!accepts_facts(invented_signature));
-
     let mut bad_ack = base_facts();
     bad_ack.action_kind = ACTION_ACKNOWLEDGE_WAL;
     bad_ack.wal_record_kind = WAL_RECORD_DECISION;
@@ -4897,7 +4634,6 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
     bad_ack.acknowledge_persist_exact = true;
     bad_ack.acknowledgement_continuation = CONTINUATION_INSTALL_TIMEOUT;
     assert!(!accepts_facts(bad_ack));
-
     let mut same_round_install = base_facts();
     same_round_install.whole_state_unchanged = false;
     same_round_install.action_kind = ACTION_ACKNOWLEDGE_WAL;
@@ -4941,29 +4677,23 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
         .volatile_after
         .outbound_control = 5;
     assert!(!accepts_facts(overflowing_same_round_control));
-
     let mut erased_same_round_pool = same_round_install;
     erased_same_round_pool.volatile_after.timeout_vote_pools = 0;
     erased_same_round_pool.volatile_after.timeout_vote_entries = 0;
     assert!(!accepts_facts(erased_same_round_pool));
-
     let mut substituted_same_size_pool = same_round_install;
     substituted_same_size_pool.timeout_vote_pool_unchanged = false;
     assert!(!accepts_facts(substituted_same_size_pool));
-
     let mut substituted_formed_marker = same_round_install;
     substituted_formed_marker.formed_timeouts_unchanged = false;
     assert!(!accepts_facts(substituted_formed_marker));
-
     let mut substituted_timeout_control = same_round_install;
     substituted_timeout_control.timeout_control_unchanged = false;
     assert!(!accepts_facts(substituted_timeout_control));
-
     let mut advancing_install_keeps_old_pool = same_round_install;
     advancing_install_keeps_old_pool.install_view_unchanged = false;
     advancing_install_keeps_old_pool.timeout_evidence_after_in_installed_window = false;
     assert!(!accepts_facts(advancing_install_keeps_old_pool));
-
     let mut advancing_install = advancing_install_keeps_old_pool;
     advancing_install.volatile_after.timeout_vote_pools = 0;
     advancing_install.volatile_after.timeout_vote_entries = 0;
@@ -4972,7 +4702,6 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
         accepts_facts(advancing_install),
         "an advancing TC install clears timeout pools, markers, and control"
     );
-
     let mut advancing_install_keeps_adjacent_pool = advancing_install;
     advancing_install_keeps_adjacent_pool
         .volatile_after
@@ -4984,10 +4713,8 @@ fn volatile_bounds_and_action_record_pairs_fail_closed() {
         accepts_facts(advancing_install_keeps_adjacent_pool),
         "an advancing TC may preserve authenticated shares in the installed window"
     );
-
     let mut advancing_install_keeps_timeout_control = advancing_install;
     advancing_install_keeps_timeout_control.timeout_control_after_absent = false;
     assert!(!accepts_facts(advancing_install_keeps_timeout_control));
 }
-
 include!("refinement_cases/terminal_body_pipeline.rs");

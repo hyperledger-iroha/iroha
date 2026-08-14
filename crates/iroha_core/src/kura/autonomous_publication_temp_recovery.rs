@@ -13,7 +13,6 @@ impl Kura {
                     && digests.next().is_none()
             })
     }
-
     fn is_unresolved_autonomous_publication_temporary_name(
         name: &str,
         temporary_prefix: &str,
@@ -21,7 +20,6 @@ impl Kura {
         name.starts_with(temporary_prefix)
             && !Self::is_autonomous_publication_quarantine_name(name, temporary_prefix)
     }
-
     fn validate_autonomous_publication_quarantine(
         store_root: &Path,
         path: &Path,
@@ -61,7 +59,6 @@ impl Kura {
         }
         Ok(true)
     }
-
     fn autonomous_lifecycle_process_generation_publication_residue_bytes(
         store_root: &Path,
     ) -> Result<u64> {
@@ -133,7 +130,6 @@ impl Kura {
         }
         Ok(bytes)
     }
-
     fn read_optional_bound_publication_bytes(
         store_root: &Path,
         path: &Path,
@@ -147,7 +143,6 @@ impl Kura {
                 .map(|(_, _, _, bytes)| Some(bytes)),
         }
     }
-
     fn read_validated_autonomous_lifecycle_bootstrap_quarantine(
         &self,
         path: &Path,
@@ -192,7 +187,6 @@ impl Kura {
             .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
         Ok(Some((bytes, bootstrap)))
     }
-
     fn validate_autonomous_lifecycle_bootstrap_quarantine_for_active_entry(
         &self,
         entry: &LaneConfigEntry,
@@ -228,7 +222,6 @@ impl Kura {
         )?;
         Ok(true)
     }
-
     fn validate_autonomous_lifecycle_bootstrap_quarantine_route(
         bootstrap: &AutonomousLifecycleBootstrapV1,
         path: &Path,
@@ -251,7 +244,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_autonomous_lifecycle_bootstrap_quarantine_domain(
         store_root: &Path,
         lane_config: &LaneConfig,
@@ -277,7 +269,6 @@ impl Kura {
         )?;
         Ok(raw)
     }
-
     fn validate_autonomous_lifecycle_bootstrap_quarantine_for_entry(
         store_root: &Path,
         entry: &LaneConfigEntry,
@@ -329,7 +320,6 @@ impl Kura {
             &bootstrap,
         )
         .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
-
         let stable = Self::read_optional_bound_publication_bytes(
             store_root,
             &stable_path,
@@ -410,7 +400,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn bind_autonomous_publication_temporary(
         store_root: &Path,
         path: &Path,
@@ -474,7 +463,6 @@ impl Kura {
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         Ok((namespace, file, metadata, bytes))
     }
-
     fn retain_bound_autonomous_publication_temporary_as_quarantine(
         store_root: &Path,
         namespace: &BoundProgressNamespace,
@@ -515,7 +503,6 @@ impl Kura {
                 format!("{kind} identity changed before exact-object quarantine"),
             ));
         }
-
         Self::quarantine_and_retain_bound_autonomous_publication_temporary(
             store_root,
             namespace,
@@ -528,7 +515,6 @@ impl Kura {
             kind,
         )
     }
-
     /// Atomically isolate a classified residue as an inert forensic tombstone.
     ///
     /// Verification before a path-based unlink is insufficient: the entry can
@@ -631,7 +617,6 @@ impl Kura {
             }
         };
         let quarantine_path = parent.join(&quarantine_name);
-
         #[cfg(not(any(
             target_os = "android",
             target_os = "linux",
@@ -649,7 +634,6 @@ impl Kura {
                 format!("{kind} exact-object quarantine is unsupported on this platform"),
             ));
         }
-
         #[cfg(any(
             target_os = "android",
             target_os = "linux",
@@ -662,7 +646,6 @@ impl Kura {
         ))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             if current_name_text != quarantine_name {
                 rustix::fs::renameat_with(
                     &immediate.file,
@@ -680,7 +663,6 @@ impl Kura {
                     format!("{kind} parent identity changed after quarantine"),
                 ));
             }
-
             let held = file
                 .metadata()
                 .map_err(|error| Error::IO(error, quarantine_path.clone()))?;
@@ -704,7 +686,6 @@ impl Kura {
                     format!("{kind} quarantine identity mismatch; residue retained"),
                 ));
             }
-
             let retained = rustix::fs::statat(
                 &immediate.file,
                 quarantine_name.as_str(),
@@ -729,7 +710,6 @@ impl Kura {
                 ));
             }
         }
-
         if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
             return Err(Self::invalid_lane_artifact_error(
                 parent.to_path_buf(),
@@ -751,7 +731,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Bind an initial durable claim to every authenticated retained generation-one residue.
     fn validate_retained_initial_process_generation_claim(
         &self,
@@ -857,7 +836,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Quarantine one fully classified process-generation atomic-write residue.
     ///
     /// The caller owns the exclusive Kura-root OS lock. An atomic temporary
@@ -1022,7 +1000,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     /// Quarantine one authenticated bootstrap that was synced but not renamed.
     ///
     /// Bootstrap publication is no-clobber and precedes both the payload and

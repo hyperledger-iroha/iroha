@@ -1,20 +1,4 @@
 //! Storage configuration helpers for the embedded SoraFS worker.
-
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-
-use iroha_config::parameters::actual;
-use iroha_data_model::sorafs::{
-    capacity::ProviderId,
-    orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
-    transparency::{
-        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
-        ModerationPrivacyParametersV1,
-    },
-};
-
 use crate::{
     governance::GovernanceDagRuntimeProviderQualificationV1,
     metering::SmoothingConfig,
@@ -29,7 +13,19 @@ use crate::{
         TransparencyRuntimeProviderBindingV1,
     },
 };
-
+use iroha_config::parameters::actual;
+use iroha_data_model::sorafs::{
+    capacity::ProviderId,
+    orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
+    transparency::{
+        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
+        ModerationPrivacyParametersV1,
+    },
+};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 /// Convenience wrapper around the Torii-level SoraFS storage configuration.
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
@@ -76,7 +72,6 @@ pub struct StorageConfig {
         Option<GovernanceDagRuntimeProviderQualificationV1>,
     penalty: PenaltySettings,
 }
-
 /// Exact public binding and bounded worker policy for finalized PoR archival.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorReplayArchivePolicyV1 {
@@ -87,7 +82,6 @@ pub struct PorReplayArchivePolicyV1 {
     max_successor_receipts: u32,
     max_successor_proof_bytes: u64,
 }
-
 impl PorReplayArchivePolicyV1 {
     /// Construct a validated archive policy without admitting secret material.
     ///
@@ -156,43 +150,36 @@ impl PorReplayArchivePolicyV1 {
             max_successor_proof_bytes,
         })
     }
-
     /// Stable deployment-owned runtime-provider handle.
     #[must_use]
     pub fn runtime_handle(&self) -> &str {
         &self.runtime_handle
     }
-
     /// Exact public archive identity and receipt-verification policy.
     #[must_use]
     pub const fn binding(&self) -> PorFinalizedReplayArchiveBindingV1 {
         self.binding
     }
-
     /// Supervised reconciliation and compaction cadence.
     #[must_use]
     pub const fn poll_interval(&self) -> Duration {
         self.poll_interval
     }
-
     /// Maximum records reconciled and compacted in one tick.
     #[must_use]
     pub const fn max_records_per_tick(&self) -> u32 {
         self.max_records_per_tick
     }
-
     /// Maximum successor receipts accepted before proof decoding continues.
     #[must_use]
     pub const fn max_successor_receipts(&self) -> u32 {
         self.max_successor_receipts
     }
-
     /// Maximum canonical bytes accepted for one successor-receipt proof.
     #[must_use]
     pub const fn max_successor_proof_bytes(&self) -> u64 {
         self.max_successor_proof_bytes
     }
-
     /// Exact lookup-proof resource bounds.
     #[must_use]
     pub fn proof_bounds(&self) -> PorFinalizedReplayArchiveProofBoundsV1 {
@@ -203,92 +190,77 @@ impl PorReplayArchivePolicyV1 {
         .expect("validated finalized PoR replay-archive proof bounds")
     }
 }
-
 impl StorageConfig {
     /// Returns a builder initialised with the Torii defaults.
     #[must_use]
     pub fn builder() -> StorageConfigBuilder {
         StorageConfigBuilder::new()
     }
-
     /// Whether the storage worker should be active.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
     }
-
     /// Exact policy for the deployment-owned finalized PoR replay archive.
     #[must_use]
     pub fn por_replay_archive_policy(&self) -> Option<&PorReplayArchivePolicyV1> {
         self.por_replay_archive_policy.as_ref()
     }
-
     /// Exact on-chain provider identity projected into this storage worker.
     #[must_use]
     pub fn provider_id(&self) -> Option<ProviderId> {
         self.provider_id
     }
-
     /// Directory where chunk data and metadata are stored.
     #[must_use]
     pub fn data_dir(&self) -> &PathBuf {
         &self.data_dir
     }
-
     /// Maximum allowed on-disk footprint (bytes).
     #[must_use]
     pub fn max_capacity_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
         self.max_capacity_bytes
     }
-
     /// Maximum number of concurrent fetch streams.
     #[must_use]
     pub fn max_parallel_fetches(&self) -> usize {
         self.max_parallel_fetches
     }
-
     /// Maximum number of manifests the node accepts before back-pressure.
     #[must_use]
     pub fn max_pins(&self) -> usize {
         self.max_pins
     }
-
     /// Cadence for Proof-of-Retrievability sampling (seconds).
     #[must_use]
     pub fn por_sample_interval_secs(&self) -> u64 {
         self.por_sample_interval_secs
     }
-
     /// Maximum PDP segments that one governed challenge may sample.
     #[must_use]
     pub fn pdp_sample_window(&self) -> u16 {
         self.pdp_sample_window
     }
-
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     #[must_use]
     pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
         self.pdp_tree_memory_limit_bytes
     }
-
     /// Whether authenticated moderation-screening admission is enabled.
     #[must_use]
     pub fn moderation_screening_enabled(&self) -> bool {
         self.moderation_screening_enabled
     }
-
     /// Canonical non-secret authority bundle configured for screening admission.
     #[must_use]
     pub fn moderation_screening_authority_bundle_path(&self) -> Option<&PathBuf> {
         self.moderation_screening_authority_bundle_path.as_ref()
     }
-
     /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
     #[must_use]
     pub fn moderation_screening_authority_bundle_digest(&self) -> Option<[u8; 32]> {
         self.moderation_screening_authority_bundle_digest
     }
-
     /// Exact public identity and policy of the runtime quarantine-key provider.
     #[must_use]
     pub fn moderation_quarantine_key_provider(
@@ -296,19 +268,16 @@ impl StorageConfig {
     ) -> Option<&actual::SorafsModerationQuarantineKeyProviderBinding> {
         self.moderation_quarantine_key_provider.as_ref()
     }
-
     /// Durable admission-bound PDP provider protocol policy.
     #[must_use]
     pub fn pdp_provider_policy(&self) -> PdpProviderProtocolPolicyV1 {
         self.pdp_provider
     }
-
     /// Dedicated durable outbox policy when supervised provider ingest is enabled.
     #[must_use]
     pub fn provider_ingest_outbox_policy(&self) -> Option<ProviderIngestOutboxPolicyV1> {
         self.provider_ingest_outbox_policy
     }
-
     /// Exact public binding of the external sealed provider-ingest checkpoint store.
     #[must_use]
     pub fn provider_ingest_checkpoint_provider(
@@ -316,67 +285,56 @@ impl StorageConfig {
     ) -> Option<&ProviderIngestCheckpointProviderBindingV1> {
         self.provider_ingest_checkpoint_provider.as_ref()
     }
-
     /// Safety ceilings for auxiliary runtime state and replay histories.
     #[must_use]
     pub fn runtime_retention(&self) -> RuntimeRetentionPolicy {
         self.runtime_retention
     }
-
     /// Optional human-friendly alias reported in telemetry.
     #[must_use]
     pub fn alias(&self) -> Option<&String> {
         self.alias.as_ref()
     }
-
     /// Advert telemetry overrides emitted by the storage worker.
     #[must_use]
     pub fn adverts(&self) -> &AdvertOverrides {
         &self.adverts
     }
-
     /// Smoothing configuration for metering snapshots.
     #[must_use]
     pub fn metering_smoothing(&self) -> &MeteringSmoothingConfig {
         &self.metering_smoothing
     }
-
     /// Operational policy for durable native orderbook transaction forwarding.
     #[must_use]
     pub fn orderbook_worker_policy(&self) -> OrderbookWorkerPolicy {
         self.orderbook_worker
     }
-
     /// Operational policy for durable native reserve/rent transaction forwarding.
     #[must_use]
     pub fn reserve_worker_policy(&self) -> ReserveWorkerPolicy {
         self.reserve_worker
     }
-
     /// Canonical external trust-policy file used for reputation snapshot admission.
     #[must_use]
     pub fn reputation_trust_policy_path(&self) -> Option<&PathBuf> {
         self.reputation_trust_policy_path.as_ref()
     }
-
     /// Canonical external trust-policy file reused by the committed billing runtime.
     #[must_use]
     pub fn hedging_feed_trust_policy_path(&self) -> Option<&PathBuf> {
         self.hedging_feed_trust_policy_path.as_ref()
     }
-
     /// Optional config-backed privacy aggregate due-cycle scheduler.
     #[must_use]
     pub fn privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.privacy_aggregate_schedule
     }
-
     /// Governed config-backed privacy and composition-budget policy.
     #[must_use]
     pub fn privacy_aggregate_policy(&self) -> Option<&PrivacyAggregatePolicyConfig> {
         self.privacy_aggregate_policy.as_ref()
     }
-
     /// Exact production threshold-PRF provider binding for configured DP cycles.
     #[must_use]
     pub fn privacy_cycle_prf_provider_binding(
@@ -384,7 +342,6 @@ impl StorageConfig {
     ) -> Option<&TransparencyRuntimeProviderBindingV1> {
         self.privacy_cycle_prf_provider_binding.as_ref()
     }
-
     /// Exact production finalized release-anchor binding for privacy cycles.
     #[must_use]
     pub fn privacy_release_anchor_provider_binding(
@@ -392,7 +349,6 @@ impl StorageConfig {
     ) -> Option<&TransparencyRuntimeProviderBindingV1> {
         self.privacy_release_anchor_provider_binding.as_ref()
     }
-
     /// Exact production external leader-lease binding for privacy cycles.
     #[must_use]
     pub fn privacy_leader_lease_provider_binding(
@@ -400,7 +356,6 @@ impl StorageConfig {
     ) -> Option<&TransparencyRuntimeProviderBindingV1> {
         self.privacy_leader_lease_provider_binding.as_ref()
     }
-
     /// Exact production fused Governance publisher binding for privacy cycles.
     #[must_use]
     pub fn privacy_fenced_publisher_binding(
@@ -408,31 +363,26 @@ impl StorageConfig {
     ) -> Option<&TransparencyRuntimeProviderBindingV1> {
         self.privacy_fenced_publisher_binding.as_ref()
     }
-
     /// Optional config-backed evidence-viewer audit-report due-cycle scheduler.
     #[must_use]
     pub fn evidence_viewer_audit_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.evidence_viewer_audit_schedule
     }
-
     /// Optional directory used to materialise governance artefacts.
     #[must_use]
     pub fn governance_dir(&self) -> Option<&PathBuf> {
         self.governance_dir.as_ref()
     }
-
     /// Optional publisher peer identifier for signed runtime Governance DAG blocks.
     #[must_use]
     pub fn governance_dag_publisher_peer_id(&self) -> Option<&String> {
         self.governance_dag_publisher_peer_id.as_ref()
     }
-
     /// Opaque runtime HSM/KMS handle for signed runtime Governance DAG blocks.
     #[must_use]
     pub fn governance_dag_signer_handle(&self) -> Option<&String> {
         self.governance_dag_signer_handle.as_ref()
     }
-
     /// Exact configured public-policy qualification of the runtime DAG signer.
     #[must_use]
     pub fn governance_dag_signer_qualification(
@@ -440,19 +390,16 @@ impl StorageConfig {
     ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
         self.governance_dag_signer_qualification
     }
-
     /// Canonical Ed25519 public key bound to the runtime Governance DAG signer.
     #[must_use]
     pub fn governance_dag_publisher_public_key_hex(&self) -> Option<&String> {
         self.governance_dag_publisher_public_key_hex.as_ref()
     }
-
     /// Opaque production handle for the sealed local Governance DAG producer store.
     #[must_use]
     pub fn governance_dag_checkpoint_store_handle(&self) -> Option<&String> {
         self.governance_dag_checkpoint_store_handle.as_ref()
     }
-
     /// Exact configured public-policy qualification of the sealed producer store.
     #[must_use]
     pub fn governance_dag_checkpoint_store_qualification(
@@ -460,13 +407,11 @@ impl StorageConfig {
     ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
         self.governance_dag_checkpoint_store_qualification
     }
-
     /// Penalty policy applied to PoR failures.
     #[must_use]
     pub fn penalty(&self) -> &PenaltySettings {
         &self.penalty
     }
-
     /// Convenience helper that converts the stored smoothing parameters
     /// into the runtime [`SmoothingConfig`].
     #[must_use]
@@ -474,19 +419,16 @@ impl StorageConfig {
         self.metering_smoothing.to_metering_config()
     }
 }
-
 impl From<actual::SorafsStorage> for StorageConfig {
     fn from(value: actual::SorafsStorage) -> Self {
         Self::from(&value)
     }
 }
-
 impl From<&actual::SorafsStorage> for StorageConfig {
     fn from(value: &actual::SorafsStorage) -> Self {
         Self::from_storage_and_penalty(value, &actual::SorafsPenaltyPolicy::default())
     }
 }
-
 impl StorageConfig {
     /// Construct a storage configuration using storage + penalty policy inputs.
     #[must_use]
@@ -627,82 +569,70 @@ impl StorageConfig {
         }
     }
 }
-
 impl Default for StorageConfig {
     fn default() -> Self {
         Self::from(actual::SorafsStorage::default())
     }
 }
-
 /// Builder for [`StorageConfig`].
 #[derive(Debug, Clone)]
 pub struct StorageConfigBuilder {
     inner: StorageConfig,
 }
-
 impl StorageConfigBuilder {
     fn new() -> Self {
         Self {
             inner: StorageConfig::default(),
         }
     }
-
     /// Enable or disable the storage worker.
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.inner.enabled = enabled;
         self
     }
-
     /// Bind this worker to one exact on-chain provider identity.
     #[must_use]
     pub fn provider_id(mut self, provider_id: Option<ProviderId>) -> Self {
         self.inner.provider_id = provider_id;
         self
     }
-
     /// Override the storage data directory.
     #[must_use]
     pub fn data_dir(mut self, data_dir: PathBuf) -> Self {
         self.inner.data_dir = data_dir;
         self
     }
-
     /// Set the capacity ceiling (bytes).
     #[must_use]
     pub fn max_capacity_bytes(mut self, bytes: iroha_config::base::util::Bytes<u64>) -> Self {
         self.inner.max_capacity_bytes = bytes;
         self
     }
-
     /// Set the fetch concurrency budget.
     #[must_use]
     pub fn max_parallel_fetches(mut self, fetches: usize) -> Self {
         self.inner.max_parallel_fetches = fetches;
         self
     }
-
     /// Set the pin limit before back-pressure.
     #[must_use]
     pub fn max_pins(mut self, pins: usize) -> Self {
         self.inner.max_pins = pins;
         self
     }
-
     /// Set the PoR sampling cadence (seconds).
     #[must_use]
     pub fn por_sample_interval_secs(mut self, interval: u64) -> Self {
         self.inner.por_sample_interval_secs = interval;
         self
     }
-
     /// Set the maximum number of PDP segment samples in one challenge.
     #[must_use]
     pub fn pdp_sample_window(mut self, sample_window: u16) -> Self {
         self.inner.pdp_sample_window = sample_window;
         self
     }
-
     /// Set the aggregate memory budget for canonical PDP tree indexes.
     #[must_use]
     pub fn pdp_tree_memory_limit_bytes(
@@ -712,21 +642,18 @@ impl StorageConfigBuilder {
         self.inner.pdp_tree_memory_limit_bytes = bytes;
         self
     }
-
     /// Enable or disable authenticated moderation-screening admission.
     #[must_use]
     pub fn moderation_screening_enabled(mut self, enabled: bool) -> Self {
         self.inner.moderation_screening_enabled = enabled;
         self
     }
-
     /// Set the canonical non-secret screening authority bundle path.
     #[must_use]
     pub fn moderation_screening_authority_bundle_path(mut self, path: Option<PathBuf>) -> Self {
         self.inner.moderation_screening_authority_bundle_path = path;
         self
     }
-
     /// Set the reviewed digest of the exact screening authority bundle bytes.
     #[must_use]
     pub fn moderation_screening_authority_bundle_digest(
@@ -736,7 +663,6 @@ impl StorageConfigBuilder {
         self.inner.moderation_screening_authority_bundle_digest = digest;
         self
     }
-
     /// Set the exact public identity and policy of the quarantine-key provider.
     #[must_use]
     pub fn moderation_quarantine_key_provider(
@@ -746,21 +672,18 @@ impl StorageConfigBuilder {
         self.inner.moderation_quarantine_key_provider = binding;
         self
     }
-
     /// Configure the deployment-owned finalized PoR replay archive.
     #[must_use]
     pub fn por_replay_archive_policy(mut self, policy: Option<PorReplayArchivePolicyV1>) -> Self {
         self.inner.por_replay_archive_policy = policy;
         self
     }
-
     /// Override the durable admission-bound PDP provider protocol policy.
     #[must_use]
     pub fn pdp_provider_policy(mut self, policy: PdpProviderProtocolPolicyV1) -> Self {
         self.inner.pdp_provider = policy;
         self
     }
-
     /// Enable provider ingest with the exact dedicated durable outbox policy.
     #[must_use]
     pub fn provider_ingest_outbox_policy(
@@ -770,7 +693,6 @@ impl StorageConfigBuilder {
         self.inner.provider_ingest_outbox_policy = policy;
         self
     }
-
     /// Bind the production external sealed provider-ingest checkpoint store.
     #[must_use]
     pub fn provider_ingest_checkpoint_provider(
@@ -780,56 +702,48 @@ impl StorageConfigBuilder {
         self.inner.provider_ingest_checkpoint_provider = binding;
         self
     }
-
     /// Override auxiliary runtime retention and checkpoint safety ceilings.
     #[must_use]
     pub fn runtime_retention(mut self, policy: RuntimeRetentionPolicy) -> Self {
         self.inner.runtime_retention = policy;
         self
     }
-
     /// Override the telemetry alias.
     #[must_use]
     pub fn alias<S: Into<Option<String>>>(mut self, alias: S) -> Self {
         self.inner.alias = alias.into();
         self
     }
-
     /// Override advert telemetry data.
     #[must_use]
     pub fn adverts(mut self, adverts: AdvertOverrides) -> Self {
         self.inner.adverts = adverts;
         self
     }
-
     /// Override the durable native orderbook transaction worker policy.
     #[must_use]
     pub fn orderbook_worker_policy(mut self, policy: OrderbookWorkerPolicy) -> Self {
         self.inner.orderbook_worker = policy;
         self
     }
-
     /// Override the durable native reserve/rent transaction worker policy.
     #[must_use]
     pub fn reserve_worker_policy(mut self, policy: ReserveWorkerPolicy) -> Self {
         self.inner.reserve_worker = policy;
         self
     }
-
     /// Override the canonical reputation trust-policy path.
     #[must_use]
     pub fn reputation_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
         self.inner.reputation_trust_policy_path = path;
         self
     }
-
     /// Set the canonical external hedging-feed trust-policy file used by billing.
     #[must_use]
     pub fn hedging_feed_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
         self.inner.hedging_feed_trust_policy_path = path;
         self
     }
-
     /// Override the optional config-backed privacy aggregate scheduler.
     #[must_use]
     pub fn privacy_aggregate_schedule(
@@ -839,7 +753,6 @@ impl StorageConfigBuilder {
         self.inner.privacy_aggregate_schedule = schedule;
         self
     }
-
     /// Override the governed config-backed privacy aggregate policy.
     #[must_use]
     pub fn privacy_aggregate_policy(
@@ -849,7 +762,6 @@ impl StorageConfigBuilder {
         self.inner.privacy_aggregate_policy = policy;
         self
     }
-
     /// Override the exact production threshold-PRF provider binding.
     #[must_use]
     pub fn privacy_cycle_prf_provider_binding(
@@ -859,7 +771,6 @@ impl StorageConfigBuilder {
         self.inner.privacy_cycle_prf_provider_binding = binding;
         self
     }
-
     /// Override the exact production finalized release-anchor binding.
     #[must_use]
     pub fn privacy_release_anchor_provider_binding(
@@ -869,7 +780,6 @@ impl StorageConfigBuilder {
         self.inner.privacy_release_anchor_provider_binding = binding;
         self
     }
-
     /// Override the exact production external leader-lease binding.
     #[must_use]
     pub fn privacy_leader_lease_provider_binding(
@@ -879,7 +789,6 @@ impl StorageConfigBuilder {
         self.inner.privacy_leader_lease_provider_binding = binding;
         self
     }
-
     /// Override the exact production fused Governance publisher binding.
     #[must_use]
     pub fn privacy_fenced_publisher_binding(
@@ -889,7 +798,6 @@ impl StorageConfigBuilder {
         self.inner.privacy_fenced_publisher_binding = binding;
         self
     }
-
     /// Override the optional config-backed evidence-viewer audit-report scheduler.
     #[must_use]
     pub fn evidence_viewer_audit_schedule(
@@ -899,35 +807,30 @@ impl StorageConfigBuilder {
         self.inner.evidence_viewer_audit_schedule = schedule;
         self
     }
-
     /// Override the metering smoothing parameters.
     #[must_use]
     pub fn metering_smoothing(mut self, smoothing: MeteringSmoothingConfig) -> Self {
         self.inner.metering_smoothing = smoothing;
         self
     }
-
     /// Override the governance artefact directory.
     #[must_use]
     pub fn governance_dir<P: Into<Option<PathBuf>>>(mut self, dir: P) -> Self {
         self.inner.governance_dir = dir.into();
         self
     }
-
     /// Override the signed runtime Governance DAG publisher peer identifier.
     #[must_use]
     pub fn governance_dag_publisher_peer_id<S: Into<Option<String>>>(mut self, peer_id: S) -> Self {
         self.inner.governance_dag_publisher_peer_id = peer_id.into();
         self
     }
-
     /// Override the opaque runtime Governance DAG signer handle.
     #[must_use]
     pub fn governance_dag_signer_handle<S: Into<Option<String>>>(mut self, handle: S) -> Self {
         self.inner.governance_dag_signer_handle = handle.into();
         self
     }
-
     /// Override the exact public-policy qualification of the runtime DAG signer.
     #[must_use]
     pub fn governance_dag_signer_qualification(
@@ -937,7 +840,6 @@ impl StorageConfigBuilder {
         self.inner.governance_dag_signer_qualification = qualification;
         self
     }
-
     /// Override the Ed25519 public key bound to the runtime Governance DAG signer.
     #[must_use]
     pub fn governance_dag_publisher_public_key_hex<S: Into<Option<String>>>(
@@ -947,7 +849,6 @@ impl StorageConfigBuilder {
         self.inner.governance_dag_publisher_public_key_hex = public_key_hex.into();
         self
     }
-
     /// Override the opaque sealed local-producer checkpoint-store handle.
     #[must_use]
     pub fn governance_dag_checkpoint_store_handle<S: Into<Option<String>>>(
@@ -957,7 +858,6 @@ impl StorageConfigBuilder {
         self.inner.governance_dag_checkpoint_store_handle = handle.into();
         self
     }
-
     /// Override the exact public-policy qualification of the sealed producer store.
     #[must_use]
     pub fn governance_dag_checkpoint_store_qualification(
@@ -967,35 +867,30 @@ impl StorageConfigBuilder {
         self.inner.governance_dag_checkpoint_store_qualification = qualification;
         self
     }
-
     /// Override the strike threshold applied to consecutive PoR failures before slashing.
     #[must_use]
     pub fn penalty_strike_threshold(mut self, threshold: u32) -> Self {
         self.inner.penalty.strike_threshold = threshold;
         self
     }
-
     /// Override the bond percentage slashed when the strike threshold is exceeded (basis points).
     #[must_use]
     pub fn penalty_bond_bps(mut self, bps: u16) -> Self {
         self.inner.penalty.penalty_bond_bps = bps.min(10_000);
         self
     }
-
     /// Override the cooldown window (seconds) enforced between slashes.
     #[must_use]
     pub fn penalty_cooldown_secs(mut self, cooldown_secs: u64) -> Self {
         self.inner.penalty.cooldown_secs = cooldown_secs;
         self
     }
-
     /// Finalise the builder into a configuration.
     #[must_use]
     pub fn build(self) -> StorageConfig {
         self.inner
     }
 }
-
 /// Config-backed safety ceilings for auxiliary embedded runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeRetentionPolicy {
@@ -1005,7 +900,6 @@ pub struct RuntimeRetentionPolicy {
     proof_outcome_forwarder_interval: Duration,
     proof_outcome_max_attempts: u32,
 }
-
 impl RuntimeRetentionPolicy {
     /// Construct a policy, clamping every safety ceiling to at least one.
     #[must_use]
@@ -1028,38 +922,32 @@ impl RuntimeRetentionPolicy {
             proof_outcome_max_attempts: defaults.proof_outcome_max_attempts.max(1),
         }
     }
-
     /// Maximum replay events retained for each event stream.
     #[must_use]
     pub fn event_history_limit(self) -> usize {
         self.event_history_limit
     }
-
     /// Maximum entries retained in each auxiliary state index.
     #[must_use]
     pub fn state_entry_limit(self) -> usize {
         self.state_entry_limit
     }
-
     /// Maximum encoded bytes accepted for one auxiliary runtime checkpoint.
     #[must_use]
     pub fn checkpoint_max_bytes(self) -> u64 {
         self.checkpoint_max_bytes
     }
-
     /// Finalized reconciliation cadence for durable proof-outcome delivery.
     #[must_use]
     pub fn proof_outcome_forwarder_interval(self) -> Duration {
         self.proof_outcome_forwarder_interval
     }
-
     /// Submission attempts allowed for one exact proof-outcome transaction.
     #[must_use]
     pub fn proof_outcome_max_attempts(self) -> u32 {
         self.proof_outcome_max_attempts
     }
 }
-
 impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
     fn from(policy: actual::SorafsRuntimeRetention) -> Self {
         let mut resolved = Self::new(
@@ -1072,7 +960,6 @@ impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
         resolved
     }
 }
-
 /// Config-backed operational policy for durable native orderbook transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderbookWorkerPolicy {
@@ -1086,7 +973,6 @@ pub struct OrderbookWorkerPolicy {
     max_attempts: u32,
     checkpoint_max_bytes: u64,
 }
-
 impl OrderbookWorkerPolicy {
     /// Whether the supervised runtime may generate new orderbook work.
     ///
@@ -1098,60 +984,50 @@ impl OrderbookWorkerPolicy {
     pub const fn enabled(self) -> bool {
         self.enabled
     }
-
     /// Finalized-state scan cadence.
     #[must_use]
     pub const fn scan_interval(self) -> Duration {
         self.scan_interval
     }
-
     /// Maximum fills requested by one native match transaction.
     #[must_use]
     pub const fn match_batch_limit(self) -> u32 {
         self.match_batch_limit
     }
-
     /// Maximum expiries/closures requested by one native maintenance transaction.
     #[must_use]
     pub const fn maintenance_batch_limit(self) -> u32 {
         self.maintenance_batch_limit
     }
-
     /// Maximum pending semantic operations retained durably.
     #[must_use]
     pub const fn max_pending(self) -> usize {
         self.max_pending
     }
-
     /// Maximum finalized idempotency tombstones retained durably.
     #[must_use]
     pub const fn max_completed(self) -> usize {
         self.max_completed
     }
-
     /// Maximum terminal dead letters retained durably.
     #[must_use]
     pub const fn max_dead_letters(self) -> usize {
         self.max_dead_letters
     }
-
     /// Maximum signing/submission attempts under one semantic identity.
     #[must_use]
     pub const fn max_attempts(self) -> u32 {
         self.max_attempts
     }
-
     /// Maximum canonical durable checkpoint size.
     #[must_use]
     pub const fn checkpoint_max_bytes(self) -> u64 {
         self.checkpoint_max_bytes
     }
 }
-
 impl From<actual::SorafsOrderbookWorker> for OrderbookWorkerPolicy {
     fn from(policy: actual::SorafsOrderbookWorker) -> Self {
         use iroha_config::parameters::defaults::sorafs::storage::orderbook_worker as bounds;
-
         let min_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS);
         let max_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS);
         let max_pending =
@@ -1188,13 +1064,11 @@ impl From<actual::SorafsOrderbookWorker> for OrderbookWorkerPolicy {
         }
     }
 }
-
 impl Default for OrderbookWorkerPolicy {
     fn default() -> Self {
         Self::from(actual::SorafsOrderbookWorker::default())
     }
 }
-
 /// Config-backed operational policy for durable native reserve/rent transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReserveWorkerPolicy {
@@ -1207,7 +1081,6 @@ pub struct ReserveWorkerPolicy {
     max_attempts: u32,
     checkpoint_max_bytes: u64,
 }
-
 impl ReserveWorkerPolicy {
     /// Whether the supervised runtime may generate new reserve/rent work.
     ///
@@ -1219,53 +1092,44 @@ impl ReserveWorkerPolicy {
     pub const fn enabled(self) -> bool {
         self.enabled
     }
-
     /// Finalized-state scan cadence.
     #[must_use]
     pub const fn scan_interval(self) -> Duration {
         self.scan_interval
     }
-
     /// Maximum durable operations inspected in one fair scan.
     #[must_use]
     pub const fn scan_batch_limit(self) -> usize {
         self.scan_batch_limit
     }
-
     /// Maximum pending semantic operations retained durably.
     #[must_use]
     pub const fn max_pending(self) -> usize {
         self.max_pending
     }
-
     /// Maximum finalized idempotency tombstones retained durably.
     #[must_use]
     pub const fn max_completed(self) -> usize {
         self.max_completed
     }
-
     /// Maximum terminal dead letters retained durably.
     #[must_use]
     pub const fn max_dead_letters(self) -> usize {
         self.max_dead_letters
     }
-
     /// Maximum signing/submission attempts under one semantic identity.
     #[must_use]
     pub const fn max_attempts(self) -> u32 {
         self.max_attempts
     }
-
     /// Maximum canonical durable checkpoint size.
     #[must_use]
     pub const fn checkpoint_max_bytes(self) -> u64 {
         self.checkpoint_max_bytes
     }
-
     /// Reject programmatic policies outside the same bounds enforced while parsing.
     pub(crate) fn validate(self) -> Result<(), String> {
         use iroha_config::parameters::defaults::sorafs::storage::reserve_worker as bounds;
-
         let minimum_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS);
         let maximum_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS);
         if !(minimum_scan_interval..=maximum_scan_interval).contains(&self.scan_interval) {
@@ -1327,7 +1191,6 @@ impl ReserveWorkerPolicy {
         Ok(())
     }
 }
-
 impl From<actual::SorafsReserveWorker> for ReserveWorkerPolicy {
     fn from(policy: actual::SorafsReserveWorker) -> Self {
         Self {
@@ -1342,17 +1205,14 @@ impl From<actual::SorafsReserveWorker> for ReserveWorkerPolicy {
         }
     }
 }
-
 impl Default for ReserveWorkerPolicy {
     fn default() -> Self {
         Self::from(actual::SorafsReserveWorker::default())
     }
 }
-
 trait PrivacyAggregateScheduleConfigExt {
     fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig>;
 }
-
 /// Governed V1 privacy aggregate policy sourced exclusively from `iroha_config`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAggregatePolicyConfig {
@@ -1366,7 +1226,6 @@ pub struct PrivacyAggregatePolicyConfig {
     policy_digest: [u8; 32],
     composition_budget: PrivacyCompositionBudgetPolicyV1,
 }
-
 impl PrivacyAggregatePolicyConfig {
     /// Construct and validate one governed privacy aggregate policy.
     ///
@@ -1434,7 +1293,6 @@ impl PrivacyAggregatePolicyConfig {
             composition_budget,
         })
     }
-
     /// Build one cycle config from the governed public policy.
     #[must_use]
     pub fn cycle_config(&self) -> PrivacyAggregateCycleConfig {
@@ -1450,32 +1308,27 @@ impl PrivacyAggregatePolicyConfig {
             metadata: Vec::new(),
         }
     }
-
     /// Return the stable governed query identity.
     #[must_use]
     pub const fn query_id(&self) -> [u8; 32] {
         self.query_id
     }
-
     /// Return the governed digest bound into threshold-PRF cycle requests.
     #[must_use]
     pub const fn policy_digest(&self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Return whether this policy requires differential-privacy randomness.
     #[must_use]
     pub const fn requires_cycle_prf(&self) -> bool {
         self.privacy.per_subject_metric_cap.is_some()
     }
-
     /// Durable composition-budget policy bound to the stable query identity.
     #[must_use]
     pub const fn composition_budget(&self) -> PrivacyCompositionBudgetPolicyV1 {
         self.composition_budget
     }
 }
-
 fn transparency_runtime_provider_binding(
     binding: &actual::SorafsTransparencyRuntimeProviderBinding,
 ) -> TransparencyRuntimeProviderBindingV1 {
@@ -1486,11 +1339,9 @@ fn transparency_runtime_provider_binding(
     )
     .expect("iroha_config validated the transparency runtime provider binding")
 }
-
 trait PrivacyAggregatePolicyConfigExt {
     fn into_policy_config(self) -> Option<PrivacyAggregatePolicyConfig>;
 }
-
 impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedule {
     fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig> {
         if !self.enabled {
@@ -1503,7 +1354,6 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedul
         })
     }
 }
-
 impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule {
     fn into_policy_config(self) -> Option<PrivacyAggregatePolicyConfig> {
         if !self.enabled {
@@ -1579,7 +1429,6 @@ impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule 
         )
     }
 }
-
 impl PrivacyAggregateScheduleConfigExt for actual::SorafsEvidenceViewerAuditSchedule {
     fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig> {
         if !self.enabled {
@@ -1592,7 +1441,6 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsEvidenceViewerAuditSche
         })
     }
 }
-
 /// Native repair worker and durable transaction-forwarder configuration.
 #[derive(Debug, Clone)]
 pub struct RepairConfig {
@@ -1602,51 +1450,43 @@ pub struct RepairConfig {
     max_attempts: u32,
     worker_concurrency: usize,
 }
-
 impl RepairConfig {
     /// Whether native repair processing is enabled.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
     }
-
     /// Lease duration requested by the native transaction worker (seconds).
     #[must_use]
     pub fn claim_ttl_secs(&self) -> u64 {
         self.claim_ttl_secs
     }
-
     /// Renewal lead time used by the native transaction worker (seconds).
     #[must_use]
     pub fn heartbeat_interval_secs(&self) -> u64 {
         self.heartbeat_interval_secs
     }
-
     /// Maximum durable forwarding attempts before dead-lettering.
     #[must_use]
     pub fn max_attempts(&self) -> u32 {
         self.max_attempts
     }
-
     /// Concurrent native repair executions per node.
     #[must_use]
     pub fn worker_concurrency(&self) -> usize {
         self.worker_concurrency
     }
 }
-
 impl Default for RepairConfig {
     fn default() -> Self {
         Self::from(&actual::SorafsRepair::default())
     }
 }
-
 impl From<actual::SorafsRepair> for RepairConfig {
     fn from(value: actual::SorafsRepair) -> Self {
         Self::from(&value)
     }
 }
-
 impl From<&actual::SorafsRepair> for RepairConfig {
     fn from(value: &actual::SorafsRepair) -> Self {
         Self {
@@ -1658,7 +1498,6 @@ impl From<&actual::SorafsRepair> for RepairConfig {
         }
     }
 }
-
 /// GC scheduler configuration resolved from the runtime config.
 #[derive(Debug, Clone)]
 pub struct GcConfig {
@@ -1668,38 +1507,32 @@ pub struct GcConfig {
     max_deletions_per_run: u32,
     retention_grace_secs: u64,
 }
-
 impl GcConfig {
     /// Whether the GC worker is enabled.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
     }
-
     /// Optional directory for durable GC state.
     #[must_use]
     pub fn state_dir(&self) -> Option<&PathBuf> {
         self.state_dir.as_ref()
     }
-
     /// GC cadence (seconds).
     #[must_use]
     pub fn interval_secs(&self) -> u64 {
         self.interval_secs
     }
-
     /// Maximum deletions per GC run.
     #[must_use]
     pub fn max_deletions_per_run(&self) -> u32 {
         self.max_deletions_per_run
     }
-
     /// Grace window for retention expiry (seconds).
     #[must_use]
     pub fn retention_grace_secs(&self) -> u64 {
         self.retention_grace_secs
     }
-
     /// Apply a default state directory when one is not provided.
     #[must_use]
     pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
@@ -1709,19 +1542,16 @@ impl GcConfig {
         self
     }
 }
-
 impl Default for GcConfig {
     fn default() -> Self {
         Self::from(&actual::SorafsGc::default())
     }
 }
-
 impl From<actual::SorafsGc> for GcConfig {
     fn from(value: actual::SorafsGc) -> Self {
         Self::from(&value)
     }
 }
-
 impl From<&actual::SorafsGc> for GcConfig {
     fn from(value: &actual::SorafsGc) -> Self {
         Self {
@@ -1733,7 +1563,6 @@ impl From<&actual::SorafsGc> for GcConfig {
         }
     }
 }
-
 /// Optional overrides for provider advert telemetry.
 #[derive(Debug, Clone)]
 pub struct AdvertOverrides {
@@ -1742,7 +1571,6 @@ pub struct AdvertOverrides {
     max_latency_ms: u32,
     topics: Vec<String>,
 }
-
 impl AdvertOverrides {
     /// Construct overrides from individual fields.
     #[must_use]
@@ -1759,39 +1587,33 @@ impl AdvertOverrides {
             topics,
         }
     }
-
     /// Stake pointer advertised alongside provider metadata.
     #[must_use]
     pub fn stake_pointer(&self) -> Option<&String> {
         self.stake_pointer.as_ref()
     }
-
     /// Availability tier advertised by the provider.
     #[must_use]
     pub fn availability(&self) -> &str {
         &self.availability
     }
-
     /// Maximum advertised retrieval latency (milliseconds).
     #[must_use]
     pub fn max_latency_ms(&self) -> u32 {
         self.max_latency_ms
     }
-
     /// Rendezvous topics published for discovery.
     #[must_use]
     pub fn topics(&self) -> &[String] {
         &self.topics
     }
 }
-
 /// Per-metric smoothing configuration used by the embedded capacity meter.
 #[derive(Debug, Clone, Default)]
 pub struct MeteringSmoothingConfig {
     gib_hours_alpha: Option<f64>,
     por_success_alpha: Option<f64>,
 }
-
 impl MeteringSmoothingConfig {
     /// Construct a configuration from optional alpha values.
     #[must_use]
@@ -1801,39 +1623,33 @@ impl MeteringSmoothingConfig {
             por_success_alpha: Self::sanitize_alpha(por_success_alpha),
         }
     }
-
     /// Set the GiB·hour smoothing alpha (values <= 0 disable smoothing).
     #[must_use]
     pub fn with_gib_hours_alpha(mut self, alpha: f64) -> Self {
         self.gib_hours_alpha = Self::sanitize_alpha(Some(alpha));
         self
     }
-
     /// Set the PoR success smoothing alpha (values <= 0 disable smoothing).
     #[must_use]
     pub fn with_por_success_alpha(mut self, alpha: f64) -> Self {
         self.por_success_alpha = Self::sanitize_alpha(Some(alpha));
         self
     }
-
     /// Return the configured GiB·hour smoothing alpha, if any.
     #[must_use]
     pub fn gib_hours_alpha(&self) -> Option<f64> {
         self.gib_hours_alpha
     }
-
     /// Return the configured PoR success smoothing alpha, if any.
     #[must_use]
     pub fn por_success_alpha(&self) -> Option<f64> {
         self.por_success_alpha
     }
-
     /// Convert into the runtime smoothing configuration used by the meter.
     #[must_use]
     pub fn to_metering_config(&self) -> SmoothingConfig {
         SmoothingConfig::from_optional_alphas(self.gib_hours_alpha, self.por_success_alpha)
     }
-
     fn sanitize_alpha(alpha: Option<f64>) -> Option<f64> {
         alpha.and_then(|value| {
             if value <= 0.0 {
@@ -1844,13 +1660,11 @@ impl MeteringSmoothingConfig {
         })
     }
 }
-
 impl From<&actual::SorafsMeteringSmoothing> for MeteringSmoothingConfig {
     fn from(value: &actual::SorafsMeteringSmoothing) -> Self {
         Self::new(value.gib_hours_alpha, value.por_success_alpha)
     }
 }
-
 impl Default for AdvertOverrides {
     fn default() -> Self {
         let defaults = actual::SorafsAdvertOverrides::default();
@@ -1862,13 +1676,11 @@ impl Default for AdvertOverrides {
         }
     }
 }
-
 impl From<actual::SorafsAdvertOverrides> for AdvertOverrides {
     fn from(value: actual::SorafsAdvertOverrides) -> Self {
         Self::from(&value)
     }
 }
-
 impl From<&actual::SorafsAdvertOverrides> for AdvertOverrides {
     fn from(value: &actual::SorafsAdvertOverrides) -> Self {
         Self {
@@ -1879,7 +1691,6 @@ impl From<&actual::SorafsAdvertOverrides> for AdvertOverrides {
         }
     }
 }
-
 /// Penalty policy controlling PoR failure escalation and slashing.
 #[derive(Debug, Clone, Copy)]
 pub struct PenaltySettings {
@@ -1890,7 +1701,6 @@ pub struct PenaltySettings {
     /// Cooldown (seconds) enforced between slashes.
     pub cooldown_secs: u64,
 }
-
 impl Default for PenaltySettings {
     fn default() -> Self {
         let defaults = actual::SorafsPenaltyPolicy::default();
@@ -1902,7 +1712,6 @@ impl Default for PenaltySettings {
         }
     }
 }
-
 impl PenaltySettings {
     /// Construct settings from the configured penalty policy.
     pub fn from_policy(policy: &actual::SorafsPenaltyPolicy) -> Self {
@@ -1913,11 +1722,9 @@ impl PenaltySettings {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn pdp_config_protocol_ceiling_matches_manifest_v1() {
         const {
@@ -1942,11 +1749,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn orderbook_worker_policy_defensively_clamps_programmatic_boundaries() {
         use iroha_config::parameters::defaults::sorafs::storage::orderbook_worker as bounds;
-
         let below = OrderbookWorkerPolicy::from(actual::SorafsOrderbookWorker {
             enabled: true,
             scan_interval: Duration::ZERO,
@@ -1970,7 +1775,6 @@ mod tests {
         assert_eq!(below.max_dead_letters(), 1);
         assert_eq!(below.max_attempts(), 1);
         assert_eq!(below.checkpoint_max_bytes(), bounds::CHECKPOINT_MIN_BYTES);
-
         let above = OrderbookWorkerPolicy::from(actual::SorafsOrderbookWorker {
             enabled: false,
             scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS + 1),
@@ -2015,16 +1819,13 @@ mod tests {
             bounds::CHECKPOINT_MAX_BYTES_LIMIT
         );
     }
-
     #[test]
     fn reserve_worker_policy_preserves_and_rejects_unsafe_programmatic_values() {
         use iroha_config::parameters::defaults::sorafs::storage::reserve_worker as bounds;
-
         assert_eq!(
             usize::try_from(bounds::SCAN_BATCH_LIMIT_MAX).unwrap(),
             crate::reserve_transaction_forwarder::RESERVE_TRANSACTION_FORWARDER_MAX_SCAN_ITEMS_V1
         );
-
         let invalid = ReserveWorkerPolicy::from(actual::SorafsReserveWorker {
             enabled: true,
             scan_interval: Duration::ZERO,
@@ -2043,14 +1844,12 @@ mod tests {
         );
         assert_eq!(invalid.max_attempts(), 0);
         assert!(invalid.validate().is_err());
-
         let sub_millisecond_overflow = ReserveWorkerPolicy::from(actual::SorafsReserveWorker {
             scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS)
                 + Duration::from_nanos(1),
             ..actual::SorafsReserveWorker::default()
         });
         assert!(sub_millisecond_overflow.validate().is_err());
-
         let boundary = ReserveWorkerPolicy::from(actual::SorafsReserveWorker {
             enabled: false,
             scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS),
@@ -2067,7 +1866,6 @@ mod tests {
             .validate()
             .expect("exact reserve worker safety boundaries are valid");
     }
-
     #[test]
     fn conversion_from_actual_preserves_fields() {
         let mut actual = actual::SorafsStorage::default();
@@ -2367,7 +2165,6 @@ mod tests {
             u64::from(defaults.cooldown_windows).saturating_mul(60 * 60)
         );
     }
-
     #[test]
     fn runtime_retention_clamps_zero_safety_ceilings() {
         let policy = RuntimeRetentionPolicy::new(0, 0, 0);
@@ -2377,7 +2174,6 @@ mod tests {
             Duration::from_secs(1)
         );
         assert_eq!(policy.proof_outcome_max_attempts(), 8);
-
         let maximum =
             iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
         let bounded =
@@ -2385,7 +2181,6 @@ mod tests {
         assert_eq!(bounded.state_entry_limit(), maximum);
         assert_eq!(bounded.event_history_limit(), maximum);
     }
-
     #[test]
     fn privacy_aggregate_schedule_is_none_when_disabled() {
         let mut actual = actual::SorafsStorage::default();
@@ -2395,7 +2190,6 @@ mod tests {
             publish_delay_seconds: 5,
             ..actual::SorafsPrivacyAggregateSchedule::default()
         };
-
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.privacy_aggregate_schedule(), None);
         assert_eq!(cfg.privacy_aggregate_policy(), None);
@@ -2404,7 +2198,6 @@ mod tests {
         assert_eq!(cfg.privacy_leader_lease_provider_binding(), None);
         assert_eq!(cfg.privacy_fenced_publisher_binding(), None);
     }
-
     #[test]
     fn privacy_fenced_publisher_builder_preserves_exact_binding_and_default_is_none() {
         assert_eq!(
@@ -2422,7 +2215,6 @@ mod tests {
             .build();
         assert_eq!(config.privacy_fenced_publisher_binding(), Some(&binding));
     }
-
     #[test]
     fn governance_dag_checkpoint_store_builder_preserves_config_authority() {
         assert_eq!(
@@ -2451,7 +2243,6 @@ mod tests {
             Some(qualification)
         );
     }
-
     #[test]
     fn evidence_viewer_audit_schedule_is_none_when_disabled() {
         let mut actual = actual::SorafsStorage::default();
@@ -2460,11 +2251,9 @@ mod tests {
             cycle_seconds: 0,
             publish_delay_seconds: 5,
         };
-
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.evidence_viewer_audit_schedule(), None);
     }
-
     #[test]
     fn por_replay_archive_policy_preserves_exact_public_binding_and_strict_bounds() {
         let signing_public_key = ed25519_dalek::SigningKey::from_bytes(&[0x44; 32])
@@ -2486,7 +2275,6 @@ mod tests {
             8_192,
         )
         .expect("valid archive policy");
-
         assert_eq!(
             policy.runtime_handle(),
             "hsm://sorafs/por-replay-archive/primary"
@@ -2530,7 +2318,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn actual_por_replay_archive_projects_into_node_storage_config() {
         let signing_public_key = ed25519_dalek::SigningKey::from_bytes(&[0x45; 32])
@@ -2548,7 +2335,6 @@ mod tests {
             max_successor_receipts: 37,
             max_successor_proof_bytes: 16_384,
         });
-
         let config = StorageConfig::from(&actual);
         let policy = config
             .por_replay_archive_policy()
@@ -2566,7 +2352,6 @@ mod tests {
         assert_eq!(policy.max_successor_receipts(), 37);
         assert_eq!(policy.max_successor_proof_bytes(), 16_384);
     }
-
     #[test]
     fn repair_and_gc_configs_preserve_fields() {
         let repair = actual::SorafsRepair {
@@ -2576,14 +2361,12 @@ mod tests {
             max_attempts: 6,
             worker_concurrency: 12,
         };
-
         let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());
         assert_eq!(cfg.claim_ttl_secs(), 900);
         assert_eq!(cfg.heartbeat_interval_secs(), 45);
         assert_eq!(cfg.max_attempts(), 6);
         assert_eq!(cfg.worker_concurrency(), 12);
-
         let gc = actual::SorafsGc {
             enabled: true,
             state_dir: Some(PathBuf::from("/tmp/gc_state")),
@@ -2591,7 +2374,6 @@ mod tests {
             max_deletions_per_run: 2_000,
             retention_grace_secs: 86_400,
         };
-
         let gc_cfg = GcConfig::from(&gc);
         assert!(gc_cfg.enabled());
         assert_eq!(gc_cfg.state_dir(), Some(&PathBuf::from("/tmp/gc_state")));
@@ -2599,12 +2381,10 @@ mod tests {
         assert_eq!(gc_cfg.max_deletions_per_run(), 2_000);
         assert_eq!(gc_cfg.retention_grace_secs(), 86_400);
     }
-
     #[test]
     fn gc_default_state_dir_follows_storage_root() {
         let data_dir = PathBuf::from("/var/lib/sorafs");
         let gc = GcConfig::from(&actual::SorafsGc::default()).with_default_state_dir(&data_dir);
-
         assert_eq!(gc.state_dir(), Some(&data_dir.join("gc")));
     }
 }

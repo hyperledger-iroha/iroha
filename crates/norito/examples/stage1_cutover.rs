@@ -4,11 +4,9 @@
 //! (`build_struct_index`) against the scalar reference implementation and gather
 //! per-byte timings across representative input sizes. Intended usage:
 //! `cargo run -p norito --example stage1_cutover --release --features bench-internal`
-
 use norito::core::read_len_dyn_slice;
 #[cfg(feature = "bench-internal")]
 use norito::json::{build_struct_index, build_struct_index_scalar_bench};
-
 #[cfg(feature = "bench-internal")]
 fn synthesize_json(target_bytes: usize) -> String {
     // Reuse a moderately nested object to exercise Stage-1 scanning without
@@ -24,7 +22,6 @@ fn synthesize_json(target_bytes: usize) -> String {
     }
     out
 }
-
 #[cfg(feature = "bench-internal")]
 fn time_ns<F: FnMut()>(iters: usize, mut f: F) -> u128 {
     let start = std::time::Instant::now();
@@ -33,7 +30,6 @@ fn time_ns<F: FnMut()>(iters: usize, mut f: F) -> u128 {
     }
     start.elapsed().as_nanos()
 }
-
 #[cfg(feature = "bench-internal")]
 fn main() {
     // Small sample set; fast enough to run in seconds.
@@ -50,7 +46,6 @@ fn main() {
         192 * 1024,
         256 * 1024,
     ];
-
     println!("bytes,scalar_ns,kernel_ns,ns_per_byte_scalar,ns_per_byte_kernel");
     for &size in &sizes {
         let json = synthesize_json(size);
@@ -77,7 +72,6 @@ fn main() {
         );
     }
 }
-
 #[cfg(not(feature = "bench-internal"))]
 fn main() {
     eprintln!("Enable --features bench-internal to run this benchmark (see stage1_cutover.rs).");

@@ -1,16 +1,13 @@
 //! Optional wrapper-level Kotodama integration tests.
-
 fn should_run_wrappers() -> bool {
     std::env::var("IROHA_RUN_ZK_WRAPPERS").ok().as_deref() == Some("1")
 }
-
 use iroha_zkp_halo2::backend::pallas::PallasBackend;
 use ivm::{
     IVM, PointerType,
     host::{DefaultHost, ZkCurve, ZkHalo2Backend, ZkHalo2Config},
     kotodama::std as kstd,
 };
-
 fn build_env_bytes(k: u32) -> Vec<u8> {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
@@ -35,20 +32,17 @@ fn build_env_bytes(k: u32) -> Vec<u8> {
     };
     norito::to_bytes(&env).expect("encode")
 }
-
 fn decode_statuses(vm: &IVM, ptr: u64) -> Vec<u8> {
     let output = vm.memory.validate_tlv(ptr).expect("batch status tlv");
     assert_eq!(output.type_id, PointerType::NoritoBytes);
     norito::decode_from_bytes(output.payload).expect("status vector")
 }
-
 #[test]
 fn zk_verify_ballot_wrapper_positive() {
     if !should_run_wrappers() {
         eprintln!("Skipping: set IROHA_RUN_ZK_WRAPPERS=1 to run kotodama wrapper tests.");
         return;
     }
-
     let mut vm = IVM::new(1_000_000);
     let env_bytes = build_env_bytes(8);
     let cfg = ZkHalo2Config {
@@ -69,21 +63,17 @@ fn zk_verify_ballot_wrapper_positive() {
     );
     assert_eq!(r, 1);
 }
-
 #[test]
 fn zk_verify_batch_wrapper_returns_status_vector_under_default_host() {
     if !should_run_wrappers() {
         eprintln!("Skipping: set IROHA_RUN_ZK_WRAPPERS=1 to run kotodama wrapper tests.");
         return;
     }
-
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
-
     let params = h2::Params::new(8).unwrap();
     let coeffs: Vec<h2::PrimeField64> = (0u64..8).map(|i| h2::PrimeField64::from(i + 1)).collect();
     let poly = h2::Polynomial::from_coeffs(coeffs);
-
     let mut tr = h2::Transcript::new(ivm::host::LABEL_BATCH);
     let p_g = poly.commit(&params).unwrap();
     let z = h2::PrimeField64::from(5u64);
@@ -105,7 +95,6 @@ fn zk_verify_batch_wrapper_returns_status_vector_under_default_host() {
         public: bad_pub,
         ..env_ok.clone()
     };
-
     let mut vm = ivm::IVM::new(1_000_000);
     let cfg = ivm::host::ZkHalo2Config {
         enabled: true,

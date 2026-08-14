@@ -1,8 +1,6 @@
 //! Measure skip-throughput using TapeWalker vs the native DOM walker.
 #![cfg(feature = "json")]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-
 fn make_blob(n_objs: usize, payload_size: usize) -> String {
     let mut s = String::with_capacity(n_objs * (payload_size + 64));
     s.push('[');
@@ -24,13 +22,11 @@ fn make_blob(n_objs: usize, payload_size: usize) -> String {
     s.push(']');
     s
 }
-
 fn bench_skip(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_skip");
     for &(n, sz) in &[(128usize, 256usize), (256, 512), (512, 1024)] {
         let blob = make_blob(n, sz);
         group.throughput(Throughput::Bytes(blob.len() as u64));
-
         // Norito tape + skip
         group.bench_function(BenchmarkId::new("norito_skip", format!("{n}x{sz}")), |b| {
             b.iter_batched(
@@ -64,7 +60,6 @@ fn bench_skip(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         // Norito DOM: parse then walk and ignore payloads
         group.bench_function(BenchmarkId::new("norito_dom", format!("{n}x{sz}")), |b| {
             b.iter_batched(
@@ -88,6 +83,5 @@ fn bench_skip(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_skip);
 criterion_main!(benches);

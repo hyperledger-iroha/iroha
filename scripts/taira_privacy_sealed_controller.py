@@ -43,9 +43,11 @@ from typing import Iterator, Mapping, NoReturn, Sequence
 try:
     from . import taira_privacy_action_driver_ipc as action_ipc
     from . import taira_privacy_verange_case_plan as verange_case_plan
+    from .iso_operator_auth import OperatorSigningContext
 except ImportError:
     import taira_privacy_action_driver_ipc as action_ipc
     import taira_privacy_verange_case_plan as verange_case_plan
+    from iso_operator_auth import OperatorSigningContext
 
 VeRangePublicAdmissionArtifactsV1 = (
     verange_case_plan.VeRangePublicAdmissionArtifactsV1
@@ -1769,8 +1771,9 @@ def _direct_exchange(
     body: bytes | None,
     timeout_seconds: float,
     accept: str = "application/json",
+    operator_signing_context: OperatorSigningContext | None = None,
 ) -> HttpObservation:
-    """Perform one direct, non-redirecting, credential-free Torii request."""
+    """Perform one direct, non-redirecting Torii request without auth fallback."""
 
     if (
         method not in {"GET", "POST"}
@@ -1780,6 +1783,10 @@ def _direct_exchange(
     ):
         _fail("controller attempted an unsupported direct Torii request")
     headers = {"Accept": accept}
+    if operator_signing_context is not None:
+        if method != "GET" or body is not None:
+            _fail("operator signing is restricted to empty-body direct GET requests")
+        headers.update(operator_signing_context.headers(method, path, b""))
     if body is not None:
         headers["Content-Type"] = "application/x-norito"
     request = urllib.request.Request(
@@ -1917,8 +1924,9 @@ def _controller_exchange(
     body: bytes | None = None,
     timeout_seconds: float = 2.0,
     accept: str = "application/json",
+    operator_signing_context: OperatorSigningContext | None = None,
 ) -> HttpObservation:
-    if accept == "application/json":
+    if accept == "application/json" and operator_signing_context is None:
         # Preserve the original narrow call shape for existing diagnostic test
         # doubles; only the capability query opens the exact Norito accept path.
         response = _direct_exchange(
@@ -1928,6 +1936,24 @@ def _controller_exchange(
             body=body,
             timeout_seconds=timeout_seconds,
         )
+    elif operator_signing_context is None:
+        response = _direct_exchange(
+            peer,
+            method,
+            path,
+            body=body,
+            timeout_seconds=timeout_seconds,
+            accept=accept,
+        )
+    elif accept == "application/json":
+        response = _direct_exchange(
+            peer,
+            method,
+            path,
+            body=body,
+            timeout_seconds=timeout_seconds,
+            operator_signing_context=operator_signing_context,
+        )
     else:
         response = _direct_exchange(
             peer,
@@ -1936,6 +1962,7 @@ def _controller_exchange(
             body=body,
             timeout_seconds=timeout_seconds,
             accept=accept,
+            operator_signing_context=operator_signing_context,
         )
     transcript.http(peer, method, path, body, response)
     return response
@@ -2199,6 +2226,7 @@ def require_verange_capability_state_preserved(
 def _peer_sample(
     transcript: TranscriptBuilder,
     peer: PeerEndpoint,
+    operator_signing_context: OperatorSigningContext,
 ) -> FleetSample:
     status_response = _controller_exchange(transcript, peer, "GET", "/status")
     if status_response.status != 200:
@@ -2206,7 +2234,11 @@ def _peer_sample(
     status = _json_http(status_response, f"{peer.label} status")
     height = _uint(status.get("blocks"), f"{peer.label} blocks", positive=True)
     consensus_response = _controller_exchange(
-        transcript, peer, "GET", "/v1/sumeragi/status"
+        transcript,
+        peer,
+        "GET",
+        "/v1/sumeragi/status",
+        operator_signing_context=operator_signing_context,
     )
     if consensus_response.status != 200:
         raise TransientPeerError(f"{peer.label} consensus status is unavailable")
@@ -2230,8 +2262,11 @@ def _peer_sample(
 def _fleet_sample(
     transcript: TranscriptBuilder,
     peers: Sequence[PeerEndpoint],
+    operator_signing_context: OperatorSigningContext,
 ) -> FleetSample:
-    samples = [_peer_sample(transcript, peer) for peer in peers]
+    samples = [
+        _peer_sample(transcript, peer, operator_signing_context) for peer in peers
+    ]
     baseline = samples[0]
     if any(sample != baseline for sample in samples[1:]):
         _fail("four direct peers disagree on exact committed height/hash")
@@ -2464,10 +2499,11 @@ def _wait_for_exact_sentinel(
     peers: Sequence[PeerEndpoint],
     sentinel: FleetSample,
     deadline: float,
+    operator_signing_context: OperatorSigningContext,
 ) -> FleetSample:
     while time.monotonic() < deadline:
         try:
-            sample = _fleet_sample(transcript, peers)
+            sample = _fleet_sample(transcript, peers, operator_signing_context)
         except TransientPeerError:
             time.sleep(0.1)
             continue
@@ -2482,10 +2518,11 @@ def _wait_for_successor(
     peers: Sequence[PeerEndpoint],
     sentinel: FleetSample,
     deadline: float,
+    operator_signing_context: OperatorSigningContext,
 ) -> FleetSample:
     while time.monotonic() < deadline:
         try:
-            sample = _fleet_sample(transcript, peers)
+            sample = _fleet_sample(transcript, peers, operator_signing_context)
         except TransientPeerError:
             time.sleep(0.1)
             continue
@@ -2515,6 +2552,7 @@ def run_verange_diagnostic_case(
     restarted_supervisor: ControllerOwnedSupervisor,
     primary_request: VeRangeActionRequest,
     successor_request: VeRangeActionRequest,
+    operator_signing_context: OperatorSigningContext,
     timeout_seconds: float,
 ) -> DiagnosticCaseRecords:
     """Exercise generic VeRange finality without claiming a protocol state case."""
@@ -2628,12 +2666,12 @@ def run_verange_diagnostic_case(
             verifier_digest_hex=public_artifacts.verifier_digest_hex,
         )
 
-    before = _fleet_sample(transcript, peer_set)
+    before = _fleet_sample(transcript, peer_set, operator_signing_context)
     _submit(transcript, peer_set[0], primary.transaction, expected="accepted")
     _wait_for_four_peer_finality(
         transcript, peer_set, primary.transaction_hash_hex, deadline
     )
-    sentinel = _fleet_sample(transcript, peer_set)
+    sentinel = _fleet_sample(transcript, peer_set, operator_signing_context)
     if sentinel.height <= before.height or sentinel.block_hash == before.block_hash:
         _fail("canonical privacy action did not create a new exact sentinel")
 
@@ -2655,7 +2693,13 @@ def run_verange_diagnostic_case(
         old_child_pid=old_pid,
         peer=restarted_supervisor.peer.label,
     )
-    recovered = _wait_for_exact_sentinel(transcript, peer_set, sentinel, deadline)
+    recovered = _wait_for_exact_sentinel(
+        transcript,
+        peer_set,
+        sentinel,
+        deadline,
+        operator_signing_context,
+    )
     _wait_for_four_peer_finality(
         transcript, peer_set, primary.transaction_hash_hex, deadline
     )
@@ -2664,7 +2708,13 @@ def run_verange_diagnostic_case(
     _wait_for_four_peer_finality(
         transcript, peer_set, successor.transaction_hash_hex, deadline
     )
-    successor_sample = _wait_for_successor(transcript, peer_set, sentinel, deadline)
+    successor_sample = _wait_for_successor(
+        transcript,
+        peer_set,
+        sentinel,
+        deadline,
+        operator_signing_context,
+    )
 
     transcript_bytes, transcript_id = transcript.finish()
     result_body: dict[str, object] = {

@@ -62,7 +62,6 @@ fn leader_wire_gate_reopens_volatile_terminal_and_verifies_durable_body_terminal
     assert_eq!(retry.status(), LeaderWireLifecycleStatus::VolatileTerminal);
     assert_eq!(retry.token().admission_ordinal(), 17);
     assert_eq!(retry.token().scheduler_ordinal(), 109);
-
     let (reopened, restore) = LeaderWireLifecycleStoreGate::open(
         &wal,
         context.id(),
@@ -95,7 +94,6 @@ fn leader_wire_gate_reopens_volatile_terminal_and_verifies_durable_body_terminal
     reopened
         .mark_durable_body_terminal(&runtime, &durable_body)
         .expect("publish body-backed terminal");
-
     let (_, stable) = LeaderWireLifecycleStoreGate::open(
         &wal,
         context.id(),
@@ -117,7 +115,6 @@ fn leader_wire_gate_reopens_volatile_terminal_and_verifies_durable_body_terminal
         stable.records()[0].terminal_evidence(),
         Some(LeaderWireStableTerminalEvidence::DurableBody(_))
     ));
-
     assert!(
         LeaderWireLifecycleStoreGate::open(
             &wal,
@@ -135,7 +132,6 @@ fn leader_wire_gate_reopens_volatile_terminal_and_verifies_durable_body_terminal
         "a body terminal cannot authorize itself from the gate snapshot"
     );
 }
-
 #[test]
 fn leader_wire_gate_reconciles_body_first_terminal_crash() {
     let directory = TempDir::new().expect("temporary directory");
@@ -187,7 +183,6 @@ fn leader_wire_gate_reconciles_body_first_terminal_crash() {
     gate.mark_ingress(&token).expect("mark ingress");
     gate.mark_runtime(&token, runtime_owner)
         .expect("publish runtime before simulated crash");
-
     let (_, restore) = LeaderWireLifecycleStoreGate::open(
         &wal,
         context.id(),

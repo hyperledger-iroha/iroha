@@ -13,7 +13,6 @@ fn sidecar_index_rejects_overflowing_based_header() {
         height: u64::MAX - 1,
     })
     .expect("encode sidecar");
-
     assert!(
         Kura::indexed_sidecar_height_range(&index_path, "dummy lane sidecar").is_none(),
         "overflowing based indexes must fail closed during scans"
@@ -34,7 +33,6 @@ fn sidecar_index_rejects_overflowing_based_header() {
         "rejecting an overflowing header must not rewrite it"
     );
 }
-
 #[test]
 fn sidecar_index_rejects_corrupt_base_header_checksum() {
     let temp_dir = TempDir::new().unwrap();
@@ -46,7 +44,6 @@ fn sidecar_index_rejects_corrupt_base_header_checksum() {
     index_bytes.extend_from_slice(&SidecarIndexEntry { offset: 0, len: 0 }.to_bytes());
     fs::write(&index_path, &index_bytes).expect("write corrupt based index");
     let payload = norito::to_bytes(&DummySidecar { height: 10_000 }).expect("encode sidecar");
-
     assert!(
         Kura::read_indexed_sidecar_from_paths(
             10_000,
@@ -69,14 +66,12 @@ fn sidecar_index_rejects_corrupt_base_header_checksum() {
     ));
     assert_eq!(fs::read(&index_path).expect("read index"), index_bytes);
 }
-
 #[test]
 fn roster_sidecars_prune_to_retention() {
     let temp_dir = TempDir::new().unwrap();
     let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
-
     for height in 1..=4 {
         let payload = norito::to_bytes(&DummySidecar { height }).expect("encode dummy sidecar");
         assert!(
@@ -93,7 +88,6 @@ fn roster_sidecars_prune_to_retention() {
             "append at height {height} must succeed"
         );
     }
-
     let mut index = std::fs::File::open(&index_path).expect("index exists");
     let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
     let mut entries = Vec::new();
@@ -101,14 +95,12 @@ fn roster_sidecars_prune_to_retention() {
         index.read_exact(&mut buf).expect("read index entry");
         entries.push(SidecarIndexEntry::from_bytes(buf));
     }
-
     assert_eq!(entries[0].len, 0);
     assert_eq!(entries[1].len, 0);
     assert!(entries[2].len > 0);
     assert!(entries[3].len > 0);
     assert_eq!(entries[2].offset, 0);
     assert_eq!(entries[3].offset, entries[2].len);
-
     let mut data = std::fs::File::open(&data_path).expect("data exists");
     for (idx, expected_height) in [3_u64, 4_u64].into_iter().enumerate() {
         let entry = &entries[idx + 2];
@@ -122,38 +114,31 @@ fn roster_sidecars_prune_to_retention() {
         assert_eq!(decoded.height, expected_height);
     }
 }
-
 #[test]
 fn hashes_count_math() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
     store.create_files_if_they_do_not_exist().unwrap();
-
     // Fresh store: no hashes
     assert_eq!(store.read_hashes_count().unwrap(), 0);
-
     // Manually extend the hashes file to 3 full entries
     let path = dir.path().join(HASHES_FILE_NAME);
     let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.set_len(3 * SIZE_OF_BLOCK_HASH).unwrap();
     assert_eq!(store.read_hashes_count().unwrap(), 3);
-
     // Non-multiple of 32 is truncated by integer division
     file.set_len(2 * SIZE_OF_BLOCK_HASH + 16).unwrap();
     assert_eq!(store.read_hashes_count().unwrap(), 2);
 }
-
 #[test]
 fn read_block_hashes_out_of_bounds() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
     store.create_files_if_they_do_not_exist().unwrap();
-
     // Prepare exactly 2 hash slots worth of data
     let path = dir.path().join(HASHES_FILE_NAME);
     let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.set_len(2 * SIZE_OF_BLOCK_HASH).unwrap();
-
     // Attempt to read 3 hashes from the start should be out of bounds
     let err = store.read_block_hashes(0, 3).unwrap_err();
     match err {
@@ -167,18 +152,15 @@ fn read_block_hashes_out_of_bounds() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn read_block_indices_out_of_bounds() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
     store.create_files_if_they_do_not_exist().unwrap();
-
     // Prepare exactly 2 index entries worth of data
     let path = dir.path().join(INDEX_FILE_NAME);
     let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.set_len(2 * BlockIndex::SIZE).unwrap();
-
     let mut buf = vec![BlockIndex::default(); 3];
     let err = store.read_block_indices(0, &mut buf).unwrap_err();
     match err {
@@ -192,27 +174,22 @@ fn read_block_indices_out_of_bounds() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn strict_init_prunes_oversized_block_length() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
     store.create_files_if_they_do_not_exist().unwrap();
-
     let mut blocks = DummyBlocks::new();
     let block = blocks.next();
     store.append_block_to_chain(&block).unwrap();
-
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-
     let validation = Kura::init_strict_mode(&mut store, 1, None).unwrap();
     assert!(validation.truncated);
     assert!(validation.hashes.is_empty());
     assert_eq!(store.read_index_count().unwrap(), 0);
 }
-
 #[test]
 fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     let dir = TempDir::new().unwrap();
@@ -223,7 +200,6 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     for block in &blocks {
         store.append_block_to_chain(block).unwrap();
     }
-
     let hashes_path = primary_blocks_dir(&dir).join(HASHES_FILE_NAME);
     let finalized_prefix_len = usize::try_from(2 * SIZE_OF_BLOCK_HASH).unwrap();
     let pristine_bytes = std::fs::read(&hashes_path).expect("read pristine hash journal");
@@ -233,7 +209,6 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     store
         .write_block_hash(2, forged)
         .expect("corrupt only the unfinalized hash suffix");
-
     let validation =
         Kura::init_strict_mode(&mut store, 3, Some(2)).expect("repair above finality must succeed");
     assert!(validation.hash_mismatch);
@@ -242,7 +217,6 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
         validation.hashes,
         blocks.iter().map(|block| block.hash()).collect::<Vec<_>>()
     );
-
     let repaired_bytes = std::fs::read(&hashes_path).expect("read repaired hash journal");
     assert_eq!(
         &repaired_bytes[..finalized_prefix_len],
@@ -251,7 +225,6 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     );
     assert_eq!(repaired_bytes, pristine_bytes);
 }
-
 #[test]
 fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     let dir = TempDir::new().unwrap();
@@ -262,14 +235,12 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     for block in &blocks {
         store.append_block_to_chain(block).unwrap();
     }
-
     let hashes_path = primary_blocks_dir(&dir).join(HASHES_FILE_NAME);
     let pristine_bytes = std::fs::read(&hashes_path).expect("read pristine hash journal");
     let finalized_prefix_len = usize::try_from(2 * SIZE_OF_BLOCK_HASH).unwrap();
     store
         .truncate_hashes_to_count(2)
         .expect("remove only the unfinalized hash suffix");
-
     let validation = Kura::init_strict_mode(&mut store, 3, Some(2))
         .expect("reconstruct a missing suffix without rewriting finality");
     assert!(!validation.hash_mismatch);
@@ -285,7 +256,6 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     );
     assert_eq!(repaired_bytes, pristine_bytes);
 }
-
 #[test]
 fn hard_fork_init_trusts_only_configured_legacy_prefix() {
     let temp_dir = TempDir::new().unwrap();
@@ -294,27 +264,22 @@ fn hard_fork_init_trusts_only_configured_legacy_prefix() {
     let first_index = store.read_block_index(0).unwrap();
     let zeros = vec![0_u8; usize::try_from(first_index.length).unwrap()];
     store.write_block_data(first_index.start, &zeros).unwrap();
-
     let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 3, 1, None).unwrap();
-
     assert!(!validation.truncated);
     assert_eq!(validation.hashes.len(), 3);
     assert_eq!(validation.hard_fork_hash_only_block_count, 1);
     assert_eq!(store.read_index_count().unwrap(), 3);
 }
-
 #[test]
 fn hard_fork_data_backed_count_preserves_hash_only_tail() {
     let temp_dir = TempDir::new().unwrap();
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-
     let mut blocks = DummyBlocks::new();
     store.append_block_to_chain(&blocks.next()).unwrap();
     let tail = blocks.next();
     store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
     store.write_block_hash(1, tail.as_ref().hash()).unwrap();
-
     assert_eq!(
         store.data_backed_count(2, 2, None).unwrap(),
         1,
@@ -326,13 +291,11 @@ fn hard_fork_data_backed_count_preserves_hash_only_tail() {
         "hard-fork snapshot bootstrap keeps hash-only tail metadata durable"
     );
 }
-
 #[test]
 fn hard_fork_init_preserves_snapshot_hash_only_tail_on_restart() {
     let temp_dir = TempDir::new().unwrap();
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-
     let mut blocks = DummyBlocks::new();
     let first = blocks.next();
     store.append_block_to_chain(&first).unwrap();
@@ -344,9 +307,7 @@ fn hard_fork_init_preserves_snapshot_hash_only_tail_on_restart() {
     store
         .write_verified_snapshot_tail_marker(1, &snapshot_hashes, None)
         .unwrap();
-
     let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1, None).unwrap();
-
     assert!(!validation.truncated);
     assert_eq!(validation.hashes.len(), 2);
     assert_eq!(validation.hashes[1], snapshot_tail_hash);
@@ -354,7 +315,6 @@ fn hard_fork_init_preserves_snapshot_hash_only_tail_on_restart() {
     assert_eq!(store.read_index_count().unwrap(), 2);
     assert_eq!(store.read_hashes_count().unwrap(), 2);
 }
-
 #[test]
 fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
     let kura = Kura::blank_kura_for_testing();
@@ -362,7 +322,6 @@ fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
     let first = blocks.next();
     let hash_only =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
-
     {
         let mut store = kura.block_store.lock();
         store.create_files_if_they_do_not_exist().unwrap();
@@ -378,11 +337,9 @@ fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
     }
     kura.hard_fork_hash_only_block_count
         .store(1, Ordering::Relaxed);
-
     assert!(kura.is_hash_only_block_height(nonzero!(2_usize)));
     assert!(kura.get_block(nonzero!(2_usize)).is_none());
 }
-
 #[test]
 fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
     let temp_dir = TempDir::new().unwrap();
@@ -391,7 +348,6 @@ fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
     let (kura, BlockCount(block_count)) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     assert_eq!(block_count, 3);
-
     let first_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
         .expect("first hash exists");
@@ -407,10 +363,8 @@ fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
         snapshot_hash_3,
         snapshot_hash_4,
     ];
-
     kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(&snapshot_hashes, Some(1))
         .expect("rewrite divergent suffix");
-
     assert_eq!(kura.blocks_count(), 4);
     assert_eq!(
         kura.block_hash_at_height(nonzero!(1_usize)),
@@ -431,13 +385,11 @@ fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
         Some(snapshot_hash_4),
         "extended snapshot hash must be durable"
     );
-
     let mut store = kura.block_store.lock();
     let rewritten_index = store.read_block_index(1).expect("read rewritten index");
     assert_eq!(rewritten_index.start, EVICTED_BLOCK_START);
     assert_eq!(rewritten_index.length, 0);
 }
-
 #[test]
 fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
     let temp_dir = TempDir::new().unwrap();
@@ -446,7 +398,6 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
     let (kura, BlockCount(block_count)) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     assert_eq!(block_count, 2);
-
     let first_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
         .expect("first hash exists");
@@ -466,13 +417,11 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
         let mut block_data = kura.block_data.lock();
         block_data[1].1 = None;
     }
-
     kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
         &[first_hash, second_hash],
         Some(1),
     )
     .expect("matching snapshot hash journal should activate hash-only window");
-
     assert_eq!(
         kura.hard_fork_hash_only_block_count.load(Ordering::Relaxed),
         2,
@@ -509,7 +458,6 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
         "fully uncached snapshot prefix should be skippable without per-height body probes"
     );
     drop(kura);
-
     for init_mode in [InitMode::Fast, InitMode::Strict] {
         let mut reopen_config = config.clone();
         reopen_config.init_mode = init_mode;
@@ -534,7 +482,6 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
         drop(reopened);
     }
 }
-
 #[test]
 fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
     let temp_dir = TempDir::new().unwrap();
@@ -543,7 +490,6 @@ fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
     let (kura, BlockCount(block_count)) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     assert_eq!(block_count, 3);
-
     let first_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
         .expect("first hash exists");
@@ -565,13 +511,11 @@ fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
         kura.get_block(nonzero!(3_usize)).is_none(),
         "pre-fix hard-fork window hides the post-snapshot body"
     );
-
     kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
         &[first_hash, second_hash],
         Some(2),
     )
     .expect("matching shorter snapshot should align the hash-only prefix");
-
     assert_eq!(
         kura.hard_fork_hash_only_block_count.load(Ordering::Relaxed),
         2,
@@ -586,7 +530,6 @@ fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
         .expect("post-snapshot block body should be replayable");
     assert_eq!(third.hash(), third_hash);
 }
-
 #[test]
 fn hard_fork_init_prunes_corrupt_tail_after_bootstrap_height() {
     let temp_dir = TempDir::new().unwrap();
@@ -596,16 +539,13 @@ fn hard_fork_init_prunes_corrupt_tail_after_bootstrap_height() {
     let tail_index = store.read_block_index(3).unwrap();
     let zeros = vec![0_u8; usize::try_from(tail_index.length).unwrap()];
     store.write_block_data(tail_index.start, &zeros).unwrap();
-
     let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2, None).unwrap();
-
     assert!(validation.truncated);
     assert_eq!(validation.hashes.len(), 3);
     assert_eq!(validation.hard_fork_hash_only_block_count, 2);
     assert_eq!(store.read_index_count().unwrap(), 3);
     assert_eq!(store.read_hashes_count().unwrap(), 3);
 }
-
 #[test]
 fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
     let temp_dir = TempDir::new().unwrap();
@@ -613,10 +553,8 @@ fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
     let mut store = new_block_store(&temp_dir);
     let snapshot_tail_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8a; 32]));
-
     store.write_block_hash(2, snapshot_tail_hash).unwrap();
     store.write_block_index(2, EVICTED_BLOCK_START, 0).unwrap();
-
     assert_eq!(store.read_index_count().unwrap(), 3);
     assert_eq!(store.read_hashes_count().unwrap(), 3);
     assert_eq!(
@@ -630,7 +568,6 @@ fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
         "hard-fork bootstrap should preserve audited hash-only placeholder tails"
     );
 }
-
 #[test]
 fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
     let temp_dir = TempDir::new().unwrap();
@@ -639,7 +576,6 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
     config.fsync_mode = FsyncMode::Batched;
     let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     assert_eq!(count, 2);
-
     let mut snapshot_hashes = vec![
         kura.get_block_hash(nonzero!(1_usize)).unwrap(),
         kura.get_block_hash(nonzero!(2_usize)).unwrap(),
@@ -647,7 +583,6 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
     let snapshot_tail_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9b; 32]));
     snapshot_hashes.push(snapshot_tail_hash);
-
     assert_eq!(
         kura.extend_hash_only_prefix_from_snapshot(&snapshot_hashes)
             .unwrap(),
@@ -655,7 +590,6 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
     );
     assert_eq!(kura.blocks_count(), 3);
     assert!(kura.get_block(nonzero!(3_usize)).is_none());
-
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, FSYNC_INTERVAL);
     reopened.create_files_if_they_do_not_exist().unwrap();
@@ -672,7 +606,6 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
         (EVICTED_BLOCK_START, 0)
     );
 }
-
 #[test]
 fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -684,7 +617,6 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
     let snapshot_tail_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7d; 32]));
     let snapshot_hashes = vec![canonical.hash(), snapshot_tail_hash];
-
     kura.pause_next_hash_only_extension_before_store_for_tests();
     let (extension_tx, extension_rx) = std::sync::mpsc::sync_channel(1);
     let extension_kura = Arc::clone(&kura);
@@ -695,7 +627,6 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
             .send(result)
             .expect("report snapshot extension result");
     });
-
     let deadline = Instant::now() + Duration::from_secs(5);
     while !kura.hash_only_extension_paused_before_store_for_tests() {
         if Instant::now() >= deadline {
@@ -704,7 +635,6 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
         }
         thread::yield_now();
     }
-
     kura.force_next_durable_blocks_count_fallback_for_tests();
     let (count_tx, count_rx) = std::sync::mpsc::sync_channel(1);
     let count_kura = Arc::clone(&kura);
@@ -713,7 +643,6 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
             .send(count_kura.durable_blocks_count_lossy())
             .expect("report durable count fallback");
     });
-
     let deadline = Instant::now() + Duration::from_secs(5);
     while !kura.durable_blocks_count_fallback_reached_for_tests() {
         if Instant::now() >= deadline {
@@ -726,7 +655,6 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
         count_rx.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
-
     // The count thread is now waiting for `block_data`. Snapshot extension must be able to
     // acquire `block_store`, publish the new durable tail, and release `block_data` first.
     kura.resume_hash_only_extension_before_store_for_tests();
@@ -743,7 +671,6 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
     extension.join().expect("join snapshot extension thread");
     counter.join().expect("join durable count thread");
 }
-
 #[test]
 fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallback() {
     for mutation in ["corrupt", "non-file"] {
@@ -753,7 +680,6 @@ fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallba
         store_dummy_block_arcs(&kura, 1);
         assert_eq!(kura.blocks_count(), 1);
         assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
-
         let marker_path = primary_blocks_dir(&temp_dir).join(COUNT_FILE_NAME);
         match mutation {
             "corrupt" => {
@@ -765,7 +691,6 @@ fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallba
             }
             _ => unreachable!("covered mutations"),
         }
-
         assert!(
             kura.exact_durable_blocks_count().is_err(),
             "{mutation} marker must fail closed"
@@ -777,7 +702,6 @@ fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallba
         );
     }
 }
-
 #[test]
 fn exact_durable_count_rejects_partial_index_and_hash_entries() {
     for journal in [INDEX_FILE_NAME, HASHES_FILE_NAME] {
@@ -791,7 +715,6 @@ fn exact_durable_count_rejects_partial_index_and_hash_entries() {
             .open(&path)
             .and_then(|mut file| file.write_all(&[0xA5]))
             .expect("append partial journal entry");
-
         assert!(
             kura.exact_durable_blocks_count().is_err(),
             "partial {journal} entry must fail closed"
@@ -799,7 +722,6 @@ fn exact_durable_count_rejects_partial_index_and_hash_entries() {
         assert_eq!(kura.blocks_count(), 1);
     }
 }
-
 #[test]
 fn ambiguous_hash_only_marker_poison_gates_live_mutation_until_restart() {
     for new_marker_won in [false, true] {
@@ -830,7 +752,6 @@ fn ambiguous_hash_only_marker_poison_gates_live_mutation_until_restart() {
                     .store(true, Ordering::Release);
             }
             drop(store);
-
             let error = kura
                 .extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
                 .expect_err("unreadable marker state must fail stop");
@@ -859,7 +780,6 @@ fn ambiguous_hash_only_marker_poison_gates_live_mutation_until_restart() {
                 if new_marker_won { 3 } else { 2 }
             );
         }
-
         assert!(matches!(
             Kura::new(&config, &lane_config),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
@@ -896,7 +816,6 @@ fn ambiguous_hash_only_marker_poison_gates_live_mutation_until_restart() {
         assert!(!reopened.canonical_storage_poisoned.load(Ordering::Acquire));
     }
 }
-
 #[test]
 fn verified_snapshot_tail_survives_batched_fsync_reopen_and_second_restart() {
     let temp_dir = TempDir::new().unwrap();
@@ -906,7 +825,6 @@ fn verified_snapshot_tail_survives_batched_fsync_reopen_and_second_restart() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
     assert_eq!(count, 2);
-
     let mut snapshot_hashes = vec![
         kura.get_block_hash(nonzero!(1_usize)).unwrap(),
         kura.get_block_hash(nonzero!(2_usize)).unwrap(),
@@ -920,7 +838,6 @@ fn verified_snapshot_tail_survives_batched_fsync_reopen_and_second_restart() {
         1
     );
     drop(kura);
-
     for restart in 1..=2 {
         assert!(matches!(
             Kura::new(&config, &lane_config),
@@ -949,7 +866,6 @@ fn verified_snapshot_tail_survives_batched_fsync_reopen_and_second_restart() {
         drop(reopened);
     }
 }
-
 #[test]
 fn unmarked_zero_length_tail_is_pruned_with_batched_fsync() {
     let temp_dir = TempDir::new().unwrap();
@@ -964,7 +880,6 @@ fn unmarked_zero_length_tail_is_pruned_with_batched_fsync() {
     store.write_block_index(2, EVICTED_BLOCK_START, 0).unwrap();
     store.write_block_hash(2, unverified_hash).unwrap();
     drop(store);
-
     let (reopened, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
     assert_eq!(count, 2);
     drop(reopened);
@@ -973,7 +888,6 @@ fn unmarked_zero_length_tail_is_pruned_with_batched_fsync() {
     assert_eq!(reopened.read_hashes_count().unwrap(), 2);
     assert!(!blocks_dir.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME).exists());
 }
-
 #[test]
 fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
     let temp_dir = TempDir::new().unwrap();
@@ -992,7 +906,6 @@ fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
     kura.extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
         .unwrap();
     drop(kura);
-
     let blocks_dir = primary_blocks_dir(&temp_dir);
     let mut tampered = BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, FSYNC_INTERVAL);
     tampered
@@ -1002,7 +915,6 @@ fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
         )
         .unwrap();
     drop(tampered);
-
     assert!(matches!(
         Kura::new(&config, &lane_config),
         Err(Error::InvalidSnapshotBootstrapMarker { .. })
@@ -1029,7 +941,6 @@ fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
         "failed authentication must not delete or rewrite the supplied marker"
     );
 }
-
 #[test]
 fn malformed_verified_snapshot_tail_marker_is_pruned() {
     let temp_dir = TempDir::new().unwrap();
@@ -1048,14 +959,12 @@ fn malformed_verified_snapshot_tail_marker_is_pruned() {
     kura.extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
         .unwrap();
     drop(kura);
-
     let blocks_dir = primary_blocks_dir(&temp_dir);
     std::fs::write(
         blocks_dir.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
         b"malformed marker",
     )
     .unwrap();
-
     assert!(matches!(
         Kura::new(&config, &lane_config),
         Err(Error::InvalidSnapshotBootstrapMarker { .. })
@@ -1083,7 +992,6 @@ fn malformed_verified_snapshot_tail_marker_is_pruned() {
         "unauthenticated startup must not repair or delete marker bytes"
     );
 }
-
 #[test]
 fn hard_fork_prefix_real_suffix_and_verified_tail_survive_reopen() {
     let temp_dir = TempDir::new().unwrap();
@@ -1112,7 +1020,6 @@ fn hard_fork_prefix_real_suffix_and_verified_tail_survive_reopen() {
         .unwrap();
     store.publish_commit_marker(5).unwrap();
     drop(store);
-
     for _ in 0..2 {
         let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, FSYNC_INTERVAL);
         reopened.create_files_if_they_do_not_exist().unwrap();
@@ -1123,21 +1030,17 @@ fn hard_fork_prefix_real_suffix_and_verified_tail_survive_reopen() {
         assert!(!validation.truncated);
     }
 }
-
 #[test]
 fn hard_fork_init_repairs_index_tail_beyond_hash_journal() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let mut store = new_block_store(&temp_dir);
     let retained_data_len = store.data_end_for_index_prefix(3).unwrap();
-
     store.truncate_hashes_to_count(3).unwrap();
     assert_eq!(store.read_index_count().unwrap(), 4);
     assert_eq!(store.read_hashes_count().unwrap(), 3);
     assert!(store.data_file_len().unwrap() > retained_data_len);
-
     let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2, None).unwrap();
-
     assert!(validation.truncated);
     assert_eq!(validation.hashes.len(), 3);
     assert_eq!(validation.hard_fork_hash_only_block_count, 2);
@@ -1145,58 +1048,45 @@ fn hard_fork_init_repairs_index_tail_beyond_hash_journal() {
     assert_eq!(store.read_hashes_count().unwrap(), 3);
     assert_eq!(store.data_file_len().unwrap(), retained_data_len);
 }
-
 #[test]
 fn hard_fork_init_truncates_hash_tail_beyond_index() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
     let mut store = new_block_store(&temp_dir);
-
     store.write_index_count(2).unwrap();
     assert_eq!(store.read_index_count().unwrap(), 2);
     assert_eq!(store.read_hashes_count().unwrap(), 3);
-
     let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1, None).unwrap();
-
     assert!(validation.truncated);
     assert_eq!(validation.hashes.len(), 2);
     assert_eq!(validation.hard_fork_hash_only_block_count, 1);
     assert_eq!(store.read_index_count().unwrap(), 2);
     assert_eq!(store.read_hashes_count().unwrap(), 2);
 }
-
 #[test]
 fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let mut store = new_block_store(&temp_dir);
-
     store.truncate_hashes_to_count(3).unwrap();
-
     let mut reopened = new_block_store(&temp_dir);
     reopened.create_files_if_they_do_not_exist().unwrap();
-
     assert_eq!(reopened.read_durable_index_count().unwrap(), 3);
     assert_eq!(reopened.read_index_count().unwrap(), 3);
     assert_eq!(reopened.read_hashes_count().unwrap(), 3);
 }
-
 #[test]
 fn strict_init_prunes_corrupted_index_end_to_end() {
     let temp_dir = TempDir::new().unwrap();
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
-
     let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
     store.append_block_to_chain(&block).unwrap();
-
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-
     let store_dir = temp_dir.path().to_path_buf();
     drop(store);
-
     let (kura, BlockCount(count)) = Kura::new(
         &Config {
             init_mode: InitMode::Strict,
@@ -1208,7 +1098,6 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
             block_sync_roster_retention:
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
@@ -1218,47 +1107,36 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
         &RuntimeLaneConfig::default(),
     )
     .unwrap();
-
     assert_eq!(count, 0);
     assert_eq!(kura.blocks_count(), 0);
 }
-
 #[test]
 fn prune_blocks() -> eyre::Result<()> {
     let temp = TempDir::new()?;
     let mut store = BlockStore::new(temp.path());
     store.create_files_if_they_do_not_exist()?;
-
     // prune on empty store - should be fine
     store.prune(0)?;
-
     // prune with height greater than there is - should be fine
     store.prune(10)?;
-
     // add some blocks
     let mut blocks = DummyBlocks::new();
     for _ in 0..10 {
         store.append_block_to_chain(&blocks.next())?;
     }
-
     assert_eq!(store.read_index_count()?, 10);
     assert_eq!(store.read_block_hashes(0, 10)?.len(), 10);
-
     store.prune(5)?;
-
     assert_eq!(store.read_index_count()?, 5);
     assert_eq!(store.read_block_hashes(0, 5)?.len(), 5);
     assert!(store.read_block_hashes(0, 7).is_err());
-
     for i in 0..5 {
         let block = read_block(&mut store, i)?;
         assert_eq!(block, *blocks.get(i).unwrap());
     }
     assert!(read_block(&mut store, 5).is_err());
-
     // prune on non-empty state with height greater than there are blocks - should be fine
     store.prune(7)?;
-
     // can add blocks again
     for i in 5..10 {
         store.append_block_to_chain(&blocks.get(i).unwrap())?;
@@ -1267,10 +1145,8 @@ fn prune_blocks() -> eyre::Result<()> {
         let block = read_block(&mut store, i)?;
         assert_eq!(block, *blocks.get(i).unwrap());
     }
-
     Ok(())
 }
-
 #[test]
 fn kura_prune_to_height_truncates_in_memory_chain() {
     let kura = Kura::blank_kura_for_testing();
@@ -1283,7 +1159,6 @@ fn kura_prune_to_height_truncates_in_memory_chain() {
     kura.store_block(b1).expect("store block");
     kura.store_block(b2).expect("store block");
     kura.store_block(b3.clone()).expect("store block");
-
     assert_eq!(kura.blocks_count(), 3);
     assert_eq!(
         kura.get_block_height_by_hash(b3_hash),
@@ -1296,7 +1171,6 @@ fn kura_prune_to_height_truncates_in_memory_chain() {
         Some(nonzero!(2_usize))
     );
     assert_eq!(kura.get_block_height_by_hash(b3_hash), None);
-
     kura.store_block(b3).expect("store block after prune");
     assert_eq!(kura.blocks_count(), 3);
     assert_eq!(
@@ -1304,7 +1178,6 @@ fn kura_prune_to_height_truncates_in_memory_chain() {
         Some(nonzero!(3_usize))
     );
 }
-
 fn populate_prune_recovery_fixture(
     temp_dir: &TempDir,
 ) -> (KuraConfig, Vec<Arc<SignedBlock>>, Vec<MergeLedgerEntry>) {
@@ -1376,7 +1249,6 @@ fn populate_prune_recovery_fixture(
     drop(kura);
     (config, blocks, merge_entries)
 }
-
 #[test]
 fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -1388,7 +1260,6 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
     // entries to prove that pruning filters the existing queue without
     // mutating it during active-prune rejection.
     kura.set_pipeline_sidecar_queue_cap_for_testing(2);
-
     let retained_pipeline = PipelineRecoverySidecar::new(
         1,
         blocks[0].hash(),
@@ -1422,7 +1293,6 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
         kura.enqueue_fastpq_proof_snapshot(sample_fastpq_snapshot(4, blocks[3].hash(), 9)),
         FastpqProofEnqueueResult::Enqueued { queue_depth: 2 }
     );
-
     kura.pause_prune_before_intent
         .store(true, Ordering::Release);
     let (prune_tx, prune_rx) = std::sync::mpsc::sync_channel(1);
@@ -1432,7 +1302,6 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
             .send(prune_kura.prune_to_height(2))
             .expect("report prune result");
     });
-
     let deadline = Instant::now() + Duration::from_secs(5);
     while !kura.prune_paused_before_intent.load(Ordering::Acquire) {
         if Instant::now() >= deadline {
@@ -1447,7 +1316,6 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
         kura.prune_in_progress.load(Ordering::Acquire),
         "real prune must publish the enqueue gate before preflight can pause"
     );
-
     let rejected_pipeline = PipelineRecoverySidecar::new(
         4,
         blocks[3].hash(),
@@ -1497,7 +1365,6 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
         2,
         "active prune rejection must not mutate the pre-prune FASTPQ queue"
     );
-
     kura.pause_prune_before_intent
         .store(false, Ordering::Release);
     prune_rx
@@ -1515,7 +1382,6 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
     assert_eq!(fastpq_queue.len(), 1);
     assert_eq!(fastpq_queue[0].snapshot.height, 1);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
@@ -1549,7 +1415,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         Some(Some(nonzero!(4_usize))),
         "test requires an above-target offline operation before prune"
     );
-
     kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
     kura.pause_prune_before_intent
         .store(true, Ordering::Release);
@@ -1564,7 +1429,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         .is_err();
         prune_tx.send(crashed).expect("report injected prune");
     });
-
     let prune_deadline = Instant::now() + Duration::from_secs(5);
     while !kura.prune_paused_before_intent.load(Ordering::Acquire) {
         if Instant::now() >= prune_deadline {
@@ -1575,7 +1439,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         }
         thread::yield_now();
     }
-
     let operation_index_guard = kura.transaction_entrypoint_index.lock();
     kura.canonical_read_kinds_after_prune_check
         .store(0, Ordering::Release);
@@ -1608,7 +1471,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
             )
             .expect("report blocked offline-operation read");
     });
-
     let readers_deadline = Instant::now() + Duration::from_secs(5);
     while (kura
         .canonical_read_kinds_after_prune_check
@@ -1636,7 +1498,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         }
         thread::yield_now();
     }
-
     kura.observe_canonical_reads_after_prune_check
         .store(false, Ordering::Release);
     kura.pause_prune_before_intent
@@ -1683,7 +1544,6 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
     assert_eq!(kura.blocks_count(), 0);
     assert_eq!(kura.block_hash_at_height(nonzero!(4_usize)), None);
 }
-
 #[test]
 fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
     for stage in PRUNE_STAGE_INTENT..=PRUNE_STAGE_MEMORY {
@@ -1695,7 +1555,6 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
             .store_v2_finality_artifact(&retained_finality)
             .expect("seed retained v2 finality artifact");
         kura.fail_prune_after_stage_for_tests(stage);
-
         let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             kura.prune_to_height(2).expect("injected prune must panic")
         }));
@@ -1765,7 +1624,6 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
             Err(Error::PruneRecoveryRequired)
         ));
         drop(kura);
-
         let (recovered, BlockCount(count)) =
             Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover prune intent");
         assert_eq!(count, 2, "stage {stage}");
@@ -1839,7 +1697,6 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
             .expect("append original successor after recovery");
     }
 }
-
 #[test]
 fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_tail() {
     for promotion_stage in [PRUNE_SIDECAR_PROMOTION_DATA, PRUNE_SIDECAR_PROMOTION_INDEX] {
@@ -1847,7 +1704,6 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
         let (config, blocks, _) = populate_prune_recovery_fixture(&temp_dir);
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen");
         kura.fail_prune_sidecar_promotion_for_tests(promotion_stage);
-
         let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = kura.prune_to_height(2);
         }));
@@ -1874,7 +1730,6 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
             "the only authoritative compact index must survive failed promotion"
         );
         drop(kura);
-
         let (recovered, BlockCount(count)) =
             Kura::new(&config, &RuntimeLaneConfig::default()).expect("retry prune recovery");
         assert_eq!(count, 2);
@@ -1887,11 +1742,9 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
         assert!(recovered.read_pipeline_metadata(3).is_none());
         assert!(!temp_data.exists());
         assert!(!temp_index.exists());
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-
             symlink(&index_path, &temp_index).expect("create adversarial temp-index symlink");
             let _guard = recovered.sidecar_lock.lock();
             assert!(matches!(
@@ -1902,7 +1755,6 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
             drop(_guard);
             std::fs::remove_file(&temp_index).expect("remove temp-index symlink");
         }
-
         std::fs::OpenOptions::new()
             .append(true)
             .open(&data_path)
@@ -1916,7 +1768,6 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
         ));
     }
 }
-
 #[test]
 fn prune_intent_tampering_and_roster_recovery_fail_closed() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -1961,14 +1812,12 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         intent_path.exists(),
         "tampered intent must not be discarded"
     );
-
     std::fs::write(&intent_path, vec![0_u8; PRUNE_INTENT_MAX_BYTES + 1])
         .expect("write oversized intent");
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message)) if message.contains("invalid byte length")
     ));
-
     let temp_intent_path = Kura::prune_intent_temp_path_for(temp_dir.path());
     std::fs::write(
         &intent_path,
@@ -1986,7 +1835,6 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
             if message.contains("not one authenticated two-link publication object")
     ));
     std::fs::remove_file(&temp_intent_path).expect("remove disagreeing temporary intent");
-
     std::fs::remove_file(&intent_path).expect("remove canonical intent");
     std::fs::create_dir(&intent_path).expect("create non-file intent");
     assert!(matches!(
@@ -1994,11 +1842,9 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         Err(Error::PruneIntentConflict(message)) if message.contains("regular no-follow")
     ));
     std::fs::remove_dir(&intent_path).expect("remove non-file intent");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let symlink_target = temp_dir.path().join("prune-intent-symlink-target");
         std::fs::write(
             &symlink_target,
@@ -2013,7 +1859,6 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         std::fs::remove_file(&intent_path).expect("remove intent symlink");
         std::fs::remove_file(&symlink_target).expect("remove symlink target");
     }
-
     std::fs::write(
         &intent_path,
         norito::to_bytes(&valid_intent).expect("encode valid intent"),
@@ -2032,7 +1877,6 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         intent_path.exists(),
         "failed roster recovery must retain intent"
     );
-
     std::fs::remove_file(&roster_path).expect("remove corrupt roster journal");
     let (recovered, BlockCount(count)) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("retry valid prune recovery");
@@ -2047,7 +1891,6 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("idempotent recovered reopen");
     assert_eq!(repeated_count, 2);
 }
-
 #[test]
 fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2057,7 +1900,6 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     kura.store_block(blocks.next()).expect("store block 1");
     kura.store_block(blocks.next()).expect("store block 2");
     let block3 = blocks.next();
-
     kura.pause_prune_before_intent
         .store(true, Ordering::Release);
     let (prune_tx, prune_rx) = std::sync::mpsc::sync_channel(1);
@@ -2077,7 +1919,6 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
         }
         thread::yield_now();
     }
-
     let (store_tx, store_rx) = std::sync::mpsc::sync_channel(1);
     let storing_kura = Arc::clone(&kura);
     let store_thread = thread::spawn(move || {
@@ -2089,7 +1930,6 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
         store_rx.recv_timeout(Duration::from_millis(50)).is_err(),
         "canonical store must remain serialized behind the active prune"
     );
-
     kura.pause_prune_before_intent
         .store(false, Ordering::Release);
     prune_rx
@@ -2115,7 +1955,6 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
 }
-
 #[test]
 fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
     // The first-release prune protocol uses the forward-recovery prune
@@ -2124,7 +1963,6 @@ fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
     // production protocol without retaining a second writer path.
     prune_crash_boundaries_recover_forward_and_poison_live_kura();
 }
-
 #[test]
 fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startup() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2132,7 +1970,6 @@ fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startu
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let block_hashes = store_dummy_blocks(&kura, 2);
     let block2_hash = block_hashes[1];
-
     let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let roster = vec![PeerId::new(keypair.public_key().clone())];
     let zero_root = Hash::prehashed([0; Hash::LENGTH]);
@@ -2175,7 +2012,6 @@ fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startu
         assert!(journal.upsert(qc.clone(), checkpoint, None));
         journal.persist().expect("persist height-2 roster row");
     }
-
     // Replace the published generation pointer with a directory. The
     // content-addressed journal rejects this stable no-follow shape both
     // in-process and after restart.
@@ -2183,7 +2019,6 @@ fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startu
     let blocked_current_path = journal_path.join("current");
     fs::remove_file(&blocked_current_path).expect("remove current generation pointer");
     fs::create_dir(&blocked_current_path).expect("block generation-pointer reads");
-
     let failure =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kura.prune_to_height(1)));
     assert!(
@@ -2213,7 +2048,6 @@ fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startu
     let prune_intent_path = Kura::prune_intent_path_for(&kura.store_root);
     assert!(prune_intent_path.exists());
     drop(kura);
-
     let reopen_err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
         Ok(_) => panic!("unrecoverable journal blocker must prevent normal startup"),
         Err(err) => err,
@@ -2223,7 +2057,6 @@ fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startu
         prune_intent_path.exists(),
         "failed startup completion must retain the durable recovery marker"
     );
-
     fs::remove_dir(&blocked_current_path).expect("remove deterministic journal blocker");
     let (reopened, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("startup should complete after journal storage recovers");
@@ -2237,7 +2070,6 @@ fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startu
             .is_none()
     );
 }
-
 #[test]
 fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
     let temp_dir = TempDir::new().unwrap();
@@ -2246,7 +2078,6 @@ fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
     let blocks = store_dummy_block_arcs(&kura, 4);
     let block2_hash = blocks[1].hash();
     let block3_hash = blocks[2].hash();
-
     let blocks_dir = kura.active_blocks_dir.lock().clone();
     let (block2_sidecar, block3_sidecar) = {
         let store = kura.block_store.lock();
@@ -2268,9 +2099,7 @@ fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
     assert!(block3_sidecar.exists());
     assert!(block2_retained.exists());
     assert!(block3_retained.exists());
-
     kura.prune_to_height(2).expect("prune to height 2");
-
     assert!(
         block2_sidecar.exists(),
         "sidecar at the retained tip should stay available"
@@ -2299,13 +2128,11 @@ fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
     );
     assert_eq!(kura.block_body_status_by_hash(block3_hash), None);
 }
-
 #[test]
 fn wsv_checkpoint_roundtrips_and_requires_matching_block_hash() {
     let kura = Kura::blank_kura_for_testing();
     let blocks = store_dummy_block_arcs(&kura, 2);
     let state_hash = Hash::new(b"canonical state surface");
-
     assert!(
         !kura
             .has_wsv_checkpoint_at_or_before(2)
@@ -2318,7 +2145,6 @@ fn wsv_checkpoint_roundtrips_and_requires_matching_block_hash() {
     );
     kura.store_wsv_checkpoint(2, blocks[1].hash(), state_hash)
         .expect("store checkpoint");
-
     let checkpoint = kura
         .wsv_checkpoint(2)
         .expect("read checkpoint")
@@ -2348,25 +2174,21 @@ fn wsv_checkpoint_roundtrips_and_requires_matching_block_hash() {
             .expect("missing lower checkpoint")
             .is_none()
     );
-
     let err = kura
         .store_wsv_checkpoint(2, blocks[0].hash(), Hash::new(b"wrong block"))
         .expect_err("checkpoint must match durable block hash");
     assert!(matches!(err, Error::BlockHeightConflict { height: 2, .. }));
 }
-
 #[test]
 fn unbound_wsv_checkpoint_identity_is_immutable() {
     let kura = Kura::blank_kura_for_testing();
     let blocks = store_dummy_block_arcs(&kura, 1);
     let block_hash = blocks[0].hash();
     let original_state_hash = Hash::new(b"pre-commit staged state");
-
     kura.store_wsv_checkpoint(1, block_hash, original_state_hash)
         .expect("store unbound staged checkpoint");
     kura.store_wsv_checkpoint(1, block_hash, original_state_hash)
         .expect("an exact replay may confirm the unbound checkpoint");
-
     let error = kura
         .store_wsv_checkpoint(1, block_hash, Hash::new(b"divergent replay state"))
         .expect_err("an unbound checkpoint must already be immutable");
@@ -2387,7 +2209,6 @@ fn unbound_wsv_checkpoint_identity_is_immutable() {
         "a rejected replay must not replace the durable identity"
     );
 }
-
 #[test]
 fn commit_manifest_roundtrips_and_requires_matching_block_hash() {
     let kura = Kura::blank_kura_for_testing();
@@ -2404,10 +2225,8 @@ fn commit_manifest_roundtrips_and_requires_matching_block_hash() {
         wsv_checkpoint_hash,
         Some(commit_qc_hash),
     );
-
     kura.store_commit_manifest(manifest.clone())
         .expect("store commit manifest");
-
     let stored = kura
         .commit_manifest(2)
         .expect("read commit manifest")
@@ -2421,7 +2240,6 @@ fn commit_manifest_roundtrips_and_requires_matching_block_hash() {
             .expect("missing lower manifest")
             .is_none()
     );
-
     let err = kura
         .store_commit_manifest(CommitManifest::new(
             2,
@@ -2434,16 +2252,13 @@ fn commit_manifest_roundtrips_and_requires_matching_block_hash() {
         .expect_err("manifest must match durable block hash");
     assert!(matches!(err, Error::BlockHeightConflict { height: 2, .. }));
 }
-
 #[test]
 fn commit_manifest_requires_matching_wsv_checkpoint_hash() {
     let kura = Kura::blank_kura_for_testing();
     let blocks = store_dummy_block_arcs(&kura, 1);
     let checkpoint_hash = Hash::new(b"checkpoint hash");
-
     kura.store_wsv_checkpoint(1, blocks[0].hash(), checkpoint_hash)
         .expect("store checkpoint");
-
     let err = kura
         .store_commit_manifest(CommitManifest::new(
             1,
@@ -2459,7 +2274,6 @@ fn commit_manifest_requires_matching_wsv_checkpoint_hash() {
         Error::NoritoFrame(norito::core::Error::Message(message))
             if message.contains("WSV checkpoint hash mismatch")
     ));
-
     let path = kura.commit_manifest_path(1);
     std::fs::create_dir_all(path.parent().expect("manifest parent")).expect("create manifest dir");
     std::fs::write(
@@ -2484,7 +2298,6 @@ fn commit_manifest_requires_matching_wsv_checkpoint_hash() {
             if message.contains("WSV checkpoint hash mismatch")
     ));
 }
-
 #[test]
 fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_tamper() {
     let kura = Kura::blank_kura_for_testing();
@@ -2493,7 +2306,6 @@ fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_ta
     let checkpoint_hash = Hash::new(b"checkpoint hash");
     kura.store_wsv_checkpoint(1, block_hash, checkpoint_hash)
         .expect("store checkpoint");
-
     let artifact = v2_finality_artifact_for_block(blocks[0].as_ref());
     let manifest = CommitManifest::new(1, block_hash, None, None, checkpoint_hash, None)
         .with_authenticated_v2_commit_authority(&artifact);
@@ -2505,7 +2317,6 @@ fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_ta
             .expect("check WSV binding"),
         "checkpoint must bind the complete durable manifest"
     );
-
     let mut tampered = manifest;
     tampered.parent_state_root = Some(Hash::new(b"tampered parent root"));
     tampered.post_state_root = Some(Hash::new(b"tampered post root"));
@@ -2530,7 +2341,6 @@ fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_ta
         CommitManifestBindingState::Mismatched,
         "a published different digest is corruption, not a resumable unbound window"
     );
-
     // A correlated local tamper can rewrite both mutable sidecars consistently. This proves the
     // WSV cross-link is useful for diagnostics and crash detection, but is not an authenticated
     // root anchor for a safety-halt decision.
@@ -2560,7 +2370,6 @@ fn commit_manifest_roots_require_v2_finality_binding_after_correlated_sidecar_ta
         "correlated mutable sidecars must not replace exact authenticated-v2 root binding"
     );
 }
-
 #[test]
 fn commit_manifest_v2_authority_binds_exact_artifact_and_execution_roots() {
     let block = DummyBlocks::new().next();
@@ -2575,20 +2384,17 @@ fn commit_manifest_v2_authority_binds_exact_artifact_and_execution_roots() {
         None,
     )
     .with_authenticated_v2_commit_authority(&artifact);
-
     assert_eq!(
         manifest.parent_state_root.zip(manifest.post_state_root),
         Some((commitment.parent_state_root, commitment.post_state_root))
     );
     assert!(manifest.binds_authenticated_v2_commit_authority(&artifact));
-
     let mut altered_artifact = artifact.clone();
     altered_artifact.commit_qc.aggregate_signature[0] ^= 0x01;
     assert!(
         !manifest.binds_authenticated_v2_commit_authority(&altered_artifact),
         "changing authenticated certificate bytes must invalidate the authority seal"
     );
-
     let mut altered_manifest = manifest.clone();
     altered_manifest.post_state_root = Some(Hash::new(b"altered post root"));
     assert!(
@@ -2596,7 +2402,6 @@ fn commit_manifest_v2_authority_binds_exact_artifact_and_execution_roots() {
         "the authority seal must not bless altered replay roots"
     );
 }
-
 #[test]
 fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
     let kura = Kura::blank_kura_for_testing();
@@ -2615,7 +2420,6 @@ fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
     );
     kura.store_commit_manifest(manifest.clone())
         .expect("publish manifest");
-
     kura.store_wsv_checkpoint(1, block_hash, state_hash)
         .expect("identical checkpoint retry must preserve binding");
     let retained = kura
@@ -2628,7 +2432,6 @@ fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
             .expect("binding survives checkpoint retry"),
         CommitManifestBindingState::Bound,
     );
-
     let replacement = CommitManifest::new(
         1,
         block_hash,
@@ -2648,7 +2451,6 @@ fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
         Some(manifest),
     );
 }
-
 #[test]
 fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
     for corrupt_checkpoint in [false, true] {
@@ -2679,7 +2481,6 @@ fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
                     .expect("remove published manifest");
             }
         }
-
         let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
             Ok(_) => panic!("published binding corruption must fail Kura reopen"),
             Err(error) => error,
@@ -2698,7 +2499,6 @@ fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
         }
     }
 }
-
 #[test]
 fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2726,7 +2526,6 @@ fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
         .expect("store commit manifest");
         blocks
     };
-
     let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
     let stored = reopened
         .commit_manifest(2)
@@ -2735,7 +2534,6 @@ fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
     assert_eq!(stored.block_hash, blocks[1].hash());
     assert_eq!(stored.wsv_checkpoint_hash, Hash::new(b"checkpoint"));
 }
-
 #[test]
 fn kura_init_rejects_mismatched_retained_commit_manifest() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2756,7 +2554,6 @@ fn kura_init_rejects_mismatched_retained_commit_manifest() {
         );
         std::fs::write(&path, bad_manifest.encode()).expect("write bad manifest");
     }
-
     let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
         Ok(_) => panic!("retained manifest mismatch must fail Kura initialization"),
         Err(error) => error,
@@ -2766,7 +2563,6 @@ fn kura_init_rejects_mismatched_retained_commit_manifest() {
         Error::BlockHeightConflict { height: 1, .. }
     ));
 }
-
 #[test]
 fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2790,14 +2586,12 @@ fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
         );
         std::fs::write(&path, bad_manifest.encode()).expect("write bad manifest");
     }
-
     let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
         Ok(_) => panic!("retained checkpoint/manifest mismatch must fail Kura initialization"),
         Err(error) => error,
     };
     assert!(matches!(error, Error::NoritoFrame(_)), "{error:?}");
 }
-
 #[test]
 fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2811,7 +2605,6 @@ fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
         let stale = WsvCheckpoint::new(2, blocks[0].hash(), Hash::new(b"stale checkpoint"));
         std::fs::write(&path, stale.encode()).expect("write stale checkpoint");
     }
-
     let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
     assert_eq!(count.0, 1);
     assert!(
@@ -2821,7 +2614,6 @@ fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
             .is_none()
     );
 }
-
 #[test]
 fn kura_init_prunes_commit_manifests_above_recovered_tip() {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -2860,7 +2652,6 @@ fn kura_init_prunes_commit_manifests_above_recovered_tip() {
         );
         std::fs::write(&path, stale_manifest.encode()).expect("write stale manifest");
     }
-
     let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
     assert_eq!(count.0, 2);
     assert!(

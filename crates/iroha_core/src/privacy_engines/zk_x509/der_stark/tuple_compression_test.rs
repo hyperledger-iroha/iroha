@@ -1,5 +1,4 @@
 // Numeric selector and tuple-compression coverage for the DER STARK.
-
 #[test]
 fn bit_selectors_and_tuple_compression_are_numeric_and_total() {
     let bits = [F::ONE, F::ZERO, F::ONE];

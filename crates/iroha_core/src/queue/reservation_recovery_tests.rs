@@ -1,7 +1,6 @@
 // Lane-reservation restart, reconciliation, and fee-capacity regression tests.
 //
 // Included by `queue::tests` so source-bound libtest names remain stable.
-
 fn live_snapshot_phase_fixture() -> (
     LaneQueueReservationReconciliationSnapshotV1,
     Vec<LaneQueueReservationKeyV2>,
@@ -37,7 +36,6 @@ fn live_snapshot_phase_fixture() -> (
         .expect("capture exact live V4/V6 phase snapshot");
     (snapshot, keys, group)
 }
-
 struct ReplayedSnapshotRecoveryFixture {
     queue: Queue,
     snapshot: LaneQueueReservationReconciliationSnapshotV1,
@@ -47,14 +45,12 @@ struct ReplayedSnapshotRecoveryFixture {
     )>,
     _journal_dir: TempDir,
 }
-
 fn replayed_snapshot_recovery_fixture(
     group_sizes: &[usize],
     release_group: Option<(usize, AutonomousLaneRetirementQueueSnapshotPhaseV1)>,
 ) -> ReplayedSnapshotRecoveryFixture {
     assert!(group_sizes.iter().all(|size| *size != 0));
     assert!(release_group.is_none_or(|(index, _)| index < group_sizes.len()));
-
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
     let journal_dir = tempdir().expect("snapshot-recovery journal directory");
@@ -122,7 +118,6 @@ fn replayed_snapshot_recovery_fixture(
         }
         (reservation_path, groups)
     };
-
     let queue = Queue::test(config_factory(), &time_source);
     queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -148,9 +143,7 @@ fn replayed_snapshot_recovery_fixture(
         _journal_dir: journal_dir,
     }
 }
-
 include!("retired_release_snapshot_recovery_tests.rs");
-
 #[test]
 fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
     let (live_snapshot, keys, group) = live_snapshot_phase_fixture();
@@ -213,7 +206,6 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         ),
         Err(LaneQueueReservationError::LifecycleStateSelectionConflict { matching_states: 2 })
     ));
-
     let mut reordered_snapshot = live_snapshot.clone();
     reordered_snapshot.ordered_groups[0].ordered_keys.swap(0, 1);
     assert!(
@@ -227,14 +219,12 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         .is_err(),
         "equal membership must not substitute a different durable FIFO order"
     );
-
     let mut missing_phase = live_snapshot.clone();
     missing_phase.ordered_owner_phases.pop();
     assert!(
         lane_reservation_recovery_phase_map(&missing_phase).is_err(),
         "cross-journal phase coverage must partition every durable owner"
     );
-
     let mut partial_commit = live_snapshot.clone();
     partial_commit
         .ordered_records
@@ -267,7 +257,6 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         .is_ok(),
         "one exact committed prefix may coexist with its live FIFO suffix"
     );
-
     let mut committed = partial_commit;
     committed.ordered_records.clear();
     committed.ordered_groups.clear();
@@ -282,7 +271,6 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         0,
         0,
     );
-
     // V4 can be one durable append ahead of its V6 marker. Until the marker is durable, the
     // composed PersistPlanTombstone action has not linearized and the signed prefix stays at zero.
     committed
@@ -304,7 +292,6 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         .is_ok(),
         "the one bounded V4-before-V6 crash window must remain recoverable"
     );
-
     committed
         .ordered_owner_phases
         .iter_mut()
@@ -342,7 +329,6 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         .is_ok(),
         "the signed tombstone prefix must advance exactly with its V6 marker"
     );
-
     committed
         .ordered_owner_phases
         .iter_mut()
@@ -363,7 +349,6 @@ fn snapshot_recovery_phase_gate_accepts_only_exact_v4_v6_prefixes_and_order() {
         "a signed completed prefix requires the exact durable V6 marker"
     );
 }
-
 #[test]
 fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_stutter() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -397,7 +382,6 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
             .collect::<Vec<_>>();
         (reservation_path, keys)
     };
-
     let queue = Queue::test(config_factory(), &time_source);
     queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -457,7 +441,6 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
             recovered_state,
         }
     };
-
     let authorization = queue
         .authorize_lane_reservation_snapshot_recovery(
             checked_startup_reconciliation_receipt(&queue),
@@ -491,7 +474,6 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
             )
             .expect("revalidate returned combined startup receipt")
     );
-
     let mut reordered_keys = keys.clone();
     reordered_keys.swap(0, 1);
     assert!(matches!(
@@ -505,7 +487,6 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
         ),
         Err(LaneQueueReservationError::InvalidIdentity(_))
     ));
-
     assert!(matches!(
         queue.authorize_lane_reservation_snapshot_recovery(
             checked_startup_reconciliation_receipt(&queue),
@@ -518,7 +499,6 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
         Err(LaneQueueReservationError::InvalidIdentity(_))
     ));
 }
-
 #[test]
 fn snapshot_recovery_accepts_mixed_lifecycle_and_strict_absence_coverage() {
     let fixture = replayed_snapshot_recovery_fixture(&[1, 1], None);
@@ -553,7 +533,6 @@ fn snapshot_recovery_accepts_mixed_lifecycle_and_strict_absence_coverage() {
         lifecycle_state,
         b"snapshot-planner-mixed-lifecycle",
     );
-
     let authorization = fixture
         .queue
         .authorize_lane_reservation_snapshot_recovery(
@@ -587,7 +566,6 @@ fn snapshot_recovery_accepts_mixed_lifecycle_and_strict_absence_coverage() {
             .expect("revalidate the mixed-coverage startup receipt")
     );
 }
-
 #[test]
 fn snapshot_recovery_rejects_planner_evidence_for_another_exact_snapshot() {
     let fixture = replayed_snapshot_recovery_fixture(&[1], None);
@@ -607,7 +585,6 @@ fn snapshot_recovery_rejects_planner_evidence_for_another_exact_snapshot() {
             },
         )],
     );
-
     let result = fixture.queue.authorize_lane_reservation_snapshot_recovery(
         checked_startup_reconciliation_receipt(&fixture.queue),
         Vec::new(),
@@ -627,7 +604,6 @@ fn snapshot_recovery_rejects_planner_evidence_for_another_exact_snapshot() {
         "a stale planner batch must not mutate any durable Queue owner"
     );
 }
-
 #[test]
 fn snapshot_recovery_rejects_terminal_planner_and_lifecycle_overlap() {
     let fixture = replayed_snapshot_recovery_fixture(&[1], None);
@@ -658,7 +634,6 @@ fn snapshot_recovery_rejects_terminal_planner_and_lifecycle_overlap() {
         lifecycle_state,
         b"snapshot-planner-overlapping-lifecycle",
     );
-
     let result = fixture.queue.authorize_lane_reservation_snapshot_recovery(
         checked_startup_reconciliation_receipt(&fixture.queue),
         vec![lifecycle],
@@ -677,7 +652,6 @@ fn snapshot_recovery_rejects_terminal_planner_and_lifecycle_overlap() {
         fixture.snapshot
     );
 }
-
 #[test]
 fn snapshot_recovery_rejects_strict_absence_against_prepared_release_phase() {
     let fixture = replayed_snapshot_recovery_fixture(
@@ -702,7 +676,6 @@ fn snapshot_recovery_rejects_strict_absence_against_prepared_release_phase() {
             },
         )],
     );
-
     assert!(matches!(
         fixture.queue.authorize_lane_reservation_snapshot_recovery(
             checked_startup_reconciliation_receipt(&fixture.queue),
@@ -720,7 +693,6 @@ fn snapshot_recovery_rejects_strict_absence_against_prepared_release_phase() {
         "strict absence must neither replace nor release a durable prepared owner"
     );
 }
-
 #[test]
 fn completed_release_install_and_replay_remain_quarantined_until_explicit_proof() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -784,7 +756,6 @@ fn completed_release_install_and_replay_remain_quarantined_until_explicit_proof(
         barrier
     };
     let journal_before = fs::read(&reservation_path).expect("read completed release journal");
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -830,7 +801,6 @@ fn completed_release_install_and_replay_remain_quarantined_until_explicit_proof(
         journal_before,
         "install and replay are read-only with respect to the evidence-gated release barrier"
     );
-
     // Simulate an authenticated Kura proof that the exact entrypoint claims are Released.
     assert_eq!(
         queue
@@ -842,7 +812,6 @@ fn completed_release_install_and_replay_remain_quarantined_until_explicit_proof(
     assert!(queue.lane_reservation_release_barriers().is_empty());
     assert_eq!(queue.queued_len(), 2);
 }
-
 #[test]
 fn reservation_validation_failure_does_not_poison_durability() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -866,7 +835,6 @@ fn reservation_validation_failure_does_not_poison_durability() {
     );
     assert!(!queue.lane_reservation_durability_faulted());
 }
-
 #[test]
 fn reservation_restart_restore_blocks_resync_until_explicit_release() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -895,7 +863,6 @@ fn reservation_restart_restore_blocks_resync_until_explicit_release() {
             .key()
             .clone()
     };
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let restored = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -914,7 +881,6 @@ fn reservation_restart_restore_blocks_resync_until_explicit_release() {
     );
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 0);
-
     // Force the ordinary resync corridor; the live reservation must never be reinserted.
     let mut global = Vec::new();
     queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut global);
@@ -945,7 +911,6 @@ fn reservation_restart_restore_blocks_resync_until_explicit_release() {
     queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut global);
     assert_eq!(global[0].as_ref().hash(), hash);
 }
-
 #[test]
 fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_commit() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -975,7 +940,6 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
             .expect("reserve transaction before canonical commit")[0]
             .key()
     };
-
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
         .header();
@@ -984,7 +948,6 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
         .transactions
         .insert_block(HashSet::from([hash]), nonzero!(1_usize));
     state_block.commit().expect("commit transaction identity");
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let reservation_replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -997,7 +960,6 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
             .expect("install sole payload journal"),
         1
     );
-
     let replay = queue
         .replay_plan_journal(&state)
         .expect("authenticate and quarantine the sole payload source");
@@ -1033,14 +995,12 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
         1,
         "terminal state must not tombstone the only payload source while reservation ownership remains live"
     );
-
     let mut selected = Vec::new();
     queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut selected);
     assert!(
         selected.is_empty(),
         "a State-committed replayed reservation stays quarantined outside ordinary FIFO"
     );
-
     // Simulate the State/Kura reconciliation layer proving this exact carrier committed.
     assert_eq!(
         queue
@@ -1062,7 +1022,6 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
         0
     );
 }
-
 #[test]
 fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1097,7 +1056,6 @@ fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
             .key()
     };
     time_handle.advance(Duration::from_millis(2));
-
     let queue = Arc::new(Queue::test(config, &time_source));
     let reservation_replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1111,7 +1069,6 @@ fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
             .expect("install expired live-owner plan journal"),
         1
     );
-
     let summary = queue
         .replay_plan_journal(&state)
         .expect("materialize expired payload under its durable reservation owner");
@@ -1154,7 +1111,6 @@ fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
         "expiry must not tombstone the sole payload source while reservation ownership is live"
     );
 }
-
 #[test]
 fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1187,7 +1143,6 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
             )
             .expect("reserve before restart");
     }
-
     let queue = Arc::new(Queue::test(one_slot_config(), &time_source));
     let replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1201,7 +1156,6 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
     let pressure = queue.pressure_snapshot();
     assert_eq!(pressure.tracked_tx_count, 1);
     assert!(pressure.saturated_by_count);
-
     queue
         .install_plan_journal(&plan_path, 1024 * 1024, true)
         .expect("install the payload journal");
@@ -1221,7 +1175,6 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
     ));
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
-
     assert_eq!(
         queue
             .replay_plan_journal(&state)
@@ -1260,7 +1213,6 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
         .expect_err("the materialized reservation must retain its exact capacity slot");
     assert!(matches!(failure.err, Error::Full));
 }
-
 #[test]
 fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1294,7 +1246,6 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
             )
             .expect("reserve before restart");
     }
-
     let queue = Arc::new(Queue::test(bounded_config(), &time_source));
     queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1308,7 +1259,6 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
     queue
         .install_plan_journal(&plan_path, 1024 * 1024, true)
         .expect("install the payload journal");
-
     let unrelated = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(
         Arc::get_mut(&mut state).expect("unshared owner-bytes test state"),
@@ -1324,7 +1274,6 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
     ));
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
-
     assert_eq!(
         queue
             .replay_plan_journal(&state)
@@ -1357,7 +1306,6 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
         .expect_err("the materialized payload must retain its exact byte budget");
     assert!(matches!(failure.err, Error::Full));
 }
-
 #[test]
 fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1383,21 +1331,14 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
             push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
         assert_eq!(binding.admission_context.proposal_height, 1);
         seed_committed_height_for_queue_test(&state, 4);
-        let mut later_scope = lane_reservation_scope(
-            &state,
-            b"commit-window-owner",
-            b"commit-window-proposal",
-        );
+        let mut later_scope =
+            lane_reservation_scope(&state, b"commit-window-owner", b"commit-window-proposal");
         later_scope.proposal_height = 5;
         later_scope.lane_incarnation = state
             .lane_incarnation_at_height(LaneId::SINGLE, later_scope.proposal_height)
             .expect("the canonical lane remains active at the later reservation height");
         let key = *queue
-            .reserve_transactions_for_lane(
-                &state,
-                later_scope,
-                nonzero!(1_usize),
-            )
+            .reserve_transactions_for_lane(&state, later_scope, nonzero!(1_usize))
             .expect("reserve transaction")[0]
             .key();
         assert_eq!(key.proposal_height, 5);
@@ -1413,7 +1354,6 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
             .expect("durable commit barrier");
         key
     };
-
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
         .header();
@@ -1422,7 +1362,6 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
         .transactions
         .insert_block(HashSet::from([hash]), nonzero!(1_usize));
     state_block.commit().expect("commit transaction identity");
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let restored = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1445,7 +1384,6 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
     assert!(queue.txs.contains_key(&hash));
     assert_eq!(queue.queued_len(), 0);
-
     // Simulate the caller proving the exact global carrier from State and Kura.
     assert_eq!(
         queue
@@ -1467,7 +1405,6 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
         0
     );
 }
-
 #[test]
 fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1496,7 +1433,6 @@ fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
             .expect("reserve transaction")[0]
             .key();
         stale.routing_plan_digest = Hash::new(b"stale reservation commit plan digest");
-
         let error = queue
             .remove_plan_journal_for_reservation_commit(&stale)
             .expect_err("a stale commit digest must not append a no-op tombstone");
@@ -1505,7 +1441,6 @@ fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
         assert!(queue.txs.contains_key(&hash));
         assert!(queue.durable_plan_claims.contains_key(&hash));
     }
-
     let replay_queue = Arc::new(Queue::test(config_factory(), &time_source));
     assert_eq!(
         replay_queue
@@ -1521,7 +1456,6 @@ fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
     assert_eq!(replay.replayed, 1);
     assert!(replay_queue.txs.contains_key(&hash));
 }
-
 #[test]
 fn stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1553,7 +1487,6 @@ fn stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan() {
             .key();
         stale.queue_plan_admission_binding_hash =
             Hash::new(b"stale reservation commit admission binding");
-
         let error = queue
             .remove_plan_journal_for_reservation_commit(&stale)
             .expect_err("a stale binding hash must not append a plan tombstone");
@@ -1562,7 +1495,6 @@ fn stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan() {
         assert!(queue.txs.contains_key(&hash));
         assert!(queue.durable_plan_claims.contains_key(&hash));
     }
-
     let replay_queue = Arc::new(Queue::test(config_factory(), &time_source));
     assert_eq!(
         replay_queue
@@ -1578,7 +1510,6 @@ fn stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan() {
     assert_eq!(replay.replayed, 1);
     assert!(replay_queue.txs.contains_key(&hash));
 }
-
 #[test]
 fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1614,7 +1545,6 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
         }
         keys
     };
-
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
         .header();
@@ -1626,7 +1556,6 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
     state_block
         .commit()
         .expect("commit high-volume transaction identities");
-
     {
         let queue = make_queue();
         let replay = queue
@@ -1656,7 +1585,6 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
         );
         assert_eq!(queue.active_len(), 256);
         assert_eq!(queue.queued_len(), 0);
-
         // Simulate a successful all-groups State/Kura preflight. Consumption remains explicit
         // for every exact reservation identity even at restart scale.
         for key in &keys {
@@ -1675,7 +1603,6 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
             "explicit proof-driven commits must still bound reconciled barrier history"
         );
     }
-
     let queue = make_queue();
     let replay = queue
         .install_lane_reservation_journal(&reservation_path, 1)
@@ -1694,11 +1621,9 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
         QueuePlanJournalReplaySummary::default()
     );
 }
-
 #[test]
 fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
     const JOURNAL_LIMIT: u64 = 4 * 1024 * 1024;
-
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
@@ -1725,7 +1650,6 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
     let reservation_journal_before =
         fs::read(&reservation_path).expect("read exact reservation journal");
     let plan_journal_before = fs::read(&plan_path).expect("read exact QueuePlan journal");
-
     let queue = Queue::test(config_factory(), &time_source);
     let restored = queue
         .install_lane_reservation_journal(&reservation_path, JOURNAL_LIMIT)
@@ -1733,7 +1657,6 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
     assert_eq!(restored.commit_barriers, 2);
     assert_eq!(queue.active_len(), 2);
     assert!(queue.txs.is_empty());
-
     // Leave the first owner exact and forge only the later owner's immutable plan binding.
     // Replay must preflight the full record set before publishing the valid prefix.
     let mut forged = keys[1];
@@ -1745,7 +1668,6 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
             .expect("install is intentionally read-only with respect to commit barriers"),
         2
     );
-
     let error = queue
         .replay_plan_journal(&state)
         .expect_err("later forged barrier must reject the complete replay batch");
@@ -1756,7 +1678,6 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
             .contains("conflicts with durable reservation ownership"),
         "unexpected late-conflict replay error: {error}"
     );
-
     assert_eq!(queue.active_len(), 2);
     assert_eq!(queue.queued_len(), 0);
     assert!(queue.txs.is_empty());
@@ -1786,7 +1707,6 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
         "a later conflict must not tombstone the already-validated prefix"
     );
 }
-
 #[test]
 fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_forget() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1819,7 +1739,6 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
     state_block
         .commit()
         .expect("commit exact transaction identity");
-
     {
         let queue = Queue::test(config_factory(), &time_source);
         assert_eq!(
@@ -1854,7 +1773,6 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
             1
         );
     }
-
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue
@@ -1885,7 +1803,6 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
     );
     assert!(queue.lane_reservation_commit_barriers().is_empty());
 }
-
 #[test]
 fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_forget() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -1918,7 +1835,6 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
     state_block
         .commit()
         .expect("commit exact transaction identity");
-
     {
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -1955,7 +1871,6 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
             1
         );
     }
-
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue
@@ -1986,7 +1901,6 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
     );
     assert!(queue.lane_reservation_commit_barriers().is_empty());
 }
-
 #[test]
 fn restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_forget() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2019,7 +1933,6 @@ fn restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_for
             .replace_strict_durable(replacement)
             .expect("persist same-plan replacement binding");
     }
-
     {
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -2048,7 +1961,6 @@ fn restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_for
             1
         );
     }
-
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue
@@ -2077,7 +1989,6 @@ fn restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_for
         1
     );
 }
-
 #[test]
 fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2110,7 +2021,6 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
         );
         key
     };
-
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
         .header();
@@ -2122,7 +2032,6 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     state_block
         .commit()
         .expect("commit exact transaction identity");
-
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue
@@ -2162,7 +2071,6 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
             plan_tombstone_marked: false,
         }]
     );
-
     // Simulate proof of the exact canonical carrier. The absent payload is safe only because
     // State membership and the durable Commit identity were both retained for this check.
     queue.hold_next_lane_reservation_commit_after_plan_marker_for_test();
@@ -2186,7 +2094,6 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
         .compact_if_needed()
         .expect("compact away retained V4 tombstone after V6 marker");
     drop(queue);
-
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue
@@ -2224,7 +2131,6 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
     );
     assert!(queue.lane_reservation_commit_barriers().is_empty());
 }
-
 #[test]
 fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2256,7 +2162,6 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
             .expect("compact away unmarked V4 tombstone evidence");
         key
     };
-
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
         .header();
@@ -2268,7 +2173,6 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
     state_block
         .commit()
         .expect("commit exact transaction identity");
-
     let queue = Queue::test(config_factory(), &time_source);
     let reservation_replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -2294,7 +2198,6 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![key]);
     assert!(queue.lane_reservations.lock().plan_tombstoned.is_empty());
 }
-
 #[test]
 fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2326,7 +2229,6 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
             b"pressure-proposal",
         )
     };
-
     let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
         .as_ref()
         .header();
@@ -2338,7 +2240,6 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
     state_block
         .commit()
         .expect("commit exact transaction identity");
-
     let queue = make_queue();
     assert_eq!(
         queue
@@ -2382,7 +2283,6 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
         pressure.snapshot().is_saturated(),
         "payload replay cannot clear unverified reservation ownership"
     );
-
     let reconciliation_receipt = checked_startup_reconciliation_receipt(&queue);
     assert_eq!(
         queue
@@ -2406,7 +2306,6 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
         "the explicit proof-driven commit must publish the terminal tracked count"
     );
 }
-
 #[test]
 fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2437,7 +2336,6 @@ fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
     time_handle.advance(Duration::from_millis(2));
     assert_eq!(queue.cull_expired_entries(time_source.get_unix_time()), 0);
     assert_eq!(queue.active_len(), 1);
-
     queue
         .release_lane_reservation(&key)
         .expect("release expired reservation");
@@ -2458,7 +2356,6 @@ fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
             .get(&hash)
             .is_some_and(|claim| claim.journal_record_digest == binding.journal_record_digest)
     );
-
     assert_eq!(
         queue.remove_committed_hashes([hash], None),
         1,
@@ -2479,7 +2376,6 @@ fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
         "canonical execution must durably tombstone the exact plan claim"
     );
 }
-
 #[test]
 fn concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2493,7 +2389,6 @@ fn concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction() {
         &dir,
         accepted_tx_by_someone(&time_source),
     );
-
     let barrier = Arc::new(std::sync::Barrier::new(3));
     let mut handles = Vec::new();
     for index in 0_u8..2 {
@@ -2522,7 +2417,6 @@ fn concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction() {
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 0);
 }
-
 #[test]
 fn stale_lane_incarnation_identity_fails_closed() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2545,7 +2439,6 @@ fn stale_lane_incarnation_identity_fails_closed() {
     assert_eq!(queue.queued_len(), 1);
 }
 include!("native_amx_reservation_tests.rs");
-
 #[test]
 fn opposite_global_and_lane_call_orders_never_select_the_same_hash() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2553,7 +2446,6 @@ fn opposite_global_and_lane_call_orders_never_select_the_same_hash() {
     let first = accepted_tx_by_someone(&time_source);
     let second = accepted_tx_by_someone(&time_source);
     let all_hashes = BTreeSet::from([first.hash(), second.hash()]);
-
     let run = |lane_first: bool, suffix: &str| {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let dir = tempdir().expect("tempdir");
@@ -2596,11 +2488,9 @@ fn opposite_global_and_lane_call_orders_never_select_the_same_hash() {
         assert_ne!(global_hash, reserved_hash);
         assert_eq!(BTreeSet::from([global_hash, reserved_hash]), all_hashes);
     };
-
     run(true, "lane-first");
     run(false, "global-first");
 }
-
 #[test]
 fn fee_capacity_reservations_prevent_queue_oversubscription() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2610,7 +2500,6 @@ fn fee_capacity_reservations_prevent_queue_oversubscription() {
         first_hash, second_hash,
         "fixtures must identify two transactions"
     );
-
     let (sponsor, _) = gen_account_in("sponsor");
     let (beneficiary, _) = gen_account_in("beneficiary");
     let program_id = FeeSponsorProgramId::new(
@@ -2623,7 +2512,6 @@ fn fee_capacity_reservations_prevent_queue_oversubscription() {
     );
     let amount = Quantity::from(6_u32);
     let remaining = Quantity::from(10_u32);
-
     let reservation = || {
         let block_key = FeeSponsorBudgetCounterKey {
             program_id: program_id.clone(),
@@ -2670,7 +2558,6 @@ fn fee_capacity_reservations_prevent_queue_oversubscription() {
             relay_lease_remaining: BTreeMap::new(),
         }
     };
-
     let mut store = FeeAdmissionReservationStore::default();
     store
         .reserve(first_hash, reservation())
@@ -2685,13 +2572,11 @@ fn fee_capacity_reservations_prevent_queue_oversubscription() {
             ..
         }
     ));
-
     store.release(&first_hash);
     store
         .reserve(second_hash, reservation())
         .expect("released capacity is immediately reusable");
 }
-
 #[test]
 fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2722,7 +2607,6 @@ fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
             relay_lease_remaining: BTreeMap::new(),
         }
     };
-
     let mut store = FeeAdmissionReservationStore::default();
     store
         .reserve(first_hash, reservation_at(7))
@@ -2730,7 +2614,6 @@ fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
     store
         .refresh(first_hash, Some(reservation_at(8)))
         .expect("pop-time recheck moves the hold to the execution-height window");
-
     let err = store
         .reserve(second_hash, reservation_at(8))
         .expect_err("a competing transaction must see the refreshed current-height hold");
@@ -2741,7 +2624,6 @@ fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
             ..
         }
     ));
-
     store
         .refresh(first_hash, None)
         .expect("disabling fee charging releases the stale hold");
@@ -2749,7 +2631,6 @@ fn fee_reservation_refresh_moves_carried_transaction_to_current_block_window() {
         .reserve(second_hash, reservation_at(8))
         .expect("released current-height capacity is reusable");
 }
-
 #[test]
 fn unsigned_payload_routing_matches_signed_queue_admission_routing() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2765,7 +2646,6 @@ fn unsigned_payload_routing_matches_signed_queue_admission_routing() {
         LiveQueryStore::start_test(),
     );
     let queue = Queue::test(config_factory(), &time_source);
-
     let signed = queue
         .route_plan_with_state(&tx, &state)
         .expect("signed route");
@@ -2774,7 +2654,6 @@ fn unsigned_payload_routing_matches_signed_queue_admission_routing() {
         .expect("unsigned route");
     assert_eq!(unsigned, signed);
 }
-
 #[test]
 fn receipt_settled_queue_admission_rejects_authority_payer() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2814,11 +2693,9 @@ fn receipt_settled_queue_admission_rejects_authority_payer() {
     }
     let queue = Queue::test(config_factory(), &time_source);
     let transaction = accepted_tx_by(authority, &keypair, &time_source);
-
     let error = queue
         .push(transaction, state.view())
         .expect_err("receipt-settled queue admission must require a sponsor");
-
     assert!(matches!(
         error.err,
         Error::NexusFeeAdmissionRejected {
@@ -2829,7 +2706,6 @@ fn receipt_settled_queue_admission_rejects_authority_payer() {
     ));
     assert_eq!(queue.active_len(), 0);
 }
-
 #[test]
 fn authority_fee_reservations_prevent_overbooking_and_release_capacity() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2852,7 +2728,6 @@ fn authority_fee_reservations_prevent_overbooking_and_release_capacity() {
         window_remaining: BTreeMap::new(),
         relay_lease_remaining: BTreeMap::new(),
     };
-
     let mut store = FeeAdmissionReservationStore::default();
     store
         .reserve(first_hash, reservation())
@@ -2867,13 +2742,11 @@ fn authority_fee_reservations_prevent_overbooking_and_release_capacity() {
             ..
         }
     ));
-
     store.release(&first_hash);
     store
         .reserve(second_hash, reservation())
         .expect("released authority capacity is immediately reusable");
 }
-
 #[test]
 fn relay_spend_lease_reservations_prevent_overbooking_and_release_capacity() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -2891,7 +2764,6 @@ fn relay_spend_lease_reservations_prevent_overbooking_and_release_capacity() {
         window_remaining: BTreeMap::new(),
         relay_lease_remaining: BTreeMap::from([(lease_id, Quantity::from(10_u32))]),
     };
-
     let mut store = FeeAdmissionReservationStore::default();
     store
         .reserve(first_hash, reservation())
@@ -2906,13 +2778,11 @@ fn relay_spend_lease_reservations_prevent_overbooking_and_release_capacity() {
             ..
         }
     ));
-
     store.release(&first_hash);
     store
         .reserve(second_hash, reservation())
         .expect("released lease capacity is immediately reusable");
 }
-
 #[test]
 fn relay_spend_lease_reservation_maps_use_aggregate_per_asset_charges() {
     let (sponsor, _) = gen_account_in("relay_lease_map_sponsor");
@@ -2964,11 +2834,9 @@ fn relay_spend_lease_reservation_maps_use_aggregate_per_asset_charges() {
             },
         ),
     ]);
-
     let (charges, remaining) =
         relay_lease_reservation_maps(&program_id, &sponsor_charges, selections)
             .expect("each charged asset maps to its exact selected lease");
-
     assert_eq!(charges[&shared_lease], Quantity::from(10_u32));
     assert_eq!(charges[&distinct_lease], Quantity::from(7_u32));
     assert_eq!(remaining[&shared_lease], Quantity::from(15_u32));

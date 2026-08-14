@@ -1,7 +1,4 @@
 //! Benchmarks for hash and Poseidon hot paths used by block admission.
-
-use std::hint::black_box;
-
 use criterion::Criterion;
 use iroha_core::fastpq;
 use iroha_crypto::Hash;
@@ -13,7 +10,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use iroha_zkp_halo2::poseidon::{self, PoseidonByteHasher};
-
+use std::hint::black_box;
 fn sample_transfer_delta() -> TransferDeltaTranscript {
     TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),
@@ -31,7 +28,6 @@ fn sample_transfer_delta() -> TransferDeltaTranscript {
         to_smt_witness: TransferSmtWitness::default(),
     }
 }
-
 fn sample_public_inputs() -> FastpqPublicInputs {
     fastpq::FastpqPublicInputsTemplate {
         dsid: [0x01; 16],
@@ -42,7 +38,6 @@ fn sample_public_inputs() -> FastpqPublicInputs {
     }
     .with_tx_set_hash([0x05; 32])
 }
-
 fn sample_transfer_transcripts(count: usize, precompute_digest: bool) -> Vec<TransferTranscript> {
     let authority_digest = fastpq::authority_digest(&ALICE_ID);
     (0..count)
@@ -72,7 +67,6 @@ fn sample_transfer_transcripts(count: usize, precompute_digest: bool) -> Vec<Tra
         })
         .collect()
 }
-
 fn bench_poseidon_hash_bytes(c: &mut Criterion) {
     for &len in &[32usize, 33, 128, 129, 512, 4096] {
         let bytes = (0..len)
@@ -95,7 +89,6 @@ fn bench_poseidon_hash_bytes(c: &mut Criterion) {
         );
     }
 }
-
 fn bench_poseidon_fixed_width(c: &mut Criterion) {
     c.bench_function("crypto_hotpaths/poseidon/hash2_u64", |b| {
         b.iter(|| black_box(poseidon::hash2_u64(black_box(42), black_box(99))))
@@ -113,16 +106,13 @@ fn bench_poseidon_fixed_width(c: &mut Criterion) {
         );
     }
 }
-
 fn bench_fastpq_poseidon_preimage_digest(c: &mut Criterion) {
     let delta = sample_transfer_delta();
     let batch_hash = Hash::prehashed([0x11; 32]);
-
     c.bench_function("crypto_hotpaths/fastpq/poseidon_preimage_digest", |b| {
         b.iter(|| fastpq::poseidon_preimage_digest(black_box(&delta), black_box(&batch_hash)))
     });
 }
-
 fn bench_fastpq_batch_from_transcripts(c: &mut Criterion) {
     let public_inputs = sample_public_inputs();
     for (label, precompute_digest) in [("missing_digests", false), ("precomputed_digests", true)] {
@@ -143,7 +133,6 @@ fn bench_fastpq_batch_from_transcripts(c: &mut Criterion) {
         );
     }
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_poseidon_hash_bytes(&mut c);

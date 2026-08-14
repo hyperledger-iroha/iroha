@@ -4,9 +4,6 @@
 //! inputs. It is sound only inside the canonical composition where Nova NIFS
 //! has already bound both input instances and the cross-term commitment to the
 //! same transcript. The type and entry points remain crate-private.
-
-use thiserror::Error;
-
 use super::{
     VegaT256ScalarV1 as Scalar,
     algebra::{
@@ -15,10 +12,13 @@ use super::{
     commitment::{CommitmentError, CommitmentKey},
     hyrax::{HyraxError, prove_direct, verify_direct},
     r1cs::{R1csError, RelaxedInstance, RelaxedWitness, Shape},
-    sumcheck::{SumcheckError, SumcheckProof, prove_cubic_with_three_inputs, prove_quadratic},
+    sumcheck::{
+        SecretScalarTable, SplitSecretScalarTable, SumcheckError, SumcheckProof,
+        prove_cubic_with_split_first_owned, prove_quadratic_owned,
+    },
     transcript::{VegaTranscriptError, VegaTranscriptV1},
 };
-
+use thiserror::Error;
 /// Failure while proving or verifying the fixed-shape Relaxed Spartan proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum SpartanError {
@@ -43,7 +43,6 @@ pub(super) enum SpartanError {
     #[error(transparent)]
     Transcript(#[from] VegaTranscriptError),
 }
-
 /// Canonical non-ZK Spartan proof for one relaxed R1CS instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RelaxedSpartanProof {
@@ -55,7 +54,6 @@ pub(super) struct RelaxedSpartanProof {
     pub(super) error_opening: Vec<Scalar>,
     pub(super) error_opening_blinding: Scalar,
 }
-
 impl RelaxedSpartanProof {
     pub(super) fn prove(
         shape: &Shape,
@@ -66,65 +64,66 @@ impl RelaxedSpartanProof {
     ) -> Result<Self, SpartanError> {
         let dimensions = SpartanDimensions::validate(shape, key)?;
         validate_prover_input(shape, key, instance, witness, dimensions)?;
-
         transcript.absorb_scalar(b"u_relaxed", instance.relaxation)?;
         transcript.absorb_scalars(b"X_relaxed", &instance.public_inputs)?;
-
-        let mut assignment = Vec::with_capacity(shape.columns());
-        assignment.extend_from_slice(&witness.values);
-        assignment.push(instance.relaxation);
-        assignment.extend_from_slice(&instance.public_inputs);
-        let products = shape.multiply(&assignment)?;
-
         let mut tau = Vec::with_capacity(dimensions.outer_rounds);
         for _ in 0..dimensions.outer_rounds {
             tau.push(transcript.squeeze(b"t")?);
         }
-        let u_cz_plus_error: Vec<_> = products
-            .c
-            .iter()
-            .copied()
-            .zip(witness.error.iter().copied())
-            .map(|(c, error)| instance.relaxation * c + error)
-            .collect();
-        let (outer_sumcheck, row_point, outer_claims) = prove_cubic_with_three_inputs(
+        let [a_product, b_product, mut d_product] =
+            derive_assignment_products_split(shape, instance, witness)?;
+        let (d_lower, d_upper) = d_product.as_mut_slices();
+        let error_half = witness.error.len() / 2;
+        for (c, error) in d_lower
+            .iter_mut()
+            .zip(witness.error[..error_half].iter().copied())
+        {
+            *c = instance.relaxation * *c + error;
+        }
+        for (c, error) in d_upper
+            .iter_mut()
+            .zip(witness.error[error_half..].iter().copied())
+        {
+            *c = instance.relaxation * *c + error;
+        }
+        let (outer_sumcheck, row_point, outer_claims) = prove_cubic_with_split_first_owned(
             Scalar::zero(),
             &tau,
-            &products.a,
-            &products.b,
-            &u_cz_plus_error,
+            a_product,
+            b_product,
+            d_product,
             transcript,
         )?;
+        drop(tau);
         transcript.absorb_scalars(b"claims_outer", &outer_claims)?;
-
         let batching_challenge = transcript.squeeze(b"r")?;
         let batching_challenge_squared = batching_challenge.square();
-        let row_weights = eq_evals(&row_point)?;
-        let error_claim = inner_product(&witness.error, &row_weights)?;
+        let row_weights = SecretScalarTable::try_eq_evals(&row_point)?;
+        let error_claim = inner_product(&witness.error, row_weights.as_slice())?;
         let inner_claim = outer_claims[0]
             + batching_challenge * outer_claims[1]
             + batching_challenge_squared * (outer_claims[2] - error_claim);
-
-        let a_bound = shape.a.bind_rows(&row_weights)?;
-        let b_bound = shape.b.bind_rows(&row_weights)?;
-        let c_bound = shape.c.bind_rows(&row_weights)?;
-        let mut batched_matrix = a_bound
-            .iter()
-            .copied()
-            .zip(b_bound.iter().copied())
-            .zip(c_bound.iter().copied())
-            .map(|((a, b), c)| {
-                a + batching_challenge * b + batching_challenge_squared * instance.relaxation * c
-            })
-            .collect::<Vec<_>>();
-        batched_matrix.resize(dimensions.assignment_table_len, Scalar::zero());
-        assignment.resize(dimensions.assignment_table_len, Scalar::zero());
-
-        let (inner_sumcheck, column_point, _) = prove_quadratic(
+        let batched_matrix = bind_batched_matrix(
+            shape,
+            row_weights.as_slice(),
+            batching_challenge,
+            instance.relaxation,
+            dimensions.assignment_table_len,
+        )?;
+        // The row weights are no longer needed. Free them before allocating
+        // the inner assignment, keeping this phase at two full prover tables.
+        drop(row_weights);
+        let mut assignment = SecretScalarTable::try_zeroed(dimensions.assignment_table_len)?;
+        let assignment_values = assignment.as_mut_slice();
+        assignment_values[..witness.values.len()].copy_from_slice(&witness.values);
+        assignment_values[shape.variable_count()] = instance.relaxation;
+        assignment_values[shape.variable_count() + 1..shape.columns()]
+            .copy_from_slice(&instance.public_inputs);
+        let (inner_sumcheck, column_point, _) = prove_quadratic_owned(
             inner_claim,
             dimensions.inner_rounds,
-            &batched_matrix,
-            &assignment,
+            batched_matrix,
+            assignment,
             transcript,
         )?;
         let (witness_opening, witness_opening_blinding) = prove_direct(
@@ -137,7 +136,6 @@ impl RelaxedSpartanProof {
             prove_direct(key, &witness.error, &witness.error_blindings, &row_point)?;
         transcript.absorb_scalars(b"v_W", &witness_opening)?;
         transcript.absorb_scalars(b"v_E", &error_opening)?;
-
         Ok(Self {
             outer_sumcheck,
             outer_claims,
@@ -148,7 +146,6 @@ impl RelaxedSpartanProof {
             error_opening_blinding,
         })
     }
-
     pub(super) fn verify(
         &self,
         shape: &Shape,
@@ -158,10 +155,8 @@ impl RelaxedSpartanProof {
     ) -> Result<(), SpartanError> {
         let dimensions = SpartanDimensions::validate(shape, key)?;
         validate_verifier_input(self, shape, key, instance, dimensions)?;
-
         transcript.absorb_scalar(b"u_relaxed", instance.relaxation)?;
         transcript.absorb_scalars(b"X_relaxed", &instance.public_inputs)?;
-
         let mut tau = Vec::with_capacity(dimensions.outer_rounds);
         for _ in 0..dimensions.outer_rounds {
             tau.push(transcript.squeeze(b"t")?);
@@ -175,7 +170,6 @@ impl RelaxedSpartanProof {
             return Err(SpartanError::InvalidOuterClaim);
         }
         transcript.absorb_scalars(b"claims_outer", &self.outer_claims)?;
-
         let batching_challenge = transcript.squeeze(b"r")?;
         let batching_challenge_squared = batching_challenge.square();
         let error_evaluation = verify_direct(
@@ -198,7 +192,6 @@ impl RelaxedSpartanProof {
             self.witness_opening_blinding,
             &column_point[1..],
         )?;
-
         let row_weights = eq_evals(&row_point)?;
         let column_weights = eq_evals(&column_point)?;
         let mut assignment_evaluation = (Scalar::one() - column_point[0]) * witness_evaluation;
@@ -215,13 +208,89 @@ impl RelaxedSpartanProof {
         if inner_final != batched_matrix_evaluation * assignment_evaluation {
             return Err(SpartanError::InvalidInnerClaim);
         }
-
         transcript.absorb_scalars(b"v_W", &self.witness_opening)?;
         transcript.absorb_scalars(b"v_E", &self.error_opening)?;
         Ok(())
     }
 }
-
+fn derive_assignment_products_split(
+    shape: &Shape,
+    instance: &RelaxedInstance,
+    witness: &RelaxedWitness,
+) -> Result<[SplitSecretScalarTable; 3], SpartanError> {
+    if witness.values.len() != shape.variable_count()
+        || instance.public_inputs.len() != shape.public_input_count()
+    {
+        return Err(SpartanError::InvalidDimension);
+    }
+    let mut products = [
+        SplitSecretScalarTable::try_zeroed(shape.constraint_count())?,
+        SplitSecretScalarTable::try_zeroed(shape.constraint_count())?,
+        SplitSecretScalarTable::try_zeroed(shape.constraint_count())?,
+    ];
+    // Both halves of all three products are reserved before the first table
+    // receives witness-derived data. A later reservation failure therefore
+    // drops only zero-filled owners, while every populated owner remains
+    // RAII-erased.
+    for (matrix, product) in [&shape.a, &shape.b, &shape.c]
+        .into_iter()
+        .zip(products.iter_mut())
+    {
+        let (lower, upper) = product.as_mut_slices();
+        let half = shape.constraint_count() / 2;
+        for row in 0..shape.constraint_count() {
+            let mut evaluation = Scalar::zero();
+            for (column, coefficient) in
+                matrix.row_entries(row).ok_or(R1csError::InvalidDimension)?
+            {
+                let assigned = if column < shape.variable_count() {
+                    witness.values[column]
+                } else if column == shape.variable_count() {
+                    instance.relaxation
+                } else {
+                    *instance
+                        .public_inputs
+                        .get(column - shape.variable_count() - 1)
+                        .ok_or(R1csError::InvalidDimension)?
+                };
+                evaluation += coefficient * assigned;
+            }
+            if row < half {
+                lower[row] = evaluation;
+            } else {
+                upper[row - half] = evaluation;
+            }
+        }
+    }
+    Ok(products)
+}
+fn bind_batched_matrix(
+    shape: &Shape,
+    row_weights: &[Scalar],
+    batching_challenge: Scalar,
+    relaxation: Scalar,
+    assignment_table_len: usize,
+) -> Result<SecretScalarTable, SpartanError> {
+    if row_weights.len() != shape.constraint_count() || assignment_table_len < shape.columns() {
+        return Err(SpartanError::InvalidDimension);
+    }
+    let mut batched = SecretScalarTable::try_zeroed(assignment_table_len)?;
+    let batching_challenge_squared = batching_challenge.square();
+    for (matrix, scale) in [
+        (&shape.a, Scalar::one()),
+        (&shape.b, batching_challenge),
+        (&shape.c, batching_challenge_squared * relaxation),
+    ] {
+        for (row, row_weight) in row_weights.iter().copied().enumerate() {
+            for (column, coefficient) in
+                matrix.row_entries(row).ok_or(R1csError::InvalidDimension)?
+            {
+                batched.as_mut_slice()[column] += scale * row_weight * coefficient;
+            }
+        }
+    }
+    Ok(batched)
+}
 #[derive(Clone, Copy)]
 struct SpartanDimensions {
     outer_rounds: usize,
@@ -230,7 +299,6 @@ struct SpartanDimensions {
     witness_rows: usize,
     error_rows: usize,
 }
-
 impl SpartanDimensions {
     fn validate(shape: &Shape, key: &CommitmentKey) -> Result<Self, SpartanError> {
         if !key.columns().is_power_of_two() {
@@ -271,7 +339,6 @@ impl SpartanDimensions {
         })
     }
 }
-
 fn validate_prover_input(
     shape: &Shape,
     key: &CommitmentKey,
@@ -300,7 +367,6 @@ fn validate_prover_input(
     }
     Ok(())
 }
-
 fn validate_verifier_input(
     proof: &RelaxedSpartanProof,
     shape: &Shape,
@@ -328,7 +394,6 @@ fn validate_verifier_input(
     }
     Ok(())
 }
-
 fn validate_instance(
     shape: &Shape,
     _key: &CommitmentKey,
@@ -343,7 +408,6 @@ fn validate_instance(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,11 +415,9 @@ mod tests {
         nifs::{NovaNifs, NovaNifsProverInput},
         r1cs::{Instance, SparseMatrix, Witness},
     };
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn h(value: &str) -> Scalar {
         let bytes: [u8; 32] = hex::decode(value)
             .expect("hex")
@@ -363,7 +425,6 @@ mod tests {
             .expect("32-byte scalar");
         Scalar::from_be_bytes_exact(bytes).expect("canonical scalar")
     }
-
     fn fixture() -> (
         CommitmentKey,
         Shape,
@@ -379,7 +440,6 @@ mod tests {
         let c = SparseMatrix::new(4, 5, &entries).expect("canonical C");
         let shape = Shape::new(4, 4, 0, a, b, c).expect("shape");
         let key = CommitmentKey::derive(b"vega-spartan-test", 2).expect("key");
-
         let relaxed_witness = RelaxedWitness {
             values: vec![s(2), s(3), s(4), s(5)],
             witness_blindings: vec![s(11), s(13)],
@@ -415,7 +475,66 @@ mod tests {
             regular_witness,
         )
     }
-
+    #[test]
+    fn streamed_products_and_reused_batch_match_materialized_algebra() {
+        let (_, shape, instance, witness, _, _) = fixture();
+        let mut assignment = witness.values.clone();
+        assignment.push(instance.relaxation);
+        assignment.extend_from_slice(&instance.public_inputs);
+        let expected_products = shape.multiply(&assignment).expect("fixture dimensions");
+        let [actual_a, actual_b, actual_c] =
+            derive_assignment_products_split(&shape, &instance, &witness)
+                .expect("streamed products");
+        let half = shape.constraint_count() / 2;
+        for (actual, expected) in [actual_a, actual_b, actual_c].into_iter().zip([
+            expected_products.a,
+            expected_products.b,
+            expected_products.c,
+        ]) {
+            let (lower, upper) = actual.as_slices();
+            assert_eq!(lower, &expected[..half]);
+            assert_eq!(upper, &expected[half..]);
+        }
+        let row_weights = [s(2), s(3), s(5), s(7)];
+        let challenge = s(11);
+        let challenge_squared = challenge.square();
+        let a_bound = shape.a.bind_rows(&row_weights).expect("A rows");
+        let b_bound = shape.b.bind_rows(&row_weights).expect("B rows");
+        let c_bound = shape.c.bind_rows(&row_weights).expect("C rows");
+        let mut expected_batch = a_bound
+            .into_iter()
+            .zip(b_bound)
+            .zip(c_bound)
+            .map(|((a, b), c)| a + challenge * b + challenge_squared * instance.relaxation * c)
+            .collect::<Vec<_>>();
+        expected_batch.resize(shape.variable_count() * 2, Scalar::zero());
+        let actual_batch = bind_batched_matrix(
+            &shape,
+            &row_weights,
+            challenge,
+            instance.relaxation,
+            shape.variable_count() * 2,
+        )
+        .expect("single-buffer batch");
+        assert_eq!(actual_batch.as_slice(), expected_batch.as_slice());
+    }
+    #[test]
+    fn spartan_prover_source_splits_and_releases_first_round_tables() {
+        let source = include_str!("spartan.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert!(!production.contains("let u_cz_plus_error"));
+        assert!(!production.contains("shape.multiply(&assignment)"));
+        assert!(!production.contains(".bind_rows("));
+        assert!(production.contains("*c = instance.relaxation * *c + error"));
+        assert!(production.contains("prove_cubic_with_split_first_owned"));
+        assert!(production.contains("derive_assignment_products_split"));
+        assert!(!production.contains("SecretScalarTable::try_eq_evals(&tau)"));
+        assert!(production.contains("prove_quadratic_owned"));
+        assert!(production.contains("drop(row_weights)"));
+    }
     fn prove_composed() -> (
         CommitmentKey,
         Shape,
@@ -461,7 +580,6 @@ mod tests {
             proof,
         )
     }
-
     fn verify_composed(
         key: &CommitmentKey,
         shape: &Shape,
@@ -477,7 +595,6 @@ mod tests {
         proof.verify(shape, key, &folded, &mut transcript)?;
         Ok(folded)
     }
-
     #[test]
     fn composed_nifs_and_relaxed_spartan_prove_and_verify() {
         let (key, shape, u1, u2, nifs, folded, witness, proof) = prove_composed();
@@ -575,7 +692,6 @@ mod tests {
             h("7c4175b3a65853572a1520d371e8794bd8ff5a867a934a656d3246d7e302beea")
         );
     }
-
     #[test]
     fn every_spartan_response_category_is_bound_and_checked() {
         let (key, shape, u1, u2, nifs, _, _, proof) = prove_composed();
@@ -632,7 +748,6 @@ mod tests {
         altered.error_opening_blinding += Scalar::one();
         assert!(verify_composed(&key, &shape, &u1, &u2, &nifs, &altered).is_err());
     }
-
     #[test]
     fn spartan_rejects_round_degree_opening_and_instance_shape_attacks() {
         let (key, shape, u1, u2, nifs, folded, _, proof) = prove_composed();
@@ -656,7 +771,6 @@ mod tests {
             verify_composed(&key, &shape, &u1, &u2, &nifs, &altered),
             Err(SpartanError::InvalidDimension)
         );
-
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         let verified_fold = nifs
             .verify(&key, &shape, &mut transcript, &u1, &u2)
@@ -669,7 +783,6 @@ mod tests {
                 .verify(&shape, &key, &altered_instance, &mut transcript)
                 .is_err()
         );
-
         let mut altered_context = VegaTranscriptV1::new_neutron_nova();
         altered_context
             .domain_separator(b"cross-context-replay")

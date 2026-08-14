@@ -7,7 +7,6 @@ use ivm::{
     },
     pedersen_commit_truncated, poseidon2, poseidon6,
 };
-
 fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.is_empty() {
         return 0;
@@ -18,7 +17,6 @@ fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.len() == 2 {
         return poseidon2(inputs[0], inputs[1]);
     }
-
     let mut idx = 0usize;
     let mut acc = 0u64;
     let mut first = true;
@@ -49,7 +47,6 @@ fn poseidon_hash(inputs: &[u64]) -> u64 {
     }
     acc
 }
-
 fn mint_circuit() -> MintCircuit {
     let witness = MintWitness {
         recipient: ECPoint { x: 10, y: 20 },
@@ -84,7 +81,6 @@ fn mint_circuit() -> MintCircuit {
         poseidon_hash(&[circuit.witness.token_id, circuit.witness.token_blind]);
     circuit
 }
-
 fn burn_circuit() -> BurnCircuit {
     let witness = BurnWitness {
         secret_key: 9,
@@ -140,7 +136,6 @@ fn burn_circuit() -> BurnCircuit {
     circuit.public.sig_public = derive_public_key(circuit.witness.sig_secret);
     circuit
 }
-
 fn bench_mint(c: &mut Criterion) {
     let circuit = mint_circuit();
     c.bench_function("mint_circuit_verify", |b| {
@@ -149,7 +144,6 @@ fn bench_mint(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_transfer(c: &mut Criterion) {
     let circuit = burn_circuit();
     c.bench_function("burn_circuit_verify", |b| {
@@ -158,7 +152,6 @@ fn bench_transfer(c: &mut Criterion) {
         })
     });
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

@@ -4,7 +4,6 @@
 //! - Kernel launches per round incur overhead; this measures end-to-end time.
 //! - To see GPU speedups, consider batching rounds per launch in future work.
 use criterion::Criterion;
-
 fn data() -> ([u8; 16], [u8; 16]) {
     let state = [
         0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
@@ -16,7 +15,6 @@ fn data() -> ([u8; 16], [u8; 16]) {
     ];
     (state, rk)
 }
-
 fn bench_aesenc_cpu(c: &mut Criterion) {
     let (state, rk) = data();
     c.bench_function("aesenc_cpu_round", |b| {
@@ -26,7 +24,6 @@ fn bench_aesenc_cpu(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aesdec_cpu(c: &mut Criterion) {
     let (state, rk) = data();
     let enc = ivm::aesenc_impl(state, rk);
@@ -37,7 +34,6 @@ fn bench_aesdec_cpu(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aesenc_cuda(c: &mut Criterion) {
     if !ivm::cuda_available() {
         eprintln!("CUDA not available; skipping aesenc_cuda benchmark");
@@ -52,7 +48,6 @@ fn bench_aesenc_cuda(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aesdec_cuda(c: &mut Criterion) {
     if !ivm::cuda_available() {
         eprintln!("CUDA not available; skipping aesdec_cuda benchmark");
@@ -68,7 +63,6 @@ fn bench_aesdec_cuda(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_aesenc_cpu(&mut c);
@@ -79,7 +73,6 @@ fn main() {
     bench_aesdec_cuda_batch(&mut c);
     c.final_summary();
 }
-
 fn bench_aesenc_cuda_batch(c: &mut Criterion) {
     if !ivm::cuda_available() {
         eprintln!("CUDA not available; skipping aesenc_cuda_batch benchmark");
@@ -109,7 +102,6 @@ fn bench_aesenc_cuda_batch(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aesdec_cuda_batch(c: &mut Criterion) {
     if !ivm::cuda_available() {
         eprintln!("CUDA not available; skipping aesdec_cuda_batch benchmark");

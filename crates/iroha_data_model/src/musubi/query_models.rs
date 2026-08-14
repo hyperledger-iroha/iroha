@@ -23,8 +23,19 @@ pub struct MusubiResolverReleaseRowV1 {
     /// Universal index revision.
     pub index_revision: u64,
 }
-
 impl MusubiResolverReleaseRowV1 {
+    /// Return the exact canonical JSON length without allocating an output or account literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if canonical JSON encoding fails or exceeds `maximum` bytes.
+    #[cfg(feature = "json")]
+    pub fn canonical_json_len_bounded(
+        &self,
+        maximum: usize,
+    ) -> Result<usize, norito::json::BoundedJsonError> {
+        streaming::musubi_resolver_row_json_len_bounded(self, maximum)
+    }
     /// Validate compact resolver commitments and canonical dependency order.
     ///
     /// # Errors
@@ -60,7 +71,6 @@ impl MusubiResolverReleaseRowV1 {
             .try_for_each(MusubiDependencyReqV1::validate)
     }
 }
-
 /// Paired home-dataspace and universal-index view of one exact release at finality.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -75,7 +85,6 @@ pub struct MusubiExactReleaseSnapshotV1 {
     /// Exact resolver-grade release row from the universal dataspace.
     pub universal_release: MusubiResolverReleaseRowV1,
 }
-
 impl MusubiExactReleaseSnapshotV1 {
     /// Validate deployment identity, paired content/state, revisions, and finalized anchors.
     ///
@@ -87,7 +96,6 @@ impl MusubiExactReleaseSnapshotV1 {
         self.snapshot.validate()?;
         self.home_release.validate()?;
         self.universal_release.validate()?;
-
         let manifest = &self.home_release.manifest;
         let universal = &self.universal_release;
         let storage = &universal.selection.storage;
@@ -126,7 +134,6 @@ impl MusubiExactReleaseSnapshotV1 {
         }
         Ok(())
     }
-
     /// Validate this paired result for one exact requested release.
     ///
     /// # Errors
@@ -146,7 +153,6 @@ impl MusubiExactReleaseSnapshotV1 {
         Ok(())
     }
 }
-
 /// Finalized cursor binding its exact query, last key, index revision, and optional caller.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -161,7 +167,6 @@ pub struct MusubiFinalizedCursorV1 {
     /// Caller binding for authorization-sensitive queries.
     pub caller: Option<AccountId>,
 }
-
 impl MusubiFinalizedCursorV1 {
     /// Validate all cursor bindings.
     ///
@@ -184,11 +189,13 @@ impl MusubiFinalizedCursorV1 {
         Ok(())
     }
 }
-
 /// Explicit stale-cursor classification returned instead of silently restarting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiCursorFailureV1 {
     /// Finalized height/hash no longer matches the requested snapshot.
     FinalizedAnchorMismatch,
@@ -201,12 +208,12 @@ pub enum MusubiCursorFailureV1 {
     /// Last key is absent from the requested ordered index.
     LastKeyStale,
 }
-
 macro_rules! musubi_page_type {
     ($name:ident, $item:ty, $doc:literal, $noncanonical_order:expr) => {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
         pub struct $name {
             /// Ordered result items.
             pub items: Vec<$item>,
@@ -215,7 +222,6 @@ macro_rules! musubi_page_type {
             /// Finalized snapshot shared by every item.
             pub snapshot: MusubiRegistrySnapshotV1,
         }
-
         impl $name {
             /// Validate page size, snapshot, and cursor.
             ///
@@ -246,7 +252,6 @@ macro_rules! musubi_page_type {
         }
     };
 }
-
 musubi_page_type!(
     MusubiPackagePageV1,
     MusubiPackageRecordV1,
@@ -273,7 +278,6 @@ pub struct MusubiVersionPageV1 {
     /// Finalized snapshot shared by every item.
     pub snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl MusubiVersionPageV1 {
     /// Validate request identity, page bounds, strict order, and cursor binding.
     ///
@@ -316,7 +320,6 @@ impl MusubiVersionPageV1 {
             self.snapshot,
         )
     }
-
     /// Validate the page and require its echoed context to equal `query` exactly.
     ///
     /// # Errors
@@ -332,7 +335,6 @@ impl MusubiVersionPageV1 {
         Ok(())
     }
 }
-
 /// Ordered page of package members and invitations bound to its exact request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -347,7 +349,6 @@ pub struct MusubiMaintainerPageV1 {
     /// Finalized snapshot shared by every item.
     pub snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl MusubiMaintainerPageV1 {
     /// Validate request identity, package membership, bounds, order, and cursor binding.
     ///
@@ -403,7 +404,6 @@ impl MusubiMaintainerPageV1 {
             self.snapshot,
         )
     }
-
     /// Validate the page and require its echoed context to equal `query` exactly.
     ///
     /// # Errors
@@ -438,7 +438,6 @@ pub struct MusubiArchiveLocationPageV1 {
     /// Finalized snapshot shared by the archive and every location.
     pub snapshot: MusubiRegistrySnapshotV1,
 }
-
 /// Authoritative cache-retention classification for one exact archive identity.
 ///
 /// An identity unknown to the queried registry is retained fail-closed because
@@ -461,7 +460,6 @@ pub enum MusubiArchiveRetentionDispositionV1 {
     /// Every published release reference has an enacted Parliament takedown.
     PruneGovernedTakedown,
 }
-
 impl MusubiArchiveRetentionDispositionV1 {
     /// Whether this finalized classification requires the local cache entry to remain.
     #[must_use]
@@ -469,7 +467,6 @@ impl MusubiArchiveRetentionDispositionV1 {
         matches!(self, Self::RetainUnknown | Self::RetainReferenced)
     }
 }
-
 /// One exact finalized cache-retention decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -488,14 +485,12 @@ pub struct MusubiArchiveRetentionDecisionV1 {
     /// Authoritative storage projection, absent only for an unknown archive.
     pub storage: Option<MusubiArchiveAvailabilityV1>,
 }
-
 impl MusubiArchiveRetentionDecisionV1 {
     /// Return whether this exact finalized decision requires retention.
     #[must_use]
     pub const fn must_retain(&self) -> bool {
         self.disposition.must_retain()
     }
-
     /// Validate identity, bounded counts, storage binding, and disposition semantics.
     ///
     /// # Errors
@@ -525,7 +520,6 @@ impl MusubiArchiveRetentionDecisionV1 {
                 ));
             }
         }
-
         let available = usize::from(self.active_releases)
             .checked_add(usize::from(self.yanked_releases))
             .expect("two u16 Musubi release counts fit usize");
@@ -551,7 +545,6 @@ impl MusubiArchiveRetentionDecisionV1 {
         Ok(())
     }
 }
-
 /// Bounded exact finalized cache-retention request.
 ///
 /// `expected_snapshot` is absent on the first batch and binds every later batch
@@ -566,7 +559,6 @@ pub struct MusubiArchiveRetentionQueryV1 {
     /// Exact finalized snapshot established by the first batch, when present.
     pub expected_snapshot: Option<MusubiRegistrySnapshotV1>,
 }
-
 impl MusubiArchiveRetentionQueryV1 {
     /// Validate the exact batch bound, order, identities, and optional snapshot.
     ///
@@ -589,7 +581,6 @@ impl MusubiArchiveRetentionQueryV1 {
             .map_or(Ok(()), MusubiRegistrySnapshotV1::validate)
     }
 }
-
 /// Exact finalized cache-retention decisions for one bounded request batch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -607,7 +598,6 @@ pub struct MusubiArchiveRetentionPageV1 {
     /// strictly later than the exact signed transaction and receipt validity window.
     pub finalized_time_ms: u64,
 }
-
 impl MusubiArchiveRetentionPageV1 {
     /// Validate deployment identity, bounded strict order, decisions, and snapshot.
     ///
@@ -642,7 +632,6 @@ impl MusubiArchiveRetentionPageV1 {
             .try_for_each(MusubiArchiveRetentionDecisionV1::validate)
     }
 }
-
 impl MusubiArchiveLocationPageV1 {
     /// Validate deployment identity, archive commitment, items, snapshot, and cursor.
     ///
@@ -708,7 +697,6 @@ pub struct MusubiAliasHistoryPageV1 {
     /// Finalized snapshot shared by every item.
     pub snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl MusubiAliasHistoryPageV1 {
     /// Validate request identity, alias membership, bounds, order, and cursor binding.
     ///
@@ -772,7 +760,6 @@ impl MusubiAliasHistoryPageV1 {
             self.snapshot,
         )
     }
-
     /// Validate the page and require its echoed context to equal `query` exactly.
     ///
     /// # Errors
@@ -804,7 +791,6 @@ pub struct MusubiResolverIndexPageV1 {
     /// Finalized snapshot shared by every item.
     pub snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl MusubiResolverIndexPageV1 {
     /// Validate request identity, lock identity, page bounds, rows, and cursor binding.
     ///
@@ -870,18 +856,22 @@ impl MusubiResolverIndexPageV1 {
         )?;
         #[cfg(feature = "json")]
         {
-            let encoded = norito::json::to_json(self).map_err(|_| {
-                ParseError::new("Musubi resolver page cannot be encoded as canonical JSON")
-            })?;
-            if encoded.len() > MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1 {
-                return Err(ParseError::new(
-                    "Musubi resolver page exceeds the public JSON response ceiling",
-                ));
+            match musubi_json_len_bounded(self, MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1) {
+                Ok(_) => {}
+                Err(norito::json::BoundedJsonError::BodyTooLarge) => {
+                    return Err(ParseError::new(
+                        "Musubi resolver page exceeds the public JSON response ceiling",
+                    ));
+                }
+                Err(_) => {
+                    return Err(ParseError::new(
+                        "Musubi resolver page cannot be encoded as canonical JSON",
+                    ));
+                }
             }
         }
         Ok(())
     }
-
     /// Validate the page and require its echoed context to equal `query` exactly.
     ///
     /// # Errors
@@ -897,10 +887,10 @@ impl MusubiResolverIndexPageV1 {
         Ok(())
     }
 }
-
 /// Compact ordered directory row; rich fuzzy search may rebuild this projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiOrderedPackageEntryV1 {
     /// Human-facing namespace/package selector.
     pub selector: MusubiPackageSelectorV1,
@@ -913,7 +903,6 @@ pub struct MusubiOrderedPackageEntryV1 {
     /// Universal directory revision.
     pub index_revision: u64,
 }
-
 impl MusubiOrderedPackageEntryV1 {
     /// Validate non-zero revisions and any structured version.
     ///
@@ -934,7 +923,6 @@ impl MusubiOrderedPackageEntryV1 {
             .map_or(Ok(()), MusubiVersionV1::validate)
     }
 }
-
 /// Ordered package-directory response with authoritative lock identity.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -953,7 +941,6 @@ pub struct MusubiOrderedPackagePageV1 {
     /// Finalized snapshot shared by every item.
     pub snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl MusubiOrderedPackagePageV1 {
     /// Validate request identity, lock identity, rows, bounds, and cursor binding.
     ///
@@ -1021,7 +1008,6 @@ impl MusubiOrderedPackagePageV1 {
             self.snapshot,
         )
     }
-
     /// Validate the page and require its echoed context to equal `query` exactly.
     ///
     /// # Errors
@@ -1037,7 +1023,6 @@ impl MusubiOrderedPackagePageV1 {
         Ok(())
     }
 }
-
 /// Exact package lookup request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1046,7 +1031,6 @@ pub struct MusubiExactPackageQueryV1 {
     /// Structural package identity.
     pub package: MusubiPackageIdV1,
 }
-
 /// Exact release lookup request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1055,12 +1039,10 @@ pub struct MusubiExactReleaseQueryV1 {
     /// Exact release identity.
     pub release: MusubiReleaseIdV1,
 }
-
 /// Bounded ordered-prefix selector for deterministic directory/index queries.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiOrderedPrefixV1(String);
-
 impl MusubiOrderedPrefixV1 {
     /// Parse a canonical `namespace/package-prefix` directory prefix.
     ///
@@ -1081,13 +1063,11 @@ impl MusubiOrderedPrefixV1 {
         prefix.components()?;
         Ok(prefix)
     }
-
     /// Return prefix text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
     /// Return the structural namespace and portable package-name prefix.
     ///
     /// # Errors
@@ -1112,7 +1092,6 @@ impl MusubiOrderedPrefixV1 {
         }
         Ok((namespace.parse()?, name_prefix))
     }
-
     /// Validate prefix text obtained through decoding.
     ///
     /// # Errors
@@ -1123,7 +1102,6 @@ impl MusubiOrderedPrefixV1 {
         Self::new(&self.0).map(|_| ())
     }
 }
-
 /// Shared finalized page request for versions, members, locations, aliases, and prefix scans.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1134,7 +1112,6 @@ pub struct MusubiPageRequestV1 {
     /// Continuation cursor.
     pub cursor: Option<MusubiFinalizedCursorV1>,
 }
-
 impl MusubiPageRequestV1 {
     /// Effective page size capped by the consensus maximum.
     #[must_use]
@@ -1148,7 +1125,6 @@ impl MusubiPageRequestV1 {
             .unwrap_or(usize::MAX)
             .min(MUSUBI_MAX_PAGE_SIZE_V1)
     }
-
     /// Validate the requested bound and any supplied cursor.
     ///
     /// # Errors
@@ -1167,7 +1143,6 @@ impl MusubiPageRequestV1 {
             .map_or(Ok(()), MusubiFinalizedCursorV1::validate)
     }
 }
-
 fn validate_finalized_response_page(
     request: &MusubiPageRequestV1,
     item_count: usize,
@@ -1186,7 +1161,6 @@ fn validate_finalized_response_page(
         true,
     )
 }
-
 fn validate_finalized_response_page_with_cursor_cardinality(
     request: &MusubiPageRequestV1,
     item_count: usize,
@@ -1230,7 +1204,6 @@ fn validate_finalized_response_page_with_cursor_cardinality(
     }
     Ok(())
 }
-
 /// Resolver-index range request; exact resolution never uses fuzzy search.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1243,7 +1216,6 @@ pub struct MusubiResolverIndexQueryV1 {
     /// Page controls and finalized cursor.
     pub page: MusubiPageRequestV1,
 }
-
 impl MusubiResolverIndexQueryV1 {
     /// Validate structural package, optional requirement, and page controls.
     ///
@@ -1258,7 +1230,6 @@ impl MusubiResolverIndexQueryV1 {
         self.page.validate()
     }
 }
-
 /// Package-scoped versions/members query.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1269,7 +1240,6 @@ pub struct MusubiPackagePageQueryV1 {
     /// Page controls.
     pub page: MusubiPageRequestV1,
 }
-
 impl MusubiPackagePageQueryV1 {
     /// Validate structural package identity and page controls.
     ///
@@ -1281,7 +1251,6 @@ impl MusubiPackagePageQueryV1 {
         self.page.validate()
     }
 }
-
 /// Archive-location query.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1292,7 +1261,6 @@ pub struct MusubiArchiveLocationQueryV1 {
     /// Page controls.
     pub page: MusubiPageRequestV1,
 }
-
 /// Exact alias lookup or history query.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1303,7 +1271,6 @@ pub struct MusubiAliasQueryV1 {
     /// Page controls used by history; ignored by exact lookup.
     pub page: MusubiPageRequestV1,
 }
-
 impl MusubiAliasQueryV1 {
     /// Validate permanent alias identity and page controls.
     ///
@@ -1315,7 +1282,6 @@ impl MusubiAliasQueryV1 {
         self.page.validate()
     }
 }
-
 /// Ordered-prefix registry query.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1326,7 +1292,6 @@ pub struct MusubiOrderedPrefixQueryV1 {
     /// Page controls.
     pub page: MusubiPageRequestV1,
 }
-
 impl MusubiOrderedPrefixQueryV1 {
     /// Validate canonical structural prefix and page controls.
     ///
@@ -1338,7 +1303,6 @@ impl MusubiOrderedPrefixQueryV1 {
         self.page.validate()
     }
 }
-
 /// Snapshot of the process-local finalized-event package-search projection.
 ///
 /// This anchor is deliberately distinct from [`MusubiRegistrySnapshotV1`]. Search
@@ -1351,12 +1315,11 @@ pub struct MusubiSearchSnapshotV1 {
     /// Finalized height through which the search projection has been applied.
     pub finalized_height: u64,
     /// Finalized block hash at `finalized_height`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
     /// Process-local projection revision, changed on every visible rebuild/update.
     pub projection_revision: u64,
 }
-
 impl MusubiSearchSnapshotV1 {
     /// Validate a non-inert finalized search anchor.
     ///
@@ -1373,7 +1336,6 @@ impl MusubiSearchSnapshotV1 {
         Ok(())
     }
 }
-
 /// Continuation cursor for the rebuildable package-search projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1386,7 +1348,6 @@ pub struct MusubiSearchCursorV1 {
     /// Last structural package returned by the preceding page.
     pub last_package: MusubiPackageIdV1,
 }
-
 impl MusubiSearchCursorV1 {
     /// Validate every cursor binding.
     ///
@@ -1404,7 +1365,6 @@ impl MusubiSearchCursorV1 {
         Ok(())
     }
 }
-
 /// Page controls for rich package discovery.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1415,7 +1375,6 @@ pub struct MusubiSearchPageRequestV1 {
     /// Continuation cursor returned by the same normalized search.
     pub cursor: Option<MusubiSearchCursorV1>,
 }
-
 impl MusubiSearchPageRequestV1 {
     /// Effective page size capped by the public V1 maximum.
     #[must_use]
@@ -1429,7 +1388,6 @@ impl MusubiSearchPageRequestV1 {
             .unwrap_or(usize::MAX)
             .min(MUSUBI_MAX_PAGE_SIZE_V1)
     }
-
     /// Validate the page bound and continuation cursor.
     ///
     /// # Errors
@@ -1448,7 +1406,6 @@ impl MusubiSearchPageRequestV1 {
             .map_or(Ok(()), MusubiSearchCursorV1::validate)
     }
 }
-
 /// Bounded exact-token query for the rebuildable package discovery projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1459,7 +1416,6 @@ pub struct MusubiSearchQueryV1 {
     /// Search-specific page controls and cursor.
     pub page: MusubiSearchPageRequestV1,
 }
-
 impl MusubiSearchQueryV1 {
     /// Return sorted, distinct, Unicode-lowercased exact search terms.
     ///
@@ -1518,7 +1474,6 @@ impl MusubiSearchQueryV1 {
         }
         Ok(terms.into_iter().collect())
     }
-
     /// Validate query normalization and page controls.
     ///
     /// # Errors
@@ -1529,7 +1484,6 @@ impl MusubiSearchQueryV1 {
         self.page.validate()
     }
 }
-
 /// One deterministic rich package-discovery result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1546,7 +1500,6 @@ pub struct MusubiSearchHitV1 {
     /// Current mutable-metadata revision.
     pub metadata_revision: u64,
 }
-
 impl MusubiSearchHitV1 {
     /// Validate structural identity, namespace scope, metadata, and revision.
     ///
@@ -1575,7 +1528,6 @@ impl MusubiSearchHitV1 {
         Ok(())
     }
 }
-
 /// One deterministic page from the rebuildable package discovery projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1590,7 +1542,6 @@ pub struct MusubiSearchPageV1 {
     /// Finalized search projection shared by every result.
     pub snapshot: MusubiSearchSnapshotV1,
 }
-
 impl MusubiSearchPageV1 {
     /// Validate request identity, page bounds, strict ordering, and cursor binding.
     ///
@@ -1644,7 +1595,6 @@ impl MusubiSearchPageV1 {
         }
         Ok(())
     }
-
     /// Validate the page and require its echoed context to equal `query` exactly.
     ///
     /// # Errors

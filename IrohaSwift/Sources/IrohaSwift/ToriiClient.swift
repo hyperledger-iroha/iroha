@@ -21737,8 +21737,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public let baseURL: URL
     /// Immutable trust context for endpoints that return bytes to be signed locally.
     public let localSigningContext: ToriiLocalSigningContext?
-    /// Per-request account signer used by internal protected capability probes.
+    /// Default local account signer for exact-network authenticated application requests.
     public let canonicalRequestAuth: ToriiCanonicalRequestAuth?
+    /// Immutable exact-network signer used only by operator-authenticated APIs.
+    public let operatorSigningContext: ToriiOperatorSigningContext?
     /// Default HTTP headers applied to every Torii request.
     public let defaultHeaders: [String: String]
     /// Wire-format preference used for dual-format Torii routes.
@@ -21764,6 +21766,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 defaultHeaders: [String: String] = [:],
                 localSigningContext: ToriiLocalSigningContext? = nil,
                 canonicalRequestAuth: ToriiCanonicalRequestAuth? = nil,
+                operatorSigningContext: ToriiOperatorSigningContext? = nil,
                 wireFormatPreference: ToriiWireFormatPreference = .noritoPreferred,
                 currentTimeMilliseconds: @escaping @Sendable () -> UInt64 = {
                     UInt64(max(0, Date().timeIntervalSince1970 * 1_000).rounded())
@@ -21777,6 +21780,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
         self.localSigningContext = localSigningContext
         self.canonicalRequestAuth = canonicalRequestAuth
+        self.operatorSigningContext = operatorSigningContext
         self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
         self.currentTimeMilliseconds = currentTimeMilliseconds
@@ -21793,6 +21797,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         authentication: ToriiClientAuthentication,
         localSigningContext: ToriiLocalSigningContext? = nil,
         canonicalRequestAuth: ToriiCanonicalRequestAuth? = nil,
+        operatorSigningContext: ToriiOperatorSigningContext? = nil,
         wireFormatPreference: ToriiWireFormatPreference = .noritoPreferred
     ) {
         self.init(baseURL: baseURL,
@@ -21800,6 +21805,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                   defaultHeaders: authentication.headers,
                   localSigningContext: localSigningContext,
                   canonicalRequestAuth: canonicalRequestAuth,
+                  operatorSigningContext: operatorSigningContext,
                   wireFormatPreference: wireFormatPreference)
     }
 
@@ -21839,221 +21845,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     // MARK: - Public completion-based API
-
-    @discardableResult
-    public func getAssets(accountId: String,
-                          limit: Int = 100,
-                          asset: String? = nil,
-                          scope: String? = nil,
-                          completion: @escaping (Result<[ToriiAssetBalance], Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope) }
-    }
-
-    @discardableResult
-    public func resolveAssetAlias(_ alias: String,
-                                  completion: @escaping (Result<ToriiAssetAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.resolveAssetAlias(alias) }
-    }
-
-    @discardableResult
-    public func resolveAccountAlias(_ alias: String,
-                                    completion: @escaping (Result<ToriiAccountAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.resolveAccountAlias(alias) }
-    }
-
-    /// Resolve a restricted alias with canonical account/signature/timestamp/nonce headers.
-    @discardableResult
-    public func resolveAccountAlias(_ alias: String,
-                                    canonicalAuth: ToriiCanonicalRequestAuth,
-                                    completion: @escaping (Result<ToriiAccountAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.resolveAccountAlias(alias, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    /// Resolve one visible deterministic alias index without authentication.
-    @discardableResult
-    public func resolveAccountAliasIndex(
-        _ index: UInt64,
-        completion: @escaping (Result<ToriiAliasIndexResolution?, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.resolveAccountAliasIndex(index) }
-    }
-
-    /// Resolve one deterministic alias index with canonical request authentication.
-    @discardableResult
-    public func resolveAccountAliasIndex(
-        _ index: UInt64,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<ToriiAliasIndexResolution?, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.resolveAccountAliasIndex(index, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    /// List visible aliases for one canonical account without authentication.
-    @discardableResult
-    public func aliasesByAccount(
-        _ lookup: ToriiAliasesByAccountRequest,
-        completion: @escaping (Result<ToriiAliasesByAccountResponse?, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.aliasesByAccount(lookup) }
-    }
-
-    /// List visible aliases for one canonical account with canonical authentication.
-    @discardableResult
-    public func aliasesByAccount(
-        _ lookup: ToriiAliasesByAccountRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<ToriiAliasesByAccountResponse?, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.aliasesByAccount(lookup, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    /// Request a read-only, canonical-account-signed atomic alias setup plan.
-    public func planAliasSetup(
-        _ setup: AliasSetupPlanRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<AliasTransactionPlanV1, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.planAliasSetup(setup, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    /// Request a canonical-account-signed, read-only lease-renewal plan.
-    public func planAliasLeaseRenewal(
-        _ renewal: AliasLeaseRenewPlanRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<AliasLifecycleTransactionPlanV1, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.planAliasLeaseRenewal(renewal, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    /// Request a canonical-account-signed, read-only auto-renew configuration plan.
-    public func planAliasAutoRenew(
-        _ configuration: AliasAutoRenewPlanRequestV1,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<AliasLifecycleTransactionPlanV1, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.planAliasAutoRenew(configuration, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    @discardableResult
-    public func listIdentifierPolicies(completion: @escaping (Result<ToriiIdentifierPolicyListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listIdentifierPolicies() }
-    }
-
-    @discardableResult
-    public func listRamLfeProgramPolicies(completion: @escaping (Result<ToriiRamLfeProgramPolicyListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listRamLfeProgramPolicies() }
-    }
-
-    @discardableResult
-    public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest,
-                                  completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.resolveIdentifier(requestBody) }
-    }
-
-    @discardableResult
-    public func resolveIdentifier(policyId: String,
-                                  encryptedInputHex: String,
-                                  outputOpening: ToriiRamLfeOutputOpening,
-                                  completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.resolveIdentifier(
-                policyId: policyId,
-                encryptedInputHex: encryptedInputHex,
-                outputOpening: outputOpening
-            )
-        }
-    }
-
-    @discardableResult
-    public func getIdentifierClaimByReceiptHash(_ receiptHash: String,
-                                                completion: @escaping (Result<ToriiIdentifierClaimRecord?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getIdentifierClaimByReceiptHash(receiptHash) }
-    }
-
-    @discardableResult
-    public func issueIdentifierClaimReceipt(accountId: String,
-                                            requestBody: ToriiIdentifierLookupRequest,
-                                            completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueIdentifierClaimReceipt(accountId: accountId, requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func issueIdentifierClaimReceipt(accountId: String,
-                                            policyId: String,
-                                            encryptedInputHex: String,
-                                            outputOpening: ToriiRamLfeOutputOpening,
-                                            completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.issueIdentifierClaimReceipt(
-                accountId: accountId,
-                policyId: policyId,
-                encryptedInputHex: encryptedInputHex,
-                outputOpening: outputOpening
-            )
-        }
-    }
-
-    @discardableResult
-    public func executeRamLfeProgram(programId: String,
-                                     requestBody: ToriiRamLfeExecuteRequest,
-                                     completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.executeRamLfeProgram(programId: programId, requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func executeRamLfeProgram(programId: String,
-                                     encryptedInputHex: String,
-                                     completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.executeRamLfeProgram(
-                programId: programId,
-                encryptedInputHex: encryptedInputHex
-            )
-        }
-    }
-
-    @discardableResult
-    public func verifyRamLfeReceipt(_ requestBody: ToriiRamLfeReceiptVerifyRequest,
-                                    completion: @escaping (Result<ToriiRamLfeReceiptVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.verifyRamLfeReceipt(requestBody) }
-    }
-
-    @discardableResult
-    public func verifyRamLfeReceipt(receipt: ToriiRamLfeExecutionReceipt,
-                                    outputHex: String? = nil,
-                                    completion: @escaping (Result<ToriiRamLfeReceiptVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.verifyRamLfeReceipt(receipt: receipt, outputHex: outputHex)
-        }
-    }
-
-    @discardableResult
-    public func getTransactions(accountId: String,
-                                limit: Int = 50,
-                                offset: Int = 0,
-                                assetDefinitionId: String? = nil,
-                                completion: @escaping (Result<ToriiTxEnvelope, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.getTransactions(
-                accountId: accountId,
-                limit: limit,
-                offset: offset,
-                assetDefinitionId: assetDefinitionId
-            )
-        }
-    }
 
     @discardableResult
     public func getUaidPortfolio(uaid: String,
@@ -22302,8 +22093,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func queryRwas(_ envelope: ToriiQueryEnvelope,
+                          canonicalAuth: ToriiCanonicalRequestAuth? = nil,
                           completion: @escaping (Result<ToriiRwaListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryRwas(envelope) }
+        runTask(completion) { try await self.queryRwas(envelope, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
@@ -22569,12 +22361,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func getKagemushaRecipientRegistrationLineage(
-        query: KagemushaRecipientLineageQueryV2,
+        query: KagemushaRecipientLineageQueryV2, canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<Data, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.getKagemushaRecipientRegistrationLineage(query: query)
-        }
+        runTask(completion) { try await self.getKagemushaRecipientRegistrationLineage(
+            query: query, canonicalAuth: canonicalAuth
+        ) }
     }
 
     @discardableResult
@@ -23364,16 +23156,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiRamLfeProgramPolicyListResponse.self, from: data)
     }
 
-    public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest) async throws -> ToriiIdentifierResolutionReceipt? {
+    public func resolveIdentifier(
+        _ requestBody: ToriiIdentifierLookupRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiIdentifierResolutionReceipt? {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: "/v1/identifiers/resolve",
             method: .post,
             body: body,
             headers: [
                 "Content-Type": "application/json",
                 "Accept": "application/json"
-            ]
+            ],
+            canonicalAuth: canonicalAuth
         )
         let (data, response) = try await send(request)
         if response.statusCode == 404 {
@@ -23394,13 +23190,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func resolveIdentifier(policyId: String,
                                   encryptedInputHex: String,
-                                  outputOpening: ToriiRamLfeOutputOpening) async throws -> ToriiIdentifierResolutionReceipt? {
+                                  outputOpening: ToriiRamLfeOutputOpening,
+                                  canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
         try await resolveIdentifier(
             buildIdentifierResolveRequest(
                 policyId: policyId,
                 encryptedInputHex: encryptedInputHex,
                 outputOpening: outputOpening
-            )
+            ),
+            canonicalAuth: canonicalAuth
         )
     }
 
@@ -23419,17 +23217,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func issueIdentifierClaimReceipt(accountId: String,
-                                            requestBody: ToriiIdentifierLookupRequest) async throws -> ToriiIdentifierResolutionReceipt? {
+                                            requestBody: ToriiIdentifierLookupRequest,
+                                            canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
+        guard accountId == canonicalAuth.accountId else {
+            throw ToriiClientError.invalidPayload(
+                "canonicalAuth.accountId must equal the claim-receipt path accountId."
+            )
+        }
         let encodedAccountId = try encodeAccountIdPath(accountId)
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: "/v1/accounts/\(encodedAccountId)/identifiers/claim-receipt",
             method: .post,
             body: body,
             headers: [
                 "Content-Type": "application/json",
                 "Accept": "application/json"
-            ]
+            ],
+            canonicalAuth: canonicalAuth
         )
         let (data, response) = try await send(request)
         if response.statusCode == 404 {
@@ -23451,30 +23256,34 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func issueIdentifierClaimReceipt(accountId: String,
                                             policyId: String,
                                             encryptedInputHex: String,
-                                            outputOpening: ToriiRamLfeOutputOpening) async throws -> ToriiIdentifierResolutionReceipt? {
+                                            outputOpening: ToriiRamLfeOutputOpening,
+                                            canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
         try await issueIdentifierClaimReceipt(
             accountId: accountId,
             requestBody: buildIdentifierResolveRequest(
                 policyId: policyId,
                 encryptedInputHex: encryptedInputHex,
                 outputOpening: outputOpening
-            )
+            ),
+            canonicalAuth: canonicalAuth
         )
     }
 
     public func executeRamLfeProgram(programId: String,
-                                     requestBody: ToriiRamLfeExecuteRequest) async throws -> ToriiRamLfeExecuteResponse? {
+                                     requestBody: ToriiRamLfeExecuteRequest,
+                                     canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRamLfeExecuteResponse? {
         let normalizedProgramId = try ToriiRequestValidation.normalizedNonEmpty(programId, field: "programId")
         let encodedProgramId = encodePathComponent(normalizedProgramId)
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: "/v1/ram-lfe/programs/\(encodedProgramId)/execute",
             method: .post,
             body: body,
             headers: [
                 "Content-Type": "application/json",
                 "Accept": "application/json"
-            ]
+            ],
+            canonicalAuth: canonicalAuth
         )
         let (data, response) = try await send(request)
         if response.statusCode == 404 {
@@ -23485,30 +23294,37 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func executeRamLfeProgram(programId: String,
-                                     encryptedInputHex: String) async throws -> ToriiRamLfeExecuteResponse? {
+                                     encryptedInputHex: String,
+                                     canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRamLfeExecuteResponse? {
         try await executeRamLfeProgram(
             programId: programId,
-            requestBody: buildRamLfeExecuteRequest(encryptedInputHex: encryptedInputHex)
+            requestBody: buildRamLfeExecuteRequest(encryptedInputHex: encryptedInputHex),
+            canonicalAuth: canonicalAuth
         )
     }
 
-    public func verifyRamLfeReceipt(_ requestBody: ToriiRamLfeReceiptVerifyRequest) async throws -> ToriiRamLfeReceiptVerifyResponse {
+    public func verifyRamLfeReceipt(
+        _ requestBody: ToriiRamLfeReceiptVerifyRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiRamLfeReceiptVerifyResponse {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: "/v1/ram-lfe/receipts/verify",
             method: .post,
             body: body,
             headers: [
                 "Content-Type": "application/json",
                 "Accept": "application/json"
-            ]
+            ],
+            canonicalAuth: canonicalAuth
         )
         let data = try await data(for: request)
         return try decodeJSON(ToriiRamLfeReceiptVerifyResponse.self, from: data)
     }
 
     public func verifyRamLfeReceipt(receipt: ToriiRamLfeExecutionReceipt,
-                                    outputHex: String? = nil) async throws -> ToriiRamLfeReceiptVerifyResponse {
+                                    outputHex: String? = nil,
+                                    canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRamLfeReceiptVerifyResponse {
         let normalizedOutputHex = try outputHex.map {
             try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "outputHex")
         }
@@ -23516,7 +23332,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             ToriiRamLfeReceiptVerifyRequest(
                 receipt: receipt,
                 outputHex: normalizedOutputHex
-            )
+            ),
+            canonicalAuth: canonicalAuth
         )
     }
 
@@ -23921,12 +23738,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiRwaListPage.self, from: data)
     }
 
-    public func queryRwas(_ envelope: ToriiQueryEnvelope) async throws -> ToriiRwaListPage {
+    public func queryRwas(_ envelope: ToriiQueryEnvelope, canonicalAuth: ToriiCanonicalRequestAuth? = nil) async throws -> ToriiRwaListPage {
         let body = try JSONEncoder().encode(envelope)
-        let request = try makeRequest(path: "/v1/rwas/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
+        guard let canonicalAuth = canonicalAuth ?? canonicalRequestAuth else {
+            throw ToriiClientError.invalidPayload("RWA query requires canonical account authentication.")
+        }
+        let request = try makeCanonicalAccountRequest(path: "/v1/rwas/query", method: .post, body: body, headers: ["Content-Type": "application/json"], canonicalAuth: canonicalAuth)
         let data = try await data(for: request)
         return try decodeJSON(ToriiRwaListPage.self, from: data)
     }
@@ -24276,8 +24093,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getConnectStatus() async throws -> ToriiConnectStatusSnapshot? {
-        let request = try makeRequest(path: "/v1/connect/status",
-                                      headers: ["Accept": "application/json"])
+        let request = try makeOperatorGetRequest(
+            path: "/v1/connect/status/aggregate",
+            headers: ["Accept": "application/json"]
+        )
         let (data, response) = try await send(request)
         if response.statusCode == 404 {
             return nil
@@ -26059,16 +25878,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getKagemushaRecipientRegistrationLineage(
-        query queryBody: KagemushaRecipientLineageQueryV2
+        query queryBody: KagemushaRecipientLineageQueryV2, canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> Data {
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
             method: .post,
             body: queryBody.noritoArchive,
             headers: [
                 "Content-Type": "application/x-norito",
                 "Accept": "application/x-norito",
-            ]
+            ], canonicalAuth: canonicalAuth
         )
         let (responseData, response) = try await sendBoundedSccpResponse(
             request,
@@ -27584,7 +27403,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getPipelineRecovery(height: UInt64) async throws -> ToriiPipelineRecovery? {
-        let request = try makeRequest(path: "/v1/pipeline/recovery/\(height)")
+        let request = try makeOperatorGetRequest(
+            path: "/v1/pipeline/recovery/\(height)",
+            headers: ["Accept": "application/json"]
+        )
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
@@ -27593,8 +27415,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getPipelinePreflight() async throws -> ToriiPipelinePreflight {
-        let request = try makeRequest(path: "/v1/pipeline/preflight",
-                                      headers: ["Accept": "application/json"])
+        let request = try makeOperatorGetRequest(
+            path: "/v1/pipeline/preflight",
+            headers: ["Accept": "application/json"]
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiPipelinePreflight.self, from: data)
     }
@@ -27619,14 +27443,19 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getTimeStatus() async throws -> ToriiTimeStatusSnapshot {
-        let request = try makeRequest(path: "/v1/time/status")
+        let request = try makeOperatorGetRequest(
+            path: "/v1/time/status",
+            headers: ["Accept": "application/json"]
+        )
         let (data, response) = try await send(request)
         try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiTimeStatusSnapshot.self, from: data)
     }
     public func getSumeragiStatus() async throws -> ToriiSumeragiStatusSnapshot {
-        let request = try makeRequest(path: "/v1/sumeragi/status",
-                                      headers: ["Accept": "application/json"])
+        let request = try makeOperatorGetRequest(
+            path: "/v1/sumeragi/status",
+            headers: ["Accept": "application/json"]
+        )
         let data = try await exactSccpJSONResponse(
             request,
             context: "Sumeragi status",
@@ -27636,8 +27465,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiSumeragiStatusSnapshot.self, from: data)
     }
     public func getSumeragiDiagnostics() async throws -> ToriiSumeragiDiagnosticsSnapshot {
-        let request = try makeRequest(path: "/v1/sumeragi/diagnostics",
-                                      headers: ["Accept": "application/json"])
+        let request = try makeOperatorGetRequest(
+            path: "/v1/sumeragi/diagnostics",
+            headers: ["Accept": "application/json"]
+        )
         let data = try await exactSccpJSONResponse(
             request,
             context: "Sumeragi diagnostics",
@@ -27648,8 +27479,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
     public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
         let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
-        let request = try makeRequest(path: "/v1/sumeragi/commit-qcs/\(normalized)",
-                                      headers: ["Accept": "application/json"])
+        let request = try makeOperatorGetRequest(
+            path: "/v1/sumeragi/commit-qcs/\(normalized)",
+            headers: ["Accept": "application/json"]
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
     }
@@ -27946,6 +27779,62 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return request
     }
 
+    /// Build one fresh, empty-body, exact-network operator-authenticated GET.
+    ///
+    /// Dispatch remains the caller's responsibility so every invocation signs
+    /// exactly once immediately before the one-shot request is sent.
+    func makeOperatorGetRequest(
+        path: String,
+        queryItems: [URLQueryItem]? = nil,
+        headers: [String: String] = [:]
+    ) throws -> URLRequest {
+        let managedHeaders = [
+            "Authorization",
+            "X-API-Token",
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+            "X-Iroha-Witness",
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature",
+        ]
+        guard !(Array(defaultHeaders.keys) + Array(headers.keys)).contains(where: { candidate in
+            managedHeaders.contains { $0.caseInsensitiveCompare(candidate) == .orderedSame }
+        }) else {
+            throw ToriiClientError.invalidPayload(
+                "Operator requests reject token, account, witness, and precomputed operator authentication headers."
+            )
+        }
+        guard let operatorSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "This Torii API requires an immutable ToriiOperatorSigningContext."
+            )
+        }
+
+        var request = try makeRequest(
+            path: path,
+            method: .get,
+            queryItems: queryItems,
+            headers: headers
+        )
+        guard let url = request.url else {
+            throw ToriiClientError.invalidURL(path)
+        }
+        let authHeaders = try operatorSigningContext.buildHeaders(
+            method: HTTPMethod.get.rawValue,
+            url: url,
+            body: Data(),
+            timestampMs: currentEpochMs()
+        )
+        for (key, value) in authHeaders {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        return request
+    }
+
     private func makeVpnRequest(path: String,
                                 method: HTTPMethod = .get,
                                 body: Data? = nil,
@@ -27970,6 +27859,19 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         headers: [String: String] = [:],
         canonicalAuth: ToriiCanonicalRequestAuth
     ) throws -> URLRequest {
+        let managedHeaders = [
+            ToriiCanonicalRequest.headerAccount,
+            ToriiCanonicalRequest.headerSignature,
+            ToriiCanonicalRequest.headerTimestampMs,
+            ToriiCanonicalRequest.headerNonce
+        ]
+        guard !(Array(defaultHeaders.keys) + Array(headers.keys)).contains(where: { candidate in
+            managedHeaders.contains { $0.caseInsensitiveCompare(candidate) == .orderedSame }
+        }) else {
+            throw ToriiClientError.invalidPayload(
+                "Canonical signing headers must be generated locally and cannot be precomputed."
+            )
+        }
         let principal: (address: AccountAddress, chainDiscriminant: UInt16)
         do {
             principal = try exactCanonicalToriiAccountAddress(canonicalAuth.accountId)

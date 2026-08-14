@@ -165,7 +165,11 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
   );
   assert.match(
     policy,
-    /"\$IROHA_RELEASE_CARGO_BIN" "\$\{pinned_arguments\[@\]\}"/,
+    /if "\$IROHA_RELEASE_CARGO_BIN" "\$@"; then/,
+  );
+  assert.match(
+    policy,
+    /_run_cargo_with_scoped_lock "\$label" "\$\{pinned_arguments\[@\]\}"/,
   );
   assert.match(policy, /pinned_arguments=\("\$subcommand" -j1\)/);
   assert.match(policy, /pinned_arguments\+=\("\$@"\)/);

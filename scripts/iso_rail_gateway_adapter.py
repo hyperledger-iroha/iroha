@@ -9,13 +9,13 @@ Purpose:
   submission and writes a bounded local receipt for every submit attempt.
 
 Prerequisites:
-  Python 3.11+ and a Torii endpoint with the ISO bridge enabled. No third party
-  Python packages are required.
+  Python 3.11+, the maintained ``iroha-python`` package, and a Torii endpoint
+  with the ISO bridge enabled.
 
 Safety:
   The script never deletes input files. Plain HTTP Torii URLs are rejected unless
-  ``--allow-insecure-http`` is supplied for local tests. Bearer tokens are read
-  from a runtime-only file and are never persisted into receipts.
+  ``--allow-insecure-http`` is supplied for local tests. Operator private keys
+  are read from a runtime-only file and are never persisted into receipts.
 """
 
 from __future__ import annotations
@@ -40,11 +40,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.iso_operator_auth import (
+        OperatorSigningContext,
+        load_operator_signing_context,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    from iso_operator_auth import (  # type: ignore[no-redef]
+        OperatorSigningContext,
+        load_operator_signing_context,
+    )
+
 
 DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
 MAX_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024
-MAX_BEARER_TOKEN_BYTES = 8192
+MAX_OPERATOR_PRIVATE_KEY_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_SIDECAR_JSON_BYTES = 16 * 1024
@@ -149,7 +162,8 @@ SECRET_VALUE_PATTERNS = [
 CLI_OPTION_FLAGS = {
     "--allow-default-profile",
     "--allow-insecure-http",
-    "--bearer-token-file",
+    "--network-id",
+    "--operator-private-key-file",
     "--dry-run",
     "--inbox-dir",
     "--max-payload-bytes",
@@ -1955,38 +1969,51 @@ def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
     return base_url.rstrip("/")
 
 
-def _load_bearer_token(path: Path | None) -> str | None:
-    if path is None:
-        return None
-    label = "bearer token file"
+def _load_operator_signing_context(
+    network_id: str,
+    path: Path,
+) -> OperatorSigningContext:
+    label = "operator private key file"
     raw = _read_regular_file(
         path,
-        max_bytes=MAX_BEARER_TOKEN_BYTES,
-        limit_label="bearer token",
+        max_bytes=MAX_OPERATOR_PRIVATE_KEY_BYTES,
+        limit_label="operator private key",
         path_label=label,
     )
     try:
-        token = raw.decode("utf-8")
+        private_key = raw.decode("ascii")
     except UnicodeDecodeError as error:
-        raise AdapterError(f"{label} is not UTF-8") from error
-    if not token:
+        raise AdapterError(f"{label} is not ASCII") from error
+    if not private_key:
         raise AdapterError(f"{label} is empty")
-    if token != token.strip():
+    if private_key != private_key.strip():
         raise AdapterError(f"{label} must not have surrounding whitespace")
-    if _contains_control_character(token):
+    if _contains_control_character(private_key):
         raise AdapterError(f"{label} must not contain control characters")
-    if any(ch.isspace() for ch in token):
+    if any(ch.isspace() for ch in private_key):
         raise AdapterError(f"{label} must not contain whitespace")
-    return token
+    try:
+        return load_operator_signing_context(network_id, private_key)
+    except Exception as error:
+        raise AdapterError("operator signing inputs are invalid") from error
+
+
+def torii_target(message: GatewayMessage) -> str:
+    """Build the exact path and signed profile query for one message."""
+
+    endpoint = ENDPOINTS.get(message.message_type)
+    if endpoint is None:
+        raise AdapterError("unsupported message_type")
+    path = f"/v1/iso20022/{endpoint}"
+    if message.profile is None:
+        return path
+    return f"{path}?{urllib.parse.urlencode({'profile': message.profile})}"
 
 
 def torii_url(base_url: str, message: GatewayMessage) -> str:
     """Build the Torii ISO endpoint URL for a verified message."""
 
-    endpoint = ENDPOINTS.get(message.message_type)
-    if endpoint is None:
-        raise AdapterError("unsupported message_type")
-    return f"{base_url}/v1/iso20022/{endpoint}"
+    return f"{base_url}{torii_target(message)}"
 
 
 def submit_message(
@@ -1995,21 +2022,23 @@ def submit_message(
     *,
     timeout_secs: float,
     response_limit_bytes: int,
-    bearer_token: str | None,
+    operator_signing_context: OperatorSigningContext,
 ) -> SubmitResult:
     """Submit one verified message to Torii."""
 
-    headers = {
-        "Content-Type": "application/xml",
-        "X-Iroha-Iso-Gateway-Payload-Sha256": message.payload_sha256,
-    }
-    if message.profile is not None:
-        headers["X-Iroha-Iso-Profile"] = message.profile
+    headers = operator_signing_context.headers(
+        "POST",
+        torii_target(message),
+        message.payload,
+    )
+    headers.update(
+        {
+            "Content-Type": "application/xml",
+            "X-Iroha-Iso-Gateway-Payload-Sha256": message.payload_sha256,
+        }
+    )
     if message.rail_message_id is not None:
         headers["X-Iroha-Iso-Rail-Message-Id"] = message.rail_message_id
-    if bearer_token is not None:
-        headers["Authorization"] = f"Bearer {bearer_token}"
-
     request = urllib.request.Request(
         torii_url(base_url, message),
         data=message.payload,
@@ -2336,16 +2365,19 @@ def run(args: argparse.Namespace) -> int:
         raise AdapterError("provide --inbox-dir")
     args.inbox_dir = _optional_cli_path(args.inbox_dir, "inbox_dir")
     args.receipt_dir = _optional_cli_path(getattr(args, "receipt_dir", None), "receipt_dir")
-    args.bearer_token_file = _optional_cli_path(
-        getattr(args, "bearer_token_file", None),
-        "bearer_token_file",
+    args.operator_private_key_file = _optional_cli_path(
+        getattr(args, "operator_private_key_file", None),
+        "operator_private_key_file",
     )
     message = _normalise_message_argument(getattr(args, "message", None))
     _reject_output_path_smuggling(args.inbox_dir, "inbox_dir")
     if message is not None:
         _reject_raw_output_path_smuggling(message, "message")
-    if args.bearer_token_file is not None:
-        _reject_output_path_smuggling(args.bearer_token_file, "bearer_token_file")
+    if args.operator_private_key_file is not None:
+        _reject_output_path_smuggling(
+            args.operator_private_key_file,
+            "operator_private_key_file",
+        )
     receipt_dir_source = args.receipt_dir or args.inbox_dir / "receipts"
     _reject_output_path_smuggling(receipt_dir_source, "receipt_dir")
     receipt_dir = _absolute_path_without_resolving_leaf(
@@ -2360,15 +2392,15 @@ def run(args: argparse.Namespace) -> int:
             "inbox_dir must not point to checked-in ISO fixture artifacts"
         )
     _reject_receipt_dir_input_alias(receipt_dir, args.inbox_dir, "inbox_dir")
-    if args.bearer_token_file is not None:
+    if args.operator_private_key_file is not None:
         _reject_receipt_dir_input_path_overlap(
             receipt_dir,
-            args.bearer_token_file,
-            "bearer_token_file",
+            args.operator_private_key_file,
+            "operator_private_key_file",
         )
         _reject_path_overlap(
-            args.bearer_token_file,
-            "bearer_token_file",
+            args.operator_private_key_file,
+            "operator_private_key_file",
             args.inbox_dir,
             "inbox_dir",
         )
@@ -2392,7 +2424,6 @@ def run(args: argparse.Namespace) -> int:
         )
     _ensure_input_directory(args.inbox_dir, "inbox_dir")
     inbox_dir = args.inbox_dir
-    bearer_token = _load_bearer_token(args.bearer_token_file)
     paths = resolve_message_paths(inbox_dir, message)
     _reject_message_receipt_dir_overlap(paths, receipt_dir)
     messages = [
@@ -2416,6 +2447,14 @@ def run(args: argparse.Namespace) -> int:
         print(json.dumps(summary, allow_nan=False, indent=2, sort_keys=True))
         return 0
 
+    network_id = _required_cli_string(getattr(args, "network_id", None), "--network-id")
+    if args.operator_private_key_file is None:
+        raise AdapterError("provide --operator-private-key-file")
+    operator_signing_context = _load_operator_signing_context(
+        network_id,
+        args.operator_private_key_file,
+    )
+
     _ensure_output_directory(receipt_dir, "receipt_dir")
     for offset, message in enumerate(messages):
         _ensure_output_file_target(
@@ -2432,7 +2471,7 @@ def run(args: argparse.Namespace) -> int:
             message,
             timeout_secs=timeout_secs,
             response_limit_bytes=response_limit_bytes,
-            bearer_token=bearer_token,
+            operator_signing_context=operator_signing_context,
         )
         receipts.append(str(write_receipt(receipt_dir, message, result, endpoint_url)))
         if not result.ok:
@@ -2489,9 +2528,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow http:// Torii URLs for local tests; production should use HTTPS.",
     )
     parser.add_argument(
-        "--bearer-token-file",
+        "--network-id",
+        help="Exact genesis-derived NetworkId literal for operator signatures.",
+    )
+    parser.add_argument(
+        "--operator-private-key-file",
         type=Path,
-        help="Runtime-only file containing a bearer token for Torii Authorization.",
+        help="Runtime-only operator private-key multihash or raw Ed25519 hex file.",
     )
     parser.add_argument(
         "--max-payload-bytes",
@@ -2524,7 +2567,8 @@ def main(argv: list[str] | None = None) -> int:
         _preflight_raw_cli_secrets(
             normalised_argv,
             {
-                "--bearer-token-file",
+                "--network-id",
+                "--operator-private-key-file",
                 "--inbox-dir",
                 "--max-payload-bytes",
                 "--message",
@@ -2550,7 +2594,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         _preflight_output_cli_paths(
             normalised_argv,
-            {"--bearer-token-file", "--inbox-dir", "--message", "--receipt-dir"},
+            {
+                "--operator-private-key-file",
+                "--inbox-dir",
+                "--message",
+                "--receipt-dir",
+            },
         )
         args = parser.parse_args(normalised_argv)
         return run(args)

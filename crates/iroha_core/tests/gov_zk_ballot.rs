@@ -3,13 +3,9 @@
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 //! Governance ZK ballot basic test (requires explicit election creation).
-
 mod zk_testkit;
-
-use core::num::NonZeroU64;
-use std::time::Duration;
-
 use base64::Engine as _;
+use core::num::NonZeroU64;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -37,7 +33,7 @@ use iroha_executor_data_model::permission::governance::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
-
+use std::time::Duration;
 fn derive_ballot_nullifier(
     domain_tag: &str,
     network_id: &iroha_data_model::NetworkId,
@@ -45,7 +41,6 @@ fn derive_ballot_nullifier(
     commit: &[u8; 32],
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
-
     let mut input = Vec::with_capacity(
         domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
     );
@@ -65,7 +60,6 @@ fn derive_ballot_nullifier(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn new_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -82,7 +76,6 @@ fn new_state() -> State {
     state.zk.verify_timeout = Duration::ZERO;
     state
 }
-
 fn assert_instruction_error_contains(err: &InstructionExecutionError, expected: &str) {
     let msg = match err {
         InstructionExecutionError::InvariantViolation(reason) => reason.as_ref(),
@@ -104,7 +97,6 @@ fn assert_instruction_error_contains(err: &InstructionExecutionError, expected: 
         "expected error containing \"{expected}\", got \"{rendered}\""
     );
 }
-
 #[test]
 fn zk_ballot_records_and_dedupes() {
     // Build minimal state/transaction
@@ -114,11 +106,9 @@ fn zk_ballot_records_and_dedupes() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     // Register a real Halo2 verifying key and wire config defaults
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     // Submit two identical ballots (same proof → same derived nullifier) → second must fail
     let proof_b64 = bundle.proof_b64();
     let public_inputs = "{}".to_string();
@@ -128,13 +118,11 @@ fn zk_ballot_records_and_dedupes() {
         proof_b64: proof_b64.clone(),
         public_inputs_json: public_inputs.clone(),
     };
-
     // Grant VK management permission and register a verifying key via instruction
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -157,7 +145,6 @@ fn zk_ballot_records_and_dedupes() {
     let s = format!("{err}");
     assert!(s.contains("unknown election id"));
     stx.world.take_external_events();
-
     let create = CreateElection {
         election_id: election_id.clone(),
         options: 2,
@@ -178,7 +165,6 @@ fn zk_ballot_records_and_dedupes() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     instr
         .clone()
         .execute(&ALICE_ID, &mut stx)
@@ -202,7 +188,6 @@ fn zk_ballot_records_and_dedupes() {
     let s = format!("{err}");
     assert!(s.contains("duplicate ballot nullifier"));
 }
-
 #[test]
 fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     let state = new_state();
@@ -213,15 +198,12 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -240,7 +222,6 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
-
     let create = CreateElection {
         election_id: election_id.clone(),
         options: 2,
@@ -261,7 +242,6 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let err = CastZkBallot {
         election_id,
         proof_b64: bundle.proof_b64(),
@@ -271,7 +251,6 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     .unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("lock hints required"));
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -279,7 +258,6 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
             if rej.reason.contains("lock hints required")
     )));
 }
-
 #[test]
 fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     let mut state = new_state();
@@ -287,15 +265,12 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -314,7 +289,6 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
-
     let create = CreateElection {
         election_id: election_id.clone(),
         options: 2,
@@ -335,7 +309,6 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     CastZkBallot {
         election_id: election_id.clone(),
         proof_b64: bundle.proof_b64(),
@@ -343,7 +316,6 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("ballot ok");
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -354,7 +326,6 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
         "direction-only hints must not create a lock"
     );
 }
-
 #[test]
 fn zk_ballot_accepts_commit_nullifier_hint() {
     let mut state = new_state();
@@ -362,15 +333,12 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -389,7 +357,6 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
-
     let create = CreateElection {
         election_id: election_id.clone(),
         options: 2,
@@ -410,7 +377,6 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let commit_bytes = bundle.commit_bytes();
     let expected_nullifier = derive_ballot_nullifier(
         "gov:ballot:v1",
@@ -430,13 +396,11 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
     ])
     .expect("serialize public inputs");
     let public_inputs = norito::json::to_json(&public_inputs).expect("serialize public inputs");
-
     let instr = CastZkBallot {
         election_id: election_id.clone(),
         proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs.clone(),
     };
-
     instr
         .clone()
         .execute(&ALICE_ID, &mut stx)
@@ -445,7 +409,6 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
     let s = format!("{err}");
     assert!(s.contains("duplicate ballot nullifier"));
 }
-
 #[test]
 fn zk_ballot_rejects_invalid_proof() {
     let mut state = new_state();
@@ -453,15 +416,12 @@ fn zk_ballot_rejects_invalid_proof() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -472,7 +432,6 @@ fn zk_ballot_rejects_invalid_proof() {
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanManageParliament");
-
     let election_id = "ref-invalid-proof".to_string();
     let ballot_perm: Permission = CanSubmitGovernanceBallot {
         referendum_id: election_id.clone(),
@@ -503,14 +462,12 @@ fn zk_ballot_rejects_invalid_proof() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let mut corrupted_proof = bundle.proof_bytes.clone();
     if let Some(last) = corrupted_proof.last_mut() {
         *last ^= 0x01;
     }
     let proof_b64 = base64::engine::general_purpose::STANDARD.encode(corrupted_proof);
     let public_inputs = "{}".to_string();
-
     let err = CastZkBallot {
         election_id: election_id.clone(),
         proof_b64,
@@ -520,7 +477,6 @@ fn zk_ballot_rejects_invalid_proof() {
     .unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("invalid proof"));
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -528,7 +484,6 @@ fn zk_ballot_rejects_invalid_proof() {
             if rej.reason.contains("invalid proof")
     )));
 }
-
 #[test]
 fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let mut state = new_state();
@@ -536,15 +491,12 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -563,7 +515,6 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
-
     let create = CreateElection {
         election_id: election_id.clone(),
         options: 2,
@@ -584,14 +535,12 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let amount = stx.gov.min_bond_amount.clone().max(Quantity::one());
     let duration = stx.gov.conviction_step_blocks.max(1u64);
     let public_inputs = format!(
         "{{\"owner\":\"{}\",\"amount\":{},\"duration_blocks\":{}}}",
         &*BOB_ID, amount, duration
     );
-
     let err = CastZkBallot {
         election_id: election_id.clone(),
         proof_b64: bundle.proof_b64(),
@@ -600,7 +549,6 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     .execute(&ALICE_ID, &mut stx)
     .unwrap_err();
     assert_instruction_error_contains(&err, "owner must equal authority");
-
     let st_after = stx
         .world
         .elections()
@@ -608,7 +556,6 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
         .expect("election exists");
     assert!(st_after.ballot_nullifiers.is_empty());
     assert!(st_after.ciphertexts.is_empty());
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -620,7 +567,6 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
         Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
     )));
 }
-
 #[test]
 fn zk_ballot_rejects_malformed_public_inputs() {
     let mut state = new_state();
@@ -628,22 +574,18 @@ fn zk_ballot_rejects_malformed_public_inputs() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let election_id = "ref-public-inputs".to_string();
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
@@ -678,7 +620,6 @@ fn zk_ballot_rejects_malformed_public_inputs() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let malformed_public_inputs = "{\"owner\": \"alice#wonderland\"".to_string();
     let err = CastZkBallot {
         election_id,
@@ -689,7 +630,6 @@ fn zk_ballot_rejects_malformed_public_inputs() {
     .unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("public inputs must be valid JSON"));
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -697,7 +637,6 @@ fn zk_ballot_rejects_malformed_public_inputs() {
             if rej.reason.contains("public inputs must be valid JSON")
     )));
 }
-
 #[test]
 fn zk_ballot_rejects_non_object_public_inputs() {
     let mut state = new_state();
@@ -705,22 +644,18 @@ fn zk_ballot_rejects_non_object_public_inputs() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let election_id = "ref-public-inputs-object".to_string();
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
@@ -755,7 +690,6 @@ fn zk_ballot_rejects_non_object_public_inputs() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let non_object_public_inputs = "[1,2,3]".to_string();
     let err = CastZkBallot {
         election_id,
@@ -766,7 +700,6 @@ fn zk_ballot_rejects_non_object_public_inputs() {
     .unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("public inputs must be a JSON object"));
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -774,7 +707,6 @@ fn zk_ballot_rejects_non_object_public_inputs() {
             if rej.reason.contains("public inputs must be a JSON object")
     )));
 }
-
 #[test]
 fn zk_ballot_rejects_public_input_aliases() {
     let mut state = new_state();
@@ -783,22 +715,18 @@ fn zk_ballot_rejects_public_input_aliases() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let election_id = "ref-public-inputs-alias".to_string();
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
@@ -833,7 +761,6 @@ fn zk_ballot_rejects_public_input_aliases() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let hex = "aa".repeat(32);
     let cases = [
         (
@@ -872,7 +799,6 @@ fn zk_ballot_rejects_public_input_aliases() {
         assert_instruction_error_contains(&err, expected);
     }
 }
-
 #[test]
 fn zk_ballot_accepts_null_public_input_hints() {
     let mut state = new_state();
@@ -880,22 +806,18 @@ fn zk_ballot_accepts_null_public_input_hints() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let election_id = "ref-public-inputs-null".to_string();
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
@@ -930,7 +852,6 @@ fn zk_ballot_accepts_null_public_input_hints() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let public_inputs = r#"{"root_hint":null,"owner":null,"amount":null,"duration_blocks":null,"direction":null,"nullifier":null}"#.to_string();
     CastZkBallot {
         election_id,
@@ -939,14 +860,12 @@ fn zk_ballot_accepts_null_public_input_hints() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("null public input hints should be accepted");
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
     )));
 }
-
 #[test]
 fn zk_ballot_rejects_owner_non_string() {
     let mut state = new_state();
@@ -954,22 +873,18 @@ fn zk_ballot_rejects_owner_non_string() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let election_id = "ref-owner-hint-type".to_string();
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
@@ -1004,7 +919,6 @@ fn zk_ballot_rejects_owner_non_string() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     let owner_non_string = "{\"owner\": 5}".to_string();
     let err = CastZkBallot {
         election_id,
@@ -1015,7 +929,6 @@ fn zk_ballot_rejects_owner_non_string() {
     .unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("owner must be a canonical I105 account id"));
-
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
@@ -1023,7 +936,6 @@ fn zk_ballot_rejects_owner_non_string() {
             if rej.reason.contains("owner must be a canonical I105 account id")
     )));
 }
-
 #[test]
 fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let mut state = new_state();
@@ -1031,22 +943,18 @@ fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
-
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant VK management");
-
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: bundle.vk_record.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let election_id = "ref-vk-commitment".to_string();
     let parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(parliament_perm, ALICE_ID.clone())
@@ -1092,9 +1000,7 @@ fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     stx.world
         .verifying_keys_mut_for_testing()
         .insert(vk_id.clone(), corrupted);
-
     let public_inputs = "{}".to_string();
-
     let err = CastZkBallot {
         election_id,
         proof_b64: bundle.proof_b64(),

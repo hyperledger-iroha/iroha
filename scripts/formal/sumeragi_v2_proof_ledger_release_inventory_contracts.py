@@ -806,11 +806,6 @@ def _production_liveness_release_inventory_errors(
             successor_adapter_path.relative_to(repo_root).as_posix(),
             errors,
             "successor parent-binding regression source",
-            expanded_components=(
-                "tests/v2_adapter_activation_context.rs",
-                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs",
-                "v2_adapter_inline_ingress_authentication_tests.rs",
-            ),
         )
         for test_name, expected_sha256 in _SUCCESSOR_PARENT_BINDING_TEST_SHA256.items():
             successor_test = _require_rust_item(
@@ -1737,7 +1732,6 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: formal receipt functions must remain isolated "
                     "in the declared component"
                 )
-            receipt_contract_source_parts = [receipt_source]
             for component_name in expected_receipt_components:
                 component_path = receipt_path.with_name(component_name)
                 if component_path.is_symlink() or not component_path.is_file():
@@ -1758,7 +1752,6 @@ def _production_liveness_release_inventory_errors(
                         f"{error}"
                     )
                     continue
-                receipt_contract_source_parts.append(component_source)
                 component_symbols = tuple(
                     statement.name
                     for statement in component_tree.body
@@ -1775,13 +1768,20 @@ def _production_liveness_release_inventory_errors(
                         f"{component_path}: release receipt component SHA-256 must "
                         f"equal {expected_receipt_component_sha256[component_name]}"
                     )
-            receipt_contract_source = "\n".join(receipt_contract_source_parts)
-            if receipt_contract_source.splitlines().count(
+            gate_evidence_path = receipt_path.with_name(
+                "write_sumeragi_v2_release_receipt_gate_evidence.py"
+            )
+            gate_evidence_source = (
+                gate_evidence_path.read_text(encoding="utf-8")
+                if gate_evidence_path.is_file() and not gate_evidence_path.is_symlink()
+                else ""
+            )
+            if gate_evidence_source.splitlines().count(
                 '                    "state::",'
             ) != 1:
                 errors.append(
-                    f"{receipt_path}: canonical receipt inventory parser must admit "
-                    "the exact state module namespace"
+                    f"{gate_evidence_path}: canonical receipt inventory parser must "
+                    "admit the exact state module namespace"
                 )
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
@@ -1790,9 +1790,9 @@ def _production_liveness_release_inventory_errors(
                 '            f"{module} -- --test-threads=1"\n'
                 "        )"
             )
-            if receipt_contract_source.count(expected_receipt_route) != 1:
+            if gate_evidence_source.count(expected_receipt_route) != 1:
                 errors.append(
-                    f"{receipt_path}: production data-model receipt legs must execute "
+                    f"{gate_evidence_path}: production data-model receipt legs must execute "
                     "against the iroha_data_model library"
                 )
 

@@ -1,15 +1,11 @@
 //! WsvHost state overlay staging and commit/rollback behaviour.
-
+use ivm::{IVM, Memory, MockWorldStateView, PointerType, WsvHost, host::IVMHost, syscalls};
 use std::{
     collections::HashMap,
     fs,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use ivm::{IVM, Memory, MockWorldStateView, PointerType, WsvHost, host::IVMHost, syscalls};
-
 mod common;
-
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -21,13 +17,11 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn state_path_tlv(path: &str) -> Vec<u8> {
     let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
     let payload = norito::to_bytes(&path).expect("encode state path");
     make_tlv(PointerType::NoritoBytes, &payload)
 }
-
 fn decode_state_payload(ptr: u64, vm: &IVM) -> Vec<u8> {
     assert!(
         (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&ptr),
@@ -37,7 +31,6 @@ fn decode_state_payload(ptr: u64, vm: &IVM) -> Vec<u8> {
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
     common::decode_bytes_state_value(tlv.payload)
 }
-
 fn sample_account() -> ivm::mock_wsv::AccountId {
     let _domain: ivm::mock_wsv::DomainId =
         iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -47,7 +40,6 @@ fn sample_account() -> ivm::mock_wsv::AccountId {
             .expect("public key"),
     )
 }
-
 fn set_and_get_program() -> Vec<u8> {
     common::assemble_bytes_state_contract_syscalls(
         &[
@@ -57,7 +49,6 @@ fn set_and_get_program() -> Vec<u8> {
         &["counter"],
     )
 }
-
 #[test]
 fn overlay_stages_and_flushes_on_finish() {
     let p_path = state_path_tlv("counter");
@@ -66,7 +57,6 @@ fn overlay_stages_and_flushes_on_finish() {
         &common::encode_bytes_state_value(b"5"),
     );
     let program = set_and_get_program();
-
     let mut vm = IVM::new(u64::MAX);
     let host =
         WsvHost::new_with_subject(MockWorldStateView::new(), sample_account(), HashMap::new());
@@ -106,7 +96,6 @@ fn overlay_stages_and_flushes_on_finish() {
         assert_eq!(common::decode_bytes_state_value(&stored), b"5");
     }
 }
-
 #[test]
 fn overlay_restores_snapshot_on_rollback() {
     let p_path = state_path_tlv("counter");
@@ -116,10 +105,8 @@ fn overlay_restores_snapshot_on_rollback() {
         &common::encode_bytes_state_value(b"9"),
     );
     let program = set_and_get_program();
-
     let mut wsv = MockWorldStateView::new();
     wsv.sc_set("counter", initial).expect("seed durable state");
-
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
     vm.set_host(host);
@@ -139,7 +126,6 @@ fn overlay_restores_snapshot_on_rollback() {
             .expect("WsvHost");
         host.checkpoint().expect("checkpoint captured")
     };
-
     let p_path_ptr = vm.alloc_input_tlv(&p_path).expect("alloc path");
     let p_val_ptr = vm.alloc_input_tlv(&updated).expect("alloc val");
     vm.set_register(10, p_path_ptr);
@@ -163,7 +149,6 @@ fn overlay_restores_snapshot_on_rollback() {
         assert_eq!(common::decode_bytes_state_value(&stored), b"1");
     }
 }
-
 #[test]
 fn checkpoint_restore_flushes_persisted_wsv_state() {
     let tmp_dir = std::env::temp_dir().join(format!(
@@ -175,7 +160,6 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
     ));
     fs::create_dir_all(&tmp_dir).expect("tmp dir");
     let persist_path = tmp_dir.join("state.json");
-
     let initial = b"1".to_vec();
     let updated = b"9".to_vec();
     let mut wsv =
@@ -183,7 +167,6 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
     wsv.sc_set("counter", initial).expect("seed durable state");
     let mut host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
     let snapshot = host.checkpoint().expect("checkpoint captured");
-
     host.wsv
         .sc_set("counter", updated)
         .expect("persist updated state");
@@ -191,21 +174,17 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
         MockWorldStateView::with_state_store(persist_path.clone()).expect("reload updated state");
     let stored = reloaded.sc_get("counter").expect("updated persisted state");
     assert_eq!(stored, b"9");
-
     assert!(host.restore(snapshot.as_ref()));
     let stored = host.wsv.sc_get("counter").expect("restored host state");
     assert_eq!(stored, b"1");
-
     let reloaded =
         MockWorldStateView::with_state_store(persist_path.clone()).expect("reload restored state");
     let stored = reloaded
         .sc_get("counter")
         .expect("restored persisted state");
     assert_eq!(stored, b"1");
-
     let _ = fs::remove_dir_all(&tmp_dir);
 }
-
 #[test]
 fn overlay_flush_errors_surface_and_reset_overlay() {
     let tmp_dir = std::env::temp_dir().join(format!(
@@ -219,20 +198,17 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     let blocker = tmp_dir.join("blocker");
     fs::write(&blocker, b"block").expect("blocker file");
     let persist_path = blocker.join("state.json");
-
     let wsv =
         MockWorldStateView::with_state_store(persist_path).expect("persisted mock WSV available");
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
     vm.set_host(host);
-
     let p_path = state_path_tlv("counter");
     let p_val = make_tlv(
         PointerType::NoritoBytes,
         &common::encode_bytes_state_value(b"5"),
     );
     let program = set_and_get_program();
-
     {
         let host = vm
             .host_mut_any()
@@ -247,7 +223,6 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     vm.set_register(11, p_val_ptr);
     vm.load_program(&program).expect("load program");
     vm.run().expect("execute overlay program");
-
     {
         let host = vm
             .host_mut_any()
@@ -273,6 +248,5 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
             "finish_tx should clear overlay and become idempotent after errors"
         );
     }
-
     let _ = fs::remove_dir_all(&tmp_dir);
 }

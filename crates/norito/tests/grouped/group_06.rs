@@ -1,7 +1,5 @@
 //! Grouped Norito integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../unsupported_compression_header.rs"]
 mod unsupported_compression_header;
 #[path = "../utf8_gate.rs"]

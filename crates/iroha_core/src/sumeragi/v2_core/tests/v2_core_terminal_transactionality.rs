@@ -4,7 +4,6 @@ fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
     let subject = Subject::repeat(0x7e);
     let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
     let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(31)).unwrap();
-
     let observed = reducer
         .step(Event::QuorumCertificateReceived {
             tag: reducer.current_tag(),
@@ -31,7 +30,6 @@ fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
         reducer.body_state(Round::new(context.height(), 0), subject),
         BodyState::Available
     );
-
     let received = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -48,7 +46,6 @@ fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
         reducer.body_state(Round::new(context.height(), 0), subject),
         BodyState::Available
     );
-
     let timeout = tc_without_high(&context, 0, &[1, 2, 3]);
     let install = only_persist(
         reducer
@@ -75,7 +72,6 @@ fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
         StepDisposition::Ignored(IgnoreReason::IrrelevantView)
     );
 }
-
 #[test]
 fn reducer_error_is_transactional_for_conflicting_prepare_certificates() {
     let context = context();
@@ -102,7 +98,6 @@ fn reducer_error_is_transactional_for_conflicting_prepare_certificates() {
         })
         .expect("highest PrepareQC is persisted");
     acknowledge(&mut reducer, &entry);
-
     let before = reducer.clone();
     let conflicting = qc(
         &context,

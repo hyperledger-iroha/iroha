@@ -1,6 +1,5 @@
 //! `CreateElection` must reject when a matching referendum exists in Plain mode.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -24,7 +23,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanManageParliament;
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
-
 #[test]
 fn create_election_rejects_plain_conflict() {
     let kura = Kura::blank_kura_for_testing();
@@ -38,7 +36,6 @@ fn create_election_rejects_plain_conflict() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     // Seed a Plain referendum with the same id
     stx.world.governance_referenda_mut().insert(
         "ref-conflict".to_string(),
@@ -49,7 +46,6 @@ fn create_election_rejects_plain_conflict() {
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
-
     let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
     let vk_id = VerifyingKeyId::new("halo2/ipa", "vk-conflict");
     let mut vk_record = VerifyingKeyRecord::new(
@@ -80,7 +76,6 @@ fn create_election_rejects_plain_conflict() {
     }
     .execute(&iroha_test_samples::ALICE_ID, &mut stx)
     .expect("register verifying key");
-
     let create = CreateElection {
         election_id: "ref-conflict".to_string(),
         options: 1,

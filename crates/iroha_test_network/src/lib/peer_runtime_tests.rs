@@ -1,9 +1,7 @@
 #[cfg(test)]
 mod post_genesis_liveness_tests {
     use tokio::sync::broadcast;
-
     use super::*;
-
     #[tokio::test]
     async fn detects_none_when_timer_expires() {
         let (_tx, rx) = broadcast::channel(4);
@@ -13,7 +11,6 @@ mod post_genesis_liveness_tests {
                 .is_none()
         );
     }
-
     #[tokio::test]
     async fn detects_killed_event() {
         let (tx, rx) = broadcast::channel(4);
@@ -21,13 +18,11 @@ mod post_genesis_liveness_tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
             let _ = tx.send(PeerLifecycleEvent::Killed);
         });
-
         assert_eq!(
             detect_peer_termination(rx, Duration::from_secs(1)).await,
             Some(TerminationKind::Killed)
         );
     }
-
     #[test]
     fn advances_next_height_for_each_block() {
         let mut block_height = BlockHeight {
@@ -35,22 +30,17 @@ mod post_genesis_liveness_tests {
             non_empty: 1,
         };
         let mut next_height = block_height.total.checked_add(1).expect("setup overflow");
-
         advance_block_height(&mut block_height, &mut next_height, 2, false);
         advance_block_height(&mut block_height, &mut next_height, 3, true);
-
         assert_eq!(block_height.total, 3);
         assert_eq!(block_height.non_empty, 2);
         assert_eq!(next_height, 4);
     }
 }
-
 #[cfg(test)]
 mod start_event_tests {
     use tokio::sync::broadcast;
-
     use super::*;
-
     #[tokio::test]
     async fn waits_until_server_started_event() {
         let (tx, rx) = broadcast::channel(4);
@@ -59,11 +49,9 @@ mod start_event_tests {
             let _ = tx.send(PeerLifecycleEvent::BlockApplied { height: 1 });
             let _ = tx.send(PeerLifecycleEvent::ServerStarted);
         });
-
         let event = wait_for_start_event(rx).await;
         assert!(matches!(event, Some(PeerLifecycleEvent::ServerStarted)));
     }
-
     #[test]
     fn storage_fallback_requires_bootstrap_grace_running_and_block_1() {
         let grace = START_CHECKED_STORAGE_FALLBACK_GRACE;
@@ -83,7 +71,6 @@ mod start_event_tests {
             true, grace, true, false
         ));
     }
-
     #[test]
     fn storage_fallback_allows_ready_bootstrap_peer() {
         assert!(start_checked_storage_fallback_ready(
@@ -94,13 +81,10 @@ mod start_event_tests {
         ));
     }
 }
-
 #[cfg(test)]
 mod diagnostics_tests {
     use tempfile::tempdir;
-
     use super::*;
-
     #[test]
     fn snapshot_dir_entries_are_sorted_and_truncated() {
         let dir = tempdir().expect("tempdir");
@@ -117,13 +101,11 @@ mod diagnostics_tests {
             "should include truncation marker"
         );
     }
-
     #[test]
     fn snapshot_snippet_keeps_short_strings_intact() {
         let message = "ok";
         assert_eq!(snapshot_snippet(message), message);
     }
-
     #[test]
     fn snapshot_snippet_truncates_and_marks_long_messages() {
         let message = "a".repeat(SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS + 5);
@@ -137,7 +119,6 @@ mod diagnostics_tests {
             "snippet should mark truncation with an ellipsis"
         );
     }
-
     #[test]
     fn storage_snapshot_detects_existing_pipeline_entries() {
         let dir = tempdir().expect("tempdir");
@@ -153,7 +134,6 @@ mod diagnostics_tests {
             vec![0u8; PIPELINE_INDEX_ENTRY_SIZE_U64 as usize],
         )
         .expect("pipeline index file");
-
         let snapshot = PeerStorageSnapshot::capture(storage.clone(), true);
         assert!(snapshot.store_exists);
         assert!(snapshot.has_block_1_artifact);
@@ -166,18 +146,14 @@ mod diagnostics_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod shutdown_tests {
     use std::process::Stdio;
-
     use tempfile::tempdir;
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, duplex};
     use tokio::process::Command;
-
     use super::*;
-
     #[cfg(target_family = "unix")]
     #[tokio::test]
     async fn shutdown_prefers_sigterm_before_sigquit() {
@@ -190,7 +166,6 @@ mod shutdown_tests {
         cmd.env("SIGNAL_LOG", &signal_log);
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         let child = cmd.spawn().expect("spawn signal trapper");
-
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
         let (_fatal_tx, fatal_rx) = watch::channel(false);
@@ -205,13 +180,11 @@ mod shutdown_tests {
             stderr_log_ready: Arc::new(Notify::new()),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
-
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _status = peer_exit
             .shutdown_or_kill()
             .await
             .expect("shutdown should complete");
-
         let log = std::fs::read_to_string(&signal_log).expect("read signal log");
         assert!(
             log.contains("SIGTERM"),
@@ -222,14 +195,12 @@ mod shutdown_tests {
             "SIGQUIT should not be used for a responsive shutdown, log: {log:?}"
         );
     }
-
     #[tokio::test]
     async fn shutdown_treats_already_exited_child_as_graceful_completion() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("exit 0");
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         let child = cmd.spawn().expect("spawn short-lived child");
-
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
         let (_fatal_tx, fatal_rx) = watch::channel(false);
@@ -244,26 +215,22 @@ mod shutdown_tests {
             stderr_log_ready: Arc::new(Notify::new()),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
-
         tokio::time::sleep(Duration::from_millis(50)).await;
         let status = peer_exit
             .shutdown_or_kill()
             .await
             .expect("already-exited child should be handled cleanly");
-
         assert!(
             status.success(),
             "expected successful exit status, got {status:?}"
         );
     }
-
     #[tokio::test]
     async fn monitor_handles_shutdown_race_after_child_already_exited() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("exit 0");
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         let child = cmd.spawn().expect("spawn short-lived child");
-
         let (events, _rx) = broadcast::channel(4);
         let (block_height, _rx) = watch::channel(None);
         let (_fatal_tx, fatal_rx) = watch::channel(false);
@@ -279,7 +246,6 @@ mod shutdown_tests {
             stderr_log_ready: Arc::clone(&stderr_log_ready),
             stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
         };
-
         tokio::time::sleep(Duration::from_millis(50)).await;
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -289,13 +255,11 @@ mod shutdown_tests {
         shutdown_tx
             .send(())
             .expect("shutdown signal should be delivered");
-
         tokio::time::timeout(Duration::from_secs(1), peer_exit.monitor(shutdown_rx))
             .await
             .expect("peer monitor should complete")
             .expect("already-exited child should be treated as graceful during shutdown race");
     }
-
     #[tokio::test]
     async fn log_drain_exits_on_shutdown_notify() {
         let dir = tempdir().expect("tempdir");
@@ -313,23 +277,19 @@ mod shutdown_tests {
             None,
             "stdout",
         ));
-
         writer.write_all(b"hello\n").await.expect("write line");
         writer.flush().await.expect("flush");
         is_running.store(false, Ordering::Relaxed);
         let _ = fatal_tx.send(true);
-
         tokio::time::timeout(Duration::from_secs(1), handle)
             .await
             .expect("log task should exit")
             .expect("log task should not panic");
     }
 }
-
 #[cfg(test)]
 mod sora_profile_tests {
     use super::*;
-
     #[test]
     fn sora_profile_detection_defaults_parse_with_bls_keys() {
         let defaults = sora_profile_detection_defaults();
@@ -354,7 +314,6 @@ mod sora_profile_tests {
         iroha_crypto::bls_normal_pop_verify(&myself_pk, pop)
             .expect("sora profile default PoP should verify");
     }
-
     #[test]
     fn sora_profile_detection_overrides_streaming_identity_keys() {
         let mut streaming = Table::new();
@@ -368,7 +327,6 @@ mod sora_profile_tests {
         );
         let mut layer = Table::new();
         layer.insert("streaming".into(), Value::Table(streaming));
-
         let merged = merged_sora_profile_detection_config(&[layer]);
         let config =
             iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(merged))
@@ -378,7 +336,6 @@ mod sora_profile_tests {
             iroha_crypto::Algorithm::Ed25519
         );
     }
-
     #[test]
     fn sora_profile_detection_pop_survives_trusted_peers_pop_override() {
         let other =
@@ -386,7 +343,6 @@ mod sora_profile_tests {
         let other_pop =
             iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("BLS PoP generation");
         let other_pk = other.public_key().to_string();
-
         let mut pop_entry = Table::new();
         pop_entry.insert("public_key".into(), Value::String(other_pk.clone()));
         pop_entry.insert(
@@ -398,7 +354,6 @@ mod sora_profile_tests {
             "trusted_peers_pop".into(),
             Value::Array(vec![Value::Table(pop_entry)]),
         );
-
         let merged = merged_sora_profile_detection_config(&[layer]);
         let entries = merged
             .get("trusted_peers_pop")
@@ -422,23 +377,18 @@ mod sora_profile_tests {
         assert!(has_default, "sora profile PoP should be retained");
         assert!(has_other, "caller-supplied PoP should be retained");
     }
-
     #[test]
     fn sora_profile_detection_is_false_for_defaults() {
         assert!(!config_requires_sora_profile(&[Table::new()]));
     }
-
     #[test]
     fn sora_profile_detection_allows_enabled_nexus_without_overrides() {
         let mut nexus = toml::map::Map::new();
         nexus.insert("enabled".into(), toml::Value::Boolean(true));
-
         let mut table = Table::new();
         table.insert("nexus".into(), toml::Value::Table(nexus));
-
         assert!(!config_requires_sora_profile(&[table]));
     }
-
     #[test]
     fn sora_profile_detection_flags_nexus_lane_overrides() {
         let mut lane = toml::map::Map::new();
@@ -450,16 +400,13 @@ mod sora_profile_tests {
             toml::Value::String("262144".into()),
         );
         lane.insert("metadata".into(), toml::Value::Table(metadata));
-
         let mut fusion = toml::map::Map::new();
         fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
         fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
-
         let mut audit = toml::map::Map::new();
         audit.insert("sample_size".into(), toml::Value::Integer(1));
         audit.insert("window_count".into(), toml::Value::Integer(1));
         audit.insert("interval_ms".into(), toml::Value::Integer(60_000));
-
         let mut da = toml::map::Map::new();
         da.insert("q_in_slot_total".into(), toml::Value::Integer(1));
         da.insert("q_in_slot_per_ds_min".into(), toml::Value::Integer(1));
@@ -468,7 +415,6 @@ mod sora_profile_tests {
         da.insert("threshold_base".into(), toml::Value::Integer(1));
         da.insert("per_attester_shards".into(), toml::Value::Integer(1));
         da.insert("audit".into(), toml::Value::Table(audit));
-
         let mut nexus = toml::map::Map::new();
         nexus.insert("enabled".into(), toml::Value::Boolean(true));
         nexus.insert("lane_count".into(), toml::Value::Integer(1));
@@ -478,13 +424,10 @@ mod sora_profile_tests {
         );
         nexus.insert("fusion".into(), toml::Value::Table(fusion));
         nexus.insert("da".into(), toml::Value::Table(da));
-
         let mut table = Table::new();
         table.insert("nexus".into(), toml::Value::Table(nexus));
-
         assert!(config_requires_sora_profile(&[table]));
     }
-
     #[test]
     fn sora_profile_detection_ignores_default_routing_policy() {
         let mut policy = toml::map::Map::new();
@@ -493,16 +436,12 @@ mod sora_profile_tests {
             "default_dataspace".into(),
             toml::Value::String("universal".into()),
         );
-
         let mut nexus = toml::map::Map::new();
         nexus.insert("routing_policy".into(), toml::Value::Table(policy));
-
         let mut table = Table::new();
         table.insert("nexus".into(), toml::Value::Table(nexus));
-
         assert!(!config_requires_sora_profile(&[table]));
     }
-
     #[test]
     fn raw_nexus_overrides_ignores_default_routing_policy() {
         let mut policy = toml::map::Map::new();
@@ -518,23 +457,17 @@ mod sora_profile_tests {
                 iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
             ),
         );
-
         let mut nexus = toml::map::Map::new();
         nexus.insert("routing_policy".into(), toml::Value::Table(policy));
-
         let mut table = Table::new();
         table.insert("nexus".into(), toml::Value::Table(nexus));
-
         assert!(!raw_nexus_overrides(&table));
     }
 }
-
 #[cfg(test)]
 mod retry_backoff_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
-
     #[tokio::test]
     async fn retry_with_backoff_for_succeeds_before_timeout() {
         let attempts = AtomicUsize::new(0);
@@ -550,10 +483,8 @@ mod retry_backoff_tests {
         })
         .await
         .expect("should not time out");
-
         assert!(result >= 2);
     }
-
     #[tokio::test]
     async fn retry_with_backoff_for_times_out() {
         let attempts = AtomicUsize::new(0);
@@ -562,7 +493,6 @@ mod retry_backoff_tests {
             async move { Err::<(), ()>(()) }
         })
         .await;
-
         assert!(result.is_err());
         assert!(attempts.load(Ordering::Relaxed) > 0);
     }

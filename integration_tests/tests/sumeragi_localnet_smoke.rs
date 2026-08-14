@@ -1,18 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bounded-latency localnet smoke and throughput tests for permissioned and `NPoS` Sumeragi.
-
-use std::{
-    cmp::Ordering,
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use blake3::Hasher as Blake3Hasher;
 use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{
@@ -83,13 +70,22 @@ use norito::json::{Map, Value};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reqwest::Client as HttpClient;
+use std::{
+    cmp::Ordering,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tempfile::tempdir;
 use tokio::{sync::Mutex, task, time::sleep};
 use toml::{Table, Value as TomlValue};
-
 #[path = "sumeragi_localnet_smoke/idle_chain.rs"]
 mod idle_chain;
-
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -194,7 +190,6 @@ const ROUTE_VALIDATOR_STAKE: u32 = 2_000;
 const ROUTE_VALIDATOR_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const ROUTE_STAKE_ASSET_NAME: &str = "Route Stake";
 const ROUTE_FEE_ASSET_NAME: &str = "Route Fee";
-
 #[allow(unsafe_code)]
 fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
     // Safety: tests serialize env mutation with LOCALNET_SMOKE_GUARD.
@@ -202,7 +197,6 @@ fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
         std::env::set_var(key, value);
     }
 }
-
 #[allow(unsafe_code)]
 fn remove_env_var(key: &str) {
     // Safety: tests serialize env mutation with LOCALNET_SMOKE_GUARD.
@@ -210,7 +204,6 @@ fn remove_env_var(key: &str) {
         std::env::remove_var(key);
     }
 }
-
 fn env_or_default(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
@@ -218,13 +211,11 @@ fn env_or_default(key: &str, default: u64) -> u64 {
         .filter(|value| *value > 0)
         .unwrap_or(default)
 }
-
 fn env_or_default_usize(key: &str, default: usize) -> usize {
     let default_u64 = u64::try_from(default).unwrap_or(u64::MAX);
     let value = env_or_default(key, default_u64);
     usize::try_from(value).unwrap_or(usize::MAX)
 }
-
 fn env_or_default_f64(key: &str, default: f64) -> f64 {
     std::env::var(key)
         .ok()
@@ -232,7 +223,6 @@ fn env_or_default_f64(key: &str, default: f64) -> f64 {
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(default)
 }
-
 fn realistic_max_avg_secs_per_block(rotating_fault: bool) -> f64 {
     let default = if rotating_fault {
         REALISTIC_30TPS_ROTATING_FAULT_MAX_AVG_SECS_PER_BLOCK
@@ -241,7 +231,6 @@ fn realistic_max_avg_secs_per_block(rotating_fault: bool) -> f64 {
     };
     env_or_default_f64(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV, default)
 }
-
 fn realistic_default_block_max_txs(rotating_fault: bool) -> u64 {
     if rotating_fault {
         REALISTIC_30TPS_ROTATING_FAULT_BLOCK_MAX_TXS
@@ -249,7 +238,6 @@ fn realistic_default_block_max_txs(rotating_fault: bool) -> u64 {
         REALISTIC_30TPS_BLOCK_MAX_TXS
     }
 }
-
 fn realistic_default_queue_soft_limit(rotating_fault: bool) -> u64 {
     if rotating_fault {
         REALISTIC_30TPS_ROTATING_FAULT_QUEUE_SOFT_LIMIT
@@ -257,7 +245,6 @@ fn realistic_default_queue_soft_limit(rotating_fault: bool) -> u64 {
         REALISTIC_30TPS_QUEUE_SOFT_LIMIT
     }
 }
-
 fn realistic_30tps_snapshot_settings(rotating_fault: bool) -> (&'static str, u64) {
     if rotating_fault {
         (
@@ -268,7 +255,6 @@ fn realistic_30tps_snapshot_settings(rotating_fault: bool) -> (&'static str, u64
         ("disabled", 0)
     }
 }
-
 async fn submit_route_probe_with_retry(
     client: &iroha::client::Client,
     message: &str,
@@ -292,7 +278,6 @@ async fn submit_route_probe_with_retry(
         }
     }
 }
-
 fn route_lane_validator_account(index: usize) -> AccountId {
     let key_pair = checked_localnet_smoke_keypair(
         format!("integration_tests::sumeragi_localnet_smoke::route-validator::{index}")
@@ -301,7 +286,6 @@ fn route_lane_validator_account(index: usize) -> AccountId {
     );
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn route_bootstrap_gas_account_id() -> AccountId {
     let key_pair = checked_localnet_smoke_keypair(
         b"integration_tests::sumeragi_localnet_smoke::route-bootstrap-gas".to_vec(),
@@ -309,25 +293,21 @@ fn route_bootstrap_gas_account_id() -> AccountId {
     );
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")
 }
-
 fn route_stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn route_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
 }
-
 fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_count = std::num::NonZeroU32::new(3).expect("lane count");
     let lanes = vec![
@@ -357,7 +337,6 @@ fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-
 fn route_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
 ) -> Vec<Vec<InstructionBox>> {
@@ -416,7 +395,6 @@ fn route_multilane_genesis_post_topology_transactions(
         .into(),
     ];
     let mut validator_tx = Vec::with_capacity(topology.len() * 2);
-
     for (index, peer_id) in topology.iter().enumerate() {
         let validator_id = route_lane_validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -450,16 +428,13 @@ fn route_multilane_genesis_post_topology_transactions(
                 .push(ActivatePublicLaneValidator::new(lane_id, validator_id.clone()).into());
         }
     }
-
     vec![bootstrap_tx, validator_tx]
 }
-
 fn queue_progress_timeout() -> Duration {
     let default_secs = SOAK_QUEUE_PROGRESS_TIMEOUT.as_secs();
     let secs = env_or_default(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV, default_secs);
     Duration::from_secs(secs)
 }
-
 fn fail_on_sandbox_skip() -> bool {
     let Ok(raw) = std::env::var(FAIL_ON_SANDBOX_SKIP_ENV) else {
         return false;
@@ -469,7 +444,6 @@ fn fail_on_sandbox_skip() -> bool {
         "1" | "true" | "yes" | "on"
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn submit_logs(
     start_idx: u64,
@@ -528,25 +502,21 @@ async fn submit_logs(
     }
     Ok(submit_start.elapsed())
 }
-
 #[derive(Clone)]
 struct TransferLoadAccount {
     id: AccountId,
     key_pair: KeyPair,
 }
-
 #[derive(Clone)]
 struct TransferSubmitAccount {
     id: AccountId,
     clients: Vec<iroha::client::Client>,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Realistic30TpsLoadKind {
     Transfer,
     RamLfeEmail,
 }
-
 impl Realistic30TpsLoadKind {
     fn from_env() -> Result<Self> {
         let Some(raw) = std::env::var("IROHA_REALISTIC_30TPS_LOAD_KIND")
@@ -565,7 +535,6 @@ impl Realistic30TpsLoadKind {
             ),
         }
     }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Transfer => "transfer",
@@ -573,20 +542,17 @@ impl Realistic30TpsLoadKind {
         }
     }
 }
-
 #[derive(Clone)]
 struct RamLfeEmailLoadAccount {
     id: AccountId,
     uaid: UniversalAccountId,
 }
-
 #[derive(Clone)]
 struct RamLfeEmailSubmitAccount {
     id: AccountId,
     clients: Vec<iroha::client::Client>,
     uaid: UniversalAccountId,
 }
-
 #[derive(Clone)]
 struct RamLfeEmailPolicyContext {
     policy_id: IdentifierPolicyId,
@@ -598,18 +564,15 @@ struct RamLfeEmailPolicyContext {
     backend: RamLfeBackend,
     verification_mode: RamLfeVerificationMode,
 }
-
 fn realistic_transfer_domain_id() -> DomainId {
     DomainId::try_new("realistic", "universal").expect("realistic transfer domain")
 }
-
 fn realistic_transfer_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         realistic_transfer_domain_id(),
         "transfer_coin".parse().expect("transfer asset name"),
     )
 }
-
 fn realistic_transfer_accounts(account_count: usize, rng_seed: u64) -> Vec<TransferLoadAccount> {
     (0..account_count)
         .map(|index| {
@@ -622,7 +585,6 @@ fn realistic_transfer_accounts(account_count: usize, rng_seed: u64) -> Vec<Trans
         })
         .collect()
 }
-
 fn realistic_npos_fee_funding_instruction_chunks(
     accounts: &[TransferLoadAccount],
 ) -> Vec<Vec<InstructionBox>> {
@@ -643,7 +605,6 @@ fn realistic_npos_fee_funding_instruction_chunks(
         })
         .collect()
 }
-
 async fn fund_realistic_npos_transfer_fee_accounts(
     network: &Network,
     accounts: &[TransferLoadAccount],
@@ -651,7 +612,6 @@ async fn fund_realistic_npos_transfer_fee_accounts(
     if accounts.is_empty() {
         return Ok(());
     }
-
     let before_statuses = collect_statuses(network, STATUS_POLL_TIMEOUT)
         .await
         .wrap_err("failed to collect baseline status before NPoS fee funding")?;
@@ -665,7 +625,6 @@ async fn fund_realistic_npos_transfer_fee_accounts(
         u64::try_from(instruction_chunks.len()).expect("funding chunk count fits u64"),
     );
     let client = network.client();
-
     task::spawn_blocking(move || -> Result<()> {
         for (chunk_index, instructions) in instruction_chunks.into_iter().enumerate() {
             client
@@ -683,27 +642,22 @@ async fn fund_realistic_npos_transfer_fee_accounts(
     })
     .await
     .wrap_err("NPoS fee funding task join failed")??;
-
     wait_for_min_txs_approved(network, target_approved, Duration::from_secs(60)).await?;
     Ok(())
 }
-
 fn realistic_ram_lfe_email_policy_id() -> IdentifierPolicyId {
     REALISTIC_30TPS_RAM_LFE_EMAIL_POLICY_ID
         .parse()
         .expect("realistic RAM-LFE email policy id")
 }
-
 fn realistic_ram_lfe_email_program_id() -> RamLfeProgramId {
     REALISTIC_30TPS_RAM_LFE_EMAIL_PROGRAM_ID
         .parse()
         .expect("realistic RAM-LFE email program id")
 }
-
 fn realistic_ram_lfe_email_bfv_parameters() -> BfvParameters {
     ram_lfe_bfv_parameters_v1()
 }
-
 fn realistic_ram_lfe_email_policy_bundle(
     owner: &AccountId,
     resolver: &KeyPair,
@@ -760,7 +714,6 @@ fn realistic_ram_lfe_email_policy_bundle(
     .with_note("realistic RAM-LFE email identifier policy");
     (policy, program_policy)
 }
-
 fn realistic_ram_lfe_email_policy_context(
     policy_id: IdentifierPolicyId,
     program_policy: &RamLfeProgramPolicy,
@@ -781,7 +734,6 @@ fn realistic_ram_lfe_email_policy_context(
         verification_mode: program_policy.verification_mode,
     })
 }
-
 fn realistic_ram_lfe_email_accounts(
     account_count: usize,
     rng_seed: u64,
@@ -802,7 +754,6 @@ fn realistic_ram_lfe_email_accounts(
         })
         .collect()
 }
-
 fn realistic_transfer_route(
     index: u64,
     account_count: usize,
@@ -822,7 +773,6 @@ fn realistic_transfer_route(
     let amount = 1 + rng.next_u64() % max_amount.max(1);
     (source, destination, amount)
 }
-
 fn expected_realistic_transfer_balances(
     account_count: usize,
     tx_count: u64,
@@ -843,7 +793,6 @@ fn expected_realistic_transfer_balances(
         .map(|balance| u64::try_from(balance).expect("transfer load balance should stay positive"))
         .collect()
 }
-
 fn realistic_ram_lfe_email_account_index(index: u64, account_count: usize, rng_seed: u64) -> usize {
     debug_assert!(account_count > 0);
     let mut rng = ChaCha8Rng::seed_from_u64(
@@ -851,7 +800,6 @@ fn realistic_ram_lfe_email_account_index(index: u64, account_count: usize, rng_s
     );
     usize::try_from(rng.next_u64() % account_count as u64).unwrap_or_default()
 }
-
 fn realistic_ram_lfe_email_address(index: u64, rng_seed: u64) -> String {
     const DOMAINS: [&str; 8] = [
         "retail.example",
@@ -875,7 +823,6 @@ fn realistic_ram_lfe_email_address(index: u64, rng_seed: u64) -> String {
         rng.next_u64() as u32,
     )
 }
-
 fn realistic_ram_lfe_email_receipt(
     context: &RamLfeEmailPolicyContext,
     resolver: &KeyPair,
@@ -941,7 +888,6 @@ fn realistic_ram_lfe_email_receipt(
         attestation: RamLfeReceiptAttestation::Signed(signature),
     }
 }
-
 fn expected_realistic_ram_lfe_email_claim_counts(
     account_count: usize,
     tx_count: u64,
@@ -954,7 +900,6 @@ fn expected_realistic_ram_lfe_email_claim_counts(
     }
     counts
 }
-
 fn realistic_load_metadata(index: u64) -> Metadata {
     let mut metadata = Metadata::default();
     metadata.insert(
@@ -963,7 +908,6 @@ fn realistic_load_metadata(index: u64) -> Metadata {
     );
     metadata
 }
-
 fn realistic_submit_error_is_retryable_message(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("connection refused")
@@ -971,7 +915,6 @@ fn realistic_submit_error_is_retryable_message(message: &str) -> bool {
         || message.contains("connection closed")
         || message.contains("tcp connect")
 }
-
 fn realistic_submit_error_is_already_known_message(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("already_enqueued")
@@ -982,11 +925,9 @@ fn realistic_submit_error_is_already_known_message(message: &str) -> bool {
         || message.contains("already in blockchain")
         || message.contains("already in the blockchain")
 }
-
 fn realistic_submit_accept_quorum(client_count: usize, tolerated_faults: usize) -> usize {
     tolerated_faults.saturating_add(1).min(client_count).max(1)
 }
-
 fn submit_prepared_to_accept_quorum(
     clients: &[iroha::client::Client],
     payload: &iroha::client::PreparedTransactionPayload,
@@ -999,7 +940,6 @@ fn submit_prepared_to_accept_quorum(
     let required_accepts = required_accepts.clamp(1, clients.len());
     let mut accepts = 0_usize;
     let mut errors = Vec::new();
-
     for client in clients {
         match client.submit_prepared_transaction_payload(payload) {
             Ok(_) => accepts = accepts.saturating_add(1),
@@ -1012,18 +952,15 @@ fn submit_prepared_to_accept_quorum(
                 }
             }
         }
-
         if accepts >= required_accepts {
             return Ok(());
         }
     }
-
     bail!(
         "prepared transaction {:?} accepted by {accepts}/{required_accepts} required Torii endpoints; errors={errors:?}",
         payload.hash()
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn submit_ram_lfe_emails_paced(
     tx_count: u64,
@@ -1046,7 +983,6 @@ async fn submit_ram_lfe_emails_paced(
     let nanos_per_tx = 1_000_000_000_u64 / target_tps.max(1);
     let submit_start = Instant::now();
     let mut pending: FuturesUnordered<task::JoinHandle<Result<()>>> = FuturesUnordered::new();
-
     for index in 0..tx_count {
         let target_elapsed = Duration::from_nanos(nanos_per_tx.saturating_mul(index));
         if let Some(target_instant) = submit_start.checked_add(target_elapsed) {
@@ -1055,7 +991,6 @@ async fn submit_ram_lfe_emails_paced(
                 sleep(target_instant.duration_since(now)).await;
             }
         }
-
         let account_index = realistic_ram_lfe_email_account_index(index, account_count, rng_seed);
         let submit_account = submit_accounts[account_index].clone();
         let policy_context = policy_context.clone();
@@ -1095,7 +1030,6 @@ async fn submit_ram_lfe_emails_paced(
             submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
             Ok(())
         }));
-
         if pending.len() >= submit_parallelism {
             let result = pending
                 .next()
@@ -1104,13 +1038,11 @@ async fn submit_ram_lfe_emails_paced(
             result.wrap_err("paced RAM-LFE email task join failed")??;
         }
     }
-
     while let Some(result) = pending.next().await {
         result.wrap_err("paced RAM-LFE email task join failed")??;
     }
     Ok(submit_start.elapsed())
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn submit_transfers_paced(
     tx_count: u64,
@@ -1133,7 +1065,6 @@ async fn submit_transfers_paced(
     let nanos_per_tx = 1_000_000_000_u64 / target_tps.max(1);
     let submit_start = Instant::now();
     let mut pending: FuturesUnordered<task::JoinHandle<Result<()>>> = FuturesUnordered::new();
-
     for index in 0..tx_count {
         let target_elapsed = Duration::from_nanos(nanos_per_tx.saturating_mul(index));
         if let Some(target_instant) = submit_start.checked_add(target_elapsed) {
@@ -1142,7 +1073,6 @@ async fn submit_transfers_paced(
                 sleep(target_instant.duration_since(now)).await;
             }
         }
-
         let (source, destination, amount) =
             realistic_transfer_route(index, account_count, transfer_max_amount, rng_seed);
         let source_account = submit_accounts[source].clone();
@@ -1178,7 +1108,6 @@ async fn submit_transfers_paced(
             submitted_counter.fetch_add(1, AtomicOrdering::Relaxed);
             Ok(())
         }));
-
         if pending.len() >= submit_parallelism {
             let result = pending
                 .next()
@@ -1187,13 +1116,11 @@ async fn submit_transfers_paced(
             result.wrap_err("paced transfer task join failed")??;
         }
     }
-
     while let Some(result) = pending.next().await {
         result.wrap_err("paced transfer task join failed")??;
     }
     Ok(submit_start.elapsed())
 }
-
 fn verify_realistic_transfer_balances(
     client: &iroha::client::Client,
     asset_definition_id: &AssetDefinitionId,
@@ -1225,7 +1152,6 @@ fn verify_realistic_transfer_balances(
     }
     Ok(())
 }
-
 fn verify_realistic_ram_lfe_email_claim_counts(
     client: &iroha::client::Client,
     accounts: &[RamLfeEmailLoadAccount],
@@ -1251,7 +1177,6 @@ fn verify_realistic_ram_lfe_email_claim_counts(
     }
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 4-peer localnet regression (30 TPS for 2 hours)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
@@ -1263,7 +1188,6 @@ async fn permissioned_localnet_realistic_30tps_2h() -> Result<()> {
     )
     .await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 4-peer localnet regression (30 TPS for 2 hours, NPoS)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
@@ -1275,7 +1199,6 @@ async fn npos_localnet_realistic_30tps_2h() -> Result<()> {
     )
     .await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 4-peer NPoS localnet regression (30 TPS for 2 hours, rotating Byzantine peer)"]
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
@@ -1287,13 +1210,11 @@ async fn npos_localnet_realistic_30tps_2h_rotating_byzantine_peer() -> Result<()
     )
     .await
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Realistic30TpsConsensusMode {
     Permissioned,
     Npos,
 }
-
 impl Realistic30TpsConsensusMode {
     fn select_in_genesis(self, builder: NetworkBuilder) -> NetworkBuilder {
         match self {
@@ -1301,34 +1222,28 @@ impl Realistic30TpsConsensusMode {
             Self::Npos => builder.with_npos_consensus(),
         }
     }
-
     fn is_npos(self) -> bool {
         matches!(self, Self::Npos)
     }
 }
-
 #[derive(Clone, Debug)]
 struct ConfigLayer(Table);
-
 impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Realistic30TpsFaultKind {
     ConflictingReady,
     DuplicateInits,
     DropValidatorChunks,
 }
-
 const REALISTIC_30TPS_DEFAULT_FAULT_KINDS: [Realistic30TpsFaultKind; 3] = [
     Realistic30TpsFaultKind::ConflictingReady,
     Realistic30TpsFaultKind::DuplicateInits,
     Realistic30TpsFaultKind::DropValidatorChunks,
 ];
-
 impl Realistic30TpsFaultKind {
     fn as_str(self) -> &'static str {
         match self {
@@ -1337,7 +1252,6 @@ impl Realistic30TpsFaultKind {
             Self::DropValidatorChunks => "drop-validator-chunks",
         }
     }
-
     fn parse(raw: &str) -> Option<Self> {
         match raw.trim() {
             "conflicting-ready"
@@ -1355,7 +1269,6 @@ impl Realistic30TpsFaultKind {
             _ => None,
         }
     }
-
     fn layer(self, peer_count: usize) -> ConfigLayer {
         let mut layer = Table::new();
         let mut rbc = Table::new();
@@ -1384,17 +1297,14 @@ impl Realistic30TpsFaultKind {
         ConfigLayer(layer)
     }
 }
-
 fn default_realistic_30tps_fault_kinds() -> Vec<Realistic30TpsFaultKind> {
     REALISTIC_30TPS_DEFAULT_FAULT_KINDS.to_vec()
 }
-
 fn parse_realistic_30tps_fault_kinds(raw: &str) -> Result<Vec<Realistic30TpsFaultKind>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
         return Ok(default_realistic_30tps_fault_kinds());
     }
-
     let mut kinds = Vec::new();
     for name in trimmed
         .split(',')
@@ -1416,7 +1326,6 @@ fn parse_realistic_30tps_fault_kinds(raw: &str) -> Result<Vec<Realistic30TpsFaul
     );
     Ok(kinds)
 }
-
 fn realistic_30tps_fault_kinds_from_env() -> Result<Vec<Realistic30TpsFaultKind>> {
     match std::env::var(REALISTIC_30TPS_FAULT_KINDS_ENV) {
         Ok(raw) => parse_realistic_30tps_fault_kinds(&raw),
@@ -1426,7 +1335,6 @@ fn realistic_30tps_fault_kinds_from_env() -> Result<Vec<Realistic30TpsFaultKind>
         )),
     }
 }
-
 fn realistic_30tps_fault_kind_at(
     fault_kinds: &[Realistic30TpsFaultKind],
     window_index: usize,
@@ -1435,11 +1343,9 @@ fn realistic_30tps_fault_kind_at(
         .get(window_index % fault_kinds.len().max(1))
         .copied()
 }
-
 fn realistic_30tps_peer_index_at(peer_count: usize, window_index: usize) -> Option<usize> {
     (peer_count > 0).then_some(window_index % peer_count)
 }
-
 fn realistic_30tps_recovery_bound_from_env() -> Result<Option<Duration>> {
     match std::env::var(REALISTIC_30TPS_RECOVERY_BOUND_SECS_ENV) {
         Ok(raw) => {
@@ -1458,7 +1364,6 @@ fn realistic_30tps_recovery_bound_from_env() -> Result<Option<Duration>> {
         )),
     }
 }
-
 fn env_bool(key: &str) -> Result<bool> {
     match std::env::var(key) {
         Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
@@ -1472,7 +1377,6 @@ fn env_bool(key: &str) -> Result<bool> {
         Err(err) => Err(eyre!("failed to read {key}: {err}")),
     }
 }
-
 fn realistic_30tps_convergence_total_bound_from_env(
     recovery_bound: Option<Duration>,
 ) -> Result<Option<Duration>> {
@@ -1493,7 +1397,6 @@ fn realistic_30tps_convergence_total_bound_from_env(
         )),
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Realistic30TpsRotatingFaultConfig {
     rotate_interval: Duration,
@@ -1503,7 +1406,6 @@ struct Realistic30TpsRotatingFaultConfig {
     convergence_total_bound: Option<Duration>,
     fault_kinds: Vec<Realistic30TpsFaultKind>,
 }
-
 impl Realistic30TpsRotatingFaultConfig {
     fn from_env() -> Result<Self> {
         let recovery_bound = realistic_30tps_recovery_bound_from_env()?;
@@ -1532,24 +1434,19 @@ impl Realistic30TpsRotatingFaultConfig {
             fault_kinds: realistic_30tps_fault_kinds_from_env()?,
         })
     }
-
     fn recovery_wait_timeout(&self) -> Duration {
         self.recovery_bound.unwrap_or(self.recovery_timeout)
     }
-
     fn requires_bounded_convergence(&self) -> bool {
         self.strict_rotation_convergence
     }
-
     fn convergence_progress_timeout(&self) -> Duration {
         Duration::from_secs(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS)
     }
-
     fn convergence_total_bound(&self) -> Option<Duration> {
         self.convergence_total_bound
     }
 }
-
 fn realistic_30tps_stall_threshold(
     rotating_fault: Option<&Realistic30TpsRotatingFaultConfig>,
 ) -> Duration {
@@ -1559,14 +1456,11 @@ fn realistic_30tps_stall_threshold(
     {
         return Duration::from_secs(secs);
     }
-
     if let Some(config) = rotating_fault {
         return REALISTIC_30TPS_STALL_THRESHOLD.max(config.rotate_interval.saturating_mul(2));
     }
-
     REALISTIC_30TPS_STALL_THRESHOLD
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Realistic30TpsFaultWindow {
     peer_index: usize,
@@ -1575,7 +1469,6 @@ struct Realistic30TpsFaultWindow {
     started_ms: u64,
     ended_ms: Option<u64>,
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Realistic30TpsSnapshotObservation {
     store_dir: String,
@@ -1586,12 +1479,10 @@ struct Realistic30TpsSnapshotObservation {
     data_modified_ms: Option<u64>,
     errors: Vec<String>,
 }
-
 impl Realistic30TpsSnapshotObservation {
     fn data_present(&self) -> bool {
         self.data_bytes.is_some()
     }
-
     fn bundle_complete(&self) -> bool {
         self.data_bytes.is_some()
             && self.digest_bytes.is_some()
@@ -1599,7 +1490,6 @@ impl Realistic30TpsSnapshotObservation {
             && self.merkle_bytes.is_some()
     }
 }
-
 #[derive(Clone, Debug)]
 struct Realistic30TpsStatusRecoverySample {
     peer_index: usize,
@@ -1616,21 +1506,17 @@ struct Realistic30TpsStatusRecoverySample {
     snapshot_after_shutdown: Realistic30TpsSnapshotObservation,
     snapshot_after_status: Realistic30TpsSnapshotObservation,
 }
-
 impl Realistic30TpsStatusRecoverySample {
     fn total_duration_ms(&self) -> u64 {
         self.ended_ms.saturating_sub(self.restart_started_ms)
     }
-
     fn status_wait_ms(&self) -> u64 {
         self.ended_ms.saturating_sub(self.status_wait_started_ms)
     }
-
     fn recovered_within_bound(&self) -> bool {
         self.recovered && self.status_wait_ms() <= self.bound_ms
     }
 }
-
 fn realistic_30tps_peer_snapshot_observation(
     peer: &iroha_test_network::NetworkPeer,
 ) -> Realistic30TpsSnapshotObservation {
@@ -1659,7 +1545,6 @@ fn realistic_30tps_peer_snapshot_observation(
         errors,
     }
 }
-
 fn realistic_30tps_snapshot_file_metadata(path: &Path) -> (Option<u64>, Option<u64>, Vec<String>) {
     match fs::metadata(path) {
         Ok(metadata) => {
@@ -1674,19 +1559,16 @@ fn realistic_30tps_snapshot_file_metadata(path: &Path) -> (Option<u64>, Option<u
         ),
     }
 }
-
 fn system_time_ms(time: SystemTime) -> Option<u64> {
     time.duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Realistic30TpsCatchUpTarget {
     blocks_non_empty: u64,
     txs_approved: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Realistic30TpsConvergenceSpan {
     min_blocks_non_empty: u64,
@@ -1694,18 +1576,15 @@ struct Realistic30TpsConvergenceSpan {
     min_txs_approved: u64,
     max_txs_approved: u64,
 }
-
 impl Realistic30TpsConvergenceSpan {
     fn block_gap(self) -> u64 {
         self.max_blocks_non_empty
             .saturating_sub(self.min_blocks_non_empty)
     }
-
     fn approved_gap(self) -> u64 {
         self.max_txs_approved.saturating_sub(self.min_txs_approved)
     }
 }
-
 #[derive(Clone, Debug)]
 struct Realistic30TpsCatchUpSample {
     timestamp_ms: u64,
@@ -1716,7 +1595,6 @@ struct Realistic30TpsCatchUpSample {
     healthy_status_error: Option<String>,
     recovering_no_progress_ms: u64,
 }
-
 #[derive(Clone, Debug)]
 struct Realistic30TpsConvergenceWindow {
     healed_peer_index: usize,
@@ -1726,7 +1604,6 @@ struct Realistic30TpsConvergenceWindow {
     start_span: Option<Realistic30TpsConvergenceSpan>,
     end_span: Realistic30TpsConvergenceSpan,
 }
-
 #[derive(Debug)]
 struct Realistic30TpsRotatingFaultController {
     config: Realistic30TpsRotatingFaultConfig,
@@ -1741,7 +1618,6 @@ struct Realistic30TpsRotatingFaultController {
     catch_up_samples: Vec<Realistic30TpsCatchUpSample>,
     convergence_windows: Vec<Realistic30TpsConvergenceWindow>,
 }
-
 impl Realistic30TpsRotatingFaultController {
     fn new(
         network: &Network,
@@ -1765,7 +1641,6 @@ impl Realistic30TpsRotatingFaultController {
             convergence_windows: Vec::new(),
         }
     }
-
     async fn start(&mut self, network: &Network) -> Result<()> {
         ensure!(
             network.peers().len() >= REALISTIC_30TPS_PEERS,
@@ -1782,7 +1657,6 @@ impl Realistic30TpsRotatingFaultController {
         self.next_rotation_at = Instant::now().checked_add(self.config.rotate_interval);
         Ok(())
     }
-
     async fn rotate_if_due(&mut self, network: &Network) -> Result<bool> {
         let Some(next_rotation_at) = self.next_rotation_at else {
             return Ok(false);
@@ -1793,7 +1667,6 @@ impl Realistic30TpsRotatingFaultController {
         self.rotate(network).await?;
         Ok(true)
     }
-
     async fn rotate(&mut self, network: &Network) -> Result<()> {
         if let Some(current_peer) = self.current_peer {
             self.heal_peer(network, current_peer, "heal rotating Byzantine peer", true)
@@ -1807,7 +1680,6 @@ impl Realistic30TpsRotatingFaultController {
         self.next_rotation_at = Instant::now().checked_add(self.config.rotate_interval);
         Ok(())
     }
-
     async fn stop_and_heal(&mut self, network: &Network) -> Result<()> {
         self.next_rotation_at = None;
         if let Some(current_peer) = self.current_peer {
@@ -1863,23 +1735,18 @@ impl Realistic30TpsRotatingFaultController {
         }
         Ok(())
     }
-
     fn fault_windows(&self) -> &[Realistic30TpsFaultWindow] {
         &self.fault_windows
     }
-
     fn drain_status_recovery_samples(&mut self) -> Vec<Realistic30TpsStatusRecoverySample> {
         self.status_recovery_samples.drain(..).collect()
     }
-
     fn drain_catch_up_samples(&mut self) -> Vec<Realistic30TpsCatchUpSample> {
         self.catch_up_samples.drain(..).collect()
     }
-
     fn convergence_windows(&self) -> &[Realistic30TpsConvergenceWindow] {
         &self.convergence_windows
     }
-
     fn current_fault_for_peer(&self, peer_index: usize) -> &'static str {
         self.fault_windows
             .iter()
@@ -1887,14 +1754,12 @@ impl Realistic30TpsRotatingFaultController {
             .find(|window| window.peer_index == peer_index && window.ended_ms.is_none())
             .map_or("unknown", |window| window.fault)
     }
-
     fn next_fault_kind(&mut self) -> Realistic30TpsFaultKind {
         let kind = realistic_30tps_fault_kind_at(&self.config.fault_kinds, self.next_fault_index)
             .expect("fault kind list checked before rotation starts");
         self.next_fault_index = self.next_fault_index.saturating_add(1);
         kind
     }
-
     async fn poison_peer(
         &mut self,
         network: &Network,
@@ -1930,7 +1795,6 @@ impl Realistic30TpsRotatingFaultController {
         self.current_peer = Some(peer_index);
         Ok(())
     }
-
     async fn heal_peer(
         &mut self,
         network: &Network,
@@ -1997,7 +1861,6 @@ impl Realistic30TpsRotatingFaultController {
         Ok(())
     }
 }
-
 fn sync_realistic_fault_artifacts(
     controller: &mut Realistic30TpsRotatingFaultController,
     artifacts: &mut ThroughputArtifacts,
@@ -2018,7 +1881,6 @@ fn sync_realistic_fault_artifacts(
     }
     artifacts.fault_windows = controller.fault_windows().to_vec();
 }
-
 async fn restart_realistic_30tps_peer(
     network: &Network,
     peer_index: usize,
@@ -2094,7 +1956,6 @@ async fn restart_realistic_30tps_peer(
     }
     Ok(())
 }
-
 async fn wait_for_realistic_peer_status(
     peer_index: usize,
     peer: &iroha_test_network::NetworkPeer,
@@ -2187,7 +2048,6 @@ async fn wait_for_realistic_peer_status(
         }
     }
 }
-
 async fn realistic_30tps_catch_up_target(
     network: &Network,
     recovering_peer_index: usize,
@@ -2216,7 +2076,6 @@ async fn realistic_30tps_catch_up_target(
     .await?;
     realistic_30tps_catch_up_target_from_statuses(&statuses)
 }
-
 fn realistic_30tps_catch_up_target_from_statuses(
     statuses: &[iroha::client::Status],
 ) -> Result<Realistic30TpsCatchUpTarget> {
@@ -2237,7 +2096,6 @@ fn realistic_30tps_catch_up_target_from_statuses(
             .unwrap_or_default(),
     })
 }
-
 fn realistic_30tps_strict_progress_target_from_statuses(
     statuses: &[iroha::client::Status],
 ) -> Result<Realistic30TpsCatchUpTarget> {
@@ -2258,7 +2116,6 @@ fn realistic_30tps_strict_progress_target_from_statuses(
             .unwrap_or_default(),
     })
 }
-
 fn realistic_30tps_statuses_exceed_strict_progress_target(
     statuses: &[iroha::client::Status],
     target: Realistic30TpsCatchUpTarget,
@@ -2268,7 +2125,6 @@ fn realistic_30tps_statuses_exceed_strict_progress_target(
             || current.txs_approved > target.txs_approved
     })
 }
-
 fn realistic_30tps_statuses_satisfy_post_heal_progress(
     statuses: &[iroha::client::Status],
     target: Realistic30TpsCatchUpTarget,
@@ -2280,7 +2136,6 @@ fn realistic_30tps_statuses_satisfy_post_heal_progress(
             || current.txs_approved >= final_target_approved
     })
 }
-
 fn realistic_30tps_convergence_span_from_statuses(
     statuses: &[iroha::client::Status],
 ) -> Result<Realistic30TpsConvergenceSpan> {
@@ -2311,7 +2166,6 @@ fn realistic_30tps_convergence_span_from_statuses(
             .unwrap_or_default(),
     })
 }
-
 fn realistic_30tps_statuses_are_converged(statuses: &[iroha::client::Status]) -> Result<bool> {
     let span = realistic_30tps_convergence_span_from_statuses(statuses)?;
     Ok(span
@@ -2321,7 +2175,6 @@ fn realistic_30tps_statuses_are_converged(statuses: &[iroha::client::Status]) ->
         && span.max_txs_approved.saturating_sub(span.min_txs_approved)
             <= REALISTIC_30TPS_ROTATING_FAULT_MAX_HEALTHY_APPROVED_LAG)
 }
-
 fn realistic_30tps_convergence_progress_since(
     current: Realistic30TpsConvergenceSpan,
     last_seen: Realistic30TpsConvergenceSpan,
@@ -2338,14 +2191,12 @@ fn realistic_30tps_convergence_progress_since(
     let last_approved_lag = last_seen
         .max_txs_approved
         .saturating_sub(last_seen.min_txs_approved);
-
     (current.min_blocks_non_empty > last_seen.min_blocks_non_empty
         || current.min_txs_approved > last_seen.min_txs_approved
         || current_block_lag < last_block_lag
         || current_approved_lag < last_approved_lag)
         .then_some(current)
 }
-
 fn realistic_30tps_catch_up_progress_since(
     status: &iroha::client::Status,
     last_seen: Realistic30TpsCatchUpTarget,
@@ -2358,7 +2209,6 @@ fn realistic_30tps_catch_up_progress_since(
         || current.txs_approved > last_seen.txs_approved)
         .then_some(current)
 }
-
 async fn realistic_30tps_healthy_status_snapshots(
     network: &Network,
     recovering_peer_index: usize,
@@ -2384,7 +2234,6 @@ async fn realistic_30tps_healthy_status_snapshots(
     .await?;
     Ok(statuses.iter().map(StatusSnapshot::from_status).collect())
 }
-
 async fn realistic_30tps_catch_up_sample(
     network: &Network,
     recovering_peer_index: usize,
@@ -2413,7 +2262,6 @@ async fn realistic_30tps_catch_up_sample(
             .unwrap_or(u64::MAX),
     }
 }
-
 async fn wait_for_realistic_peer_catch_up(
     network: &Network,
     peer_index: usize,
@@ -2516,7 +2364,6 @@ async fn wait_for_realistic_peer_catch_up(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_realistic_all_peer_convergence(
     network: &Network,
     peer_index: usize,
@@ -2630,7 +2477,6 @@ async fn wait_for_realistic_all_peer_convergence(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_realistic_post_heal_consensus_progress(
     network: &Network,
     peer_index: usize,
@@ -2715,7 +2561,6 @@ async fn wait_for_realistic_post_heal_consensus_progress(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 fn realistic_30tps_validator_mask(peer_count: usize) -> i64 {
     if peer_count == 0 {
         0
@@ -2725,7 +2570,6 @@ fn realistic_30tps_validator_mask(peer_count: usize) -> i64 {
         (1_i64 << peer_count) - 1
     }
 }
-
 fn realistic_fault_windows_have_no_overlap(windows: &[Realistic30TpsFaultWindow]) -> bool {
     let mut sorted: Vec<_> = windows.iter().collect();
     sorted.sort_by_key(|window| window.started_ms);
@@ -2738,7 +2582,6 @@ fn realistic_fault_windows_have_no_overlap(windows: &[Realistic30TpsFaultWindow]
     }
     true
 }
-
 fn realistic_fault_windows_observed_all_kinds(
     windows: &[Realistic30TpsFaultWindow],
     fault_kinds: &[Realistic30TpsFaultKind],
@@ -2747,7 +2590,6 @@ fn realistic_fault_windows_observed_all_kinds(
         .iter()
         .all(|kind| windows.iter().any(|window| window.fault == kind.as_str()))
 }
-
 fn realistic_strict_fault_windows_start_after_convergence(
     windows: &[Realistic30TpsFaultWindow],
     convergence_windows: &[Realistic30TpsConvergenceWindow],
@@ -2768,7 +2610,6 @@ fn realistic_strict_fault_windows_start_after_convergence(
             .is_some_and(|convergence| next.started_ms >= convergence.ended_ms)
     })
 }
-
 fn unix_timestamp_ms() -> u64 {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2776,7 +2617,6 @@ fn unix_timestamp_ms() -> u64 {
         .as_millis();
     u64::try_from(millis).unwrap_or(u64::MAX)
 }
-
 async fn run_realistic_30tps_localnet(
     consensus_mode: Realistic30TpsConsensusMode,
     test_name: &'static str,
@@ -2787,7 +2627,6 @@ async fn run_realistic_30tps_localnet(
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-
     let duration_secs = env_or_default(
         "IROHA_REALISTIC_30TPS_DURATION_SECS",
         REALISTIC_30TPS_DURATION_SECS,
@@ -2886,14 +2725,12 @@ async fn run_realistic_30tps_localnet(
         ram_lfe_email_policy.id.clone(),
         &ram_lfe_email_program_policy,
     )?;
-
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     let client_ttl = Duration::from_secs(duration_secs.saturating_add(120));
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
         client_ttl.as_millis().to_string(),
     );
-
     let builder = NetworkBuilder::new()
         .with_peers(REALISTIC_30TPS_PEERS)
         .with_auto_populated_trusted_peers()
@@ -3067,20 +2904,17 @@ async fn run_realistic_30tps_localnet(
             }
         }
     }
-
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await?
         else {
             return Ok(());
         };
-
         let network_dir = network.env_dir().to_path_buf();
         let http = HttpClient::builder()
             .tls_built_in_root_certs(false)
             .build()
             .wrap_err("build local HTTP client for realistic throughput soak")?;
         let mut artifacts = ThroughputArtifacts::default();
-
         let run_result: Result<()> = async {
             wait_for_status_responses(&network, Duration::from_secs(30)).await?;
             if consensus_mode.is_npos() && load_kind == Realistic30TpsLoadKind::Transfer {
@@ -3158,7 +2992,6 @@ async fn run_realistic_30tps_localnet(
                 rbc_data_shards: 0,
                 rbc_parity_shards: 0,
             });
-
             let mut fault_controller = if let Some(config) = rotating_fault {
                 let mut controller = Realistic30TpsRotatingFaultController::new(
                     &network,
@@ -3174,7 +3007,6 @@ async fn run_realistic_30tps_localnet(
             } else {
                 None
             };
-
             let submitted_counter = Arc::new(AtomicU64::new(0));
             let submitted_for_task = Arc::clone(&submitted_counter);
             let submit_accept_quorum = realistic_submit_accept_quorum(
@@ -3257,7 +3089,6 @@ async fn run_realistic_30tps_localnet(
                     ))
                 }
             };
-
             eprintln!(
                 "realistic localnet recipe: peers={}, target_tps={}, duration_secs={}, total_txs={}, target_non_empty_delta={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, load_kind={}, transfer_accounts={}, transfer_initial_balance={}, transfer_max_amount={}, ram_lfe_email_accounts={}, ram_lfe_email_policy={}, ram_lfe_program={}, submit_parallelism={}, submit_accept_quorum={}, queue_soft_limit={}, snapshot_mode={}, snapshot_create_every_ms={}, stall_threshold={:?}, max_avg_secs_per_block={max_avg_secs_per_block:.3}, baseline_non_empty={}, baseline_approved={}",
                 network.peers().len(),
@@ -3311,7 +3142,6 @@ async fn run_realistic_30tps_localnet(
                     controller.fault_windows()
                 );
             }
-
             artifacts.samples.clear();
             let mut last_progress = Instant::now();
             let mut last_min_non_empty = baseline_non_empty;
@@ -3322,7 +3152,6 @@ async fn run_realistic_30tps_localnet(
                 .unwrap_or_else(Instant::now);
             let run_start = Instant::now();
             let tolerated_progress_lagging = usize::from(fault_controller.is_some());
-
             loop {
                 if let Some(controller) = fault_controller.as_mut() {
                     match controller.rotate_if_due(&network).await {
@@ -3396,7 +3225,6 @@ async fn run_realistic_30tps_localnet(
                             sumeragi: sumeragi_snapshots,
                         });
                         last_snapshot = status_snapshots;
-
                         if last_log.elapsed() >= REALISTIC_30TPS_PROGRESS_LOG_INTERVAL {
                             eprintln!(
                                 "realistic localnet progress elapsed={:?} submitted={} target_non_empty={} min_non_empty={} max_non_empty={} min_approved={} target_approved={} max_queue={}: {:?}",
@@ -3420,7 +3248,6 @@ async fn run_realistic_30tps_localnet(
                         }
                     }
                 }
-
                 if submit_handle.is_finished() {
                     break;
                 }
@@ -3469,7 +3296,6 @@ async fn run_realistic_30tps_localnet(
                 }
                 sleep(REALISTIC_30TPS_SAMPLE_INTERVAL).await;
             }
-
             let submit_elapsed = submit_handle
                 .await
                 .wrap_err("paced submit task join failed")??;
@@ -3634,7 +3460,6 @@ async fn run_realistic_30tps_localnet(
             let load_avg_secs_per_block =
                 seconds_per_block(load_end_elapsed, load_end_produced_blocks);
             let avg_secs_per_block = seconds_per_block(run_start.elapsed(), produced_blocks);
-
             if let Ok(after_metrics) =
                 collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await
             {
@@ -3733,7 +3558,6 @@ async fn run_realistic_30tps_localnet(
             Ok(())
         }
         .await;
-
         if let Err(err) = &run_result {
             artifacts.error = Some(err.to_string());
         }
@@ -3760,34 +3584,28 @@ async fn run_realistic_30tps_localnet(
                 eprintln!("throughput artifact write failed: {err:?}");
             }
         }
-
         network.shutdown().await;
         run_result
     }
     .await;
-
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
     } else {
         remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
     }
-
     if sandbox::handle_result(result, test_name)?.is_none() {
         return Ok(());
     }
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     idle_chain::run_permissioned_progress().await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_idle_chain_advances_only_for_external_or_internal_work() -> Result<()> {
     idle_chain::run().await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()> {
     init_instruction_registry();
@@ -3795,7 +3613,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-
     let mut lane_universal = Table::new();
     lane_universal.insert("index".into(), TomlValue::Integer(0));
     lane_universal.insert(
@@ -3808,21 +3625,18 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     );
     lane_universal.insert("visibility".into(), TomlValue::String("public".to_owned()));
     lane_universal.insert("metadata".into(), TomlValue::Table(Table::new()));
-
     let mut lane_alice = Table::new();
     lane_alice.insert("index".into(), TomlValue::Integer(1));
     lane_alice.insert("alias".into(), TomlValue::String("lane-alice".to_owned()));
     lane_alice.insert("dataspace".into(), TomlValue::String("ds1".to_owned()));
     lane_alice.insert("visibility".into(), TomlValue::String("public".to_owned()));
     lane_alice.insert("metadata".into(), TomlValue::Table(Table::new()));
-
     let mut lane_bob = Table::new();
     lane_bob.insert("index".into(), TomlValue::Integer(2));
     lane_bob.insert("alias".into(), TomlValue::String("lane-bob".to_owned()));
     lane_bob.insert("dataspace".into(), TomlValue::String("ds2".to_owned()));
     lane_bob.insert("visibility".into(), TomlValue::String("public".to_owned()));
     lane_bob.insert("metadata".into(), TomlValue::Table(Table::new()));
-
     let mut ds_universal = Table::new();
     ds_universal.insert("alias".into(), TomlValue::String("universal".to_owned()));
     ds_universal.insert("id".into(), TomlValue::Integer(0));
@@ -3831,7 +3645,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         TomlValue::String("default dataspace".to_owned()),
     );
     ds_universal.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
     let mut ds1 = Table::new();
     ds1.insert("alias".into(), TomlValue::String("ds1".to_owned()));
     ds1.insert("id".into(), TomlValue::Integer(1));
@@ -3846,7 +3659,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         TomlValue::String("alice route dataspace".to_owned()),
     );
     ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
     let mut ds2 = Table::new();
     ds2.insert("alias".into(), TomlValue::String("ds2".to_owned()));
     ds2.insert("id".into(), TomlValue::Integer(2));
@@ -3861,21 +3673,18 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         TomlValue::String("bob route dataspace".to_owned()),
     );
     ds2.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
     let mut matcher_alice = Table::new();
     matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
     let mut rule_alice = Table::new();
     rule_alice.insert("lane".into(), TomlValue::Integer(1));
     rule_alice.insert("dataspace".into(), TomlValue::String("ds1".to_owned()));
     rule_alice.insert("matcher".into(), TomlValue::Table(matcher_alice));
-
     let mut matcher_bob = Table::new();
     matcher_bob.insert("account".into(), TomlValue::String(BOB_ID.to_string()));
     let mut rule_bob = Table::new();
     rule_bob.insert("lane".into(), TomlValue::Integer(2));
     rule_bob.insert("dataspace".into(), TomlValue::String("ds2".to_owned()));
     rule_bob.insert("matcher".into(), TomlValue::Table(matcher_bob));
-
     let mut policy = Table::new();
     policy.insert("default_lane".into(), TomlValue::Integer(0));
     policy.insert(
@@ -3894,7 +3703,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         .expect("canonical I105 bootstrap gas account literal");
     let stake_asset_id_literal = route_stake_asset_definition_id().to_string();
     let fee_asset_id_literal = route_fee_asset_definition_id().to_string();
-
     let mut npos = SumeragiNposParameters::default();
     npos.max_validators = 4;
     npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
@@ -3973,7 +3781,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 )
                 .write(["nexus", "staking", "max_validators"], 4_i64);
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(sumeragi_status_json_endpoint_decodes_to_wire_end_to_end),
@@ -3987,7 +3794,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         );
         return Ok(());
     };
-
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         network.client().submit::<InstructionBox>(
@@ -4001,7 +3807,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             .first()
             .cloned()
             .ok_or_else(|| eyre!("network started without peers"))?;
-
         let before_height = quorum_low_watermark_height(
             &warmup_statuses,
             tolerated_lagging_peers(network.peers().len()),
@@ -4029,7 +3834,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 Duration::from_secs(45),
             )
             .await?;
-
             let routing_deadline = Instant::now() + Duration::from_secs(45);
             let mut observed_cross_lane_routing = false;
             while Instant::now() < routing_deadline {
@@ -4064,40 +3868,11 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 ROUTE_BINDING_TIMEOUT
             );
         }
-
-        let url = format!(
-            "{}/v1/sumeragi/status",
-            peer.torii_url().trim_end_matches('/')
-        );
-        let response = HttpClient::new()
-            .get(url)
-            .header("Accept", "application/json")
-            .send()
+        let status_client = peer.client();
+        let payload = task::spawn_blocking(move || status_client.get_sumeragi_status_json())
             .await
-            .wrap_err("fetch sumeragi status endpoint as JSON")?;
-        let status = response.status();
-        ensure!(
-            status.is_success(),
-            "sumeragi status endpoint returned {status}"
-        );
-
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        ensure!(
-            content_type.starts_with("application/json"),
-            "expected JSON status payload, got content-type={content_type}"
-        );
-
-        let body = response
-            .bytes()
-            .await
-            .wrap_err("read sumeragi status JSON body")?;
-        let payload: Value =
-            norito::json::from_slice(&body).wrap_err("parse sumeragi status JSON payload")?;
+            .wrap_err("join operator-signed Sumeragi status JSON request")?
+            .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
         let mode_tag = payload
             .get("mode_tag")
             .and_then(Value::as_str)
@@ -4110,7 +3885,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         Ok(())
     }
     .await;
-
     if sandbox::handle_result(
         result,
         stringify!(sumeragi_status_json_endpoint_decodes_to_wire_end_to_end),
@@ -4126,7 +3900,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     }
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
@@ -4135,13 +3908,11 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
         SOAK_CLIENT_TTL.as_millis().to_string(),
     );
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -4180,7 +3951,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                     1_i64,
                 );
         });
-
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
@@ -4190,7 +3960,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         else {
             return Ok(());
         };
-
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
@@ -4214,7 +3983,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             .map(|status| status.blocks)
             .min()
             .unwrap_or_default();
-
         let target_blocks = if cfg!(debug_assertions) { 30_u64 } else { 100_u64 };
         let target_height = baseline_height.saturating_add(target_blocks);
         let peers = network.peers();
@@ -4301,7 +4069,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 sleep(Duration::from_millis(200)).await;
             }
         }
-
         let remaining = timeout.saturating_sub(start.elapsed());
         let catch_up_timeout = per_block_timeout.min(remaining);
         if catch_up_timeout > Duration::ZERO {
@@ -4347,14 +4114,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 sleep(Duration::from_millis(200)).await;
             }
         }
-
         let elapsed = start.elapsed();
         ensure!(
             elapsed <= timeout,
             "block production exceeded bound: elapsed={:?}",
             elapsed
         );
-
         let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         ensure!(
             after_statuses
@@ -4362,18 +4127,15 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 .all(|status| status.blocks >= target_height),
             "not all peers reached target height {target_height}: {after_statuses:?}"
         );
-
         network.shutdown().await;
         Ok(())
     }
     .await;
-
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
     } else {
         remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
     }
-
     if sandbox::handle_result(result, stringify!(permissioned_localnet_reaches_100_blocks))?
         .is_none()
     {
@@ -4381,7 +4143,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
     }
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running localnet soak (thousands of blocks/tx)"]
 #[allow(clippy::too_many_lines)]
@@ -4391,19 +4152,16 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-
     let soak_block_time_ms = env_or_default("IROHA_SOAK_BLOCK_TIME_MS", SOAK_BLOCK_TIME_MS);
     let soak_commit_time_ms =
         env_or_default("IROHA_SOAK_COMMIT_TIME_MS", SOAK_COMMIT_TIME_MS).max(soak_block_time_ms);
     let soak_max_secs_per_block = env_or_default_f64("IROHA_SOAK_MAX_SEC_PER_BLOCK", 1.0);
-
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     // Extend TTL so early transactions do not expire during the soak run.
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
         SOAK_CLIENT_TTL.as_millis().to_string(),
     );
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -4476,7 +4234,6 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     10_000_i64,
                 );
         });
-
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
@@ -4486,11 +4243,9 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         else {
             return Ok(());
         };
-
         eprintln!(
             "localnet soak timing profile: block_time_ms={soak_block_time_ms}, commit_time_ms={soak_commit_time_ms}"
         );
-
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_non_empty = baseline_statuses
@@ -4499,7 +4254,6 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             .min()
             .unwrap_or_default();
         let soak_start = Instant::now();
-
         // Allow shorter local runs via IROHA_SOAK_TARGET_BLOCKS while keeping the default.
         let target_blocks = env_or_default("IROHA_SOAK_TARGET_BLOCKS", SOAK_TARGET_BLOCKS);
         let submit_batch = env_or_default("IROHA_SOAK_SUBMIT_BATCH", SOAK_SUBMIT_BATCH);
@@ -4523,7 +4277,6 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 wait_for_queue_depth(&network, queue_soft_limit, SOAK_STATUS_POLL_TIMEOUT).await?;
             }
         }
-
         let mut last_progress = Instant::now();
         let mut last_min_non_empty = baseline_non_empty;
         let mut last_log = Instant::now()
@@ -4532,7 +4285,6 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
         let mut last_phase_snapshot: Option<SoakPhaseSnapshot> = None;
         let mut phase_poll_enabled = true;
-
         loop {
             if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
                 let min_non_empty = statuses
@@ -4593,17 +4345,14 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     break;
                 }
             }
-
             if last_progress.elapsed() >= SOAK_STALL_THRESHOLD {
                 return Err(eyre!(
                     "localnet soak stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={target_height}): last_snapshot={last_snapshot:?}, last_phases={last_phase_snapshot:?}",
                     SOAK_STALL_THRESHOLD,
                 ));
             }
-
             sleep(SOAK_STATUS_POLL_INTERVAL).await;
         }
-
         let after_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         ensure!(
             after_statuses
@@ -4644,24 +4393,20 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             secs_per_block <= soak_max_secs_per_block,
             "localnet soak too slow: secs_per_block={secs_per_block:.3}, target<={soak_max_secs_per_block:.3}"
         );
-
         network.shutdown().await;
         Ok(())
     }
     .await;
-
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
     } else {
         remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
     }
-
     if sandbox::handle_result(result, stringify!(permissioned_localnet_soak_thousands))?.is_none() {
         return Ok(());
     }
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 7-peer localnet throughput regression (10k tps target)"]
 #[allow(clippy::too_many_lines)]
@@ -4672,7 +4417,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
@@ -4683,7 +4427,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
     let throughput_rbc_data_shards = env_or_default("IROHA_THROUGHPUT_RBC_DATA_SHARDS", 4);
     let throughput_rbc_parity_shards = env_or_default("IROHA_THROUGHPUT_RBC_PARITY_SHARDS", 2);
     let throughput_rbc_encoding_for_config = throughput_rbc_encoding.clone();
-
     let builder = NetworkBuilder::new()
         .with_peers(7)
         .with_auto_populated_trusted_peers()
@@ -4781,7 +4524,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     );
             }
         });
-
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
@@ -4791,11 +4533,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         else {
             return Ok(());
         };
-
         let network_dir = network.env_dir().to_path_buf();
         let http = HttpClient::new();
         let mut artifacts = ThroughputArtifacts::default();
-
         let run_result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
@@ -4809,7 +4549,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             .map(|status| status.txs_approved)
             .min()
             .unwrap_or_default();
-
         let total_blocks_default = THROUGHPUT_WARMUP_BLOCKS.saturating_add(THROUGHPUT_STEADY_BLOCKS);
         let total_blocks =
             env_or_default("IROHA_THROUGHPUT_TARGET_BLOCKS", total_blocks_default).max(1);
@@ -4848,7 +4587,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let warmup_txs = warmup_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
         let steady_txs = steady_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
         let total_txs = warmup_txs.saturating_add(steady_txs);
-
         artifacts.recipe = Some(ThroughputArtifactRecipe {
             peers: network.peers().len() as u64,
             block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
@@ -4878,7 +4616,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             rbc_data_shards: throughput_rbc_data_shards,
             rbc_parity_shards: throughput_rbc_parity_shards,
         });
-
         let slo_p95_ms = env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_SLO_P95_MS);
         let slo_p99_ms = env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_SLO_P99_MS);
         let slo_view_change_rate = env_or_default_f64(
@@ -4900,7 +4637,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             backpressure_rate_max: slo_backpressure_rate,
             queue_saturation_max: slo_queue_saturation,
         });
-
         let submit_clients: Vec<_> =
             network.peers().iter().map(|peer| peer.client()).collect();
         ensure!(
@@ -4927,7 +4663,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             baseline_non_empty,
             baseline_approved,
         );
-
         let warmup_submit_elapsed = submit_logs(
             0,
             warmup_txs,
@@ -4940,7 +4675,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             rng_seed,
         )
         .await?;
-
         let mut last_progress = Instant::now();
         let mut last_min_non_empty = baseline_non_empty;
         let mut last_log = Instant::now()
@@ -4980,20 +4714,16 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     break;
                 }
             }
-
             if last_progress.elapsed() >= THROUGHPUT_STALL_THRESHOLD {
                 return Err(eyre!(
                     "localnet throughput warmup stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={warmup_target_height}): last_snapshot={last_snapshot:?}",
                     THROUGHPUT_STALL_THRESHOLD
                 ));
             }
-
             sleep(SOAK_STATUS_POLL_INTERVAL).await;
         }
-
         let warmup_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
-
         let steady_start_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let steady_start_approved = steady_start_statuses
             .iter()
@@ -5001,7 +4731,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             .min()
             .unwrap_or(baseline_approved);
         let steady_start = Instant::now();
-
         let steady_submit_elapsed = submit_logs(
             warmup_txs,
             steady_txs,
@@ -5014,7 +4743,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             rng_seed,
         )
         .await?;
-
         let mut samples: Vec<ThroughputSample> = Vec::new();
         let mut last_progress = Instant::now();
         let mut last_min_non_empty = warmup_target_height;
@@ -5022,7 +4750,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             .checked_sub(THROUGHPUT_PROGRESS_LOG_INTERVAL)
             .unwrap_or_else(Instant::now);
         let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
-
         loop {
             if let Ok(statuses) = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await {
                 let sumeragi_statuses =
@@ -5073,19 +4800,15 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     break;
                 }
             }
-
             if last_progress.elapsed() >= THROUGHPUT_STALL_THRESHOLD {
                 return Err(eyre!(
                     "localnet throughput stalled for {:?} (min_non_empty={last_min_non_empty}, target_non_empty={steady_target_height}): last_snapshot={last_snapshot:?}",
                     THROUGHPUT_STALL_THRESHOLD
                 ));
             }
-
             sleep(THROUGHPUT_SAMPLE_INTERVAL).await;
         }
-
         let steady_elapsed = steady_start.elapsed();
-
         let after_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let after_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
@@ -5119,12 +4842,10 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         } else {
             min_commit_time_ms
         };
-
         let (commit_p95_ms, commit_p99_ms, commit_hist_count) =
             commit_time_quantiles(&warmup_metrics, &after_metrics);
         let commit_p95_ms = commit_p95_ms.unwrap_or_default();
         let commit_p99_ms = commit_p99_ms.unwrap_or_default();
-
         let committed_approved = after_statuses
             .iter()
             .map(|status| status.txs_approved)
@@ -5141,7 +4862,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         } else {
             0.0
         };
-
         let (view_change_avg, view_change_max) = rate_summary(
             steady_start_statuses
                 .iter()
@@ -5180,7 +4900,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .as_slice(),
             steady_elapsed,
         );
-
         let mut saturated_samples = 0_u64;
         let mut total_samples = 0_u64;
         let mut max_queue_depth = 0_u64;
@@ -5198,7 +4917,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         } else {
             0.0
         };
-
         let metrics = ThroughputArtifactMetrics {
             submitted_tps,
             committed_tps,
@@ -5222,7 +4940,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         artifacts.samples = samples;
         artifacts.warmup_metrics = warmup_metrics;
         artifacts.after_metrics = after_metrics;
-
         eprintln!(
             "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
             network.peers().len(),
@@ -5256,7 +4973,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             max_commit_time_ms <= max_commit_time_allowed,
             "commit time exceeded target: max_commit_time_ms={max_commit_time_ms}, allowed={max_commit_time_allowed}",
         );
-
         if commit_hist_count > 0 {
             ensure!(
                 commit_p95_ms <= slo_p95_ms,
@@ -5285,11 +5001,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 "queue saturation exceeded SLO: fraction={queue_saturated_frac:.2}, slo={slo_queue_saturation:.2}",
             );
         }
-
         Ok(())
     }
     .await;
-
         if let Err(err) = &run_result {
             artifacts.error = Some(err.to_string());
         }
@@ -5316,18 +5030,15 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 eprintln!("throughput artifact write failed: {err:?}");
             }
         }
-
         network.shutdown().await;
         run_result
     }
     .await;
-
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
     } else {
         remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
     }
-
     if sandbox::handle_result(result, stringify!(permissioned_localnet_throughput_10k_tps))?
         .is_none()
     {
@@ -5335,7 +5046,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
     }
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "long-running 7-peer localnet throughput regression (10k tps target, NPoS)"]
 #[allow(clippy::too_many_lines)]
@@ -5346,15 +5056,12 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
         THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
     );
-
     let npos_params = SumeragiNposParameters::default();
-
     let builder = NetworkBuilder::new()
         .with_peers(7)
         .with_auto_populated_trusted_peers()
@@ -5440,7 +5147,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
         });
-
     let result: Result<()> = async {
         let Some(network) = sandbox::start_network_async_or_skip(
             builder,
@@ -5450,11 +5156,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         else {
             return Ok(());
         };
-
         let network_dir = network.env_dir().to_path_buf();
         let http = HttpClient::new();
         let mut artifacts = ThroughputArtifacts::default();
-
         let run_result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
@@ -5468,7 +5172,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             .map(|status| status.txs_approved)
             .min()
             .unwrap_or_default();
-
         let total_blocks_default =
             THROUGHPUT_WARMUP_BLOCKS.saturating_add(THROUGHPUT_STEADY_BLOCKS);
         let total_blocks =
@@ -5534,7 +5237,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             rbc_data_shards: 4,
             rbc_parity_shards: 2,
         });
-
         let slo_p95_ms =
             env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_NPOS_SLO_P95_MS);
         let slo_p99_ms =
@@ -5558,7 +5260,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             backpressure_rate_max: slo_backpressure_rate,
             queue_saturation_max: slo_queue_saturation,
         });
-
         let submit_clients: Vec<_> =
             network.peers().iter().map(|peer| peer.client()).collect();
         ensure!(
@@ -5582,7 +5283,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             baseline_non_empty,
             baseline_approved,
         );
-
         let warmup_submit_elapsed = submit_logs(
             0,
             warmup_txs,
@@ -5595,7 +5295,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             rng_seed,
         )
         .await?;
-
         let mut last_progress = Instant::now();
         let mut last_min_non_empty = baseline_non_empty;
         let mut last_log = Instant::now()
@@ -5640,11 +5339,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             }
             sleep(THROUGHPUT_SAMPLE_INTERVAL).await;
         }
-
         let warmup_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
         let steady_start_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-
         let steady_submit_elapsed = submit_logs(
             warmup_txs,
             steady_txs,
@@ -5657,7 +5354,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             rng_seed,
         )
         .await?;
-
         let steady_start = Instant::now();
         let mut samples: Vec<ThroughputSample> = Vec::new();
         let mut last_progress = Instant::now();
@@ -5722,12 +5418,10 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             });
             sleep(THROUGHPUT_SAMPLE_INTERVAL).await;
         }
-
         let steady_elapsed = steady_start.elapsed();
         let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let after_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
-
         let max_commit_time_ms = after_statuses
             .iter()
             .map(|status| status.commit_time_ms)
@@ -5752,12 +5446,10 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         } else {
             min_commit_time_ms
         };
-
         let (commit_p95_ms, commit_p99_ms, commit_hist_count) =
             commit_time_quantiles(&warmup_metrics, &after_metrics);
         let commit_p95_ms = commit_p95_ms.unwrap_or_default();
         let commit_p99_ms = commit_p99_ms.unwrap_or_default();
-
         let steady_approved = after_statuses
             .iter()
             .map(|status| status.txs_approved)
@@ -5781,7 +5473,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         } else {
             0.0
         };
-
         let (view_change_avg, view_change_max) = rate_summary(
             steady_start_statuses
                 .iter()
@@ -5820,7 +5511,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .as_slice(),
             steady_elapsed,
         );
-
         let mut saturated_samples = 0_u64;
         let mut total_samples = 0_u64;
         let mut max_queue_depth = 0_u64;
@@ -5838,7 +5528,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         } else {
             0.0
         };
-
         let metrics = ThroughputArtifactMetrics {
             submitted_tps,
             committed_tps,
@@ -5862,7 +5551,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         artifacts.samples = samples;
         artifacts.warmup_metrics = warmup_metrics;
         artifacts.after_metrics = after_metrics;
-
         eprintln!(
             "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
             network.peers().len(),
@@ -5896,7 +5584,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             max_commit_time_ms <= max_commit_time_allowed,
             "commit time exceeded target: max_commit_time_ms={max_commit_time_ms}, allowed={max_commit_time_allowed}",
         );
-
         if commit_hist_count > 0 {
             ensure!(
                 commit_p95_ms <= slo_p95_ms,
@@ -5925,11 +5612,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 "queue saturation exceeded SLO: fraction={queue_saturated_frac:.2}, slo={slo_queue_saturation:.2}",
             );
         }
-
         Ok(())
     }
     .await;
-
         if let Err(err) = &run_result {
             artifacts.error = Some(err.to_string());
         }
@@ -5956,24 +5641,20 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 eprintln!("throughput artifact write failed: {err:?}");
             }
         }
-
         network.shutdown().await;
         run_result
     }
     .await;
-
     if let Some(previous_ttl) = previous_ttl {
         set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
     } else {
         remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
     }
-
     if sandbox::handle_result(result, stringify!(npos_localnet_throughput_10k_tps))?.is_none() {
         return Ok(());
     }
     Ok(())
 }
-
 async fn collect_statuses(
     network: &Network,
     status_timeout: Duration,
@@ -6015,7 +5696,6 @@ async fn collect_statuses(
     }))
     .await
 }
-
 async fn collect_realistic_statuses(
     network: &Network,
     status_timeout: Duration,
@@ -6027,7 +5707,6 @@ async fn collect_realistic_statuses(
         collect_statuses(network, status_timeout).await
     }
 }
-
 async fn collect_statuses_allowing_missing(
     network: &Network,
     status_timeout: Duration,
@@ -6079,7 +5758,6 @@ async fn collect_statuses_allowing_missing(
     );
     Ok(statuses)
 }
-
 async fn collect_sumeragi_statuses(
     network: &Network,
     status_timeout: Duration,
@@ -6122,7 +5800,6 @@ async fn collect_sumeragi_statuses(
     }))
     .await
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct SoakPhaseSnapshot {
     propose_ms: u64,
@@ -6138,7 +5815,6 @@ struct SoakPhaseSnapshot {
     commit_ema_ms: u64,
     pipeline_total_ema_ms: u64,
 }
-
 impl SoakPhaseSnapshot {
     fn from_json(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
@@ -6159,11 +5835,9 @@ impl SoakPhaseSnapshot {
         })
     }
 }
-
 fn json_object_u64(map: &Map, key: &str) -> u64 {
     map.get(key).and_then(Value::as_u64).unwrap_or_default()
 }
-
 async fn collect_sumeragi_phase_snapshot(
     network: &Network,
     status_timeout: Duration,
@@ -6183,7 +5857,6 @@ async fn collect_sumeragi_phase_snapshot(
     SoakPhaseSnapshot::from_json(&value)
         .ok_or_else(|| eyre!("sumeragi phase payload malformed: {:?}", value))
 }
-
 async fn collect_metrics_snapshots(
     network: &Network,
     http: &HttpClient,
@@ -6216,7 +5889,6 @@ async fn collect_metrics_snapshots(
     }))
     .await
 }
-
 async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut last_log = Instant::now()
@@ -6243,7 +5915,6 @@ async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Resu
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_min_txs_approved(
     network: &Network,
     target_approved: u64,
@@ -6298,7 +5969,6 @@ async fn wait_for_min_txs_approved(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_queue_depth(
     network: &Network,
     max_queue: u64,
@@ -6348,18 +6018,15 @@ async fn wait_for_queue_depth(
                 }
             }
         }
-
         if last_progress.elapsed() >= progress_timeout {
             return Err(eyre!(
                 "submit queue did not drain below {max_queue} within {:?}",
                 progress_timeout
             ));
         }
-
         sleep(SOAK_STATUS_POLL_INTERVAL).await;
     }
 }
-
 #[tokio::test]
 async fn env_or_default_reads_positive_values() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6371,7 +6038,6 @@ async fn env_or_default_reads_positive_values() {
     assert_eq!(env_or_default(key, 7), 42);
     remove_env_var(key);
 }
-
 #[tokio::test]
 async fn env_or_default_ignores_invalid_or_zero() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6385,7 +6051,6 @@ async fn env_or_default_ignores_invalid_or_zero() {
     assert_eq!(env_or_default(key, 7), 7);
     remove_env_var(key);
 }
-
 #[tokio::test]
 async fn env_or_default_usize_reads_positive_values() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6397,7 +6062,6 @@ async fn env_or_default_usize_reads_positive_values() {
     assert_eq!(env_or_default_usize(key, 8), 64);
     remove_env_var(key);
 }
-
 #[tokio::test]
 async fn env_or_default_f64_reads_values() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6411,7 +6075,6 @@ async fn env_or_default_f64_reads_values() {
     assert!((env_or_default_f64(key, 0.5) - 0.5).abs() < f64::EPSILON);
     remove_env_var(key);
 }
-
 #[tokio::test]
 async fn realistic_max_avg_secs_per_block_is_fault_aware_and_overridable() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6429,13 +6092,11 @@ async fn realistic_max_avg_secs_per_block_is_fault_aware_and_overridable() {
             .abs()
             < f64::EPSILON
     );
-
     set_env_var(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV, "2.5");
     assert!((realistic_max_avg_secs_per_block(false) - 2.5).abs() < f64::EPSILON);
     assert!((realistic_max_avg_secs_per_block(true) - 2.5).abs() < f64::EPSILON);
     remove_env_var(REALISTIC_30TPS_MAX_AVG_SECS_PER_BLOCK_ENV);
 }
-
 #[tokio::test]
 async fn queue_progress_timeout_reads_override() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6448,7 +6109,6 @@ async fn queue_progress_timeout_reads_override() {
     assert_eq!(queue_progress_timeout(), SOAK_QUEUE_PROGRESS_TIMEOUT);
     remove_env_var(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV);
 }
-
 #[tokio::test]
 async fn fail_on_sandbox_skip_parses_truthy_values() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6463,7 +6123,6 @@ async fn fail_on_sandbox_skip_parses_truthy_values() {
     assert!(fail_on_sandbox_skip());
     remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
 }
-
 #[tokio::test]
 async fn fail_on_sandbox_skip_defaults_to_false() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6478,7 +6137,6 @@ async fn fail_on_sandbox_skip_defaults_to_false() {
     assert!(!fail_on_sandbox_skip());
     remove_env_var(FAIL_ON_SANDBOX_SKIP_ENV);
 }
-
 #[tokio::test]
 async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6504,7 +6162,6 @@ async fn realistic_30tps_load_kind_parses_email_mode_and_defaults_to_transfer() 
     assert!(Realistic30TpsLoadKind::from_env().is_err());
     remove_env_var("IROHA_REALISTIC_30TPS_LOAD_KIND");
 }
-
 #[tokio::test]
 async fn realistic_30tps_rotating_fault_config_reads_rotate_interval_override() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6589,7 +6246,6 @@ async fn realistic_30tps_rotating_fault_config_reads_rotate_interval_override() 
     remove_env_var(REALISTIC_30TPS_STRICT_ROTATION_CONVERGENCE_ENV);
     remove_env_var(REALISTIC_30TPS_CONVERGENCE_BOUND_SECS_ENV);
 }
-
 #[tokio::test]
 async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
     let _guard = LOCALNET_SMOKE_GUARD
@@ -6605,7 +6261,6 @@ async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
         convergence_total_bound: None,
         fault_kinds: default_realistic_30tps_fault_kinds(),
     };
-
     assert_eq!(
         realistic_30tps_stall_threshold(None),
         REALISTIC_30TPS_STALL_THRESHOLD
@@ -6614,13 +6269,11 @@ async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
         realistic_30tps_stall_threshold(Some(&config)),
         Duration::from_secs(120)
     );
-
     set_env_var(REALISTIC_30TPS_STALL_SECS_ENV, "45");
     assert_eq!(
         realistic_30tps_stall_threshold(Some(&config)),
         Duration::from_secs(45)
     );
-
     set_env_var(REALISTIC_30TPS_STALL_SECS_ENV, "0");
     assert_eq!(
         realistic_30tps_stall_threshold(Some(&config)),
@@ -6628,7 +6281,6 @@ async fn realistic_30tps_rotating_fault_stall_threshold_covers_fault_windows() {
     );
     remove_env_var(REALISTIC_30TPS_STALL_SECS_ENV);
 }
-
 #[test]
 fn realistic_30tps_fault_kind_parsing_accepts_default_matrix_and_rejects_unknown() -> Result<()> {
     assert_eq!(
@@ -6644,7 +6296,6 @@ fn realistic_30tps_fault_kind_parsing_accepts_default_matrix_and_rejects_unknown
     assert!(parse_realistic_30tps_fault_kinds("conflicting-ready,unknown").is_err());
     Ok(())
 }
-
 fn realistic_30tps_fault_layer_rbc(layer: &ConfigLayer) -> &Table {
     layer
         .as_ref()
@@ -6656,7 +6307,6 @@ fn realistic_30tps_fault_layer_rbc(layer: &ConfigLayer) -> &Table {
         .and_then(TomlValue::as_table)
         .expect("fault layer should include sumeragi.debug.rbc")
 }
-
 #[test]
 fn realistic_30tps_fault_kind_layers_set_only_expected_rbc_knob() {
     let conflicting_ready = Realistic30TpsFaultKind::ConflictingReady.layer(4);
@@ -6667,7 +6317,6 @@ fn realistic_30tps_fault_kind_layers_set_only_expected_rbc_knob() {
             .and_then(TomlValue::as_integer),
         Some(0b1111)
     );
-
     let duplicate_inits = Realistic30TpsFaultKind::DuplicateInits.layer(4);
     let rbc = realistic_30tps_fault_layer_rbc(&duplicate_inits);
     assert_eq!(rbc.len(), 1);
@@ -6675,7 +6324,6 @@ fn realistic_30tps_fault_kind_layers_set_only_expected_rbc_knob() {
         rbc.get("duplicate_inits").and_then(TomlValue::as_bool),
         Some(true)
     );
-
     let drop_validator_chunks = Realistic30TpsFaultKind::DropValidatorChunks.layer(4);
     let rbc = realistic_30tps_fault_layer_rbc(&drop_validator_chunks);
     assert_eq!(rbc.len(), 1);
@@ -6685,7 +6333,6 @@ fn realistic_30tps_fault_kind_layers_set_only_expected_rbc_knob() {
         Some(0b1111)
     );
 }
-
 #[test]
 fn realistic_30tps_fault_rotation_schedule_cycles_peer_and_fault_without_overlap() -> Result<()> {
     let fault_kinds = default_realistic_30tps_fault_kinds();
@@ -6703,7 +6350,6 @@ fn realistic_30tps_fault_rotation_schedule_cycles_peer_and_fault_without_overlap
             })
         })
         .collect::<Result<Vec<_>>>()?;
-
     assert_eq!(
         windows
             .iter()
@@ -6732,7 +6378,6 @@ fn realistic_30tps_fault_rotation_schedule_cycles_peer_and_fault_without_overlap
     ));
     Ok(())
 }
-
 #[test]
 fn realistic_default_block_max_txs_uses_larger_rotating_fault_batches() {
     assert_eq!(
@@ -6749,7 +6394,6 @@ fn realistic_default_block_max_txs_uses_larger_rotating_fault_batches() {
     );
     assert_eq!(realistic_default_block_max_txs(true), 512);
 }
-
 #[test]
 fn realistic_default_queue_soft_limit_is_fault_aware() {
     assert_eq!(
@@ -6765,7 +6409,6 @@ fn realistic_default_queue_soft_limit_is_fault_aware() {
         "rotating fault soak allows restart bursts without accepting unbounded backlog"
     );
 }
-
 #[test]
 fn realistic_30tps_snapshot_settings_enable_read_write_for_rotating_faults() {
     assert_eq!(realistic_30tps_snapshot_settings(false), ("disabled", 0));
@@ -6777,7 +6420,6 @@ fn realistic_30tps_snapshot_settings_enable_read_write_for_rotating_faults() {
         )
     );
 }
-
 #[test]
 fn realistic_30tps_validator_mask_covers_roster_bits() {
     assert_eq!(realistic_30tps_validator_mask(0), 0);
@@ -6785,7 +6427,6 @@ fn realistic_30tps_validator_mask_covers_roster_bits() {
     assert_eq!(realistic_30tps_validator_mask(4), 0b1111);
     assert_eq!(realistic_30tps_validator_mask(63), i64::MAX);
 }
-
 #[test]
 fn realistic_30tps_catch_up_target_uses_leading_statuses() -> Result<()> {
     let target = realistic_30tps_catch_up_target_from_statuses(&[
@@ -6815,7 +6456,6 @@ fn realistic_30tps_catch_up_target_uses_leading_statuses() -> Result<()> {
     assert!(realistic_30tps_catch_up_target_from_statuses(&[]).is_err());
     Ok(())
 }
-
 #[test]
 fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
     let last_seen = Realistic30TpsCatchUpTarget {
@@ -6876,7 +6516,6 @@ fn realistic_30tps_catch_up_progress_tracks_block_or_transaction_advances() {
         })
     );
 }
-
 #[test]
 fn realistic_30tps_strict_progress_target_uses_lagging_statuses() -> Result<()> {
     let target = realistic_30tps_strict_progress_target_from_statuses(&[
@@ -6906,7 +6545,6 @@ fn realistic_30tps_strict_progress_target_uses_lagging_statuses() -> Result<()> 
     assert!(realistic_30tps_strict_progress_target_from_statuses(&[]).is_err());
     Ok(())
 }
-
 #[test]
 fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
     let target = Realistic30TpsCatchUpTarget {
@@ -6929,7 +6567,6 @@ fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
         &one_peer_still_at_baseline,
         target
     ));
-
     let all_peers_approved_more = [
         iroha::client::Status {
             blocks_non_empty: 10,
@@ -6946,7 +6583,6 @@ fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
         &all_peers_approved_more,
         target
     ));
-
     let all_peers_have_more_non_empty_blocks = [
         iroha::client::Status {
             blocks_non_empty: 11,
@@ -6968,7 +6604,6 @@ fn realistic_30tps_strict_progress_requires_all_peers_to_advance() {
         target
     ));
 }
-
 #[test]
 fn realistic_30tps_post_heal_progress_accepts_completed_target() {
     let target = Realistic30TpsCatchUpTarget {
@@ -6996,7 +6631,6 @@ fn realistic_30tps_post_heal_progress_accepts_completed_target() {
         target,
         216_016
     ));
-
     let one_peer_before_final_target = [
         iroha::client::Status {
             blocks_non_empty: 1379,
@@ -7015,7 +6649,6 @@ fn realistic_30tps_post_heal_progress_accepts_completed_target() {
         216_016
     ));
 }
-
 #[test]
 fn realistic_30tps_all_peer_convergence_rejects_deep_lag() -> Result<()> {
     let converged = [
@@ -7031,7 +6664,6 @@ fn realistic_30tps_all_peer_convergence_rejects_deep_lag() -> Result<()> {
         },
     ];
     assert!(realistic_30tps_statuses_are_converged(&converged)?);
-
     let lagging = [
         iroha::client::Status {
             blocks_non_empty: 42,
@@ -7048,7 +6680,6 @@ fn realistic_30tps_all_peer_convergence_rejects_deep_lag() -> Result<()> {
     assert!(realistic_30tps_statuses_are_converged(&[]).is_err());
     Ok(())
 }
-
 #[test]
 fn realistic_30tps_convergence_progress_tracks_lagging_peer_catch_up() {
     let last_seen = Realistic30TpsConvergenceSpan {
@@ -7067,7 +6698,6 @@ fn realistic_30tps_convergence_progress_tracks_lagging_peer_catch_up() {
         realistic_30tps_convergence_progress_since(leading_peer_only_advanced, last_seen),
         None
     );
-
     let lagging_peer_advanced = Realistic30TpsConvergenceSpan {
         min_blocks_non_empty: 1_112,
         max_blocks_non_empty: 1_197,
@@ -7078,7 +6708,6 @@ fn realistic_30tps_convergence_progress_tracks_lagging_peer_catch_up() {
         realistic_30tps_convergence_progress_since(lagging_peer_advanced, last_seen),
         Some(lagging_peer_advanced)
     );
-
     let block_gap_narrowed = Realistic30TpsConvergenceSpan {
         min_blocks_non_empty: 1_111,
         max_blocks_non_empty: 1_195,
@@ -7089,7 +6718,6 @@ fn realistic_30tps_convergence_progress_tracks_lagging_peer_catch_up() {
         realistic_30tps_convergence_progress_since(block_gap_narrowed, last_seen),
         Some(block_gap_narrowed)
     );
-
     let approved_gap_narrowed = Realistic30TpsConvergenceSpan {
         min_blocks_non_empty: 1_111,
         max_blocks_non_empty: 1_196,
@@ -7101,7 +6729,6 @@ fn realistic_30tps_convergence_progress_tracks_lagging_peer_catch_up() {
         Some(approved_gap_narrowed)
     );
 }
-
 #[test]
 fn realistic_fault_windows_detect_overlap() {
     let first = Realistic30TpsFaultWindow {
@@ -7131,7 +6758,6 @@ fn realistic_fault_windows_detect_overlap() {
         overlapping,
     ]));
 }
-
 #[test]
 fn realistic_strict_fault_windows_require_convergence_before_next_fault() {
     let first = Realistic30TpsFaultWindow {
@@ -7170,7 +6796,6 @@ fn realistic_strict_fault_windows_require_convergence_before_next_fault() {
         &[first.clone(), second.clone()],
         std::slice::from_ref(&convergence)
     ));
-
     let early_second = Realistic30TpsFaultWindow {
         started_ms: 69,
         ..second
@@ -7180,7 +6805,6 @@ fn realistic_strict_fault_windows_require_convergence_before_next_fault() {
         &[convergence]
     ));
 }
-
 #[test]
 fn realistic_status_recovery_summary_distinguishes_startup_bound_from_convergence() {
     let within = Realistic30TpsStatusRecoverySample {
@@ -7204,12 +6828,10 @@ fn realistic_status_recovery_summary_distinguishes_startup_bound_from_convergenc
         last_error: Some("connection refused".to_string()),
         ..within.clone()
     };
-
     assert_eq!(within.total_duration_ms(), 62);
     assert_eq!(within.status_wait_ms(), 60);
     assert!(within.recovered_within_bound());
     assert!(!outside.recovered_within_bound());
-
     let Value::Object(summary) = status_recovery_summary_value(&[within, outside]) else {
         panic!("expected status recovery summary object");
     };
@@ -7221,13 +6843,11 @@ fn realistic_status_recovery_summary_distinguishes_startup_bound_from_convergenc
         Some(&Value::from(false))
     );
 }
-
 #[test]
 fn realistic_load_metadata_stamps_unique_sequence() {
     let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
     let first = realistic_load_metadata(7);
     let second = realistic_load_metadata(8);
-
     assert_eq!(
         first.get(&sequence_key).map(ToString::to_string).as_deref(),
         Some("7")
@@ -7241,7 +6861,6 @@ fn realistic_load_metadata_stamps_unique_sequence() {
     );
     assert_ne!(first, second);
 }
-
 #[test]
 fn realistic_submit_retry_filter_only_matches_local_transport_errors() {
     assert!(realistic_submit_error_is_retryable_message(
@@ -7257,7 +6876,6 @@ fn realistic_submit_retry_filter_only_matches_local_transport_errors() {
         "validation failed after transaction reached Torii"
     ));
 }
-
 #[test]
 fn realistic_submit_already_known_filter_counts_queue_conflicts_as_accepts() {
     assert!(realistic_submit_error_is_already_known_message(
@@ -7273,7 +6891,6 @@ fn realistic_submit_already_known_filter_counts_queue_conflicts_as_accepts() {
         "transaction rejected: insufficient balance"
     ));
 }
-
 #[test]
 fn realistic_submit_accept_quorum_requires_one_more_than_tolerated_faults() {
     assert_eq!(realistic_submit_accept_quorum(4, 0), 1);
@@ -7281,13 +6898,11 @@ fn realistic_submit_accept_quorum_requires_one_more_than_tolerated_faults() {
     assert_eq!(realistic_submit_accept_quorum(4, 2), 3);
     assert_eq!(realistic_submit_accept_quorum(1, 1), 1);
 }
-
 #[test]
 fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
     let accounts = realistic_transfer_accounts(3, 7);
     let chunks = realistic_npos_fee_funding_instruction_chunks(&accounts);
     let fee_asset_definition_id = route_fee_asset_definition_id();
-
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0].len(), accounts.len());
     for (instruction, account) in chunks[0].iter().zip(&accounts) {
@@ -7307,7 +6922,6 @@ fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
         );
     }
 }
-
 #[test]
 fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
     let resolver = checked_localnet_smoke_keypair(
@@ -7321,10 +6935,8 @@ fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
     let account = realistic_ram_lfe_email_accounts(1, 9)
         .pop()
         .expect("account");
-
     let receipt =
         realistic_ram_lfe_email_receipt(&context, &resolver, &account.id, account.uaid, 7, 9);
-
     receipt
         .verify(resolver.public_key())
         .expect("receipt signature should verify");
@@ -7336,21 +6948,18 @@ fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
         Hash::new(&context.program_id_bytes)
     );
 }
-
 #[test]
 fn localnet_smoke_fixture_keypairs_use_checked_seed_derivation() {
     let seed = b"integration_tests::sumeragi_localnet_smoke::checked-fixture".to_vec();
     let key_pair = checked_localnet_smoke_keypair(seed.clone(), Algorithm::Ed25519);
     let expected = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .expect("derive expected localnet smoke fixture key");
-
     assert_eq!(key_pair.public_key(), expected.public_key());
     assert!(
         KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
         "checked localnet smoke fixtures must reject invalid Ed25519 seed material"
     );
 }
-
 #[test]
 fn realistic_ram_lfe_email_claim_counts_are_deterministic() {
     let first = expected_realistic_ram_lfe_email_claim_counts(4, 25, 123);
@@ -7362,7 +6971,6 @@ fn realistic_ram_lfe_email_claim_counts_are_deterministic() {
         expected_realistic_ram_lfe_email_claim_counts(4, 25, 124)
     );
 }
-
 #[test]
 fn write_throughput_artifacts_writes_error_summary() {
     let dir = tempdir().expect("tempdir");
@@ -7384,7 +6992,6 @@ fn write_throughput_artifacts_writes_error_summary() {
         stdout_log: None,
         stderr_log: None,
     }];
-
     let run_dir = write_throughput_artifacts(&artifact_root, &network_dir, &peer_logs, &artifacts)
         .expect("write artifacts");
     let summary_path = run_dir.join("summary.json");
@@ -7410,7 +7017,6 @@ fn write_throughput_artifacts_writes_error_summary() {
         Some(&Value::String("load".to_string()))
     );
 }
-
 #[test]
 fn throughput_status_summary_uses_min_and_max_peer_values() {
     let statuses = vec![
@@ -7431,9 +7037,7 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
             view_changes: 0,
         },
     ];
-
     let summary = ThroughputStatusSummary::from_statuses(&statuses);
-
     assert_eq!(summary.min_blocks, 10);
     assert_eq!(summary.max_blocks, 12);
     assert_eq!(summary.min_blocks_non_empty, 9);
@@ -7442,7 +7046,6 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
     assert_eq!(summary.max_txs_rejected, 2);
     assert_eq!(summary.max_queue_size, 7);
 }
-
 #[test]
 fn throughput_status_summary_can_ignore_one_lagging_peer_for_progress() {
     let statuses = vec![
@@ -7469,9 +7072,7 @@ fn throughput_status_summary_can_ignore_one_lagging_peer_for_progress() {
             ..StatusSnapshot::default()
         },
     ];
-
     let summary = ThroughputStatusSummary::from_statuses_tolerating_lagging(&statuses, 1);
-
     assert_eq!(summary.min_blocks, 208);
     assert_eq!(summary.min_blocks_non_empty, 208);
     assert_eq!(summary.min_txs_approved, 51_777);
@@ -7479,7 +7080,6 @@ fn throughput_status_summary_can_ignore_one_lagging_peer_for_progress() {
     assert_eq!(summary.max_txs_rejected, 1);
     assert_eq!(summary.max_queue_size, 1_847);
 }
-
 #[test]
 fn throughput_status_summary_uses_strict_min_without_lag_tolerance() {
     let statuses = vec![
@@ -7494,13 +7094,10 @@ fn throughput_status_summary_uses_strict_min_without_lag_tolerance() {
             ..StatusSnapshot::default()
         },
     ];
-
     let summary = ThroughputStatusSummary::from_statuses_tolerating_lagging(&statuses, 0);
-
     assert_eq!(summary.min_blocks_non_empty, 7);
     assert_eq!(summary.min_txs_approved, 70);
 }
-
 #[test]
 fn height_quorum_with_bounded_lag_accepts_one_block_tail_lag() {
     let statuses = [
@@ -7521,10 +7118,8 @@ fn height_quorum_with_bounded_lag_accepts_one_block_tail_lag() {
             ..Default::default()
         },
     ];
-
     assert!(height_quorum_with_bounded_lag(&statuses, 3, 3));
 }
-
 #[test]
 fn height_quorum_with_bounded_lag_accepts_tolerated_tail_lag() {
     let statuses = [
@@ -7545,10 +7140,8 @@ fn height_quorum_with_bounded_lag_accepts_tolerated_tail_lag() {
             ..Default::default()
         },
     ];
-
     assert!(height_quorum_with_bounded_lag(&statuses, 3, 3));
 }
-
 #[test]
 fn height_quorum_with_bounded_lag_rejects_missing_quorum_or_split_quorum() {
     let missing_quorum = [
@@ -7570,7 +7163,6 @@ fn height_quorum_with_bounded_lag_rejects_missing_quorum_or_split_quorum() {
         },
     ];
     assert!(!height_quorum_with_bounded_lag(&missing_quorum, 3, 3));
-
     let split_quorum = [
         iroha::client::Status {
             blocks: 1,
@@ -7592,7 +7184,6 @@ fn height_quorum_with_bounded_lag_rejects_missing_quorum_or_split_quorum() {
     assert!(!height_quorum_with_bounded_lag(&split_quorum, 3, 3));
     assert!(!height_quorum_with_bounded_lag(&[], 3, 3));
 }
-
 #[test]
 fn quorum_low_watermark_height_ignores_tolerated_tail_lag() {
     let statuses = [
@@ -7613,12 +7204,10 @@ fn quorum_low_watermark_height_ignores_tolerated_tail_lag() {
             ..Default::default()
         },
     ];
-
     assert_eq!(quorum_low_watermark_height(&statuses, 1), 2);
     assert_eq!(quorum_low_watermark_height(&statuses, 0), 1);
     assert_eq!(quorum_low_watermark_height(&[], 1), 0);
 }
-
 #[test]
 fn realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_finite() {
     let load_end = ThroughputStatusSummary {
@@ -7643,7 +7232,6 @@ fn realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_fin
             sumeragi: Vec::new(),
         },
     ];
-
     let summary = realistic_artifact_summary(
         0,
         10,
@@ -7659,14 +7247,12 @@ fn realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_fin
         0,
         &samples,
     );
-
     assert_eq!(summary.load_sample_count, 1);
     assert_eq!(summary.drain_elapsed_ms, 3_000);
     assert_eq!(summary.load_avg_secs_per_block, 0.0);
     assert_eq!(summary.avg_secs_per_block, 0.0);
     assert!(summary.final_committed_tps.is_finite());
 }
-
 #[test]
 fn realistic_target_blocks_cover_load_capacity() {
     assert_eq!(realistic_target_blocks(0, 216_000, 512), 422);
@@ -7675,7 +7261,6 @@ fn realistic_target_blocks_cover_load_capacity() {
     assert_eq!(realistic_target_blocks(0, 36_001, 50), 721);
     assert_eq!(realistic_target_blocks(600, 36_000, 0), 600);
 }
-
 #[test]
 fn realistic_target_blocks_handle_extreme_counters() {
     assert_eq!(realistic_target_blocks(0, u64::MAX, 1), u64::MAX);
@@ -7683,14 +7268,12 @@ fn realistic_target_blocks_handle_extreme_counters() {
     assert_eq!(realistic_target_blocks(u64::MAX, 1, 1), u64::MAX);
     assert_eq!(realistic_target_blocks(u64::MAX - 1, 1, 0), u64::MAX - 1);
 }
-
 #[test]
 fn realistic_target_blocks_zero_transactions_never_inflates_default() {
     assert_eq!(realistic_target_blocks(0, 0, 100), 0);
     assert_eq!(realistic_target_blocks(7, 0, 100), 7);
     assert_eq!(realistic_target_blocks(7, 0, 0), 7);
 }
-
 #[test]
 fn realistic_target_blocks_rounds_up_partial_capacity() {
     assert_eq!(realistic_target_blocks(0, 1, 100), 1);
@@ -7698,7 +7281,6 @@ fn realistic_target_blocks_rounds_up_partial_capacity() {
     assert_eq!(realistic_target_blocks(0, 101, 100), 2);
     assert_eq!(realistic_target_blocks(1, 101, 100), 2);
 }
-
 #[test]
 fn realistic_target_blocks_handles_near_max_capacity_without_overflow() {
     assert_eq!(realistic_target_blocks(0, u64::MAX, u64::MAX), 1);
@@ -7708,7 +7290,6 @@ fn realistic_target_blocks_handles_near_max_capacity_without_overflow() {
         2
     );
 }
-
 #[test]
 fn max_queue_size_for_phase_filters_samples() {
     let samples = vec![
@@ -7740,12 +7321,10 @@ fn max_queue_size_for_phase_filters_samples() {
             sumeragi: Vec::new(),
         },
     ];
-
     assert_eq!(max_queue_size_for_phase(&samples, "load"), 11);
     assert_eq!(max_queue_size_for_phase(&samples, "drain"), 99);
     assert_eq!(max_queue_size_for_phase(&samples, "missing"), 0);
 }
-
 #[test]
 fn max_queue_size_for_phase_ignores_adversarial_non_matching_samples() {
     let samples = vec![
@@ -7789,12 +7368,10 @@ fn max_queue_size_for_phase_ignores_adversarial_non_matching_samples() {
             sumeragi: Vec::new(),
         },
     ];
-
     assert_eq!(max_queue_size_for_phase(&samples, "load"), 21);
     assert_eq!(max_queue_size_for_phase(&samples, "Load"), u64::MAX - 1);
     assert_eq!(max_queue_size_for_phase(&samples, ""), 0);
 }
-
 #[test]
 fn max_queue_size_for_phase_counts_all_matching_statuses_without_summing() {
     let samples = vec![
@@ -7832,11 +7409,9 @@ fn max_queue_size_for_phase_counts_all_matching_statuses_without_summing() {
             sumeragi: Vec::new(),
         },
     ];
-
     assert_eq!(max_queue_size_for_phase(&samples, "load"), u64::MAX - 1);
     assert_eq!(max_queue_size_for_phase(&samples, "drain"), u64::MAX);
 }
-
 #[test]
 fn max_queue_size_for_phase_requires_exact_phase_match() {
     let samples = vec![
@@ -7877,11 +7452,9 @@ fn max_queue_size_for_phase_requires_exact_phase_match() {
             sumeragi: Vec::new(),
         },
     ];
-
     assert_eq!(max_queue_size_for_phase(&samples, "load"), 5);
     assert_eq!(max_queue_size_for_phase(&samples, "load "), u64::MAX);
 }
-
 #[test]
 fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
     let dir = tempdir().expect("tempdir");
@@ -8016,7 +7589,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         stdout_log: None,
         stderr_log: None,
     }];
-
     let run_dir = write_throughput_artifacts(&artifact_root, &network_dir, &peer_logs, &artifacts)
         .expect("write artifacts");
     let summary_json = fs::read_to_string(run_dir.join("summary.json")).expect("read summary");
@@ -8151,7 +7723,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         strict_summary.get("max_start_block_gap"),
         Some(&Value::from(3_u64))
     );
-
     let samples_json =
         fs::read_to_string(run_dir.join("status_samples.json")).expect("read samples");
     let Value::Array(samples) =
@@ -8174,7 +7745,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
     };
     assert_eq!(status.get("blocks_non_empty"), Some(&Value::from(4_u64)));
 }
-
 #[test]
 fn throughput_payload_is_deterministic() {
     let payload = throughput_payload(7, 64, 123);
@@ -8185,7 +7755,6 @@ fn throughput_payload_is_deterministic() {
     let different = throughput_payload(8, 64, 123);
     assert_ne!(payload, different);
 }
-
 #[test]
 fn metrics_url_handles_variants() {
     assert_eq!(
@@ -8201,7 +7770,6 @@ fn metrics_url_handles_variants() {
         "http://127.0.0.1:8080/metrics"
     );
 }
-
 #[test]
 fn parse_prom_histogram_extracts_quantiles() {
     let payload = r#"
@@ -8219,7 +7787,6 @@ commit_time_ms_count 4
     let p50 = hist.quantile(0.5).expect("p50");
     assert!((p50 - 7.5).abs() < 0.25);
 }
-
 #[test]
 fn aggregate_histograms_sums_counts() {
     let h1 = HistogramSnapshot {
@@ -8237,7 +7804,6 @@ fn aggregate_histograms_sums_counts() {
     assert!((merged.sum - 9.0).abs() < f64::EPSILON);
     assert_eq!(merged.buckets.len(), 2);
 }
-
 #[test]
 fn commit_time_quantiles_use_delta_histogram() {
     let warmup = PeerMetricsSnapshot {
@@ -8263,14 +7829,12 @@ fn commit_time_quantiles_use_delta_histogram() {
     assert_eq!(p95, Some(10));
     assert_eq!(p99, Some(10));
 }
-
 #[test]
 fn rate_summary_reports_avg_and_max() {
     let (avg, max) = rate_summary(&[0, 10], &[10, 40], Duration::from_secs(10));
     assert!((avg - 2.0).abs() < f64::EPSILON);
     assert!((max - 3.0).abs() < f64::EPSILON);
 }
-
 #[test]
 fn config_fingerprint_changes_on_update() {
     let dir = tempdir().expect("tempdir");
@@ -8285,7 +7849,6 @@ fn config_fingerprint_changes_on_update() {
         .expect("fingerprint value");
     assert_ne!(first, second);
 }
-
 #[test]
 fn status_snapshot_value_contains_only_general_telemetry() {
     let snapshot = StatusSnapshot {
@@ -8305,7 +7868,6 @@ fn status_snapshot_value_contains_only_general_telemetry() {
     assert!(!map.contains_key("highest_qc_height"));
     assert!(!map.contains_key("tx_queue_saturated"));
 }
-
 #[test]
 fn sumeragi_snapshot_value_maps_fields() {
     let snapshot = SumeragiStatusSnapshot {
@@ -8335,7 +7897,6 @@ fn sumeragi_snapshot_value_maps_fields() {
     );
     assert_eq!(map.get("tx_queue_saturated"), Some(&Value::from(true)));
 }
-
 async fn wait_for_converged_height(
     network: &Network,
     target_height: u64,
@@ -8386,7 +7947,6 @@ async fn wait_for_converged_height(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn wait_for_height_quorum_with_bounded_lag(
     network: &Network,
     target_height: u64,
@@ -8434,7 +7994,6 @@ async fn wait_for_height_quorum_with_bounded_lag(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 fn height_quorum_with_bounded_lag(
     statuses: &[iroha::client::Status],
     target_height: u64,
@@ -8461,17 +8020,14 @@ fn height_quorum_with_bounded_lag(
     let low_watermark = quorum_low_watermark_height(statuses, tolerated_lagging);
     max_height.saturating_sub(low_watermark) <= 1
 }
-
 fn status_height_span(statuses: &[iroha::client::Status]) -> Option<(u64, u64)> {
     let min_height = statuses.iter().map(|status| status.blocks).min()?;
     let max_height = statuses.iter().map(|status| status.blocks).max()?;
     Some((min_height, max_height))
 }
-
 fn tolerated_lagging_peers(peer_count: usize) -> usize {
     peer_count.saturating_sub(commit_quorum_from_len(peer_count).max(1))
 }
-
 fn quorum_low_watermark_height(
     statuses: &[iroha::client::Status],
     tolerated_lagging: usize,
@@ -8483,12 +8039,10 @@ fn quorum_low_watermark_height(
     heights.sort_unstable();
     heights[tolerated_lagging.min(heights.len().saturating_sub(1))]
 }
-
 fn scale_duration(duration: Duration, factor: u64) -> Duration {
     let total_ms = duration.as_millis().saturating_mul(u128::from(factor));
     Duration::from_millis(u64::try_from(total_ms).unwrap_or(u64::MAX))
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[allow(dead_code)]
 struct StatusSnapshot {
@@ -8499,7 +8053,6 @@ struct StatusSnapshot {
     txs_rejected: u64,
     view_changes: u32,
 }
-
 impl StatusSnapshot {
     fn from_status(status: &iroha::client::Status) -> Self {
         Self {
@@ -8512,7 +8065,6 @@ impl StatusSnapshot {
         }
     }
 }
-
 #[derive(Debug)]
 struct ThroughputSample {
     phase: Option<String>,
@@ -8520,7 +8072,6 @@ struct ThroughputSample {
     statuses: Vec<StatusSnapshot>,
     sumeragi: Vec<SumeragiStatusSnapshot>,
 }
-
 #[derive(Clone, Debug, Default)]
 struct ThroughputStatusSummary {
     min_blocks: u64,
@@ -8532,7 +8083,6 @@ struct ThroughputStatusSummary {
     max_txs_rejected: u64,
     max_queue_size: u64,
 }
-
 impl ThroughputStatusSummary {
     fn from_statuses(statuses: &[StatusSnapshot]) -> Self {
         if statuses.is_empty() {
@@ -8581,7 +8131,6 @@ impl ThroughputStatusSummary {
                 .unwrap_or_default(),
         }
     }
-
     fn from_statuses_tolerating_lagging(
         statuses: &[StatusSnapshot],
         tolerated_lagging: usize,
@@ -8589,7 +8138,6 @@ impl ThroughputStatusSummary {
         if statuses.is_empty() || tolerated_lagging == 0 {
             return Self::from_statuses(statuses);
         }
-
         fn low_watermark_after_lagging<I>(values: I, tolerated_lagging: usize) -> u64
         where
             I: IntoIterator<Item = u64>,
@@ -8601,7 +8149,6 @@ impl ThroughputStatusSummary {
             values.sort_unstable();
             values[tolerated_lagging.min(values.len().saturating_sub(1))]
         }
-
         let mut summary = Self::from_statuses(statuses);
         summary.min_blocks = low_watermark_after_lagging(
             statuses.iter().map(|status| status.blocks),
@@ -8618,7 +8165,6 @@ impl ThroughputStatusSummary {
         summary
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SumeragiStatusSnapshot {
     tx_queue_depth: u64,
@@ -8631,7 +8177,6 @@ struct SumeragiStatusSnapshot {
     tx_queue_saturated_by_age: bool,
     tx_queue_oldest_queued_age_ms: u64,
 }
-
 impl SumeragiStatusSnapshot {
     fn from_status(status: &SumeragiDiagnosticsStatus) -> Self {
         Self {
@@ -8647,10 +8192,8 @@ impl SumeragiStatusSnapshot {
         }
     }
 }
-
 fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     let mut map = Map::new();
-
     map.insert("blocks".to_string(), Value::from(snapshot.blocks));
     map.insert(
         "blocks_non_empty".to_string(),
@@ -8671,7 +8214,6 @@ fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     );
     Value::Object(map)
 }
-
 fn throughput_status_summary_value(summary: &ThroughputStatusSummary) -> Value {
     let mut map = Map::new();
     map.insert("min_blocks".to_string(), Value::from(summary.min_blocks));
@@ -8702,7 +8244,6 @@ fn throughput_status_summary_value(summary: &ThroughputStatusSummary) -> Value {
     );
     Value::Object(map)
 }
-
 fn catch_up_target_value(target: Realistic30TpsCatchUpTarget) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -8712,7 +8253,6 @@ fn catch_up_target_value(target: Realistic30TpsCatchUpTarget) -> Value {
     map.insert("txs_approved".to_string(), Value::from(target.txs_approved));
     Value::Object(map)
 }
-
 fn convergence_span_value(span: Realistic30TpsConvergenceSpan) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -8735,7 +8275,6 @@ fn convergence_span_value(span: Realistic30TpsConvergenceSpan) -> Value {
     map.insert("approved_gap".to_string(), Value::from(span.approved_gap()));
     Value::Object(map)
 }
-
 fn convergence_window_value(window: &Realistic30TpsConvergenceWindow) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -8764,7 +8303,6 @@ fn convergence_window_value(window: &Realistic30TpsConvergenceWindow) -> Value {
     );
     Value::Object(map)
 }
-
 fn catch_up_sample_value(sample: &Realistic30TpsCatchUpSample) -> Value {
     let mut map = Map::new();
     map.insert("timestamp_ms".to_string(), Value::from(sample.timestamp_ms));
@@ -8809,7 +8347,6 @@ fn catch_up_sample_value(sample: &Realistic30TpsCatchUpSample) -> Value {
     );
     Value::Object(map)
 }
-
 fn snapshot_observation_value(snapshot: &Realistic30TpsSnapshotObservation) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -8850,7 +8387,6 @@ fn snapshot_observation_value(snapshot: &Realistic30TpsSnapshotObservation) -> V
     );
     Value::Object(map)
 }
-
 fn status_recovery_sample_value(sample: &Realistic30TpsStatusRecoverySample) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -8910,7 +8446,6 @@ fn status_recovery_sample_value(sample: &Realistic30TpsStatusRecoverySample) -> 
     );
     Value::Object(map)
 }
-
 fn fault_window_value(window: &Realistic30TpsFaultWindow) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -8935,7 +8470,6 @@ fn fault_window_value(window: &Realistic30TpsFaultWindow) -> Value {
     );
     Value::Object(map)
 }
-
 fn convergence_summary_value(
     windows: &[Realistic30TpsFaultWindow],
     convergence_windows: &[Realistic30TpsConvergenceWindow],
@@ -8984,7 +8518,6 @@ fn convergence_summary_value(
         .map(|window| window.ended_ms.saturating_sub(window.started_ms))
         .max()
         .unwrap_or_default();
-
     map.insert(
         "strict_fault_starts_after_convergence".to_string(),
         Value::from(strict_fault_starts_after_convergence),
@@ -9016,7 +8549,6 @@ fn convergence_summary_value(
     map.insert("max_wait_ms".to_string(), Value::from(max_wait_ms));
     Value::Object(map)
 }
-
 fn status_recovery_summary_value(samples: &[Realistic30TpsStatusRecoverySample]) -> Value {
     let mut map = Map::new();
     let recoveries = samples.len();
@@ -9100,7 +8632,6 @@ fn status_recovery_summary_value(samples: &[Realistic30TpsStatusRecoverySample])
     map.insert("max_bound_ms".to_string(), Value::from(max_bound_ms));
     Value::Object(map)
 }
-
 fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -9141,7 +8672,6 @@ fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     );
     Value::Object(map)
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PeerLogInfo {
     index: u64,
@@ -9149,7 +8679,6 @@ struct PeerLogInfo {
     stdout_log: Option<String>,
     stderr_log: Option<String>,
 }
-
 #[derive(Clone, Debug)]
 struct ThroughputArtifactRecipe {
     peers: u64,
@@ -9180,7 +8709,6 @@ struct ThroughputArtifactRecipe {
     rbc_data_shards: u64,
     rbc_parity_shards: u64,
 }
-
 #[derive(Clone, Debug)]
 struct ThroughputArtifactSlo {
     commit_p95_ms: u64,
@@ -9189,7 +8717,6 @@ struct ThroughputArtifactSlo {
     backpressure_rate_max: f64,
     queue_saturation_max: f64,
 }
-
 #[derive(Clone, Debug)]
 struct ThroughputArtifactMetrics {
     submitted_tps: f64,
@@ -9210,7 +8737,6 @@ struct ThroughputArtifactMetrics {
     warmup_submit_elapsed_ms: u64,
     steady_submit_elapsed_ms: u64,
 }
-
 #[derive(Clone, Debug)]
 struct ThroughputArtifactRealistic {
     baseline_non_empty: u64,
@@ -9233,7 +8759,6 @@ struct ThroughputArtifactRealistic {
     load_avg_secs_per_block: f64,
     avg_secs_per_block: f64,
 }
-
 #[derive(Debug, Default)]
 struct ThroughputArtifacts {
     recipe: Option<ThroughputArtifactRecipe>,
@@ -9249,7 +8774,6 @@ struct ThroughputArtifacts {
     convergence_windows: Vec<Realistic30TpsConvergenceWindow>,
     error: Option<String>,
 }
-
 fn write_throughput_artifacts(
     artifact_root: &Path,
     network_dir: &Path,
@@ -9265,12 +8789,10 @@ fn write_throughput_artifacts(
         u64::try_from(timestamp_ms).unwrap_or(u64::MAX)
     ));
     fs::create_dir_all(&run_dir).wrap_err("create throughput artifact dir")?;
-
     let metrics_dir = run_dir.join("metrics");
     fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
     let logs_dir = run_dir.join("logs");
     fs::create_dir_all(&logs_dir).wrap_err("create logs dir")?;
-
     for snapshot in &artifacts.warmup_metrics {
         let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
         fs::write(&path, &snapshot.payload)
@@ -9281,7 +8803,6 @@ fn write_throughput_artifacts(
         fs::write(&path, &snapshot.payload)
             .wrap_err_with(|| format!("write steady metrics {}", path.display()))?;
     }
-
     let status_samples_value = Value::Array(
         artifacts
             .samples
@@ -9310,15 +8831,12 @@ fn write_throughput_artifacts(
             })
             .collect(),
     );
-
     let status_path = run_dir.join("status_samples.json");
     let status_json = norito::json::to_json_pretty(&status_samples_value)
         .map_err(|err| eyre!(err.to_string()))?;
     fs::write(&status_path, status_json)
         .wrap_err_with(|| format!("write {}", status_path.display()))?;
-
     let config_fingerprint = config_fingerprint(network_dir)?;
-
     let mut summary = Map::new();
     summary.insert(
         "run_id".to_string(),
@@ -9401,7 +8919,6 @@ fn write_throughput_artifacts(
             convergence_summary_value(&artifacts.fault_windows, &artifacts.convergence_windows),
         );
     }
-
     if let Some(recipe) = artifacts.recipe.as_ref() {
         let mut recipe_map = Map::new();
         recipe_map.insert("peers".to_string(), Value::from(recipe.peers));
@@ -9493,7 +9010,6 @@ fn write_throughput_artifacts(
         );
         summary.insert("recipe".to_string(), Value::Object(recipe_map));
     }
-
     if let Some(slo) = artifacts.slo.as_ref() {
         let mut slo_map = Map::new();
         slo_map.insert("commit_p95_ms".to_string(), Value::from(slo.commit_p95_ms));
@@ -9512,7 +9028,6 @@ fn write_throughput_artifacts(
         );
         summary.insert("slo".to_string(), Value::Object(slo_map));
     }
-
     if let Some(metrics) = artifacts.metrics.as_ref() {
         let mut metrics_map = Map::new();
         metrics_map.insert(
@@ -9585,7 +9100,6 @@ fn write_throughput_artifacts(
         );
         summary.insert("metrics".to_string(), Value::Object(metrics_map));
     }
-
     if let Some(realistic) = artifacts.realistic.as_ref() {
         let mut realistic_map = Map::new();
         realistic_map.insert(
@@ -9663,7 +9177,6 @@ fn write_throughput_artifacts(
         );
         summary.insert("realistic".to_string(), Value::Object(realistic_map));
     }
-
     let peer_logs_value: Vec<Value> = peer_logs
         .iter()
         .map(|peer| {
@@ -9704,17 +9217,14 @@ fn write_throughput_artifacts(
         "metrics_dir".to_string(),
         Value::String(metrics_dir.to_string_lossy().to_string()),
     );
-
     let summary_value = Value::Object(summary);
     let summary_path = run_dir.join("summary.json");
     let summary_json =
         norito::json::to_json_pretty(&summary_value).map_err(|err| eyre!(err.to_string()))?;
     fs::write(&summary_path, summary_json)
         .wrap_err_with(|| format!("write {}", summary_path.display()))?;
-
     Ok(run_dir)
 }
-
 fn copy_peer_log_into_artifacts(
     logs_dir: &Path,
     peer: &PeerLogInfo,
@@ -9742,7 +9252,6 @@ fn copy_peer_log_into_artifacts(
     }
     Some(dest.to_string_lossy().to_string())
 }
-
 fn peer_log_artifact_file_name(index: u64, mnemonic: &str, stream: &str) -> String {
     let mut sanitized: String = mnemonic
         .chars()
@@ -9759,14 +9268,12 @@ fn peer_log_artifact_file_name(index: u64, mnemonic: &str, stream: &str) -> Stri
     }
     format!("{index}-{sanitized}-{stream}.log")
 }
-
 #[derive(Clone, Debug, Default)]
 struct HistogramSnapshot {
     buckets: Vec<(f64, u64)>,
     sum: f64,
     count: u64,
 }
-
 impl HistogramSnapshot {
     #[allow(clippy::float_cmp)]
     fn saturating_sub(&self, baseline: &Self) -> Self {
@@ -9790,7 +9297,6 @@ impl HistogramSnapshot {
             count,
         }
     }
-
     #[allow(clippy::cast_precision_loss)]
     fn quantile(&self, quantile: f64) -> Option<f64> {
         if !(0.0..=1.0).contains(&quantile) || self.count == 0 {
@@ -9819,14 +9325,12 @@ impl HistogramSnapshot {
         Some(prev_le)
     }
 }
-
 #[derive(Clone, Debug)]
 struct PeerMetricsSnapshot {
     peer: String,
     payload: String,
     commit_time_hist: HistogramSnapshot,
 }
-
 #[allow(clippy::float_cmp, single_use_lifetimes)]
 fn aggregate_histograms<'a>(
     histograms: impl IntoIterator<Item = &'a HistogramSnapshot>,
@@ -9852,7 +9356,6 @@ fn aggregate_histograms<'a>(
         count,
     }
 }
-
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -9865,7 +9368,6 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
     let bucket_prefix = format!("{metric}_bucket");
     let sum_prefix = format!("{metric}_sum");
     let count_prefix = format!("{metric}_count");
-
     for line in payload.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -9919,7 +9421,6 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
             }
         }
     }
-
     buckets.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     HistogramSnapshot {
         buckets,
@@ -9927,7 +9428,6 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
         count,
     }
 }
-
 fn parse_prom_counter(payload: &str, metric: &str) -> Option<u64> {
     payload
         .lines()
@@ -9945,7 +9445,6 @@ fn parse_prom_counter(payload: &str, metric: &str) -> Option<u64> {
                 .or_else(|| raw.parse::<f64>().ok().map(|value| value.round() as u64))
         })
 }
-
 fn metrics_url(torii_url: &str) -> String {
     if torii_url.ends_with("/metrics") {
         torii_url.to_string()
@@ -9955,7 +9454,6 @@ fn metrics_url(torii_url: &str) -> String {
         format!("{torii_url}/metrics")
     }
 }
-
 fn throughput_payload(index: u64, payload_bytes: usize, seed: u64) -> String {
     let prefix = format!("localnet throughput {index} ");
     let mut payload = String::with_capacity(payload_bytes.max(prefix.len()));
@@ -9974,7 +9472,6 @@ fn throughput_payload(index: u64, payload_bytes: usize, seed: u64) -> String {
     }
     payload
 }
-
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn commit_time_quantiles(
     warmup: &[PeerMetricsSnapshot],
@@ -9990,7 +9487,6 @@ fn commit_time_quantiles(
     let p99 = delta.quantile(0.99).map(|v| v.round() as u64);
     (p95, p99, delta.count)
 }
-
 #[allow(clippy::cast_precision_loss)]
 fn rate_summary(start: &[u64], end: &[u64], elapsed: Duration) -> (f64, f64) {
     let count = start.len().min(end.len());
@@ -10009,7 +9505,6 @@ fn rate_summary(start: &[u64], end: &[u64], elapsed: Duration) -> (f64, f64) {
     }
     (sum / count as f64, max_rate)
 }
-
 fn rate_per_second(count: u64, elapsed: Duration) -> f64 {
     let secs = elapsed.as_secs_f64();
     if secs <= 0.0 {
@@ -10017,18 +9512,15 @@ fn rate_per_second(count: u64, elapsed: Duration) -> f64 {
     }
     count as f64 / secs
 }
-
 fn duration_millis_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 fn seconds_per_block(elapsed: Duration, blocks: u64) -> f64 {
     if blocks == 0 {
         return 0.0;
     }
     elapsed.as_secs_f64() / blocks as f64
 }
-
 fn realistic_target_blocks(
     configured_target_blocks: u64,
     total_txs: u64,
@@ -10039,7 +9531,6 @@ fn realistic_target_blocks(
     }
     configured_target_blocks.max(total_txs.div_ceil(block_max_txs))
 }
-
 fn max_queue_size_for_phase(samples: &[ThroughputSample], phase: &str) -> u64 {
     samples
         .iter()
@@ -10048,7 +9539,6 @@ fn max_queue_size_for_phase(samples: &[ThroughputSample], phase: &str) -> u64 {
         .max()
         .unwrap_or_default()
 }
-
 #[allow(clippy::too_many_arguments)]
 fn realistic_artifact_summary(
     baseline_non_empty: u64,
@@ -10095,5 +9585,4 @@ fn realistic_artifact_summary(
         avg_secs_per_block: seconds_per_block(total_elapsed, produced_blocks),
     }
 }
-
 include!("sumeragi_localnet_smoke/config_paths.rs");

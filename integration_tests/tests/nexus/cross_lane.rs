@@ -1,14 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-lane manifest and relay proof tests (NX-11).
-
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    time::Duration,
-};
-
 use eyre::{Result, WrapErr};
 use iroha::nexus;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
@@ -26,8 +17,14 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{core as norito_core, json};
+use std::{
+    collections::BTreeMap,
+    fs,
+    num::{NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tempfile::tempdir;
-
 fn sample_commit_qc(header: &iroha_data_model::block::BlockHeader) -> Qc {
     let validator_set: Vec<PeerId> = Vec::new();
     Qc {
@@ -51,14 +48,12 @@ fn sample_commit_qc(header: &iroha_data_model::block::BlockHeader) -> Qc {
         },
     }
 }
-
 #[test]
 fn commitment_only_lane_without_privacy_commitments_is_gated() -> Result<()> {
     let alias = "private-lane";
     let lane_id = LaneId::new(42);
     let fixtures = tempdir()?;
     write_manifest(fixtures.path(), alias, false)?;
-
     let registry = build_registry(
         fixtures.path(),
         lane_id,
@@ -79,14 +74,12 @@ fn commitment_only_lane_without_privacy_commitments_is_gated() -> Result<()> {
     );
     Ok(())
 }
-
 #[test]
 fn commitment_only_lane_with_privacy_commitments_is_ready() -> Result<()> {
     let alias = "confidential-lane";
     let lane_id = LaneId::new(7);
     let fixtures = tempdir()?;
     write_manifest(fixtures.path(), alias, true)?;
-
     let registry = build_registry(
         fixtures.path(),
         lane_id,
@@ -106,7 +99,6 @@ fn commitment_only_lane_with_privacy_commitments_is_ready() -> Result<()> {
     );
     Ok(())
 }
-
 #[test]
 fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
     let leaf = [0xAB_u8; 32];
@@ -117,7 +109,6 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
         0,
         vec![Some(sibling)],
     )?;
-
     let mut attachment = ProofAttachment::new_ref(
         "lane/privacy".parse()?,
         ProofBox::new("lane/privacy".parse()?, vec![0x01, 0x02]),
@@ -126,7 +117,6 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
     attachment.lane_privacy = Some(privacy);
     let list = ProofAttachmentList::try_from(vec![attachment])
         .expect("one attachment is a valid bounded proof list");
-
     let norito_bytes = norito::to_bytes(&list)?;
     let archived = norito::from_bytes::<ProofAttachmentList>(&norito_bytes)?;
     let decoded: ProofAttachmentList = norito_core::NoritoDeserialize::deserialize(archived);
@@ -139,7 +129,6 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
     assert_eq!(decoded_privacy.commitment_id, LaneCommitmentId::new(9));
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
@@ -167,7 +156,6 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     let da_commitment_hash = Some(HashOf::from_untyped_unchecked(da_hash));
     header.set_da_commitments_hash(da_commitment_hash);
     let mut qc = sample_commit_qc(&header);
-
     // Tamper with the QC so the builder surfaces the mismatch.
     qc.subject_block_hash = HashOf::from_untyped_unchecked(Hash::new([0xFF; 4]));
     let err = nexus::CrossLaneTransferBuilder::new(
@@ -182,7 +170,6 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::QcSubjectMismatch)
     ));
-
     // Height mismatch should also be rejected.
     let mut height_mismatch_qc = sample_commit_qc(&header);
     height_mismatch_qc.height = header.height().get() + 1;
@@ -198,7 +185,6 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::QcHeightMismatch)
     ));
-
     // Untampered QC should build a verifiable envelope.
     let proof = nexus::CrossLaneTransferBuilder::new(
         header,
@@ -211,7 +197,6 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     proof.verify().expect("verification should succeed");
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn cross_lane_builder_accepts_independent_lane_local_settlement_height() -> Result<()> {
@@ -240,7 +225,6 @@ fn cross_lane_builder_accepts_independent_lane_local_settlement_height() -> Resu
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-
     let proof = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
         .build()
         .expect("lane-local settlement height may differ from global proposal height");
@@ -251,7 +235,6 @@ fn cross_lane_builder_accepts_independent_lane_local_settlement_height() -> Resu
         .expect("independent lane-local and global heights should verify");
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
@@ -285,7 +268,6 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
     let mismatched_da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([
         0x27, 0x18, 0x28, 0x18,
     ])));
-
     let err = nexus::CrossLaneTransferBuilder::new(header, None, mismatched_da_hash, settlement)
         .build()
         .expect_err("da hash mismatch should fail");
@@ -295,7 +277,6 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
     ));
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
@@ -328,11 +309,9 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
         .build()
         .expect("builder should succeed");
     let envelope = proof.envelope().clone();
-
     // Happy-path verification.
     nexus::verify_lane_relay_envelopes(std::slice::from_ref(&envelope))
         .expect("single envelope should pass");
-
     // Ensure the helper rejects duplicate envelopes for the same tuple.
     let err = nexus::verify_lane_relay_envelopes(&[envelope.clone(), envelope])
         .expect_err("duplicate should be rejected");
@@ -350,7 +329,6 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
     }
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
@@ -384,7 +362,6 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
         .expect("builder should succeed");
     let mut envelope = proof.envelope().clone();
     envelope.settlement_hash = HashOf::from_untyped_unchecked(Hash::new([0xEE; 4]));
-
     let err = nexus::verify_lane_relay_envelopes(&[envelope]).expect_err("tamper should fail");
     assert!(matches!(
         err,
@@ -392,25 +369,21 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
     ));
     Ok(())
 }
-
 #[test]
 fn lane_relay_envelope_rejects_zero_lane_local_height() {
     let mut envelope = sample_relay_envelope();
     envelope.block_height = 0;
-
     let err = nexus::verify_lane_relay_envelopes(&[envelope]).expect_err("zero lane-local height");
     assert!(matches!(
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::BlockHeightMismatch)
     ));
 }
-
 #[test]
 fn lane_relay_envelope_rejects_settlement_height_tamper_even_when_rehashed() -> Result<()> {
     let mut envelope = sample_relay_envelope();
     envelope.settlement_commitment.block_height += 1;
     envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)?;
-
     let err = nexus::verify_lane_relay_envelopes(&[envelope]).expect_err("settlement height");
     assert!(matches!(
         err,
@@ -418,7 +391,6 @@ fn lane_relay_envelope_rejects_settlement_height_tamper_even_when_rehashed() -> 
     ));
     Ok(())
 }
-
 #[test]
 fn lane_relay_envelope_rejects_lane_and_dataspace_tamper_with_rehashed_payload() -> Result<()> {
     let mut envelope = sample_relay_envelope();
@@ -429,7 +401,6 @@ fn lane_relay_envelope_rejects_lane_and_dataspace_tamper_with_rehashed_payload()
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::SettlementLaneMismatch)
     ));
-
     let mut envelope = sample_relay_envelope();
     envelope.settlement_commitment.dataspace_id = DataSpaceId::new(99);
     envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)?;
@@ -440,20 +411,17 @@ fn lane_relay_envelope_rejects_lane_and_dataspace_tamper_with_rehashed_payload()
     ));
     Ok(())
 }
-
 #[test]
 fn lane_relay_envelope_rejects_da_commitment_tamper() {
     let mut envelope = sample_relay_envelope();
     let bogus_da_hash = HashOf::from_untyped_unchecked(Hash::new([0xEE, 0xAA, 0xBB, 0xCC]));
     envelope.da_commitment_hash = Some(bogus_da_hash);
-
     let err = nexus::verify_lane_relay_envelopes(&[envelope]).expect_err("da tamper");
     assert!(matches!(
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::DaCommitmentHashMismatch)
     ));
 }
-
 #[test]
 fn lane_relay_quorum_rejects_out_of_range_signer() {
     let lane_id = LaneId::new(13);
@@ -488,7 +456,6 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
         .build()
         .expect("proof");
     let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
-
     let err = proof
         .verify_with_quorum(quorum)
         .expect_err("out-of-range signer");
@@ -497,7 +464,6 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
         nexus::CrossLaneProofError::Relay(LaneRelayError::InvalidSignerIndex { .. })
     ));
 }
-
 #[test]
 fn lane_relay_quorum_rejects_zero_signature() {
     let lane_id = LaneId::new(15);
@@ -532,7 +498,6 @@ fn lane_relay_quorum_rejects_zero_signature() {
         .build()
         .expect("proof");
     let quorum = nexus::LaneRelayQuorumContext::new(4, 2).expect("quorum context");
-
     let err = proof
         .verify_with_quorum(quorum)
         .expect_err("zero signature should fail");
@@ -541,7 +506,6 @@ fn lane_relay_quorum_rejects_zero_signature() {
         nexus::CrossLaneProofError::Relay(LaneRelayError::AggregateSignatureInvalid)
     ));
 }
-
 #[test]
 fn lane_relay_quorum_requires_quorum_bitmap() {
     let lane_id = LaneId::new(17);
@@ -576,7 +540,6 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
         .build()
         .expect("proof");
     let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
-
     let err = proof
         .verify_with_quorum(quorum)
         .expect_err("quorum should fail");
@@ -585,7 +548,6 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
         nexus::CrossLaneProofError::Relay(LaneRelayError::InsufficientQuorum { .. })
     ));
 }
-
 #[test]
 fn lane_relay_quorum_accepts_exact_min_quorum() {
     let lane_id = LaneId::new(19);
@@ -620,12 +582,10 @@ fn lane_relay_quorum_accepts_exact_min_quorum() {
         .build()
         .expect("proof");
     let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
-
     proof
         .verify_with_quorum(quorum)
         .expect("exact min quorum should pass");
 }
-
 #[test]
 fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
     let lane_id = LaneId::new(18);
@@ -660,7 +620,6 @@ fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
         .build()
         .expect("proof");
     let quorum = nexus::LaneRelayQuorumContext::new(4, 2).expect("quorum context");
-
     let err = proof
         .verify_with_quorum(quorum)
         .expect_err("bitmap length mismatch should fail");
@@ -672,7 +631,6 @@ fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
         })
     ));
 }
-
 #[test]
 fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
     let first = sample_relay_envelope();
@@ -704,11 +662,9 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
         .expect("valid second envelope")
         .envelope()
         .clone();
-
     nexus::verify_lane_relay_envelopes(&[first, second])
         .expect("distinct lane tuples must not be treated as duplicates");
 }
-
 #[test]
 fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_height() {
     let first = sample_relay_envelope();
@@ -740,11 +696,9 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_heigh
         .expect("valid second envelope")
         .envelope()
         .clone();
-
     nexus::verify_lane_relay_envelopes(&[first, second])
         .expect("distinct lanes on same dataspace/height must not be duplicates");
 }
-
 #[test]
 fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_height() {
     let first = sample_relay_envelope();
@@ -776,11 +730,9 @@ fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_heigh
         .expect("valid second envelope")
         .envelope()
         .clone();
-
     nexus::verify_lane_relay_envelopes(&[first, second])
         .expect("distinct dataspaces on the same lane/height must not be duplicates");
 }
-
 #[test]
 fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
     let first = sample_relay_envelope();
@@ -813,17 +765,14 @@ fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
         .expect("valid second envelope")
         .envelope()
         .clone();
-
     nexus::verify_lane_relay_envelopes(&[first, second])
         .expect("same lane should be accepted when block heights differ");
 }
-
 #[test]
 fn verify_lane_relay_envelopes_reports_relay_error_before_duplicate_tuple_check() {
     let valid = sample_relay_envelope();
     let mut tampered_duplicate = valid.clone();
     tampered_duplicate.settlement_hash = HashOf::from_untyped_unchecked(Hash::new([0xDD; 4]));
-
     let err = nexus::verify_lane_relay_envelopes(&[valid, tampered_duplicate])
         .expect_err("invalid duplicate should fail relay verification first");
     assert!(matches!(
@@ -831,22 +780,18 @@ fn verify_lane_relay_envelopes_reports_relay_error_before_duplicate_tuple_check(
         nexus::CrossLaneProofError::Relay(LaneRelayError::SettlementHashMismatch)
     ));
 }
-
 #[test]
 fn dataspace_tamper_does_not_taint_valid_envelopes() -> Result<()> {
     let baseline = sample_relay_envelope();
     nexus::verify_lane_relay_envelopes(std::slice::from_ref(&baseline))
         .expect("baseline envelope should validate");
-
     let mut tampered = baseline.clone();
     tampered.settlement_commitment.dataspace_id = DataSpaceId::new(99);
     tampered.settlement_hash = compute_settlement_hash(&tampered.settlement_commitment)?;
-
     let err = nexus::verify_lane_relay_envelopes(std::slice::from_ref(&tampered))
         .expect_err("tampered dataspace should be rejected");
     nexus::verify_lane_relay_envelopes(std::slice::from_ref(&baseline))
         .expect("valid envelope should remain usable after tamper rejection");
-
     let mut summary = json::native::Map::new();
     summary.insert(
         "scenario".to_string(),
@@ -874,7 +819,6 @@ fn dataspace_tamper_does_not_taint_valid_envelopes() -> Result<()> {
     )?;
     Ok(())
 }
-
 fn build_registry(
     manifest_dir: &Path,
     lane_id: LaneId,
@@ -892,7 +836,6 @@ fn build_registry(
             ..LaneConfig::default()
         }],
     )?;
-
     let mut governance_catalog = GovernanceCatalog::default();
     governance_catalog.modules.insert(
         "council".to_string(),
@@ -901,20 +844,17 @@ fn build_registry(
             params: BTreeMap::new(),
         },
     );
-
     let registry_cfg = LaneRegistry {
         manifest_directory: Some(manifest_dir.to_path_buf()),
         cache_directory: None,
         poll_interval: Duration::ZERO,
     };
-
     Ok(LaneManifestRegistry::from_config(
         &lane_catalog,
         &governance_catalog,
         &registry_cfg,
     ))
 }
-
 fn write_manifest(dir: &Path, alias: &str, include_privacy: bool) -> Result<()> {
     fs::create_dir_all(dir)?;
     let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string();
@@ -941,7 +881,6 @@ fn write_manifest(dir: &Path, alias: &str, include_privacy: bool) -> Result<()> 
         "protected_namespaces".into(),
         norito::json!(["confidential"]),
     );
-
     if include_privacy {
         manifest.insert(
             "privacy_commitments".into(),
@@ -956,12 +895,10 @@ fn write_manifest(dir: &Path, alias: &str, include_privacy: bool) -> Result<()> 
         );
     }
     let manifest = norito::json::native::Value::Object(manifest);
-
     let path = dir.join(format!("{alias}.manifest.json"));
     fs::write(&path, format!("{}\n", json::to_string_pretty(&manifest)?))?;
     Ok(())
 }
-
 fn sample_relay_envelope() -> LaneRelayEnvelope {
     let lane_id = LaneId::new(12);
     let dataspace_id = DataSpaceId::new(9);
@@ -990,14 +927,12 @@ fn sample_relay_envelope() -> LaneRelayEnvelope {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0x22, 0x33, 0x44, 0x55]));
     header.set_da_commitments_hash(Some(da_hash));
-
     nexus::CrossLaneTransferBuilder::new(header, None, Some(da_hash), settlement)
         .build()
         .expect("valid envelope")
         .envelope()
         .clone()
 }
-
 fn relay_error_code(err: &nexus::CrossLaneProofError) -> &'static str {
     match err {
         nexus::CrossLaneProofError::Relay(LaneRelayError::SettlementDataspaceMismatch) => {
@@ -1027,11 +962,9 @@ fn relay_error_code(err: &nexus::CrossLaneProofError) -> &'static str {
         _ => "unexpected",
     }
 }
-
 fn emit_adversarial_summary(scenario: &str, summary: &norito::json::native::Value) -> Result<()> {
     let pretty = json::to_json_pretty(summary).wrap_err("serialize summary")?;
     println!("dataspace_adversarial::{scenario}::{pretty}");
-
     if let Ok(dir) = std::env::var("DATASPACE_ADVERSARIAL_ARTIFACT_DIR") {
         let root = PathBuf::from(dir);
         fs::create_dir_all(&root).wrap_err("create dataspace artifact dir")?;

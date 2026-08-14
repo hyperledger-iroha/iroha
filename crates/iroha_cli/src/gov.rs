@@ -1,17 +1,13 @@
 //! Governance helpers (app API convenience). Build/submit governance transactions.
-
 mod audit;
 mod council;
 mod deploy;
 mod shared;
 mod vote;
-
 pub(crate) use shared::parse_governance_selector_v1;
-
 use self::council::CouncilArgs;
 use crate::{Run, RunContext};
 use eyre::Result;
-
 pub use audit::AuditDeployArgs;
 pub use deploy::{
     DeployMetaArgs, EnactArgs, FinalizeArgs, ProposeDeployArgs, ProtectedApplyArgs,
@@ -20,7 +16,6 @@ pub use deploy::{
 pub use vote::{
     LocksGetArgs, ProposalGetArgs, ReferendumGetArgs, TallyGetArgs, UnlockStatsArgs, VoteArgs,
 };
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Deployment helpers (propose/meta/audit). Propose deployment of IVM bytecode.
@@ -53,7 +48,6 @@ pub enum Command {
     #[command(subcommand)]
     Protected(ProtectedCommand),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -71,7 +65,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum DeployCommand {
     /// Propose deployment of IVM bytecode by code/abi hash via governance (build-only; server returns instruction skeleton)
@@ -81,7 +74,6 @@ pub enum DeployCommand {
     /// Audit stored manifests against governance proposals and code storage
     Audit(AuditDeployArgs),
 }
-
 impl Run for DeployCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -91,13 +83,11 @@ impl Run for DeployCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ProposalCommand {
     /// Get a governance proposal by id (hex)
     Get(ProposalGetArgs),
 }
-
 impl Run for ProposalCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -105,13 +95,11 @@ impl Run for ProposalCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum LocksCommand {
     /// Get locks for a referendum id
     Get(LocksGetArgs),
 }
-
 impl Run for LocksCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -119,13 +107,11 @@ impl Run for LocksCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ReferendumCommand {
     /// Get a referendum by id
     Get(ReferendumGetArgs),
 }
-
 impl Run for ReferendumCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -133,13 +119,11 @@ impl Run for ReferendumCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum TallyCommand {
     /// Get a tally snapshot by referendum id
     Get(TallyGetArgs),
 }
-
 impl Run for TallyCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -147,13 +131,11 @@ impl Run for TallyCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum UnlockCommand {
     /// Show governance unlock sweep stats (expired locks at current height)
     Stats(UnlockStatsArgs),
 }
-
 impl Run for UnlockCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -161,7 +143,6 @@ impl Run for UnlockCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ProtectedCommand {
     /// Set protected namespaces (custom parameter `gov_protected_namespaces`)
@@ -171,7 +152,6 @@ pub enum ProtectedCommand {
     /// Get protected namespaces (custom parameter `gov_protected_namespaces`)
     Get(ProtectedGetArgs),
 }
-
 impl Run for ProtectedCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {

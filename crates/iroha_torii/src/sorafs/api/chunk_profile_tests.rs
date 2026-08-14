@@ -1,16 +1,12 @@
 // SoraFS chunk-profile regressions included by the parent test module.
-
 use super::*;
-
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
-
 fn canonical_fixture_car_stats(plan: &CarBuildPlan, payload: &[u8]) -> sorafs_car::CarWriteStats {
     sorafs_car::CarWriter::new(plan, payload)
         .expect("canonical fixture CAR writer")
         .write_to(std::io::sink())
         .expect("derive canonical fixture CAR archive stats")
 }
-
 #[test]
 fn chunk_profile_for_manifest_accepts_inline_profile() {
     let payload = b"chunk-profile-fixture";
@@ -39,12 +35,9 @@ fn chunk_profile_for_manifest_accepts_inline_profile() {
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
-
     let resolved = chunk_profile_for_manifest(&manifest).expect("inline profile accepted");
-
     assert_eq!(resolved, profile);
 }
-
 #[test]
 fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
     let payload = b"chunk-profile-fixture";
@@ -74,7 +67,6 @@ fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
     manifest.chunking.target_size = 512;
     manifest.chunking.max_size = 2048;
     manifest.chunking.break_mask = 1;
-
     let err = chunk_profile_for_manifest(&manifest).expect_err("invalid profile should fail");
     assert_eq!(err.status(), StatusCode::BAD_REQUEST);
 }

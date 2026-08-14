@@ -1,7 +1,6 @@
 // Lane-incarnation namespace coverage for durable commit-vote locks.
 //
 // Included by `lane_consensus::tests` to preserve the exact libtest name.
-
 #[test]
 fn commit_vote_locks_are_namespaced_by_lane_incarnation() {
     let keys = [
@@ -12,7 +11,6 @@ fn commit_vote_locks_are_namespaced_by_lane_incarnation() {
     let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
     validator_set.sort();
     let mut cache = LaneBlockSessionCache::new(8);
-
     let original = lane_block_proposal_at_height(&validator_set, 13);
     assert_eq!(
         cache.insert_proposal(original.clone()),
@@ -30,7 +28,6 @@ fn commit_vote_locks_are_namespaced_by_lane_incarnation() {
         cache.insert_vote(original_commit.clone(), Some(&original_commit.signer)),
         Ok(LaneBlockSessionInsertOutcome::Inserted)
     );
-
     let recreated_incarnation = Hash::new(b"recreated-commit-lock-incarnation");
     let mut recreated = retag_lane_block_proposal_payload(original, 0xD7);
     recreated.descriptor.lane_incarnation = recreated_incarnation;
@@ -55,7 +52,6 @@ fn commit_vote_locks_are_namespaced_by_lane_incarnation() {
         "an old-incarnation signer lock must not block the recreated lane"
     );
     assert_eq!(cache.commit_vote_lock_len(), 2);
-
     assert_eq!(
         cache.prune_commit_vote_locks_for_inactive_incarnations(
             |_lane_id, _dataspace_id, incarnation| incarnation == recreated_incarnation,

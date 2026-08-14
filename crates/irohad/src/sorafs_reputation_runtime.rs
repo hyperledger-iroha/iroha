@@ -4,7 +4,6 @@
 //! never fabricates ledger pages, signatures, DAG acknowledgements, or native
 //! journal transactions: those operations remain behind deployment-injected,
 //! identity-pinned runtime adapters.
-
 use std::{
     sync::{
         Arc, Mutex,
@@ -12,7 +11,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
@@ -50,19 +48,15 @@ use sorafs_node::reputation::{
         StreamTokenReputationAdmissionOutcomeV1, reputation_journal_submitter_policy_digest_v1,
     },
 };
-
 use crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlV1;
-
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const MIN_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONCILIATION_TIMEOUT_POLL_MULTIPLIER: u32 = 3;
 const RECONCILIATION_FRESHNESS_GRACE_POLLS: u32 = 2;
-
 type ReputationReconciliationResult =
     Result<sorafs_node::reputation::runtime::ReputationRuntimeTickOutcomeV1>;
 type ReputationJoinedReconciliationResult =
     std::result::Result<ReputationReconciliationResult, tokio::task::JoinError>;
-
 /// Runtime-only dependencies for the committed reputation worker.
 #[derive(Clone)]
 pub(crate) struct ReputationRuntimeDependenciesV1 {
@@ -73,7 +67,6 @@ pub(crate) struct ReputationRuntimeDependenciesV1 {
     pub(crate) governance_dag: Arc<dyn ReputationGovernanceDagClientV1>,
     pub(crate) retention_control: Option<Arc<dyn ReputationFinalizedArchiveRetentionControlV1>>,
 }
-
 impl ReputationRuntimeDependenciesV1 {
     /// Require every runtime-only production adapter before daemon assembly.
     pub(crate) fn require(
@@ -108,7 +101,6 @@ impl ReputationRuntimeDependenciesV1 {
         })
     }
 }
-
 /// Payload-free daemon health projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationDaemonStatusV1 {
@@ -124,7 +116,6 @@ pub struct ReputationDaemonStatusV1 {
     /// Overall daemon readiness, including the native journal producer path.
     pub ready: bool,
 }
-
 /// Payload-free monotonic liveness state for the supervised reputation worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationDaemonLivenessStatusV1 {
@@ -138,7 +129,6 @@ pub struct ReputationDaemonLivenessStatusV1 {
     /// Whether one bounded reconciliation attempt is currently running.
     pub tick_in_flight: bool,
 }
-
 /// Payload-free supervised-worker counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationDaemonMetricsV1 {
@@ -156,7 +146,6 @@ pub struct ReputationDaemonMetricsV1 {
     /// was not attached.
     pub journal_delivery: Option<ReputationJournalDeliveryMetricsV1>,
 }
-
 #[derive(Debug, Default)]
 struct ReputationDaemonCounters {
     successful: AtomicU64,
@@ -164,7 +153,6 @@ struct ReputationDaemonCounters {
     panicked: AtomicU64,
     timed_out: AtomicU64,
 }
-
 #[derive(Debug)]
 struct ReputationDaemonLiveness {
     last_completed_at: Mutex<Option<Instant>>,
@@ -174,18 +162,15 @@ struct ReputationDaemonLiveness {
     tick_timeout: Duration,
     freshness_timeout: Duration,
 }
-
 #[derive(Debug)]
 struct ReputationDaemonShutdownGuard {
     liveness: Arc<ReputationDaemonLiveness>,
 }
-
 impl Drop for ReputationDaemonShutdownGuard {
     fn drop(&mut self) {
         self.liveness.mark_shutdown();
     }
 }
-
 impl ReputationDaemonLiveness {
     fn new(poll_interval: Duration) -> Self {
         let tick_timeout = poll_interval
@@ -202,11 +187,9 @@ impl ReputationDaemonLiveness {
             freshness_timeout,
         }
     }
-
     fn begin_tick(&self) {
         self.tick_in_flight.store(true, Ordering::Release);
     }
-
     fn finish_tick(&self, healthy: bool) -> Result<(), ReputationRuntimeError> {
         let last_completed_at = self.last_completed_at.lock();
         let Ok(mut last_completed_at) = last_completed_at else {
@@ -221,23 +204,19 @@ impl ReputationDaemonLiveness {
             .store(healthy, Ordering::Release);
         Ok(())
     }
-
     fn mark_timeout(&self) {
         self.external_dependencies_healthy
             .store(false, Ordering::Release);
     }
-
     fn mark_late_tick_finished(&self) {
         self.tick_in_flight.store(false, Ordering::Release);
     }
-
     fn mark_shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         self.tick_in_flight.store(false, Ordering::Release);
         self.external_dependencies_healthy
             .store(false, Ordering::Release);
     }
-
     fn status(&self) -> Result<(bool, bool, bool), ReputationRuntimeError> {
         let last_completed_at = self
             .last_completed_at
@@ -258,13 +237,11 @@ impl ReputationDaemonLiveness {
         ))
     }
 }
-
 /// Cloneable status/metrics handle retained by `irohad`.
 #[derive(Debug, Clone)]
 pub struct ReputationRuntimeHandleV1 {
     active: Arc<Mutex<Option<ActiveReputationRuntimeV1>>>,
 }
-
 #[derive(Debug, Clone)]
 struct ActiveReputationRuntimeV1 {
     runtime: Arc<ReputationRuntimeSupervisorV1>,
@@ -272,7 +249,6 @@ struct ActiveReputationRuntimeV1 {
     counters: Arc<ReputationDaemonCounters>,
     liveness: Arc<ReputationDaemonLiveness>,
 }
-
 impl ActiveReputationRuntimeV1 {
     fn check_external_bindings(&self) -> Result<(), ReputationRuntimeError> {
         self.runtime.check_external_bindings()?;
@@ -284,20 +260,17 @@ impl ActiveReputationRuntimeV1 {
         Ok(())
     }
 }
-
 impl ReputationRuntimeHandleV1 {
     fn from_active(active: ActiveReputationRuntimeV1) -> Self {
         Self {
             active: Arc::new(Mutex::new(Some(active))),
         }
     }
-
     fn deferred() -> Self {
         Self {
             active: Arc::new(Mutex::new(None)),
         }
     }
-
     fn active(&self) -> Result<ActiveReputationRuntimeV1, ReputationRuntimeError> {
         self.active
             .lock()
@@ -305,7 +278,6 @@ impl ReputationRuntimeHandleV1 {
             .clone()
             .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)
     }
-
     /// Return whether deferred runtime assembly has installed the active
     /// deployment-owned dependencies.
     pub fn activation_state(
@@ -327,7 +299,6 @@ impl ReputationRuntimeHandleV1 {
         active.check_external_bindings()?;
         Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
     }
-
     fn install_active(
         &self,
         active: ActiveReputationRuntimeV1,
@@ -342,7 +313,6 @@ impl ReputationRuntimeHandleV1 {
         *slot = Some(active);
         Ok(())
     }
-
     /// Return payload-free health and readiness without performing work.
     ///
     /// # Errors
@@ -369,7 +339,6 @@ impl ReputationRuntimeHandleV1 {
             ready,
         })
     }
-
     /// Return payload-free supervised and deterministic counters.
     #[must_use]
     pub fn metrics(&self) -> ReputationDaemonMetricsV1 {
@@ -392,7 +361,6 @@ impl ReputationRuntimeHandleV1 {
             journal_delivery: active.runtime.journal_delivery_metrics().ok().flatten(),
         }
     }
-
     /// Return the exact durable committed reputation read projection.
     ///
     /// Threshold-signer output and submitter-side Governance DAG success are
@@ -407,7 +375,6 @@ impl ReputationRuntimeHandleV1 {
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
         self.active()?.runtime.committed_read_projection()
     }
-
     /// Return one exact retained authoritative snapshot by its identifier.
     ///
     /// # Errors
@@ -419,7 +386,6 @@ impl ReputationRuntimeHandleV1 {
     ) -> Result<Option<sorafs_manifest::ReputationSnapshotV1>, ReputationRuntimeError> {
         self.active()?.runtime.committed_snapshot_by_id(snapshot_id)
     }
-
     /// Return only the retained committed-event suffix after `sequence`.
     ///
     /// # Errors
@@ -431,7 +397,6 @@ impl ReputationRuntimeHandleV1 {
     ) -> Result<Vec<sorafs_manifest::ReputationSnapshotEventV1>, ReputationRuntimeError> {
         self.active()?.runtime.committed_events_after(sequence)
     }
-
     /// Durably enqueue one actual native `PoR` terminal callback.
     ///
     /// This is a fail-closed injection point for a `PoR` terminal owner and
@@ -462,7 +427,6 @@ impl ReputationRuntimeHandleV1 {
         active.check_external_bindings()?;
         result
     }
-
     /// Durably admit one authenticated, externally sequenced stream-token outcome.
     ///
     /// The regional gateway owner remains responsible for authenticating the
@@ -491,21 +455,18 @@ impl ReputationRuntimeHandleV1 {
         result
     }
 }
-
 impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
     fn committed_read_projection(
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
         ReputationRuntimeHandleV1::committed_read_projection(self)
     }
-
     fn committed_snapshot_by_id(
         &self,
         snapshot_id: [u8; 16],
     ) -> Result<Option<sorafs_manifest::ReputationSnapshotV1>, ReputationRuntimeError> {
         ReputationRuntimeHandleV1::committed_snapshot_by_id(self, snapshot_id)
     }
-
     fn committed_events_after(
         &self,
         sequence: u64,
@@ -513,7 +474,6 @@ impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
         ReputationRuntimeHandleV1::committed_events_after(self, sequence)
     }
 }
-
 impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
     fn activation_state(
         &self,
@@ -523,7 +483,6 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
     > {
         ReputationRuntimeHandleV1::activation_state(self)
     }
-
     fn record_por_terminal(
         &self,
         provider_id: ProviderId,
@@ -534,7 +493,6 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
     > {
         ReputationRuntimeHandleV1::record_por_terminal(self, provider_id, outcome)
     }
-
     fn record_authenticated_stream_token_validation(
         &self,
         provider_id: ProviderId,
@@ -547,7 +505,6 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
         )
     }
 }
-
 /// Assemble and start the committed reputation runtime.
 ///
 /// Missing, test-marked, stale, or identity/revision/policy-mismatched adapters
@@ -565,18 +522,15 @@ pub(crate) fn start(
         .active()
         .wrap_err("access assembled committed reputation runtime")?;
     record_status_metrics(&handle);
-
     let status_handle = handle.clone();
     let task = tokio::task::spawn(async move {
         run_active_worker(active, status_handle, poll_interval, shutdown_signal).await;
     });
     Ok((handle, Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT))))
 }
-
 /// Nonblocking finalized-archive activation probe.
 pub(crate) type ReputationRuntimeActivationProbeV1 =
     Arc<dyn Fn() -> Result<bool> + Send + Sync + 'static>;
-
 /// Validate runtime-only identities immediately, then defer durable reputation
 /// assembly until the finalized archive has its first live exact anchor.
 ///
@@ -597,7 +551,6 @@ pub(crate) fn start_deferred(
         build_and_qualify_runtime_policies(config, network_id, trust_policy, &dependencies)?;
     validate_retention_control(config, &dependencies)?;
     revalidate_before_durable_state(&policies, &dependencies)?;
-
     let poll_interval = config.poll_interval;
     let config = config.clone();
     let network_id = *network_id;
@@ -680,7 +633,6 @@ pub(crate) fn start_deferred(
     });
     Ok((handle, Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT))))
 }
-
 async fn run_active_worker(
     worker: ActiveReputationRuntimeV1,
     status_handle: ReputationRuntimeHandleV1,
@@ -722,7 +674,6 @@ async fn run_active_worker(
                     record_status_metrics(&status_handle);
                     continue;
                 }
-
                 worker.liveness.mark_timeout();
                 worker
                     .counters
@@ -735,7 +686,6 @@ async fn run_active_worker(
                         .unwrap_or(u64::MAX),
                     "committed SoraFS reputation reconciliation exceeded its deadline"
                 );
-
                 let late_result = tokio::select! {
                     result = &mut reconciliation => Some(result),
                     () = shutdown_signal.receive() => {
@@ -778,7 +728,6 @@ async fn run_active_worker(
         }
     }
 }
-
 fn reconcile_retention_control(
     retention_control: Option<&dyn ReputationFinalizedArchiveRetentionControlV1>,
 ) -> Result<()> {
@@ -789,7 +738,6 @@ fn reconcile_retention_control(
     }
     Ok(())
 }
-
 fn record_reputation_tick_result(
     worker: &ActiveReputationRuntimeV1,
     result: ReputationJoinedReconciliationResult,
@@ -840,7 +788,6 @@ fn record_reputation_tick_result(
         }
     }
 }
-
 struct ReputationRuntimePoliciesV1 {
     ingest: ReputationIngestPolicyV1,
     query: ReputationFinalizedQueryPolicyV1,
@@ -848,7 +795,6 @@ struct ReputationRuntimePoliciesV1 {
     journal_delivery: ReputationJournalDeliveryPolicyV1,
     publication: ReputationPublicationPolicyV1,
 }
-
 fn assemble(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
@@ -858,7 +804,6 @@ fn assemble(
     assemble_active(config, network_id, trust_policy, dependencies)
         .map(ReputationRuntimeHandleV1::from_active)
 }
-
 fn assemble_active(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
@@ -884,7 +829,6 @@ fn assemble_active(
         journal_delivery,
         publication,
     } = policies;
-
     let projector = Arc::new(
         ReputationIngestService::open(&config.state_dir, ingest.clone())
             .wrap_err("open committed reputation projector")?,
@@ -940,7 +884,6 @@ fn assemble_active(
         liveness: Arc::new(ReputationDaemonLiveness::new(poll_interval)),
     })
 }
-
 fn validate_retention_control(
     config: &SorafsReputationRuntime,
     dependencies: &ReputationRuntimeDependenciesV1,
@@ -966,7 +909,6 @@ fn validate_retention_control(
             .wrap_err("revalidate explicit finalized reputation archive retention control"),
     }
 }
-
 fn build_and_qualify_runtime_policies(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
@@ -1011,7 +953,6 @@ fn build_and_qualify_runtime_policies(
         publication_policy.threshold_signer_qualification(),
         publication_policy.governance_dag_qualification(),
     )?;
-
     validate_dependency_handle(
         "finalized query",
         &config.finalized_query_handle,
@@ -1063,7 +1004,6 @@ fn build_and_qualify_runtime_policies(
         publication: publication_policy,
     })
 }
-
 fn validate_configured_runtime_provider_qualifications(
     config: &SorafsReputationRuntime,
     journal_submitter: ReputationRuntimeProviderQualificationV1,
@@ -1098,7 +1038,6 @@ fn validate_configured_runtime_provider_qualifications(
     }
     Ok(())
 }
-
 fn read_bootstrap_delivery_view(
     network_id: &NetworkId,
     query_policy: &ReputationFinalizedQueryPolicyV1,
@@ -1150,7 +1089,6 @@ fn read_bootstrap_delivery_view(
     }
     Ok(bootstrap_delivery_view)
 }
-
 fn revalidate_before_durable_state(
     policies: &ReputationRuntimePoliciesV1,
     dependencies: &ReputationRuntimeDependenciesV1,
@@ -1183,7 +1121,6 @@ fn revalidate_before_durable_state(
     }
     Ok(())
 }
-
 fn build_reputation_ingest_policy(
     config: &SorafsReputationRuntime,
     network_id: &NetworkId,
@@ -1223,7 +1160,6 @@ fn build_reputation_ingest_policy(
         .wrap_err("validate configured committed reputation ingest policy")?;
     Ok(ingest_policy)
 }
-
 fn build_reputation_finalized_query_policy(
     config: &SorafsReputationRuntime,
     ingest_policy: &ReputationIngestPolicyV1,
@@ -1236,7 +1172,6 @@ fn build_reputation_finalized_query_policy(
     )
     .wrap_err("construct committed reputation finalized-query policy")
 }
-
 /// Derive the exact provider qualification for the daemon-owned archive
 /// adapter from the same committed ingest policy used by worker assembly.
 pub(crate) fn finalized_query_qualification_v1(
@@ -1248,7 +1183,6 @@ pub(crate) fn finalized_query_qualification_v1(
     let ingest_policy = build_reputation_ingest_policy(config, network_id, trust_policy)?;
     Ok(build_reputation_finalized_query_policy(config, &ingest_policy)?.query_qualification())
 }
-
 fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
     if !config.state_dir.is_absolute()
         || config.state_dir.file_name().is_none()
@@ -1286,14 +1220,12 @@ fn validate_actual_config(config: &SorafsReputationRuntime) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_dependency_handle(label: &str, expected: &str, actual: &str) -> Result<()> {
     if !is_production_runtime_handle(actual) || actual != expected {
         bail!("{label} adapter identity does not match committed reputation configuration");
     }
     Ok(())
 }
-
 #[cfg(feature = "telemetry")]
 fn record_status_metrics(handle: &ReputationRuntimeHandleV1) {
     let Some(metrics) = iroha_telemetry::metrics::global() else {
@@ -1337,24 +1269,19 @@ fn record_status_metrics(handle: &ReputationRuntimeHandleV1) {
         ),
     }
 }
-
 #[cfg(not(feature = "telemetry"))]
 fn record_status_metrics(_handle: &ReputationRuntimeHandleV1) {}
-
 #[cfg(feature = "telemetry")]
 fn record_tick_metric(result: &str) {
     if let Some(metrics) = iroha_telemetry::metrics::global() {
         metrics.inc_sorafs_reputation_runtime_tick(result);
     }
 }
-
 #[cfg(not(feature = "telemetry"))]
 fn record_tick_metric(_result: &str) {}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-
     use iroha_config::base::util::Bytes;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1396,9 +1323,7 @@ mod tests {
         reputation_journal_submitter_policy_digest_v1,
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn network_id(label: &str) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1406,14 +1331,12 @@ mod tests {
             )),
         )
     }
-
     #[derive(Debug)]
     struct CountingRetentionControl {
         reconciliations: AtomicU64,
         ready: AtomicBool,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
-
     impl CountingRetentionControl {
         fn new(ready: bool) -> Self {
             Self {
@@ -1422,7 +1345,6 @@ mod tests {
                 external_calls: None,
             }
         }
-
         fn with_external_calls(
             ready: bool,
             external_calls: Arc<ExternalProviderCallCounters>,
@@ -1434,7 +1356,6 @@ mod tests {
             }
         }
     }
-
     impl ReputationFinalizedArchiveRetentionControlV1 for CountingRetentionControl {
         fn revalidate(
             &self,
@@ -1453,7 +1374,6 @@ mod tests {
                 )
             }
         }
-
         fn reconcile_once(
             &self,
         ) -> std::result::Result<
@@ -1468,13 +1388,11 @@ mod tests {
             )
         }
     }
-
     #[derive(Debug)]
     struct DriftingRetentionControl {
         drift_armed: AtomicBool,
         remaining_good_revalidations: AtomicU64,
     }
-
     impl DriftingRetentionControl {
         fn new() -> Self {
             Self {
@@ -1482,18 +1400,15 @@ mod tests {
                 remaining_good_revalidations: AtomicU64::new(0),
             }
         }
-
         fn arm_after(&self, good_revalidations: u64) {
             self.remaining_good_revalidations
                 .store(good_revalidations, Ordering::SeqCst);
             self.drift_armed.store(true, Ordering::SeqCst);
         }
-
         fn restore(&self) {
             self.drift_armed.store(false, Ordering::SeqCst);
         }
     }
-
     impl ReputationFinalizedArchiveRetentionControlV1 for DriftingRetentionControl {
         fn revalidate(
             &self,
@@ -1517,7 +1432,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn reconcile_once(
             &self,
         ) -> std::result::Result<
@@ -1530,7 +1444,6 @@ mod tests {
             )
         }
     }
-
     #[derive(Debug, Default)]
     struct ExternalProviderCallCounters {
         handles: AtomicU64,
@@ -1538,7 +1451,6 @@ mod tests {
         readiness: AtomicU64,
         operations: AtomicU64,
     }
-
     impl ExternalProviderCallCounters {
         fn assert_zero(&self, case: &str) {
             assert_eq!(
@@ -1552,32 +1464,27 @@ mod tests {
                 "{case}: configured qualification rejection must precede every external provider call"
             );
         }
-
         fn record_handle(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.handles.fetch_add(1, Ordering::AcqRel);
             }
         }
-
         fn record_qualification(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.qualifications.fetch_add(1, Ordering::AcqRel);
             }
         }
-
         fn record_readiness(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.readiness.fetch_add(1, Ordering::AcqRel);
             }
         }
-
         fn record_operation(calls: &Option<Arc<Self>>) {
             if let Some(calls) = calls {
                 calls.operations.fetch_add(1, Ordering::AcqRel);
             }
         }
     }
-
     #[derive(Debug)]
     struct UnavailableQuery {
         handle: String,
@@ -1586,13 +1493,11 @@ mod tests {
         malformed_bootstrap_continuation: bool,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
-
     impl ReputationRuntimeProviderV1 for UnavailableQuery {
         fn handle(&self) -> &str {
             ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> std::result::Result<
@@ -1608,7 +1513,6 @@ mod tests {
             }
         }
     }
-
     impl ReputationFinalizedQueryV1 for UnavailableQuery {
         fn finalized_at_or_before(
             &self,
@@ -1618,7 +1522,6 @@ mod tests {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
-
         fn reputation_journal_delivery_view(
             &self,
             network_id: &NetworkId,
@@ -1671,7 +1574,6 @@ mod tests {
             }
             Ok(view)
         }
-
         fn reputation_journal_event_by_source_id(
             &self,
             network_id: &NetworkId,
@@ -1697,7 +1599,6 @@ mod tests {
                 })?;
             Ok(view)
         }
-
         fn proof_outcome_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -1707,7 +1608,6 @@ mod tests {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
-
         fn reputation_journal_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -1717,7 +1617,6 @@ mod tests {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
-
         fn repair_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -1727,7 +1626,6 @@ mod tests {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
-
         fn orderbook_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -1737,7 +1635,6 @@ mod tests {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
-
         fn reserve_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -1747,7 +1644,6 @@ mod tests {
             ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
-
         fn reserve_provider_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -1758,14 +1654,12 @@ mod tests {
             unreachable!("assembly must not query external state")
         }
     }
-
     #[derive(Debug)]
     struct PendingThresholdSigner {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
-
     #[derive(Debug)]
     struct DriftingThresholdSigner {
         handle: String,
@@ -1773,19 +1667,16 @@ mod tests {
         drift_armed: AtomicBool,
         remaining_good_qualifications: AtomicU64,
     }
-
     impl DriftingThresholdSigner {
         fn arm_after(&self, good_qualifications: u64) {
             self.remaining_good_qualifications
                 .store(good_qualifications, Ordering::SeqCst);
             self.drift_armed.store(true, Ordering::SeqCst);
         }
-
         fn restore(&self) {
             self.drift_armed.store(false, Ordering::SeqCst);
         }
     }
-
     #[derive(Debug)]
     struct PendingJournalCheckpointProvider {
         handle: String,
@@ -1793,13 +1684,11 @@ mod tests {
         latest: Mutex<Option<ReputationJournalSealedCheckpointRecordV1>>,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
-
     impl ReputationRuntimeProviderV1 for PendingJournalCheckpointProvider {
         fn handle(&self) -> &str {
             ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> std::result::Result<
@@ -1810,7 +1699,6 @@ mod tests {
             Ok(self.qualification)
         }
     }
-
     impl ReputationJournalCheckpointRuntimeV1 for PendingJournalCheckpointProvider {
         fn load_latest(
             &self,
@@ -1825,7 +1713,6 @@ mod tests {
                 .expect("journal checkpoint provider lock")
                 .clone())
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -1847,20 +1734,17 @@ mod tests {
             Ok(())
         }
     }
-
     #[derive(Debug)]
     struct PendingJournalSubmitter {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
-
     impl ReputationRuntimeProviderV1 for PendingJournalSubmitter {
         fn handle(&self) -> &str {
             ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> std::result::Result<
@@ -1871,13 +1755,11 @@ mod tests {
             Ok(self.qualification)
         }
     }
-
     impl ReputationJournalTransactionSubmitterV1 for PendingJournalSubmitter {
         fn supports_authority(&self, _authority: &AccountId) -> bool {
             ExternalProviderCallCounters::record_readiness(&self.external_calls);
             true
         }
-
         fn submit(
             &self,
             request: &ReputationJournalTransactionRequestV1,
@@ -1888,13 +1770,11 @@ mod tests {
             }
         }
     }
-
     impl ReputationRuntimeProviderV1 for PendingThresholdSigner {
         fn handle(&self) -> &str {
             ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> std::result::Result<
@@ -1905,7 +1785,6 @@ mod tests {
             Ok(self.qualification)
         }
     }
-
     impl ReputationThresholdSignerClientV1 for PendingThresholdSigner {
         fn reconcile_signature(
             &self,
@@ -1915,12 +1794,10 @@ mod tests {
             Ok(None)
         }
     }
-
     impl ReputationRuntimeProviderV1 for DriftingThresholdSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> std::result::Result<
@@ -1943,7 +1820,6 @@ mod tests {
             Ok(self.qualification)
         }
     }
-
     impl ReputationThresholdSignerClientV1 for DriftingThresholdSigner {
         fn reconcile_signature(
             &self,
@@ -1952,20 +1828,17 @@ mod tests {
             Ok(None)
         }
     }
-
     #[derive(Debug)]
     struct PendingGovernanceDag {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
         external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
-
     impl ReputationRuntimeProviderV1 for PendingGovernanceDag {
         fn handle(&self) -> &str {
             ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> std::result::Result<
@@ -1976,7 +1849,6 @@ mod tests {
             Ok(self.qualification)
         }
     }
-
     impl ReputationGovernanceDagClientV1 for PendingGovernanceDag {
         fn reconcile_publication(
             &self,
@@ -1987,7 +1859,6 @@ mod tests {
             Ok(None)
         }
     }
-
     fn public_key(seed: u8) -> [u8; 32] {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic Ed25519 key");
@@ -1997,13 +1868,11 @@ mod tests {
             .try_into()
             .expect("Ed25519 public key is 32 bytes")
     }
-
     fn account(seed: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic account");
         AccountId::new(key.public_key().clone())
     }
-
     fn trust_policy() -> Arc<ReputationSnapshotTrustPolicyV1> {
         Arc::new(ReputationSnapshotTrustPolicyV1 {
             version: REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
@@ -2021,7 +1890,6 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         })
     }
-
     fn config(
         state_dir: PathBuf,
         network_id: &NetworkId,
@@ -2100,7 +1968,6 @@ mod tests {
             repair_breach_bps: 1_000,
         }
     }
-
     fn dependencies(
         config: &SorafsReputationRuntime,
         network_id: &NetworkId,
@@ -2109,7 +1976,6 @@ mod tests {
     ) -> ReputationRuntimeDependenciesV1 {
         dependencies_with_calls(config, network_id, trust_policy, query_handle, None)
     }
-
     fn dependencies_with_calls(
         config: &SorafsReputationRuntime,
         network_id: &NetworkId,
@@ -2195,7 +2061,6 @@ mod tests {
             retention_control: None,
         }
     }
-
     fn counting_dependencies(
         config: &SorafsReputationRuntime,
         network_id: &NetworkId,
@@ -2217,7 +2082,6 @@ mod tests {
         ));
         (dependencies, calls)
     }
-
     fn por_terminal(marker: u8) -> PorTerminalOutcomeV1 {
         PorTerminalOutcomeV1 {
             challenge_id: [marker; 32],
@@ -2237,7 +2101,6 @@ mod tests {
             status: PorTerminalStatusV1::Verified,
         }
     }
-
     #[tokio::test]
     async fn deferred_start_is_nonblocking_and_fail_closed_before_activation() {
         let temp = TempDir::new().expect("tempdir");
@@ -2267,7 +2130,6 @@ mod tests {
         )
         .expect("deferred runtime identity preflight");
         tokio::task::yield_now().await;
-
         assert_eq!(
             handle.activation_state(),
             Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Deferred)
@@ -2283,7 +2145,6 @@ mod tests {
         ));
         shutdown.send();
     }
-
     #[test]
     fn daemon_owned_query_qualification_matches_worker_policy() {
         let temp = TempDir::new().expect("tempdir");
@@ -2303,13 +2164,10 @@ mod tests {
         .finalized_query
         .qualification()
         .expect("fixture query qualification");
-
         let actual = finalized_query_qualification_v1(&config, &network_id, trust_policy.as_ref())
             .expect("derive daemon-owned query qualification");
-
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn native_outcome_trait_is_object_safe_and_exactly_idempotent() {
         let temp = TempDir::new().expect("tempdir");
@@ -2444,7 +2302,6 @@ mod tests {
             ) if inserted == replay
         ));
     }
-
     #[test]
     fn native_admission_revalidates_bindings_before_and_after_durable_enqueue() {
         let temp = TempDir::new().expect("tempdir");
@@ -2479,7 +2336,6 @@ mod tests {
         )
         .expect("assemble native admission runtime");
         let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
-
         let terminal = PorTerminalOutcomeV1 {
             challenge_id: [0x61; 32],
             manifest_digest: [0x62; 32],
@@ -2510,7 +2366,6 @@ mod tests {
             sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay { .. }
         ));
     }
-
     #[test]
     fn native_admission_rejects_stale_retention_before_mutation() {
         let temp = TempDir::new().expect("tempdir");
@@ -2552,7 +2407,6 @@ mod tests {
             .journal_delivery
             .expect("journal delivery")
             .producer;
-
         retention.ready.store(false, Ordering::Release);
         assert_eq!(
             handle.activation_state(),
@@ -2562,7 +2416,6 @@ mod tests {
             handle.record_por_terminal(ProviderId::new([0x71; 32]), por_terminal(0x72)),
             Err(ReputationRuntimeError::RuntimeBindingChanged)
         );
-
         let producer_after = handle
             .active()
             .expect("active runtime")
@@ -2577,7 +2430,6 @@ mod tests {
             "a stale pre-enqueue retention binding must not mutate the durable outbox"
         );
     }
-
     #[test]
     fn native_admission_replays_after_post_enqueue_retention_drift() {
         let temp = TempDir::new().expect("tempdir");
@@ -2612,7 +2464,6 @@ mod tests {
         .expect("assemble drifting-retention native admission runtime");
         let provider_id = ProviderId::new([0x73; 32]);
         let terminal = por_terminal(0x74);
-
         retention.arm_after(1);
         assert_eq!(
             handle.record_por_terminal(provider_id, terminal),
@@ -2631,7 +2482,6 @@ mod tests {
             producer_after_drift.ready, 1,
             "post-enqueue drift must retain the one durable admission"
         );
-
         retention.restore();
         assert!(matches!(
             handle
@@ -2644,7 +2494,6 @@ mod tests {
             Ok(sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
         );
     }
-
     #[test]
     fn production_config_rejects_null_test_handles_and_unsafe_paths() {
         let temp = TempDir::new().expect("tempdir");
@@ -2668,7 +2517,6 @@ mod tests {
                 "{rejected:?} must fail before runtime construction"
             );
         }
-
         let mut unsafe_path_config = config(
             PathBuf::from("/var/lib/iroha/../reputation"),
             &network_id,
@@ -2677,7 +2525,6 @@ mod tests {
         unsafe_path_config.finalized_query_handle = "ledger.finalized.primary".to_owned();
         assert!(validate_actual_config(&unsafe_path_config).is_err());
     }
-
     #[test]
     fn daemon_liveness_is_fail_closed_freshness_bounded_and_shutdown_safe() {
         let liveness = Arc::new(ReputationDaemonLiveness::new(Duration::from_secs(1)));
@@ -2685,7 +2532,6 @@ mod tests {
             liveness.status().expect("initial liveness"),
             (false, false, false)
         );
-
         liveness.begin_tick();
         assert_eq!(
             liveness.status().expect("in-flight liveness"),
@@ -2696,7 +2542,6 @@ mod tests {
             liveness.status().expect("healthy liveness"),
             (true, true, false)
         );
-
         *liveness
             .last_completed_at
             .lock()
@@ -2709,7 +2554,6 @@ mod tests {
             liveness.status().expect("stale liveness"),
             (true, false, false)
         );
-
         drop(ReputationDaemonShutdownGuard {
             liveness: Arc::clone(&liveness),
         });
@@ -2718,11 +2562,9 @@ mod tests {
             (false, false, false)
         );
     }
-
     #[test]
     fn configured_provider_qualification_matrix_fails_before_external_calls_or_state_open() {
         type ConfigMutation = fn(&mut SorafsReputationRuntime);
-
         let cases: [(&str, ConfigMutation, &str); 6] = [
             (
                 "journal-submitter-revision",
@@ -2770,7 +2612,6 @@ mod tests {
                 "configured reputation Governance DAG policy digest does not match the derived V1 policy",
             ),
         ];
-
         let temp = TempDir::new().expect("tempdir");
         let network_id = network_id("reputation-runtime-config-pins");
         let trust_policy = trust_policy();
@@ -2787,10 +2628,8 @@ mod tests {
             let (dependencies, calls) =
                 counting_dependencies(&config, &network_id, trust_policy.as_ref());
             mutate(&mut config);
-
             let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
                 .expect_err("substituted configured qualification must fail startup");
-
             assert_eq!(error.to_string(), expected_error, "{case}");
             assert!(
                 !state_dir.exists(),
@@ -2799,7 +2638,6 @@ mod tests {
             calls.assert_zero(case);
         }
     }
-
     #[test]
     fn assembly_rejects_adapter_identity_substitution_before_external_calls() {
         let temp = TempDir::new().expect("tempdir");
@@ -2820,7 +2658,6 @@ mod tests {
             .expect_err("mismatched query identity must fail startup");
         assert!(error.to_string().contains("identity"));
     }
-
     #[test]
     fn configured_retention_control_is_required_invoked_and_fail_closed() {
         let network_id = network_id("reputation-retention-runtime-test");
@@ -2847,7 +2684,6 @@ mod tests {
             validate_retention_control(&config, &dependencies).is_err(),
             "configured retention must not start without its controller"
         );
-
         let control = Arc::new(CountingRetentionControl::new(true));
         dependencies.retention_control = Some(control.clone());
         validate_retention_control(&config, &dependencies)
@@ -2855,7 +2691,6 @@ mod tests {
         reconcile_retention_control(dependencies.retention_control.as_deref())
             .expect("supervised tick invokes explicit retention");
         assert_eq!(control.reconciliations.load(Ordering::Acquire), 1);
-
         control.ready.store(false, Ordering::Release);
         assert!(validate_retention_control(&config, &dependencies).is_err());
         assert!(
@@ -2868,7 +2703,6 @@ mod tests {
             "failed qualification must not claim work"
         );
     }
-
     #[test]
     fn startup_rejects_each_missing_runtime_adapter() {
         let network_id = network_id("reputation-runtime-test");
@@ -2940,7 +2774,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn assembly_rejects_unready_adapter_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -2965,17 +2798,14 @@ mod tests {
             malformed_bootstrap_continuation: false,
             external_calls: None,
         });
-
         let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("unready query adapter must fail startup");
-
         assert!(error.to_string().contains("not qualified"));
         assert!(
             !state_dir.exists(),
             "adapter qualification must be verified before state is opened"
         );
     }
-
     #[test]
     fn assembly_rejects_malformed_bootstrap_view_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -3000,17 +2830,14 @@ mod tests {
             malformed_bootstrap_continuation: true,
             external_calls: None,
         });
-
         let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("malformed exact bootstrap view must fail startup");
-
         assert!(error.to_string().contains("bootstrap view"));
         assert!(
             !state_dir.exists(),
             "bootstrap view must be validated before state is opened"
         );
     }
-
     #[test]
     fn assembly_rejects_same_key_different_governance_peer_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -3036,23 +2863,19 @@ mod tests {
             ),
             external_calls: None,
         });
-
         let error = assemble(&config, &network_id, trust_policy.as_ref(), dependencies)
             .expect_err("same-key different-peer DAG adapter must fail startup");
-
         assert!(error.to_string().contains("not qualified"));
         assert!(
             !state_dir.exists(),
             "DAG peer qualification must fail before durable state"
         );
     }
-
     #[test]
     fn assembly_rejects_policy_mismatched_and_test_marked_providers_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
         let network_id = network_id("reputation-runtime-test");
         let trust_policy = trust_policy();
-
         let mismatched_state_dir = temp.path().join("mismatched-must-not-exist");
         let mismatched_config = config(
             mismatched_state_dir.clone(),
@@ -3085,7 +2908,6 @@ mod tests {
             !mismatched_state_dir.exists(),
             "qualification mismatch must fail before durable state"
         );
-
         let test_marked_state_dir = temp.path().join("test-marked-must-not-exist");
         let test_marked_config = config(
             test_marked_state_dir.clone(),
@@ -3121,7 +2943,6 @@ mod tests {
             "test-marked provider must fail before durable state"
         );
     }
-
     #[test]
     fn checkpoint_runtime_reopens_without_claiming_journal_readiness() {
         let temp = TempDir::new().expect("tempdir");
@@ -3168,7 +2989,6 @@ mod tests {
                 .is_none()
         );
         drop(first);
-
         let restarted = assemble(
             &config,
             &network_id,

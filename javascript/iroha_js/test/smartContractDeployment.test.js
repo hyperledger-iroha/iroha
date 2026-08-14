@@ -273,13 +273,19 @@ test("deployment instruction transactions are locally signed and verified", asyn
     /signature does not verify/u,
   );
 
+  const expectedReceiptHeaders = {
+    "x-iroha-entrypoint-hash": finalized.hashHex,
+    "x-iroha-transaction-hash": finalized.hashHex,
+    "x-iroha-signed-transaction-hash": finalized.hashHex,
+  };
   const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl: async () =>
       new Response("{}", {
         status: 202,
         headers: {
           "content-type": "application/json",
-          "x-iroha-entrypoint-hash": hashLiteral("00".repeat(32)),
+          ...expectedReceiptHeaders,
+          "x-iroha-entrypoint-hash": "00".repeat(32),
         },
       }),
   });

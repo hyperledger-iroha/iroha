@@ -1,8 +1,6 @@
 //! Proposal-bound PLAIN ballot gates for validation-fee governance.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use core::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -37,19 +35,16 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSlashGovernanceLock;
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use mv::storage::StorageReadOnly;
-
 const GATE_HEIGHT: u64 = 5;
 const BALLOT_HEIGHT: u64 = 10;
 const BALLOT_AMOUNT: u64 = 150;
 const BALLOT_DURATION: u64 = 3_600;
 const CITIZENSHIP_AMOUNT: u64 = 10_000;
-
 fn account(seed: u8) -> AccountId {
     let key_pair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("deterministic key pair");
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn plain_rules(
     voting_asset_id: AssetDefinitionId,
     bond_escrow_account: AccountId,
@@ -72,7 +67,6 @@ fn plain_rules(
             ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
     }
 }
-
 fn ballot(
     referendum_id: &str,
     owner: &AccountId,
@@ -88,7 +82,6 @@ fn ballot(
         direction,
     }
 }
-
 fn rejection_message(
     ballot: CastPlainBallot,
     authority: &AccountId,
@@ -99,7 +92,6 @@ fn rejection_message(
         .expect_err("ballot must be rejected")
         .to_string()
 }
-
 #[test]
 fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let proposer = account(1);
@@ -117,7 +109,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         domain_id.clone(),
         "changed_live_xor".parse().expect("asset name"),
     );
-
     let accounts = [
         proposer.clone(),
         other_at_gate.clone(),
@@ -156,7 +147,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
-
     let retained_rules = plain_rules(
         voting_asset_id.clone(),
         bond_escrow.clone(),
@@ -180,7 +170,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     proposal_time_governance.plain_voting_enabled = true;
     proposal_time_governance.parliament_term_blocks = 100;
     state.set_gov(proposal_time_governance);
-
     let policy = ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
         network_id: *state.network_id_ref(),
@@ -204,7 +193,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     });
     let proposal_id = proposal_kind.fingerprint();
     let referendum_id = hex::encode(proposal_id);
-
     // Proposal-bound ballot validation must not be reinterpreted through mutable
     // live governance state after the proposal has been fingerprinted.
     let mut changed_live_governance = state.gov.clone();
@@ -221,7 +209,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     changed_live_governance.approval_threshold_q_num = 3;
     changed_live_governance.approval_threshold_q_den = 4;
     state.set_gov(changed_live_governance);
-
     let header = BlockHeader::new(
         NonZeroU64::new(BALLOT_HEIGHT).expect("non-zero height"),
         None,
@@ -232,7 +219,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     );
     let mut block = state.block(header);
     let mut state_transaction = block.transaction();
-
     state_transaction.world.governance_proposals_mut().insert(
         proposal_id,
         GovernanceProposalRecord {
@@ -319,7 +305,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         .world
         .governance_stage_approvals_mut()
         .insert(referendum_id.clone(), approvals);
-
     for (candidate, expected) in [
         (
             ballot(
@@ -375,7 +360,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         let error = rejection_message(candidate, &late_nay_voter, &mut state_transaction);
         assert!(error.contains(expected), "unexpected rejection: {error}");
     }
-
     // Mutable citizen changes after the boundary cannot expand or shrink the
     // proposal-bound electorate.
     state_transaction.world.citizens_mut().insert(
@@ -401,7 +385,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         error.contains("not in the frozen PLAIN electorate"),
         "an ordinary citizen excluded at the gate must remain ineligible: {error}"
     );
-
     state_transaction.world.citizens_mut().insert(
         proposer.clone(),
         CitizenshipRecord::new(
@@ -428,7 +411,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     assert!(retained_electorate.contains(&proposer));
     assert!(retained_electorate.contains(&late_abstain_voter));
     assert!(!retained_electorate.contains(&other_at_gate));
-
     for (owner, direction) in [
         (&proposer, 0),
         (&late_nay_voter, 1),
@@ -444,7 +426,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         .execute(owner, &mut state_transaction)
         .expect("proposal-bound exact ballot must be accepted");
     }
-
     let error = rejection_message(
         ballot(&referendum_id, &proposer, BALLOT_AMOUNT, BALLOT_DURATION, 0),
         &proposer,
@@ -454,7 +435,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         error.contains("one effective ballot per account"),
         "validation-fee re-voting must be rejected: {error}"
     );
-
     let locks = state_transaction
         .world
         .governance_locks()
@@ -509,7 +489,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
             .status,
         GovernanceReferendumStatus::Open
     );
-
     let mut malformed_locks = state_transaction
         .world
         .governance_locks()

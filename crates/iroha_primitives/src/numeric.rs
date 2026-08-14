@@ -7,13 +7,8 @@
 //! Encoding note: `Numeric` serializes as a helper carrying `(mantissa, scale)`.
 //! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
 //! is embedded in the integer), and the scale is stored separately as a `u32`.
-
+use crate::bigint::BigInt;
 use core::{cmp::Ordering, str::FromStr};
-use std::{
-    string::{String, ToString},
-    vec::Vec,
-};
-
 pub use iroha_primitives_derive::numeric;
 use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
@@ -21,18 +16,17 @@ use norito::{
 };
 use num_bigint::BigInt as UnboundedBigInt;
 use num_traits::{One as _, Signed as _, Zero as _};
-
-use crate::bigint::BigInt;
-
+use std::{
+    string::{String, ToString},
+    vec::Vec,
+};
 /// Width of the signed two's-complement domain shared by Kotodama `int`,
 /// `decimal` mantissas, and `quantity` mantissas.
 pub const MAX_MANTISSA_BITS: usize = 512;
 /// Maximum canonical two's-complement mantissa payload length.
 pub const MAX_MANTISSA_BYTES: usize = MAX_MANTISSA_BITS / 8;
-
 /// Maximum number of fractional decimal digits in a canonical decimal.
 pub const MAX_DECIMAL_SCALE: u32 = 28;
-
 /// Maximum number of factors accepted by aggregate decimal-product helpers.
 ///
 /// Each factor is individually bounded to a 512-bit canonical mantissa, but
@@ -41,7 +35,6 @@ pub const MAX_DECIMAL_SCALE: u32 = 28;
 /// inventory prevents attacker-controlled iterators from growing that
 /// intermediate without limit.
 pub const MAX_DECIMAL_PRODUCT_FACTORS: usize = 64;
-
 /// Canonical exact decimal with a bounded signed mantissa and scale.
 ///
 /// The finite set of values of type [`Numeric`] are of the form $m / 10^e$,
@@ -63,7 +56,6 @@ pub struct Numeric {
     mantissa: BigInt,
     scale: u32,
 }
-
 /// Canonical non-negative decimal for asset and resource quantities.
 ///
 /// `Quantity` is nominal: it cannot contain negative values or noncanonical
@@ -82,14 +74,12 @@ pub struct Numeric {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Quantity(Numeric);
-
 /// Maximum number of fractional digits accepted for XOR-denominated values.
 ///
 /// XOR's ledger definition permits nanounit precision.  Keeping this limit in
 /// the nominal type prevents independent services from silently choosing
 /// incompatible fixed-unit conventions.
 pub const XOR_QUANTITY_SCALE: u32 = 9;
-
 /// Canonical XOR-denominated quantity.
 ///
 /// This wrapper carries the same exact decimal value as [`Quantity`] while
@@ -107,7 +97,6 @@ pub const XOR_QUANTITY_SCALE: u32 = 9;
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct XorQuantity(Quantity);
-
 /// Define maximum precision and scale for given number.
 ///
 /// Runtime-supplied fractional scales must use [`NumericSpec::try_fractional`];
@@ -134,13 +123,11 @@ pub struct NumericSpec {
     /// Currently only positive scale up to 28 decimal points is supported.
     scale: Option<u32>,
 }
-
 impl NoritoSerialize for NumericSpec {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         NoritoSerialize::serialize(&self.scale, writer)
     }
 }
-
 // Bridge Norito slice-based decoding for Numeric through the same helper used
 // by its codec implementation. Decoding the helper directly preserves the
 // exact prefix length when Numeric is embedded in a larger packed record.
@@ -158,12 +145,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
         Ok((value, used))
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for NumericSpec {
     fn deserialize(archived: &'a Archived<NumericSpec>) -> Self {
         Self::try_deserialize(archived).expect("invalid numeric specification")
     }
-
     fn try_deserialize(archived: &'a Archived<NumericSpec>) -> Result<Self, Error> {
         let scale_arch: &Archived<Option<u32>> = archived.cast();
         let scale = <Option<u32> as NoritoDeserialize>::deserialize(scale_arch);
@@ -171,7 +156,6 @@ impl<'a> NoritoDeserialize<'a> for NumericSpec {
             .map_err(|error| Error::Message(format!("invalid numeric specification: {error}")))
     }
 }
-
 impl FastJsonWrite for NumericSpec {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -183,8 +167,18 @@ impl FastJsonWrite for NumericSpec {
         }
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"scale\":")?;
+        self.scale.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 impl JsonDeserialize for NumericSpec {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
@@ -217,7 +211,6 @@ impl JsonDeserialize for NumericSpec {
         })
     }
 }
-
 /// Error occurred during creation of [`Numeric`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
 pub enum NumericError {
@@ -228,7 +221,6 @@ pub enum NumericError {
     /// Malformed: expecting number with optional decimal point (10, 10.02)
     Malformed,
 }
-
 /// Consensus-visible failures produced by exact decimal and quantity operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
 pub enum NumericOperationError {
@@ -253,7 +245,6 @@ pub enum NumericOperationError {
     /// Quantity subtraction would produce a negative result
     QuantityUnderflow,
 }
-
 /// Failures produced while multiplying a quantity by aggregate decimal factors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DecimalProductError {
@@ -264,7 +255,6 @@ pub enum DecimalProductError {
     #[error(transparent)]
     Numeric(#[from] NumericOperationError),
 }
-
 /// Errors raised while constructing or manipulating XOR quantities.
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum XorQuantityError {
@@ -289,7 +279,6 @@ pub enum XorQuantityError {
         max: u32,
     },
 }
-
 /// Deterministic rounding policies supported by decimal operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -309,7 +298,6 @@ pub enum RoundingMode {
     /// Round to nearest, resolving ties toward zero.
     NearestTowardZero = 6,
 }
-
 /// A division-like work unit reported before arithmetic begins.
 ///
 /// The VM uses these callbacks to debit deterministic logical work before it
@@ -408,7 +396,6 @@ pub enum NumericWorkStep {
         value_limbs: u16,
     },
 }
-
 /// Error from an observed numeric operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObservedNumericError<E> {
@@ -417,7 +404,6 @@ pub enum ObservedNumericError<E> {
     /// Observer rejected the work before it began.
     Observer(E),
 }
-
 /// Mathematical classification of an exact decimal quotient.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExactDivisionClass {
@@ -432,18 +418,15 @@ pub enum ExactDivisionClass {
     /// The quotient terminates, but its minimum scale is greater than 28.
     ScaleOverflow,
 }
-
 /// The error type returned when a numeric conversion fails.
 #[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error)]
 pub struct TryFromNumericError;
-
 /// Error occurred while checking if number satisfy given spec
 #[derive(Clone, Copy, Debug, displaydoc::Display, thiserror::Error)]
 pub enum NumericSpecError {
     /// Given number has scale higher than allowed by spec.
     ScaleTooHigh,
 }
-
 /// Error occurred while checking if number satisfy given spec
 #[derive(Clone, Debug, displaydoc::Display, thiserror::Error)]
 pub enum NumericSpecParseError {
@@ -454,7 +437,6 @@ pub enum NumericSpecParseError {
     /// Scale should be valid integer value: {_0}
     InvalidScale(#[source] <u32 as FromStr>::Err),
 }
-
 impl Numeric {
     /// Zero numeric value
     pub fn zero() -> Self {
@@ -464,7 +446,6 @@ impl Numeric {
     pub fn one() -> Self {
         Self::new(BigInt::one(), 0)
     }
-
     /// Create a canonical numeric from a mantissa and scale.
     ///
     /// # Panics
@@ -480,7 +461,6 @@ impl Numeric {
             Err(NumericError::Malformed) => unreachable!(),
         }
     }
-
     /// Try to create a canonical numeric from a mantissa and scale.
     ///
     /// # Errors
@@ -492,7 +472,6 @@ impl Numeric {
         if mantissa.is_zero() {
             return Ok(Self { mantissa, scale: 0 });
         }
-
         let value = Self { mantissa, scale }.trim_trailing_zeros();
         if value.scale > MAX_DECIMAL_SCALE {
             return Err(NumericError::ScaleTooLarge);
@@ -505,7 +484,6 @@ impl Numeric {
         }
         Ok(value)
     }
-
     /// Construct raw fields for strict decoders that must detect and reject a
     /// noncanonical representation rather than silently normalize it.
     pub(crate) fn try_new_raw<T: Into<BigInt>>(
@@ -521,13 +499,11 @@ impl Numeric {
         }
         Ok(Self { mantissa, scale })
     }
-
     /// Return mantissa of number (signed).
     #[inline]
     pub fn mantissa(&self) -> &BigInt {
         &self.mantissa
     }
-
     /// Try to view mantissa as u128 (fails on negative or too-wide values).
     #[inline]
     pub fn try_mantissa_u128(&self) -> Option<u128> {
@@ -537,19 +513,16 @@ impl Numeric {
             self.mantissa.to_string().parse::<u128>().ok()
         }
     }
-
     /// Try to view mantissa as i128 (fails if too wide).
     #[inline]
     pub fn try_mantissa_i128(&self) -> Option<i128> {
         self.mantissa.to_string().parse::<i128>().ok()
     }
-
     /// Return scale of number
     #[inline]
     pub const fn scale(&self) -> u32 {
         self.scale
     }
-
     /// Reduce the scale by stripping trailing zero fractional digits.
     #[must_use]
     pub fn trim_trailing_zeros(mut self) -> Self {
@@ -565,7 +538,6 @@ impl Numeric {
         }
         self
     }
-
     /// Return this value in its unique canonical decimal representation.
     ///
     /// Canonicalization strips fractional trailing zeroes and represents every
@@ -582,7 +554,6 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-
     /// Canonicalize while reporting every normalization division before it begins.
     ///
     /// # Errors
@@ -601,7 +572,6 @@ impl Numeric {
             observer,
         )
     }
-
     /// Validate the unique canonical decimal representation.
     ///
     /// # Errors
@@ -612,7 +582,6 @@ impl Numeric {
             self.validate_decimal_observed(&mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Validate canonicality while reporting the divisibility probe first.
     ///
     /// Zero at nonzero scale is rejected without bigint division. Every other
@@ -651,7 +620,6 @@ impl Numeric {
         }
         Ok(())
     }
-
     /// Checked canonical decimal negation.
     ///
     /// # Errors
@@ -661,7 +629,6 @@ impl Numeric {
             self.try_decimal_neg_observed(&mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Negate while reporting normalization divisions before work.
     ///
     /// # Errors
@@ -680,7 +647,6 @@ impl Numeric {
         .map_err(ObservedNumericError::Observer)?;
         canonical_decimal_from_unbounded_observed(-self.mantissa.inner(), self.scale, observer)
     }
-
     /// Add two canonical decimals using an unbounded conceptual intermediate.
     ///
     /// # Errors
@@ -690,7 +656,6 @@ impl Numeric {
             self.try_decimal_add_observed(other, &mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Add while reporting normalization divisions before work.
     ///
     /// # Errors
@@ -717,7 +682,6 @@ impl Numeric {
         .map_err(ObservedNumericError::Observer)?;
         canonical_decimal_from_unbounded_observed(lhs + rhs, target_scale, observer)
     }
-
     /// Subtract two canonical decimals using an unbounded conceptual intermediate.
     ///
     /// # Errors
@@ -727,7 +691,6 @@ impl Numeric {
             self.try_decimal_sub_observed(other, &mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Subtract while reporting normalization divisions before work.
     ///
     /// # Errors
@@ -754,7 +717,6 @@ impl Numeric {
         .map_err(ObservedNumericError::Observer)?;
         canonical_decimal_from_unbounded_observed(lhs - rhs, target_scale, observer)
     }
-
     /// Multiply two canonical decimals exactly.
     ///
     /// The conceptual product may be wider than 512 bits and may initially
@@ -768,7 +730,6 @@ impl Numeric {
             self.try_decimal_mul_observed(other, &mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Multiply two decimals while reporting normalization divisions before work.
     ///
     /// # Errors
@@ -800,7 +761,6 @@ impl Numeric {
             observer,
         )
     }
-
     /// Multiply by one decimal and divide exactly by another using one
     /// conceptual intermediate.
     ///
@@ -822,7 +782,6 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-
     /// Fused exact multiply/divide while reporting every logical work phase
     /// before it begins.
     ///
@@ -845,7 +804,6 @@ impl Numeric {
                 NumericOperationError::DivisionByZero,
             ));
         }
-
         let product_scale =
             self.scale
                 .checked_add(multiplier.scale)
@@ -885,7 +843,6 @@ impl Numeric {
             )),
         }
     }
-
     /// Multiply by one decimal and divide by another with a single rounded
     /// conceptual intermediate.
     ///
@@ -911,7 +868,6 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-
     /// Fused multiply/divide while reporting every logical work phase before
     /// it begins.
     ///
@@ -941,7 +897,6 @@ impl Numeric {
                 NumericOperationError::DivisionByZero,
             ));
         }
-
         let product_scale =
             self.scale
                 .checked_add(multiplier.scale)
@@ -954,7 +909,6 @@ impl Numeric {
         })
         .map_err(ObservedNumericError::Observer)?;
         let product = self.mantissa.inner() * multiplier.mantissa.inner();
-
         let (numerator, denominator) = decimal_product_division_operands_observed(
             &product,
             product_scale,
@@ -962,7 +916,6 @@ impl Numeric {
             output_scale,
             observer,
         )?;
-
         observer(NumericWorkStep::RoundedDivision {
             numerator_limbs: logical_limbs(&numerator),
             denominator_limbs: logical_limbs(&denominator),
@@ -972,7 +925,6 @@ impl Numeric {
         let quotient = rounded_quotient(&numerator, &denominator, mode);
         canonical_decimal_from_unbounded_observed(quotient, output_scale, observer)
     }
-
     /// Attempt exact division at one explicit output scale.
     ///
     /// `Ok(None)` means the quotient has a nonzero remainder at this scale.
@@ -1005,7 +957,6 @@ impl Numeric {
         }
         exact_division_at_scale_observed(self, divisor, output_scale, observer)
     }
-
     /// Attempt exact division at one explicit output scale without an observer.
     ///
     /// # Errors
@@ -1021,7 +972,6 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-
     /// Classify the mathematical quotient after reducing its denominator.
     ///
     /// Every Euclidean and prime-factor division is reported to `observer`
@@ -1046,7 +996,6 @@ impl Numeric {
         }
         classify_exact_division_inner(self, divisor, observer)
     }
-
     /// Classify an exact quotient without an observer.
     ///
     /// # Errors
@@ -1059,7 +1008,6 @@ impl Numeric {
             Ok::<_, core::convert::Infallible>(())
         }))
     }
-
     /// Divide exactly, selecting the smallest representable output scale.
     ///
     /// The reduced denominator is classified first. A terminating quotient is
@@ -1103,7 +1051,6 @@ impl Numeric {
             )),
         }
     }
-
     /// Divide exactly without an observer.
     ///
     /// # Errors
@@ -1113,7 +1060,6 @@ impl Numeric {
             Ok::<_, core::convert::Infallible>(())
         }))
     }
-
     /// Divide with an explicit output scale and deterministic rounding mode.
     ///
     /// # Errors
@@ -1151,7 +1097,6 @@ impl Numeric {
         let quotient = rounded_quotient(&numerator, &denominator, mode);
         canonical_decimal_from_unbounded_observed(quotient, output_scale, observer)
     }
-
     /// Divide with explicit rounding without an observer.
     ///
     /// # Errors
@@ -1169,7 +1114,6 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-
     /// Convert to an integer only when the decimal has no fractional value.
     ///
     /// # Errors
@@ -1179,7 +1123,6 @@ impl Numeric {
             self.try_decimal_to_int_exact_observed(&mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Convert exactly while reporting the quotient/remainder work first.
     ///
     /// # Errors
@@ -1214,7 +1157,6 @@ impl Numeric {
         }
         finalize_bigint_observed(quotient, observer)
     }
-
     /// Convert to an integer by truncating toward zero.
     ///
     /// # Errors
@@ -1224,7 +1166,6 @@ impl Numeric {
             self.decimal_to_int_trunc_observed(&mut |_| Ok::<_, core::convert::Infallible>(())),
         )
     }
-
     /// Truncate to an integer while reporting the division before work.
     ///
     /// # Errors
@@ -1256,7 +1197,6 @@ impl Numeric {
             observer,
         )
     }
-
     /// Convert to an integer using an explicit deterministic rounding mode.
     ///
     /// # Errors
@@ -1271,7 +1211,6 @@ impl Numeric {
             }),
         )
     }
-
     /// Round to an integer while reporting the division before work.
     ///
     /// # Errors
@@ -1304,7 +1243,6 @@ impl Numeric {
             observer,
         )
     }
-
     /// Checked addition. Computes `self + other`, returning `None` if overflow occurred
     #[expect(
         clippy::needless_pass_by_value,
@@ -1313,7 +1251,6 @@ impl Numeric {
     pub fn checked_add(self, other: Self) -> Option<Self> {
         self.try_decimal_add(&other).ok()
     }
-
     /// Checked subtraction. Computes `self - other`, returning `None` if overflow occurred
     #[expect(
         clippy::needless_pass_by_value,
@@ -1322,7 +1259,6 @@ impl Numeric {
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         self.try_decimal_sub(&other).ok()
     }
-
     /// Quantize this value to at most `output_scale` fractional digits using
     /// an explicit deterministic rounding mode.
     ///
@@ -1352,7 +1288,6 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-
     /// Quantize to an optional asset scale with an explicit rounding mode.
     ///
     /// An unconstrained specification returns the value unchanged.
@@ -1367,7 +1302,6 @@ impl Numeric {
         spec.scale
             .map_or_else(|| Ok(self.clone()), |scale| self.try_quantize(scale, mode))
     }
-
     /// Convert [`Numeric`] to [`f64`] with possible loss of precision.
     ///
     /// This conversion is intended only for non-consensus consumers such as
@@ -1379,26 +1313,22 @@ impl Numeric {
             .parse()
             .expect("every bounded canonical Numeric value is representable as a finite f64")
     }
-
     /// Check if number is zero
     pub fn is_zero(&self) -> bool {
         self.mantissa.is_zero()
     }
 }
-
 impl Quantity {
     /// Zero quantity.
     #[must_use]
     pub fn zero() -> Self {
         Self(Numeric::zero())
     }
-
     /// One quantity.
     #[must_use]
     pub fn one() -> Self {
         Self(Numeric::one())
     }
-
     /// Canonicalize and validate a decimal as a non-negative quantity.
     ///
     /// # Errors
@@ -1408,7 +1338,6 @@ impl Quantity {
         let value = value.canonicalize_decimal()?;
         Self::from_canonical_numeric(value)
     }
-
     /// Wrap an already canonical decimal as a non-negative quantity.
     ///
     /// Every publicly constructible [`Numeric`] already carries the canonical
@@ -1424,37 +1353,31 @@ impl Quantity {
         }
         Ok(Self(value))
     }
-
     /// Borrow the canonical decimal representation.
     #[must_use]
     pub fn as_numeric(&self) -> &Numeric {
         &self.0
     }
-
     /// Borrow the signed-domain mantissa (always non-negative for a quantity).
     #[must_use]
     pub fn mantissa(&self) -> &BigInt {
         self.0.mantissa()
     }
-
     /// Return the canonical decimal scale.
     #[must_use]
     pub const fn scale(&self) -> u32 {
         self.0.scale()
     }
-
     /// Return whether this quantity is zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
-
     /// Consume this quantity and return its canonical decimal representation.
     #[must_use]
     pub fn into_numeric(self) -> Numeric {
         self.0
     }
-
     /// Add two quantities exactly.
     ///
     /// # Errors
@@ -1462,7 +1385,6 @@ impl Quantity {
     pub fn try_add(&self, other: &Self) -> Result<Self, NumericOperationError> {
         Self::from_canonical_numeric(self.0.try_decimal_add(&other.0)?)
     }
-
     /// Alias for [`Self::try_add`] emphasizing checked domain arithmetic.
     ///
     /// # Errors
@@ -1470,7 +1392,6 @@ impl Quantity {
     pub fn checked_add(&self, other: &Self) -> Result<Self, NumericOperationError> {
         self.try_add(other)
     }
-
     /// Subtract quantities, rejecting a negative result as underflow.
     ///
     /// # Errors
@@ -1483,7 +1404,6 @@ impl Quantity {
         }
         Self::from_canonical_numeric(result)
     }
-
     /// Alias for [`Self::try_sub`] emphasizing checked domain arithmetic.
     ///
     /// # Errors
@@ -1491,7 +1411,6 @@ impl Quantity {
     pub fn checked_sub(&self, other: &Self) -> Result<Self, NumericOperationError> {
         self.try_sub(other)
     }
-
     /// Multiply a quantity by an exact decimal factor.
     ///
     /// # Errors
@@ -1499,7 +1418,6 @@ impl Quantity {
     pub fn try_mul_decimal(&self, factor: &Numeric) -> Result<Self, NumericOperationError> {
         Self::from_canonical_numeric(self.0.try_decimal_mul(factor)?)
     }
-
     /// Multiply and divide exactly with one unbounded conceptual intermediate.
     ///
     /// # Errors
@@ -1511,7 +1429,6 @@ impl Quantity {
     ) -> Result<Self, NumericOperationError> {
         Self::from_canonical_numeric(self.0.try_decimal_mul_div_exact(multiplier, divisor)?)
     }
-
     /// Multiply and divide with one unbounded conceptual intermediate and an
     /// explicit final rounding policy.
     ///
@@ -1531,7 +1448,6 @@ impl Quantity {
             mode,
         )?)
     }
-
     /// Compute a weighted average with unbounded conceptual intermediates.
     ///
     /// Each input contributes `value * weight` to the numerator. Products and
@@ -1558,7 +1474,6 @@ impl Quantity {
         if output_scale > MAX_DECIMAL_SCALE {
             return Err(NumericOperationError::InvalidScale);
         }
-
         let mut common_scale = 0_u32;
         let mut weighted_sum = UnboundedBigInt::zero();
         let mut total_weight = UnboundedBigInt::zero();
@@ -1567,7 +1482,6 @@ impl Quantity {
             if weight == 0 {
                 continue;
             }
-
             if value.scale() > common_scale {
                 weighted_sum *= UnboundedBigInt::from(10_u8).pow(value.scale() - common_scale);
                 common_scale = value.scale();
@@ -1579,11 +1493,9 @@ impl Quantity {
             weighted_sum += contribution;
             total_weight += UnboundedBigInt::from(weight);
         }
-
         if total_weight.is_zero() {
             return Err(NumericOperationError::DivisionByZero);
         }
-
         let (numerator, denominator) = if output_scale >= common_scale {
             (
                 weighted_sum * UnboundedBigInt::from(10_u8).pow(output_scale - common_scale),
@@ -1602,7 +1514,6 @@ impl Quantity {
             }),
         )?)
     }
-
     /// Multiply this quantity by a sequence of decimal factors using one
     /// unbounded conceptual product.
     ///
@@ -1625,7 +1536,6 @@ impl Quantity {
         let ten = UnboundedBigInt::from(10_u8);
         let mut product = self.mantissa().inner().clone();
         let mut scale = u128::from(self.scale());
-
         for (index, factor) in factors.into_iter().enumerate() {
             if index >= MAX_DECIMAL_PRODUCT_FACTORS {
                 return Err(DecimalProductError::TooManyFactors);
@@ -1648,7 +1558,6 @@ impl Quantity {
                 scale -= 1;
             }
         }
-
         if scale > u128::from(MAX_DECIMAL_SCALE) {
             return Err(NumericOperationError::ScaleOverflow.into());
         }
@@ -1659,7 +1568,6 @@ impl Quantity {
             }),
         )?)?)
     }
-
     /// Multiply this quantity by decimal factors as one unbounded conceptual
     /// product, then round the aggregate once at `output_scale`.
     ///
@@ -1688,7 +1596,6 @@ impl Quantity {
         let ten = UnboundedBigInt::from(10_u8);
         let mut product = self.mantissa().inner().clone();
         let mut scale = u128::from(self.scale());
-
         for (index, factor) in factors.into_iter().enumerate() {
             if index >= MAX_DECIMAL_PRODUCT_FACTORS {
                 return Err(DecimalProductError::TooManyFactors);
@@ -1711,7 +1618,6 @@ impl Quantity {
                 scale -= 1;
             }
         }
-
         let output_scale_wide = u128::from(output_scale);
         let rounded = if scale > output_scale_wide {
             let reduction = u32::try_from(scale - output_scale_wide)
@@ -1728,7 +1634,6 @@ impl Quantity {
             }),
         )?)?)
     }
-
     /// Compare `self * self_multiplier` with `other * other_multiplier`.
     ///
     /// Products and decimal alignment are conceptual unbounded intermediates,
@@ -1751,7 +1656,6 @@ impl Quantity {
             * UnboundedBigInt::from(10_u8).pow(common_scale - other.scale());
         lhs.cmp(&rhs)
     }
-
     /// Divide a quantity by a decimal factor exactly.
     ///
     /// # Errors
@@ -1759,7 +1663,6 @@ impl Quantity {
     pub fn try_div_decimal_exact(&self, divisor: &Numeric) -> Result<Self, NumericOperationError> {
         Self::from_canonical_numeric(self.0.try_decimal_div_exact(divisor)?)
     }
-
     /// Divide a quantity by a decimal factor with explicit rounding.
     ///
     /// # Errors
@@ -1772,7 +1675,6 @@ impl Quantity {
     ) -> Result<Self, NumericOperationError> {
         Self::from_canonical_numeric(self.0.try_decimal_div_round(divisor, output_scale, mode)?)
     }
-
     /// Compute the exact dimensionless ratio of two quantities.
     ///
     /// # Errors
@@ -1780,7 +1682,6 @@ impl Quantity {
     pub fn try_ratio_exact(&self, divisor: &Self) -> Result<Numeric, NumericOperationError> {
         self.0.try_decimal_div_exact(&divisor.0)
     }
-
     /// Compute a rounded dimensionless ratio of two quantities.
     ///
     /// # Errors
@@ -1794,34 +1695,28 @@ impl Quantity {
         self.0.try_decimal_div_round(&divisor.0, output_scale, mode)
     }
 }
-
 impl Default for Quantity {
     fn default() -> Self {
         Self::zero()
     }
 }
-
 impl PartialOrd for Quantity {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for Quantity {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.cmp(&other.0)
     }
 }
-
 impl core::fmt::Display for Quantity {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
 }
-
 impl core::str::FromStr for Quantity {
     type Err = NumericOperationError;
-
     fn from_str(source: &str) -> Result<Self, Self::Err> {
         let value = source.parse::<Numeric>().map_err(|error| match error {
             NumericError::ScaleTooLarge => NumericOperationError::ScaleOverflow,
@@ -1832,61 +1727,50 @@ impl core::str::FromStr for Quantity {
         Self::try_from_numeric(value)
     }
 }
-
 impl TryFrom<Numeric> for Quantity {
     type Error = NumericOperationError;
-
     fn try_from(value: Numeric) -> Result<Self, Self::Error> {
         Self::try_from_numeric(value)
     }
 }
-
 impl From<Quantity> for Numeric {
     fn from(value: Quantity) -> Self {
         value.0
     }
 }
-
 impl From<u32> for Quantity {
     fn from(value: u32) -> Self {
         Self(Numeric::from(value))
     }
 }
-
 impl From<u64> for Quantity {
     fn from(value: u64) -> Self {
         Self(Numeric::from(value))
     }
 }
-
 impl From<u128> for Quantity {
     fn from(value: u128) -> Self {
         Self(Numeric::new(BigInt::from(value), 0))
     }
 }
-
 impl NoritoSerialize for Quantity {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for Quantity {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid canonical quantity")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let numeric = Numeric::try_deserialize(archived.cast::<Numeric>())?;
         Self::from_canonical_numeric(numeric)
             .map_err(|error| Error::Message(format!("invalid quantity: {error}")))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for Quantity {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (numeric, used) = <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -1895,13 +1779,18 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Quantity {
         Ok((quantity, used))
     }
 }
-
 impl FastJsonWrite for Quantity {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // A quantity is capped by the 512-bit mantissa and decimal-scale policy.
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
-
 impl JsonDeserialize for Quantity {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -1920,7 +1809,6 @@ impl JsonDeserialize for Quantity {
         Ok(parsed)
     }
 }
-
 impl XorQuantity {
     /// Validate and wrap a canonical non-negative XOR quantity.
     ///
@@ -1936,7 +1824,6 @@ impl XorQuantity {
         }
         Ok(Self(quantity))
     }
-
     /// Construct from an exact micro-XOR projection.
     ///
     /// This is an explicit adapter for versioned external formats that define
@@ -1951,31 +1838,26 @@ impl XorQuantity {
             .map_err(XorQuantityError::from)
             .and_then(Self::try_from_quantity)
     }
-
     /// Borrow the canonical quantity.
     #[must_use]
     pub const fn as_quantity(&self) -> &Quantity {
         &self.0
     }
-
     /// Consume the nominal wrapper.
     #[must_use]
     pub fn into_quantity(self) -> Quantity {
         self.0
     }
-
     /// Return the zero amount.
     #[must_use]
     pub fn zero() -> Self {
         Self(Quantity::zero())
     }
-
     /// Whether the amount is zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
-
     /// Project to micro-XOR exactly.
     ///
     /// This is an explicit adapter for versioned external formats. It never
@@ -1996,7 +1878,6 @@ impl XorQuantity {
             .try_mantissa_u128()
             .ok_or(XorQuantityError::Overflow)
     }
-
     /// Add two XOR amounts exactly.
     ///
     /// # Errors
@@ -2007,7 +1888,6 @@ impl XorQuantity {
             .map_err(XorQuantityError::from)
             .and_then(Self::try_from_quantity)
     }
-
     /// Subtract two XOR amounts exactly.
     ///
     /// # Errors
@@ -2018,7 +1898,6 @@ impl XorQuantity {
             .map_err(XorQuantityError::from)
             .and_then(Self::try_from_quantity)
     }
-
     /// Return the smaller amount.
     #[must_use]
     pub fn min(&self, other: &Self) -> Self {
@@ -2028,7 +1907,6 @@ impl XorQuantity {
             other.clone()
         }
     }
-
     /// Multiply by an unsigned 64-bit scalar.
     ///
     /// # Errors
@@ -2036,7 +1914,6 @@ impl XorQuantity {
     pub fn checked_mul_u64(&self, multiplier: u64) -> Result<Self, XorQuantityError> {
         self.checked_mul_u128(u128::from(multiplier))
     }
-
     /// Multiply by an unsigned 128-bit scalar.
     ///
     /// # Errors
@@ -2047,7 +1924,6 @@ impl XorQuantity {
             .map_err(XorQuantityError::from)
             .and_then(Self::try_from_quantity)
     }
-
     /// Divide by a positive integer with explicit output scale and rounding.
     ///
     /// # Errors
@@ -2069,7 +1945,6 @@ impl XorQuantity {
             .map_err(XorQuantityError::from)
             .and_then(Self::try_from_quantity)
     }
-
     /// Apply a basis-point ratio (`basis_points / 10_000`) toward zero.
     ///
     /// # Errors
@@ -2077,7 +1952,6 @@ impl XorQuantity {
     pub fn checked_mul_basis_points(&self, basis_points: u16) -> Result<Self, XorQuantityError> {
         self.checked_mul_basis_points_u32(u32::from(basis_points))
     }
-
     /// Apply a basis-point ratio whose numerator may exceed `u16`.
     ///
     /// # Errors
@@ -2091,7 +1965,6 @@ impl XorQuantity {
             core::num::NonZeroU64::new(10_000).expect("basis-point denominator is non-zero"),
         )
     }
-
     /// Multiply by an unsigned rational factor, rounding toward zero at XOR's
     /// maximum scale.
     ///
@@ -2109,7 +1982,6 @@ impl XorQuantity {
             RoundingMode::TowardZero,
         )
     }
-
     /// Multiply by an unsigned rational factor using an explicit rounding
     /// policy and output scale.
     ///
@@ -2139,34 +2011,28 @@ impl XorQuantity {
             .and_then(Self::try_from_quantity)
     }
 }
-
 impl Default for XorQuantity {
     fn default() -> Self {
         Self::zero()
     }
 }
-
 impl PartialOrd for XorQuantity {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for XorQuantity {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.cmp(&other.0)
     }
 }
-
 impl core::fmt::Display for XorQuantity {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(formatter)
     }
 }
-
 impl core::str::FromStr for XorQuantity {
     type Err = XorQuantityError;
-
     fn from_str(source: &str) -> Result<Self, Self::Err> {
         source
             .parse::<Quantity>()
@@ -2174,43 +2040,35 @@ impl core::str::FromStr for XorQuantity {
             .and_then(Self::try_from_quantity)
     }
 }
-
 impl TryFrom<Quantity> for XorQuantity {
     type Error = XorQuantityError;
-
     fn try_from(value: Quantity) -> Result<Self, Self::Error> {
         Self::try_from_quantity(value)
     }
 }
-
 impl From<XorQuantity> for Quantity {
     fn from(value: XorQuantity) -> Self {
         value.0
     }
 }
-
 impl NoritoSerialize for XorQuantity {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for XorQuantity {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid canonical XOR quantity")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let quantity = Quantity::try_deserialize(archived.cast::<Quantity>())?;
         Self::try_from_quantity(quantity)
             .map_err(|error| Error::Message(format!("invalid XOR quantity: {error}")))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for XorQuantity {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (quantity, used) =
@@ -2220,13 +2078,17 @@ impl<'a> norito::core::DecodeFromSlice<'a> for XorQuantity {
         Ok((value, used))
     }
 }
-
 impl FastJsonWrite for XorQuantity {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
-
 impl JsonDeserialize for XorQuantity {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let quantity = Quantity::json_deserialize(parser)?;
@@ -2236,7 +2098,6 @@ impl JsonDeserialize for XorQuantity {
         })
     }
 }
-
 impl From<NumericOperationError> for XorQuantityError {
     fn from(value: NumericOperationError) -> Self {
         match value {
@@ -2253,7 +2114,6 @@ impl From<NumericOperationError> for XorQuantityError {
         }
     }
 }
-
 fn infallible_observed<T>(
     result: Result<T, ObservedNumericError<core::convert::Infallible>>,
 ) -> Result<T, NumericOperationError> {
@@ -2263,13 +2123,11 @@ fn infallible_observed<T>(
         Err(ObservedNumericError::Observer(never)) => match never {},
     }
 }
-
 fn logical_limbs(value: &UnboundedBigInt) -> u16 {
     let bits = value.bits();
     let limbs = bits.max(1).div_ceil(64);
     u16::try_from(limbs).unwrap_or(u16::MAX)
 }
-
 fn quotient_remainder(
     numerator: &UnboundedBigInt,
     denominator: &UnboundedBigInt,
@@ -2278,7 +2136,6 @@ fn quotient_remainder(
     let remainder = numerator - (&quotient * denominator);
     (quotient, remainder)
 }
-
 fn canonical_decimal_from_unbounded_observed<E, F>(
     mut mantissa: UnboundedBigInt,
     mut scale: u32,
@@ -2320,7 +2177,6 @@ where
         })
     })
 }
-
 fn finalize_bigint_observed<E, F>(
     value: UnboundedBigInt,
     observer: &mut F,
@@ -2335,11 +2191,9 @@ where
     BigInt::from_inner(value)
         .map_err(|_| ObservedNumericError::Numeric(NumericOperationError::MantissaOverflow))
 }
-
 fn mantissa_fits_numeric_domain(value: &BigInt) -> bool {
     value.twos_byte_len() <= MAX_MANTISSA_BYTES
 }
-
 fn decimal_division_operands_observed<E, F>(
     dividend: &Numeric,
     divisor: &Numeric,
@@ -2360,7 +2214,6 @@ where
         scale_unbounded_observed(divisor.mantissa.inner(), denominator_delta, observer)?;
     Ok((numerator, denominator))
 }
-
 fn decimal_product_division_operands_observed<E, F>(
     product: &UnboundedBigInt,
     product_scale: u32,
@@ -2388,7 +2241,6 @@ where
         scale_unbounded_observed(divisor.mantissa.inner(), denominator_delta, observer)?;
     Ok((numerator, denominator))
 }
-
 fn exact_division_at_scale_observed<E, F>(
     dividend: &Numeric,
     divisor: &Numeric,
@@ -2412,7 +2264,6 @@ where
     }
     canonical_decimal_from_unbounded_observed(quotient, output_scale, observer).map(Some)
 }
-
 fn exact_product_division_at_scale_observed<E, F>(
     product: &UnboundedBigInt,
     product_scale: u32,
@@ -2442,7 +2293,6 @@ where
     }
     canonical_decimal_from_unbounded_observed(quotient, output_scale, observer).map(Some)
 }
-
 fn classification_division<E, F>(
     dividend: &UnboundedBigInt,
     divisor: &UnboundedBigInt,
@@ -2458,7 +2308,6 @@ where
     .map_err(ObservedNumericError::Observer)?;
     Ok(quotient_remainder(dividend, divisor))
 }
-
 fn classify_exact_division_inner<E, F>(
     dividend: &Numeric,
     divisor: &Numeric,
@@ -2471,7 +2320,6 @@ where
         decimal_division_operands_observed(dividend, divisor, 0, observer)?;
     classify_exact_rational_observed(&numerator, &denominator, observer)
 }
-
 fn classify_exact_rational_observed<E, F>(
     numerator: &UnboundedBigInt,
     denominator: &UnboundedBigInt,
@@ -2493,7 +2341,6 @@ where
         lhs = rhs;
         rhs = remainder;
     }
-
     let mut reduced_denominator = if lhs.is_one() {
         absolute_denominator
     } else {
@@ -2515,7 +2362,6 @@ where
             *count += 1;
         }
     }
-
     if reduced_denominator != UnboundedBigInt::one() {
         return Ok(ExactDivisionClass::Repeating);
     }
@@ -2527,7 +2373,6 @@ where
         minimum_scale: u8::try_from(minimum_scale).expect("bounded minimum scale"),
     })
 }
-
 fn rounded_quotient(
     numerator: &UnboundedBigInt,
     denominator: &UnboundedBigInt,
@@ -2537,7 +2382,6 @@ fn rounded_quotient(
     if remainder.is_zero() {
         return quotient;
     }
-
     let direction = if numerator.is_negative() == denominator.is_negative() {
         UnboundedBigInt::one()
     } else {
@@ -2567,7 +2411,6 @@ fn rounded_quotient(
     }
     quotient
 }
-
 fn scale_unbounded_observed<E, F>(
     value: &UnboundedBigInt,
     decimal_places: u32,
@@ -2590,14 +2433,12 @@ where
     .map_err(ObservedNumericError::Observer)?;
     Ok(value * decimal_power_unbounded(decimal_places))
 }
-
 fn scale_unbounded(value: &UnboundedBigInt, decimal_places: u32) -> UnboundedBigInt {
     if decimal_places == 0 || value.is_zero() {
         return value.clone();
     }
     value * decimal_power_unbounded(decimal_places)
 }
-
 fn decimal_power_unbounded(decimal_places: u32) -> UnboundedBigInt {
     let ten = UnboundedBigInt::from(10_u8);
     let mut power = UnboundedBigInt::one();
@@ -2606,7 +2447,6 @@ fn decimal_power_unbounded(decimal_places: u32) -> UnboundedBigInt {
     }
     power
 }
-
 impl Numeric {
     /// Encode this `Numeric` into Norito bytes.
     pub fn encode(&self) -> Vec<u8> {
@@ -2616,7 +2456,6 @@ impl Numeric {
         };
         norito::codec::Encode::encode(&helper)
     }
-
     /// Decode `Numeric` from Norito-encoded input.
     ///
     /// # Errors
@@ -2653,7 +2492,6 @@ impl Numeric {
         }
     }
 }
-
 impl NoritoSerialize for Numeric {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         let helper = scale_::NumericScaleHelper {
@@ -2662,7 +2500,6 @@ impl NoritoSerialize for Numeric {
         };
         helper.serialize(writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         scale_::NumericScaleHelperView {
             mantissa: scale_::BigIntView(&self.mantissa),
@@ -2671,18 +2508,15 @@ impl NoritoSerialize for Numeric {
         .encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for Numeric {
     fn deserialize(archived: &'a Archived<Numeric>) -> Self {
         Self::try_deserialize(archived).expect("invalid numeric")
     }
-
     fn try_deserialize(archived: &'a Archived<Numeric>) -> Result<Self, Error> {
         let helper_align = norito::core::archived_payload_align::<scale_::NumericScaleHelper>();
         let numeric_align = norito::core::archived_payload_align::<Numeric>();
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let aligned = numeric_align >= helper_align || (ptr as usize).is_multiple_of(helper_align);
-
         if aligned {
             let helper_arch: &Archived<scale_::NumericScaleHelper> = archived.cast();
             let helper = scale_::NumericScaleHelper::try_deserialize(helper_arch)?;
@@ -2699,13 +2533,18 @@ impl<'a> NoritoDeserialize<'a> for Numeric {
         }
     }
 }
-
 impl FastJsonWrite for Numeric {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // A numeric is capped by the 512-bit mantissa and decimal-scale policy.
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
-
 impl JsonDeserialize for Numeric {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -2724,28 +2563,23 @@ impl JsonDeserialize for Numeric {
         Ok(parsed)
     }
 }
-
 impl From<u32> for Numeric {
     fn from(value: u32) -> Self {
         Self::new(BigInt::from(i128::from(value)), 0)
     }
 }
-
 impl From<u64> for Numeric {
     fn from(value: u64) -> Self {
         Self::new(BigInt::from(i128::from(value)), 0)
     }
 }
-
 impl From<i64> for Numeric {
     fn from(value: i64) -> Self {
         Self::new(BigInt::from(i128::from(value)), 0)
     }
 }
-
 impl TryFrom<Numeric> for u32 {
     type Error = TryFromNumericError;
-
     fn try_from(value: Numeric) -> Result<Self, Self::Error> {
         value
             .to_string()
@@ -2753,10 +2587,8 @@ impl TryFrom<Numeric> for u32 {
             .map_err(|_| TryFromNumericError)
     }
 }
-
 impl TryFrom<Numeric> for u64 {
     type Error = TryFromNumericError;
-
     fn try_from(value: Numeric) -> Result<Self, Self::Error> {
         value
             .to_string()
@@ -2764,7 +2596,6 @@ impl TryFrom<Numeric> for u64 {
             .map_err(|_| TryFromNumericError)
     }
 }
-
 impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> Ordering {
         let target_scale = self.scale.max(other.scale);
@@ -2773,13 +2604,11 @@ impl Ord for Numeric {
         lhs.cmp(&rhs)
     }
 }
-
 impl PartialOrd for Numeric {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl NumericSpec {
     fn try_from_scale(scale: Option<u32>) -> Result<Self, NumericSpecError> {
         if scale.is_some_and(|scale| scale > MAX_DECIMAL_SCALE) {
@@ -2787,7 +2616,6 @@ impl NumericSpec {
         }
         Ok(Self { scale })
     }
-
     /// Check if given numeric satisfy constrains
     ///
     /// # Errors
@@ -2798,7 +2626,6 @@ impl NumericSpec {
             if actual_scale <= allowed_scale {
                 return Ok(());
             }
-
             // Allow higher-scale representations when the extra fractional digits are all zero
             // (e.g., "1.00" should satisfy an integer-only spec).
             let trim = actual_scale - allowed_scale;
@@ -2811,25 +2638,20 @@ impl NumericSpec {
             {
                 return Ok(());
             }
-
             return Err(NumericSpecError::ScaleTooHigh);
         }
-
         Ok(())
     }
-
     /// Create [`NumericSpec`] which accepts any numeric value
     #[inline]
     pub const fn unconstrained() -> Self {
         NumericSpec { scale: None }
     }
-
     /// Create [`NumericSpec`] which accepts only integer values
     #[inline]
     pub const fn integer() -> Self {
         Self { scale: Some(0) }
     }
-
     /// Try to create a specification accepting at most `scale` decimal places.
     ///
     /// # Errors
@@ -2842,7 +2664,6 @@ impl NumericSpec {
         }
         Ok(Self { scale: Some(scale) })
     }
-
     /// Create [`NumericSpec`] which accepts numeric values with scale up to given decimal places.
     ///
     /// # Panics
@@ -2856,17 +2677,14 @@ impl NumericSpec {
         );
         Self { scale: Some(scale) }
     }
-
     /// Get the scale
     #[inline]
     pub const fn scale(self) -> Option<u32> {
         self.scale
     }
 }
-
 impl core::str::FromStr for Numeric {
     type Err = NumericError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -2913,7 +2731,6 @@ impl core::str::FromStr for Numeric {
         Numeric::try_new(mantissa, scale)
     }
 }
-
 impl core::fmt::Display for NumericSpec {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Numeric")?;
@@ -2923,7 +2740,6 @@ impl core::fmt::Display for NumericSpec {
         Ok(())
     }
 }
-
 impl core::fmt::Display for Numeric {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.scale == 0 {
@@ -2943,35 +2759,29 @@ impl core::fmt::Display for Numeric {
         }
     }
 }
-
 mod scale_ {
     /// Borrowed wire-compatible view of a numeric mantissa.
     pub(super) struct BigIntView<'a>(
         /// Canonical bounded integer serialized by the view.
         pub(super) &'a crate::bigint::BigInt,
     );
-
     impl norito::core::NoritoSerialize for BigIntView<'_> {
         fn schema_hash() -> [u8; 16] {
             <crate::bigint::BigInt as norito::core::NoritoSerialize>::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             norito::core::NoritoSerialize::serialize(self.0, writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             norito::core::NoritoSerialize::encoded_len_hint(self.0)
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             norito::core::NoritoSerialize::encoded_len_exact(self.0)
         }
     }
-
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
@@ -2984,7 +2794,6 @@ mod scale_ {
         #[codec(compact)]
         pub(super) scale: u32,
     }
-
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode)]
     /// Borrowed wire-compatible view used to size a canonical numeric.
@@ -2997,30 +2806,24 @@ mod scale_ {
         pub(super) scale: u32,
     }
 }
-
 mod schema_ {
+    use super::*;
     use iroha_schema::{
         Compact, Declaration, Ident, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId,
     };
-
-    use super::*;
-
     impl TypeId for Numeric {
         fn id() -> Ident {
             "Numeric".to_string()
         }
     }
-
     impl IntoSchema for Numeric {
         fn type_name() -> Ident {
             "Numeric".to_string()
         }
-
         fn update_schema_map(metamap: &mut MetaMap) {
             if !metamap.contains_key::<Self>() {
                 <crate::bigint::BigInt as iroha_schema::IntoSchema>::update_schema_map(metamap);
                 <Compact<u32> as iroha_schema::IntoSchema>::update_schema_map(metamap);
-
                 metamap.insert::<Self>(Metadata::Struct(NamedFieldsMeta {
                     declarations: vec![
                         Declaration {
@@ -3036,18 +2839,15 @@ mod schema_ {
             }
         }
     }
-
     impl TypeId for Quantity {
         fn id() -> Ident {
             "Quantity".to_string()
         }
     }
-
     impl IntoSchema for Quantity {
         fn type_name() -> Ident {
             "Quantity".to_string()
         }
-
         fn update_schema_map(metamap: &mut MetaMap) {
             if !metamap.contains_key::<Self>() {
                 <Numeric as IntoSchema>::update_schema_map(metamap);
@@ -3060,18 +2860,15 @@ mod schema_ {
             }
         }
     }
-
     impl TypeId for XorQuantity {
         fn id() -> Ident {
             "XorQuantity".to_string()
         }
     }
-
     impl IntoSchema for XorQuantity {
         fn type_name() -> Ident {
             "XorQuantity".to_string()
         }
-
         fn update_schema_map(metamap: &mut MetaMap) {
             if !metamap.contains_key::<Self>() {
                 <Quantity as IntoSchema>::update_schema_map(metamap);
@@ -3085,35 +2882,26 @@ mod schema_ {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::cmp::Ordering;
-
     use num_bigint::BigInt as ReferenceInt;
     use num_traits::{One as _, Signed as _, Zero as _};
-
-    use super::*;
-
     #[test]
     fn check_add() {
         let a = Numeric::new(10, 0);
         let b = Numeric::new(9, 3);
-
         assert_eq!(a.checked_add(b), Some(Numeric::new(10009, 3)));
-
         let a = Numeric::new(1, 2);
         let b = Numeric::new(999, 2);
-
         assert_eq!(a.checked_add(b), Some(Numeric::new(1000, 2)));
     }
-
     #[test]
     fn numeric_ordering_compares_value_not_repr() {
         let ten = Numeric::new(10, 0);
         let nine_point_eight = Numeric::new(98, 1);
         let nine_point_eight_fine = Numeric::new(9_800, 3);
-
         assert!(nine_point_eight < ten);
         assert!(nine_point_eight_fine < ten);
         assert_eq!(
@@ -3121,22 +2909,18 @@ mod tests {
             Some(Ordering::Equal)
         );
     }
-
     #[test]
     fn numeric_decode_from_slice_reports_the_exact_prefix_length() {
         let expected: Numeric = "1.25".parse().expect("numeric");
         let canonical = expected.encode();
         let mut followed_by_next_field = canonical.clone();
         followed_by_next_field.extend_from_slice(b"next-field");
-
         let (decoded, used) =
             <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(&followed_by_next_field)
                 .expect("decode numeric prefix");
-
         assert_eq!(decoded, expected);
         assert_eq!(used, canonical.len());
     }
-
     #[test]
     fn numeric_exact_norito_length_matches_canonical_payload() {
         let assert_exact_length = |value: &Numeric| {
@@ -3150,7 +2934,6 @@ mod tests {
             };
             let owned_payload = norito::codec::Encode::encode(&owned);
             let borrowed_payload = norito::codec::Encode::encode(&borrowed);
-
             assert_eq!(borrowed_payload, owned_payload);
             assert_eq!(
                 norito::codec::Encode::encode(value),
@@ -3161,7 +2944,6 @@ mod tests {
             assert_eq!(borrowed.encoded_len_exact(), Some(owned_payload.len()));
             assert_eq!(value.encoded_len_exact(), Some(owned_payload.len()));
         };
-
         for value in [
             "-327.69",
             "-128",
@@ -3176,7 +2958,6 @@ mod tests {
             let value: Numeric = value.parse().expect("canonical numeric");
             assert_exact_length(&value);
         }
-
         let signed_limit = ReferenceInt::one() << (MAX_MANTISSA_BITS - 1);
         for mantissa in [-signed_limit.clone(), signed_limit - 1_u8] {
             let mantissa = BigInt::from_inner(mantissa).expect("bounded numeric mantissa");
@@ -3187,19 +2968,13 @@ mod tests {
             assert_exact_length(&value);
         }
     }
-
     #[test]
     fn check_json_roundtrip() {
         let num1 = Numeric::new(1002, 2);
-
         let s = norito::json::to_json(&num1).expect("failed to serialize numeric");
-
         assert_eq!(s, "\"10.02\"");
-
         let num2 = norito::json::from_str(&s).expect("failed to deserialize numeric");
-
         assert_eq!(num1, num2);
-
         for noncanonical in ["+1", "01", "-0", "1.0", ".5", "1."] {
             let source = format!("\"{noncanonical}\"");
             assert!(
@@ -3208,7 +2983,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn numeric_spec_json_roundtrip() {
         let specs = [NumericSpec::unconstrained(), NumericSpec::fractional(5)];
@@ -3223,7 +2997,6 @@ mod tests {
             let reencoded = norito::json::to_json(&decoded).expect("re-serialize spec");
             assert_eq!(reencoded, json);
         }
-
         let duplicate = norito::json::from_json::<NumericSpec>(r#"{"scale":1,"scale":2}"#)
             .expect_err("duplicate numeric-spec scale must fail closed");
         assert!(matches!(
@@ -3231,7 +3004,6 @@ mod tests {
             norito::json::Error::DuplicateField { ref field } if field == "scale"
         ));
     }
-
     #[test]
     fn numeric_spec_rejects_scales_outside_the_v1_domain_on_every_boundary() {
         assert_eq!(
@@ -3242,13 +3014,11 @@ mod tests {
             NumericSpec::try_fractional(MAX_DECIMAL_SCALE + 1),
             Err(NumericSpecError::ScaleTooHigh)
         ));
-
         let hostile_json = format!(r#"{{"scale":{}}}"#, MAX_DECIMAL_SCALE + 1);
         assert!(
             norito::json::from_json::<NumericSpec>(&hostile_json).is_err(),
             "JSON must not construct an asset precision policy outside the numeric domain"
         );
-
         let invalid = NumericSpec {
             scale: Some(MAX_DECIMAL_SCALE + 1),
         };
@@ -3258,7 +3028,6 @@ mod tests {
             "Norito must not construct an asset precision policy outside the numeric domain"
         );
     }
-
     #[test]
     fn numeric_spec_allows_trailing_zero_scale_reduction() {
         let integer_spec = NumericSpec::integer();
@@ -3267,7 +3036,6 @@ mod tests {
             integer_spec.check(&Numeric::new(101, 2)),
             Err(NumericSpecError::ScaleTooHigh)
         ));
-
         let fractional_spec = NumericSpec::fractional(1);
         assert!(fractional_spec.check(&Numeric::new(120, 2)).is_ok());
         assert!(matches!(
@@ -3275,7 +3043,6 @@ mod tests {
             Err(NumericSpecError::ScaleTooHigh)
         ));
     }
-
     #[test]
     fn trim_trailing_zeros_normalises_scale() {
         assert_eq!(
@@ -3291,19 +3058,14 @@ mod tests {
             Numeric::new(1234, 2)
         );
     }
-
     // Ensure Norito codec round-trips the value without loss.
     #[test]
     fn check_norito_roundtrip() {
         let num1 = Numeric::new(1002, 2);
-
         let s = num1.encode();
-
         let num2 = Numeric::decode(&mut s.as_slice()).expect("failed to decode numeric");
-
         assert_eq!(num1, num2);
     }
-
     #[test]
     fn numeric_canonical_roundtrip() {
         let value = Numeric::new(12345, 3);
@@ -3313,7 +3075,6 @@ mod tests {
         assert_eq!(decoded, value);
         assert_eq!(used, payload.len());
     }
-
     #[test]
     fn signed_domain_minimum_parses_and_formats_at_fractional_scale() {
         let mut minimum_bytes = vec![0_u8; MAX_MANTISSA_BYTES];
@@ -3323,7 +3084,6 @@ mod tests {
         let magnitude = integer.strip_prefix('-').expect("negative minimum");
         let split = magnitude.len() - 1;
         let source = format!("-{}.{}", &magnitude[..split], &magnitude[split..]);
-
         let numeric = source
             .parse::<Numeric>()
             .expect("fractional signed minimum");
@@ -3331,7 +3091,6 @@ mod tests {
         assert_eq!(numeric.scale(), 1);
         assert_eq!(numeric.to_string(), source);
     }
-
     fn decimal(source: &str) -> Numeric {
         source
             .parse::<Numeric>()
@@ -3339,23 +3098,19 @@ mod tests {
             .canonicalize_decimal()
             .expect("representable canonical decimal")
     }
-
     fn quantity(source: &str) -> Quantity {
         source.parse().expect("valid quantity source")
     }
-
     fn signed_maximum() -> BigInt {
         let mut bytes = vec![0xff_u8; MAX_MANTISSA_BYTES - 1];
         bytes.push(0x7f);
         BigInt::from_twos_bytes(&bytes).expect("signed maximum")
     }
-
     fn signed_minimum() -> BigInt {
         let mut bytes = vec![0_u8; MAX_MANTISSA_BYTES - 1];
         bytes.push(0x80);
         BigInt::from_twos_bytes(&bytes).expect("signed minimum")
     }
-
     #[test]
     fn lossy_f64_conversion_is_explicit_and_finite_across_the_domain() {
         let beyond_exact_binary_range = decimal("9007199254740993");
@@ -3363,7 +3118,6 @@ mod tests {
             beyond_exact_binary_range.to_f64_lossy().to_bits(),
             9_007_199_254_740_992.0_f64.to_bits()
         );
-
         for endpoint in [
             Numeric::try_new(signed_minimum(), 0).expect("signed minimum"),
             Numeric::try_new(signed_maximum(), 0).expect("signed maximum"),
@@ -3375,7 +3129,6 @@ mod tests {
             assert!(endpoint.to_f64_lossy().is_finite(), "{endpoint}");
         }
     }
-
     #[test]
     fn decimal_canonicalization_is_unique_for_signed_zeroes_and_trailing_zeroes() {
         for (source, expected) in [
@@ -3399,7 +3152,6 @@ mod tests {
                 Err(NumericOperationError::NonCanonical)
             );
         }
-
         assert_eq!(
             Numeric::try_new(10, 29),
             Ok(Numeric::new(1, 28)),
@@ -3407,7 +3159,6 @@ mod tests {
         );
         assert_eq!(Numeric::try_new(1, 29), Err(NumericError::ScaleTooLarge));
         assert_eq!(Numeric::try_new(0, u32::MAX), Ok(Numeric::zero()));
-
         let removable = format!("0.{}10", "0".repeat(27));
         assert_eq!(
             removable.parse::<Numeric>(),
@@ -3419,7 +3170,6 @@ mod tests {
             nonremovable.parse::<Numeric>(),
             Err(NumericError::ScaleTooLarge)
         );
-
         let maximum = signed_maximum();
         let oversized_but_removable = format!("{maximum}.0");
         assert_eq!(
@@ -3433,7 +3183,6 @@ mod tests {
             Err(NumericError::MantissaTooLarge)
         );
     }
-
     #[test]
     fn decimal_endpoints_and_negation_enforce_signed_domain_after_normalization() {
         let maximum = Numeric::new(signed_maximum(), 0);
@@ -3458,7 +3207,6 @@ mod tests {
             Ok(maximum)
         );
     }
-
     #[test]
     fn numeric_construction_rejects_both_signed_512_bit_neighbors() {
         let above_maximum = signed_maximum()
@@ -3467,7 +3215,6 @@ mod tests {
         let below_minimum = signed_minimum()
             .checked_sub(&BigInt::one())
             .expect("generic bigint can represent the lower neighbor");
-
         assert_eq!(
             Numeric::try_new(above_maximum.clone(), 0),
             Err(NumericError::MantissaTooLarge)
@@ -3485,7 +3232,6 @@ mod tests {
             Err(NumericError::MantissaTooLarge)
         );
     }
-
     #[test]
     fn decimal_multiplication_uses_unbounded_intermediate_then_normalizes() {
         let maximum = Numeric::new(signed_maximum(), MAX_DECIMAL_SCALE);
@@ -3498,7 +3244,6 @@ mod tests {
             Ok(Numeric::new(signed_maximum(), 0)),
             "the conceptual product is wider than 512 bits but the canonical result fits"
         );
-
         assert_eq!(
             decimal("0.0000000000000000000000000001")
                 .try_decimal_mul(&decimal("0.0000000000000000000000000001")),
@@ -3514,12 +3259,10 @@ mod tests {
             "after normalization, scale failure precedes simultaneous mantissa overflow"
         );
     }
-
     #[test]
     fn fused_multiply_divide_bounds_only_the_final_result() {
         let maximum = Numeric::new(signed_maximum(), 0);
         let factor = Numeric::from(10_000_u64);
-
         assert_eq!(
             maximum.try_decimal_mul(&factor),
             Err(NumericOperationError::MantissaOverflow),
@@ -3535,7 +3278,6 @@ mod tests {
             Ok(maximum.clone()),
             "exact fused arithmetic must also bound only its final result"
         );
-
         let maximum_quantity =
             Quantity::from_canonical_numeric(maximum).expect("signed maximum is non-negative");
         let maximum_xor =
@@ -3551,7 +3293,6 @@ mod tests {
             "domain wrappers must retain the fused-intermediate guarantee"
         );
     }
-
     #[test]
     fn weighted_average_bounds_only_the_final_result_and_total_weight_is_unbounded() {
         let maximum = Quantity::from_canonical_numeric(Numeric::new(signed_maximum(), 0))
@@ -3561,7 +3302,6 @@ mod tests {
             Err(NumericOperationError::MantissaOverflow),
             "a staged weighted product deliberately exceeds the public domain"
         );
-
         let entries = [(&maximum, u64::MAX), (&maximum, u64::MAX)];
         assert_eq!(
             Quantity::try_weighted_average_round(entries, 0, RoundingMode::NearestEven,),
@@ -3569,7 +3309,6 @@ mod tests {
             "neither the product, sum, nor total weight is narrowed before division"
         );
     }
-
     #[test]
     fn weighted_average_aligns_scales_and_has_explicit_failure_boundaries() {
         let one = Quantity::try_from_numeric(decimal("1")).expect("quantity");
@@ -3577,7 +3316,6 @@ mod tests {
         let fractional =
             Quantity::try_from_numeric(decimal("0.000001")).expect("fractional quantity");
         let entries = [(&one, 1), (&two, 1), (&fractional, 2)];
-
         assert_eq!(
             Quantity::try_weighted_average_round(entries, 6, RoundingMode::TowardZero),
             Quantity::try_from_numeric(decimal("0.75")),
@@ -3599,7 +3337,6 @@ mod tests {
             Err(NumericOperationError::InvalidScale)
         );
     }
-
     #[test]
     fn aggregate_decimal_product_bounds_only_its_canonical_final_result() {
         let maximum_even = Quantity::from_canonical_numeric(Numeric::new(
@@ -3618,7 +3355,6 @@ mod tests {
             Ok(maximum_even.clone()),
             "a later exact factor may cancel a wide conceptual product"
         );
-
         let tiny = decimal("0.0000000000000000000000000001");
         assert_eq!(
             Quantity::one()
@@ -3642,7 +3378,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn aggregate_decimal_product_rejects_more_than_sixty_four_factors() {
         let one = Numeric::one();
@@ -3657,7 +3392,6 @@ mod tests {
             Err(DecimalProductError::TooManyFactors)
         );
     }
-
     #[test]
     fn aggregate_decimal_product_rounds_only_its_final_result() {
         let panel_multiplier = decimal("0.7142857142857142857142857143");
@@ -3715,7 +3449,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn rounded_aggregate_decimal_product_rejects_more_than_sixty_four_factors() {
         let one = Numeric::one();
@@ -3736,12 +3469,10 @@ mod tests {
             Err(DecimalProductError::TooManyFactors)
         );
     }
-
     #[test]
     fn multiplied_quantity_comparison_never_materializes_bounded_products() {
         let maximum = Quantity::from_canonical_numeric(Numeric::new(signed_maximum(), 0))
             .expect("signed maximum is a quantity");
-
         assert_eq!(maximum.cmp_mul_u64(3, &maximum, 2), Ordering::Greater);
         assert_eq!(
             Quantity::try_from_numeric(decimal("0.02"))
@@ -3755,7 +3486,6 @@ mod tests {
             "scale alignment preserves an exact two-thirds boundary"
         );
     }
-
     #[test]
     fn fused_multiply_divide_matches_bounded_reference_across_signs_and_rounding_modes() {
         let values = ["-12.5", "-1", "0", "0.125", "7.75"];
@@ -3770,7 +3500,6 @@ mod tests {
             RoundingMode::NearestAway,
             RoundingMode::NearestTowardZero,
         ];
-
         for value in values.map(decimal) {
             for multiplier in multipliers.map(decimal) {
                 for divisor in divisors.map(decimal) {
@@ -3803,7 +3532,6 @@ mod tests {
                 }
             }
         }
-
         assert_eq!(
             decimal("1").try_decimal_mul_div_round(
                 &decimal("2"),
@@ -3832,7 +3560,6 @@ mod tests {
             Err(NumericOperationError::ExactDivisionScaleOverflow)
         );
     }
-
     #[test]
     fn exact_division_distinguishes_repeating_and_over_scale_terminating_results() {
         assert_eq!(
@@ -3864,7 +3591,6 @@ mod tests {
             Err(NumericOperationError::DivisionByZero)
         );
     }
-
     #[test]
     fn exact_division_at_scale_reports_inexact_without_conflating_failure_classes() {
         let one = decimal("1");
@@ -3885,7 +3611,6 @@ mod tests {
             Err(NumericOperationError::InvalidScale)
         );
     }
-
     #[test]
     fn all_rounding_modes_are_correct_for_positive_and_negative_ties() {
         let two = decimal("2");
@@ -3921,7 +3646,6 @@ mod tests {
             Ok(decimal("-2"))
         );
     }
-
     #[test]
     fn quantization_requires_an_explicit_mode_and_preserves_canonical_form() {
         let expectations = [
@@ -3945,13 +3669,11 @@ mod tests {
                 "negative mode={mode:?}"
             );
         }
-
         let no_padding = decimal("1.2")
             .try_quantize(5, RoundingMode::NearestEven)
             .expect("a larger requested scale does not manufacture trailing zeros");
         assert_eq!(no_padding, decimal("1.2"));
         assert_eq!(no_padding.scale(), 1);
-
         let canonical_integer = decimal("1.004")
             .try_quantize(2, RoundingMode::TowardZero)
             .expect("truncated result is representable");
@@ -3962,7 +3684,6 @@ mod tests {
             Err(NumericOperationError::InvalidScale)
         );
     }
-
     #[test]
     fn quantization_to_spec_preserves_unconstrained_values_and_applies_scale() {
         let value = decimal("1.25");
@@ -3975,7 +3696,6 @@ mod tests {
             Ok(decimal("1.2"))
         );
     }
-
     #[test]
     fn exact_truncating_and_rounded_integer_conversions_are_distinct() {
         assert_eq!(
@@ -4003,7 +3723,6 @@ mod tests {
             Ok(BigInt::from(44_i32))
         );
     }
-
     #[test]
     fn observed_canonicalization_reports_each_normalization_and_zero_finalization() {
         let mut normalization_steps = Vec::new();
@@ -4025,7 +3744,6 @@ mod tests {
             normalization_steps[4],
             NumericWorkStep::Finalize { value_limbs: 1 }
         ));
-
         let mut zero_steps = Vec::new();
         let zero = Numeric::try_new_raw(0, MAX_DECIMAL_SCALE)
             .expect("raw scaled zero")
@@ -4041,7 +3759,6 @@ mod tests {
             "zero performs no division but still validates its final domain"
         );
     }
-
     #[test]
     fn observed_validation_reports_canonicality_probe_before_division_and_can_abort() {
         let mut validation_steps = Vec::new();
@@ -4063,7 +3780,6 @@ mod tests {
             Err(ObservedNumericError::Observer("out-of-gas"))
         );
     }
-
     #[test]
     fn observed_repeating_division_classifies_without_speculative_attempts() {
         let mut attempts = Vec::new();
@@ -4091,7 +3807,6 @@ mod tests {
                 .any(|step| matches!(step, NumericWorkStep::DivisionClassification { .. }))
         );
     }
-
     #[test]
     fn observed_terminating_division_attempts_only_the_proven_scale() {
         let mut terminating_steps = Vec::new();
@@ -4120,7 +3835,6 @@ mod tests {
             }
         )));
     }
-
     #[test]
     fn observed_division_stops_before_arithmetic_after_observer_rejection() {
         let mut callbacks = 0;
@@ -4134,12 +3848,10 @@ mod tests {
             "no arithmetic phase is entered after observer rejection"
         );
     }
-
     #[test]
     fn public_quantity_construction_makes_equality_ordering_and_hash_canonical() {
         use core::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
-
         let representations = [
             Numeric::new(1, 0),
             Numeric::new(10, 1),
@@ -4158,7 +3870,6 @@ mod tests {
         });
         assert!(hashes.iter().all(|hash| *hash == hashes[0]));
     }
-
     #[test]
     fn observed_alignment_and_multiplication_steps_precede_bigint_work() {
         let mut add_steps = Vec::new();
@@ -4187,7 +3898,6 @@ mod tests {
         assert!(matches!(add_steps[3], NumericWorkStep::Add { .. }));
         assert!(matches!(add_steps[4], NumericWorkStep::Normalize { .. }));
         assert!(matches!(add_steps[5], NumericWorkStep::Finalize { .. }));
-
         let mut zero_steps = Vec::new();
         let zero_sum = decimal("0")
             .try_decimal_add_observed(&decimal("0.1"), &mut |step| {
@@ -4210,7 +3920,6 @@ mod tests {
                 .all(|step| !matches!(step, NumericWorkStep::ScaleByPowerOfTen { .. })),
             "zero alignment must not construct or multiply by a decimal power"
         );
-
         let mut multiply_steps = Vec::new();
         let product = decimal("0.2")
             .try_decimal_mul_observed(&decimal("0.5"), &mut |step| {
@@ -4240,7 +3949,6 @@ mod tests {
             multiply_steps.last(),
             Some(NumericWorkStep::Finalize { .. })
         ));
-
         let mut saw_add = false;
         let aborted =
             decimal("1").try_decimal_add_observed(&decimal("0.1"), &mut |step| match step {
@@ -4257,7 +3965,6 @@ mod tests {
             "aligned multiplication and addition did not begin after rejection"
         );
     }
-
     #[test]
     fn core_numeric_decoder_rejects_noncanonical_raw_payloads() {
         for value in [
@@ -4268,7 +3975,6 @@ mod tests {
             assert!(Numeric::decode(&mut encoded.as_slice()).is_err());
         }
     }
-
     #[test]
     fn quantity_canonicalization_is_unique_and_rejects_invalid_payloads() {
         for (source, expected, expected_scale) in [
@@ -4285,12 +3991,10 @@ mod tests {
                 .validate_decimal()
                 .expect("quantity contains a canonical decimal");
         }
-
         assert_eq!(
             Quantity::try_from_numeric(decimal("-0.01")),
             Err(NumericOperationError::NegativeQuantity)
         );
-
         let raw = Numeric::try_new_raw(10, 1).expect("representable noncanonical decimal");
         assert_eq!(
             raw.validate_decimal(),
@@ -4301,7 +4005,6 @@ mod tests {
             Ok(quantity("1")),
             "the canonicalizing constructor must produce the unique representation"
         );
-
         let mut state = 0x9e37_79b9_7f4a_7c15_u64;
         for _ in 0..10_000 {
             state = state
@@ -4334,7 +4037,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn quantity_arithmetic_is_exact_and_underflow_is_explicit() {
         let lhs = quantity("1.20");
@@ -4351,7 +4053,6 @@ mod tests {
         );
         assert_eq!(lhs.try_mul_decimal(&decimal("0.5")), Ok(quantity("0.6")));
         assert_eq!(lhs.try_ratio_exact(&rhs), Ok(decimal("40")));
-
         let maximum = Quantity::from_canonical_numeric(Numeric::new(signed_maximum(), 0))
             .expect("signed maximum is a quantity");
         assert_eq!(
@@ -4364,7 +4065,6 @@ mod tests {
             "result-domain overflow precedes the nominal negative-quantity check"
         );
     }
-
     #[test]
     fn quantity_exact_division_distinguishes_all_failure_classes() {
         assert_eq!(
@@ -4393,7 +4093,6 @@ mod tests {
             Err(NumericOperationError::NegativeQuantity)
         );
     }
-
     #[test]
     fn quantity_rounded_division_obeys_modes_and_small_domain_invariants() {
         assert_eq!(
@@ -4437,7 +4136,6 @@ mod tests {
             quantity("1").try_div_decimal_round(&decimal("-2"), 2, RoundingMode::NearestEven),
             Err(NumericOperationError::NegativeQuantity)
         );
-
         for dividend in 0_u64..=50 {
             for divisor in 1_u64..=20 {
                 let dividend = Quantity::from(dividend);
@@ -4478,7 +4176,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn quantity_codec_json_and_schema_roundtrip_preserve_invariant() {
         let value: Quantity = "123.4500".parse().expect("quantity");
@@ -4512,7 +4209,6 @@ mod tests {
         let schema = <Quantity as iroha_schema::IntoSchema>::schema();
         assert!(schema.contains_key::<Quantity>());
     }
-
     #[test]
     fn small_domain_arithmetic_matches_integer_reference_exhaustively() {
         for lhs in -100_i64..=100 {
@@ -4540,13 +4236,11 @@ mod tests {
             }
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct ReferenceDecimal {
         mantissa: ReferenceInt,
         scale: u32,
     }
-
     impl ReferenceDecimal {
         fn read(value: &Numeric) -> Self {
             Self {
@@ -4559,18 +4253,15 @@ mod tests {
             }
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ReferenceExactClass {
         Representable { minimum_scale: u8 },
         Repeating,
         ScaleOverflow,
     }
-
     fn reference_pow10(exponent: u32) -> ReferenceInt {
         ReferenceInt::from(10_u8).pow(exponent)
     }
-
     fn reference_normalize(
         mut mantissa: ReferenceInt,
         mut scale: u32,
@@ -4592,7 +4283,6 @@ mod tests {
         }
         Ok(ReferenceDecimal { mantissa, scale })
     }
-
     fn reference_add_or_sub(
         lhs: &ReferenceDecimal,
         rhs: &ReferenceDecimal,
@@ -4608,14 +4298,12 @@ mod tests {
         };
         reference_normalize(mantissa, scale)
     }
-
     fn reference_multiply(
         lhs: &ReferenceDecimal,
         rhs: &ReferenceDecimal,
     ) -> Result<ReferenceDecimal, NumericOperationError> {
         reference_normalize(&lhs.mantissa * &rhs.mantissa, lhs.scale + rhs.scale)
     }
-
     fn reference_gcd(mut lhs: ReferenceInt, mut rhs: ReferenceInt) -> ReferenceInt {
         lhs = lhs.abs();
         rhs = rhs.abs();
@@ -4626,7 +4314,6 @@ mod tests {
         }
         lhs
     }
-
     fn reference_reduced_ratio(
         lhs: &ReferenceDecimal,
         rhs: &ReferenceDecimal,
@@ -4647,7 +4334,6 @@ mod tests {
         let gcd = reference_gcd(numerator.clone(), denominator.clone());
         Ok((numerator / &gcd, denominator / gcd))
     }
-
     fn reference_exact_class(
         lhs: &ReferenceDecimal,
         rhs: &ReferenceDecimal,
@@ -4675,7 +4361,6 @@ mod tests {
             minimum_scale: u8::try_from(minimum_scale).expect("reference scale is at most 28"),
         })
     }
-
     fn reference_exact_divide(
         lhs: &ReferenceDecimal,
         rhs: &ReferenceDecimal,
@@ -4699,7 +4384,6 @@ mod tests {
         );
         reference_normalize(quotient, u32::from(minimum_scale))
     }
-
     fn reference_rounded_divide(
         lhs: &ReferenceDecimal,
         rhs: &ReferenceDecimal,
@@ -4749,13 +4433,11 @@ mod tests {
         }
         reference_normalize(quotient, output_scale)
     }
-
     fn reference_result(
         result: Result<Numeric, NumericOperationError>,
     ) -> Result<ReferenceDecimal, NumericOperationError> {
         result.map(|value| ReferenceDecimal::read(&value))
     }
-
     fn reference_class_result(
         result: Result<ExactDivisionClass, NumericOperationError>,
     ) -> Result<ReferenceExactClass, NumericOperationError> {
@@ -4767,7 +4449,6 @@ mod tests {
             ExactDivisionClass::ScaleOverflow => ReferenceExactClass::ScaleOverflow,
         })
     }
-
     #[test]
     fn randomized_decimal_arithmetic_matches_independent_rational_reference() {
         const ROUNDING_MODES: [RoundingMode; 7] = [
@@ -4779,7 +4460,6 @@ mod tests {
             RoundingMode::NearestAway,
             RoundingMode::NearestTowardZero,
         ];
-
         // Fixed xorshift seed makes failures reproducible without coupling the
         // oracle to a random-number crate or host entropy.
         let mut random = 0x6a09_e667_f3bc_c909_u64;
@@ -4789,7 +4469,6 @@ mod tests {
             random ^= random << 17;
             random
         };
-
         for case in 0..2_048 {
             let lhs_mantissa =
                 i64::try_from(next() % 2_000_001).expect("bounded sample") - 1_000_000;
@@ -4803,7 +4482,6 @@ mod tests {
             let lhs_reference = ReferenceDecimal::read(&lhs);
             let rhs_reference = ReferenceDecimal::read(&rhs);
             let context = format!("case={case}, lhs={lhs}, rhs={rhs}, output_scale={output_scale}");
-
             assert_eq!(
                 reference_result(lhs.try_decimal_add(&rhs)),
                 reference_add_or_sub(&lhs_reference, &rhs_reference, false),
@@ -4838,7 +4516,6 @@ mod tests {
             }
         }
     }
-
     #[allow(clippy::too_many_lines)] // The full-width matrix stays together so its corpus cannot drift between helpers.
     #[test]
     fn full_width_decimal_arithmetic_matches_independent_rational_reference() {
@@ -4851,7 +4528,6 @@ mod tests {
             RoundingMode::NearestAway,
             RoundingMode::NearestTowardZero,
         ];
-
         fn numeric_from_reference(mantissa: &ReferenceInt, scale: u32) -> Numeric {
             let bounded = mantissa
                 .to_string()
@@ -4860,7 +4536,6 @@ mod tests {
             Numeric::try_new(bounded, scale)
                 .expect("edge-biased input is canonicalizable in the V1 domain")
         }
-
         let signed_limit = ReferenceInt::one() << (MAX_MANTISSA_BITS - 1);
         let maximum = &signed_limit - ReferenceInt::one();
         let minimum = -signed_limit;
@@ -4885,7 +4560,6 @@ mod tests {
                 -power + ReferenceInt::one(),
             ]);
         }
-
         let divisors = [
             ReferenceInt::zero(),
             ReferenceInt::from(2_u8),
@@ -4898,7 +4572,6 @@ mod tests {
         ];
         let scales = [0_u32, 1, 27, 28];
         let output_scales = [0_u32, 1, 27, 28];
-
         let mut case = 0_usize;
         for (index, lhs_mantissa) in mantissas.iter().enumerate() {
             let rhs_mantissa = if index % 3 == 0 {
@@ -4916,7 +4589,6 @@ mod tests {
                 let context = format!(
                     "case={case}, lhs={lhs}, rhs={rhs}, lhs_scale={lhs_scale}, rhs_scale={rhs_scale}"
                 );
-
                 assert_eq!(
                     reference_result(lhs.try_decimal_add(&rhs)),
                     reference_add_or_sub(&lhs_reference, &rhs_reference, false),

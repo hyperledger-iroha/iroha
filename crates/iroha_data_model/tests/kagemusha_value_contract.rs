@@ -1,5 +1,4 @@
 //! Exact-value and branch-safety tests for the first-release Kagemusha lifecycle.
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -18,7 +17,6 @@ use iroha_data_model::{
     },
     prelude::{Numeric, Quantity},
 };
-
 #[test]
 fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
     let mut limbs = (0..iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5)
@@ -28,7 +26,6 @@ fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
     let boundary =
         KagemushaRecursiveSpendStateBoundaryV5::new(limbs.clone()).expect("valid exact boundary");
     assert_eq!(boundary.exact_state().expect("recover exact state"), limbs);
-
     for malformed_len in [0, limbs.len() - 1, limbs.len() + 1] {
         assert!(KagemushaRecursiveSpendStateBoundaryV5::new(vec![1; malformed_len]).is_err());
     }
@@ -37,36 +34,30 @@ fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5
             .saturating_add(1);
     assert!(KagemushaRecursiveSpendStateBoundaryV5::new(wrong_layout_limb).is_err());
-
     let mut wrong_version = boundary;
     wrong_version.layout_version = wrong_version.layout_version.saturating_add(1);
     assert!(wrong_version.exact_state().is_err());
 }
-
 const SCALE: u32 = 9;
 const TOTAL: u128 = 10_750_000_000;
 const TRANSFER: u128 = 6_250_000_000;
 const CHANGE: u128 = 4_500_000_000;
-
 fn asset() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("sbp", "universal").expect("fixture domain"),
         "pkr".parse().expect("fixture asset name"),
     )
 }
-
 fn recipient() -> AccountId {
     let keypair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
         .expect("deterministic fixture keypair");
     AccountId::new(keypair.public_key().clone())
 }
-
 fn network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"kagemusha-value-contract-genesis",
     )))
 }
-
 fn note(
     network_id: &NetworkId,
     asset: &AssetDefinitionId,
@@ -82,14 +73,12 @@ fn note(
         amount: KagemushaScaledAmountV2::new(atomic_units, SCALE).expect("fixture amount"),
     }
 }
-
 fn anchor_ref() -> KagemushaRecursiveSpendTopUpAnchorRefV2 {
     KagemushaRecursiveSpendTopUpAnchorRefV2 {
         topup_operation_id: [0x11; 32],
         anchor_digest: [0x12; 32],
     }
 }
-
 fn artifact_binding_v4() -> KagemushaRecursiveSpendArtifactBindingV4 {
     KagemushaRecursiveSpendArtifactBindingV4 {
         version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
@@ -97,7 +86,6 @@ fn artifact_binding_v4() -> KagemushaRecursiveSpendArtifactBindingV4 {
         manifest_sha256: [0x14; 32],
     }
 }
-
 fn split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
     let network_id = network_id();
     let asset = asset();
@@ -126,7 +114,6 @@ fn split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
         operation_id: [0x36; 32],
     }
 }
-
 fn redemption_intent_v4(
     public_atomic_units: u128,
     change_atomic_units: Option<u128>,
@@ -177,7 +164,6 @@ fn redemption_intent_v4(
         operation_id: [0x49; 32],
     }
 }
-
 #[test]
 fn scaled_amount_converts_fractional_values_exactly_at_asset_scale() {
     let decimal: Quantity = "10.75".parse().expect("valid quantity");
@@ -186,14 +172,12 @@ fn scaled_amount_converts_fractional_values_exactly_at_asset_scale() {
     assert_eq!(amount.atomic_units, TOTAL);
     assert_eq!(amount.scale, SCALE);
     assert_eq!(amount.public_quantity(), decimal);
-
     let minimum: Quantity = "0.000000001".parse().expect("minimum atomic quantity");
     assert_eq!(
         KagemushaScaledAmountV2::from_public_quantity(&minimum, SCALE)
             .expect("minimum atomic amount"),
         KagemushaScaledAmountV2::new(1, SCALE).expect("minimum atomic amount")
     );
-
     let maximum = Quantity::try_from_numeric(Numeric::new(u128::MAX, SCALE))
         .expect("maximum non-negative quantity");
     assert_eq!(
@@ -203,7 +187,6 @@ fn scaled_amount_converts_fractional_values_exactly_at_asset_scale() {
         u128::MAX
     );
 }
-
 #[test]
 fn scaled_amount_rejects_rounding_nonpositive_values_and_overflow() {
     let excess_precision: Quantity = "0.0000000001".parse().expect("valid quantity");
@@ -229,7 +212,6 @@ fn scaled_amount_rejects_rounding_nonpositive_values_and_overflow() {
     assert!(KagemushaScaledAmountV2::new(0, SCALE).is_err());
     assert!(KagemushaScaledAmountV2::new(1, 29).is_err());
 }
-
 #[test]
 fn split_conserves_fractional_value_and_produces_disjoint_siblings() {
     let split = split_intent_v4();
@@ -237,7 +219,6 @@ fn split_conserves_fractional_value_and_produces_disjoint_siblings() {
         split.input_amount().expect("validated input total"),
         KagemushaScaledAmountV2::new(TOTAL, SCALE).expect("total amount")
     );
-
     let recipient_claims = split
         .output_branch_claims(KagemushaRecursiveSpendBranchV2::Recipient)
         .expect("recipient claims");
@@ -252,7 +233,6 @@ fn split_conserves_fractional_value_and_produces_disjoint_siblings() {
             .conflicts_with(change_claims[0].path)
     );
 }
-
 #[test]
 fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
     let split = split_intent_v4();
@@ -262,7 +242,6 @@ fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
         KagemushaScaledAmountV2::new(TOTAL, SCALE).expect("total amount")
     );
     assert_ne!(split.binding_digest().expect("V4 split digest"), [0; 32]);
-
     let recipient_claims = split
         .output_branch_claims(KagemushaRecursiveSpendBranchV2::Recipient)
         .expect("V4 recipient claims");
@@ -274,7 +253,6 @@ fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
             .path
             .conflicts_with(change_claims[0].path)
     );
-
     let mut nonconserving = split;
     nonconserving.change_output.as_mut().expect("change").amount =
         KagemushaScaledAmountV2::new(CHANGE + 1, SCALE).expect("wrong change amount");
@@ -285,7 +263,6 @@ fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
         })
     ));
 }
-
 #[test]
 fn abi21_redemption_binds_change_claims_and_rejects_artifact_omission() {
     let intent = redemption_intent_v4(TRANSFER, Some(CHANGE));
@@ -297,7 +274,6 @@ fn abi21_redemption_binds_change_claims_and_rejects_artifact_omission() {
         .expect("proof-bound V4 change claims");
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].path.depth, 1);
-
     let mut missing_binding = intent;
     missing_binding.change_artifact_binding = None;
     assert!(matches!(
@@ -307,7 +283,6 @@ fn abi21_redemption_binds_change_claims_and_rejects_artifact_omission() {
         })
     ));
 }
-
 #[test]
 fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
     let mut wrong_change = split_intent_v4();
@@ -319,7 +294,6 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
             field: "split.v4.conservation"
         })
     ));
-
     let mut duplicate_output = split_intent_v4();
     duplicate_output
         .change_output
@@ -332,7 +306,6 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
             field: "split.v4.output_material"
         })
     ));
-
     let mut overlaps_consumed_material = split_intent_v4();
     overlaps_consumed_material.recipient_output.note_commitment = overlaps_consumed_material.inputs
         [0]
@@ -344,7 +317,6 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
             field: "split.v4.output_material"
         })
     ));
-
     let mut overlapping_claims = split_intent_v4();
     let root = overlapping_claims.inputs[0].branch_claims[0].clone();
     let descendant = root
@@ -358,7 +330,6 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
         })
     ));
 }
-
 #[test]
 fn branch_claim_conflicts_bind_paths_and_exact_transition_history() {
     let root =
@@ -372,7 +343,6 @@ fn branch_claim_conflicts_bind_paths_and_exact_transition_history() {
     let alternative_transition_change = root
         .child(KagemushaRecursiveSpendBranchV2::Change, [0x42; 32])
         .expect("alternative-transition change claim");
-
     assert!(root.conflicts_with(&recipient).expect("root conflict"));
     assert!(
         recipient
@@ -394,7 +364,6 @@ fn branch_claim_conflicts_bind_paths_and_exact_transition_history() {
             .conflicts_with(&recipient)
             .expect("alternative transition conflict symmetry")
     );
-
     let other_root =
         KagemushaRecursiveSpendBranchClaimV2::root([0x77; 32]).expect("independent root");
     assert!(
@@ -403,7 +372,6 @@ fn branch_claim_conflicts_bind_paths_and_exact_transition_history() {
             .expect("independent lineage")
     );
 }
-
 #[test]
 fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
     fn claim_at_depth(depth: u8) -> KagemushaRecursiveSpendBranchClaimV2 {
@@ -418,7 +386,6 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
         }
         claim
     }
-
     let mut last_permitted_parent = split_intent_v4();
     let maximum_hops = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
     last_permitted_parent.inputs[0].branch_claims = vec![claim_at_depth(
@@ -428,7 +395,6 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
     last_permitted_parent
         .validate_public_binding()
         .expect("a seventh-hop parent may produce the eighth peer hop");
-
     let mut exhausted_parent = split_intent_v4();
     exhausted_parent.inputs[0].branch_claims = vec![claim_at_depth(
         u8::try_from(maximum_hops).expect("hop bound fits u8"),
@@ -440,7 +406,6 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
             field: "split.v4.inputs"
         })
     ));
-
     let mut terminal_redemption = redemption_intent_v4(TOTAL, None);
     terminal_redemption.parent_branch_claims = vec![claim_at_depth(
         u8::try_from(maximum_hops).expect("hop bound fits u8"),
@@ -449,7 +414,6 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
     terminal_redemption
         .validate_public_binding()
         .expect("redemption does not add a peer hop at the eight-hop boundary");
-
     terminal_redemption.parent_peer_hop_count = maximum_hops + 1;
     assert!(matches!(
         terminal_redemption.validate_public_binding(),
@@ -458,7 +422,6 @@ fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
         })
     ));
 }
-
 #[test]
 fn redemption_supports_exact_full_and_partial_value_conservation() {
     let full = redemption_intent_v4(TOTAL, None);
@@ -467,7 +430,6 @@ fn redemption_supports_exact_full_and_partial_value_conservation() {
         full.unshield_public_inputs.public_amount,
         kagemusha_confidential_amount_encoding_v2(TOTAL)
     );
-
     let partial = redemption_intent_v4(TRANSFER, Some(CHANGE));
     partial
         .validate_public_binding()
@@ -484,7 +446,6 @@ fn redemption_supports_exact_full_and_partial_value_conservation() {
         Some(TOTAL)
     );
 }
-
 #[test]
 fn redemption_rejects_nonconservation_and_reused_input_material() {
     let mut wrong_change = redemption_intent_v4(TRANSFER, Some(CHANGE + 1));
@@ -494,7 +455,6 @@ fn redemption_rejects_nonconservation_and_reused_input_material() {
             field: "redemption.v4.change_output"
         })
     ));
-
     let mut duplicate_material = redemption_intent_v4(TRANSFER, Some(CHANGE));
     duplicate_material
         .change_output
@@ -514,7 +474,6 @@ fn redemption_rejects_nonconservation_and_reused_input_material() {
             field: "redemption.v4.change_output"
         })
     ));
-
     wrong_change.change_output = None;
     wrong_change.change_artifact_binding = None;
     wrong_change.unshield_public_inputs.change_output_commitment = [0; 32];

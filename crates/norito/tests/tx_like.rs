@@ -2,37 +2,31 @@
 //! hybrid packed-struct layout without panicking or length mismatches.
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize, from_bytes, to_bytes};
-
 #[derive(Clone, Debug, PartialEq, Default, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct DomainId {
     name: String,
 }
-
 #[derive(Clone, Debug, PartialEq, Default, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct AccountId {
     name: String,
     domain: DomainId,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct AssetDefinitionId {
     name: String,
     domain: DomainId,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct RegisterAssetDef {
     id: AssetDefinitionId,
     precision: u8,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct MintAsset {
     id: AssetDefinitionId,
     quantity: u128,
     account: AccountId,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct TransferAsset {
     id: AssetDefinitionId,
@@ -40,14 +34,12 @@ struct TransferAsset {
     dst: AccountId,
     quantity: u128,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct SetKeyValue {
     account: AccountId,
     key: String,
     value: String,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 enum Instruction {
     RegisterAssetDef(RegisterAssetDef),
@@ -55,19 +47,16 @@ enum Instruction {
     TransferAsset(TransferAsset),
     SetKeyValue(SetKeyValue),
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct Signature {
     public_key: [u8; 32],
     signature: [u8; 64],
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct MetadataEntry {
     key: String,
     value: String,
 }
-
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct SignedTransaction {
     creator: AccountId,
@@ -77,7 +66,6 @@ struct SignedTransaction {
     metadata: Vec<MetadataEntry>,
     signatures: Vec<Signature>,
 }
-
 // Provide safe slice-based decoders for nested types used by derive expansions.
 impl<'a> norito::core::DecodeFromSlice<'a> for DomainId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
@@ -101,7 +89,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DomainId {
         Ok((v, bytes.len()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         use std::alloc::{Layout, alloc, dealloc};
@@ -124,7 +111,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
         Ok((v, bytes.len()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for AssetDefinitionId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         use std::alloc::{Layout, alloc, dealloc};
@@ -147,7 +133,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AssetDefinitionId {
         Ok((v, bytes.len()))
     }
 }
-
 fn sample_tx(n_instr: usize, n_meta: usize, n_sigs: usize) -> SignedTransaction {
     let dom = DomainId {
         name: "wonderland".into(),
@@ -220,7 +205,6 @@ fn sample_tx(n_instr: usize, n_meta: usize, n_sigs: usize) -> SignedTransaction 
         signatures,
     }
 }
-
 #[test]
 fn tx_like_roundtrip() {
     // A modestly sized transaction exercising nested structs, enums, and Vec fields.

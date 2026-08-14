@@ -1,5 +1,4 @@
 // SCCP request-authentication fixtures shared by the split runtime-handler tests.
-
 fn sccp_ingress_auth_fixture() -> (AccountId, KeyPair) {
     let key_pair = checked_torii_test_keypair_from_seed_byte(
         0xC7,
@@ -9,7 +8,6 @@ fn sccp_ingress_auth_fixture() -> (AccountId, KeyPair) {
     let account = AccountId::new(key_pair.public_key().clone());
     (account, key_pair)
 }
-
 fn seed_sccp_ingress_auth_account(app: &SharedAppState) {
     let (account, _) = sccp_ingress_auth_fixture();
     if app.state.view().world().account(&account).is_ok() {
@@ -35,7 +33,6 @@ fn seed_sccp_ingress_auth_account(app: &SharedAppState) {
     transaction.apply();
     block.commit().expect("commit SCCP ingress fixture account");
 }
-
 fn authenticate_sccp_ingress_request(
     request: &mut axum::http::Request<axum::body::Body>,
     body: &[u8],

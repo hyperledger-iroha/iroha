@@ -1,29 +1,23 @@
 #[cfg(test)]
 mod signed_transaction_fixture_tests {
     use std::time::Duration;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId, account::AccountId, block::BlockHeader, transaction::TransactionBuilder,
     };
     use iroha_version::codec::EncodeVersioned as _;
-
     use super::decode_signed_transaction;
-
     // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant).
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
-
     fn fixture_key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn fixture_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"connect-norito-signed-transaction-fixture-genesis",
         )))
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair().algorithm(), Algorithm::Ed25519);
@@ -32,7 +26,6 @@ mod signed_transaction_fixture_tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn signed_transaction_decoder_accepts_only_versioned_bytes() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
@@ -52,7 +45,6 @@ mod signed_transaction_fixture_tests {
         let framed = norito::to_bytes(&tx).expect("encode framed signed tx");
         assert!(decode_signed_transaction(&framed).is_err());
     }
-
     #[test]
     fn signed_transaction_versioned_reencode_match() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
@@ -69,7 +61,6 @@ mod signed_transaction_fixture_tests {
         let signed = decode_signed_transaction(&bytes).expect("decode versioned signed tx");
         assert_eq!(signed.encode_versioned(), bytes);
     }
-
     #[test]
     fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
@@ -84,12 +75,10 @@ mod signed_transaction_fixture_tests {
         let tx = builder.sign(keypair.private_key());
         let versioned = tx.encode_versioned();
         let bare = norito::codec::encode_adaptive(&tx);
-
         assert_eq!(versioned.first().copied(), Some(1));
         assert_eq!(&versioned[1..], bare.as_slice());
     }
 }
-
 #[cfg(test)]
 mod da_proof_summary_tests {
     use iroha_data_model::{
@@ -105,9 +94,7 @@ mod da_proof_summary_tests {
         sorafs::pin_registry::StorageClass,
     };
     use sorafs_car::ChunkStore;
-
     use super::*;
-
     #[test]
     fn da_proof_summary_via_ffi() {
         let (manifest_bytes, payload) = sample_manifest_bytes();
@@ -138,7 +125,6 @@ mod da_proof_summary_tests {
             "missing blob hash field"
         );
     }
-
     fn sample_manifest_bytes() -> (Vec<u8>, Vec<u8>) {
         let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
         let mut store = ChunkStore::new();

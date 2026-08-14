@@ -1,5 +1,4 @@
 // Subscription route and query-filter adapter regressions.
-
 fn sample_subscription_state(
     plan_id: AssetDefinitionId,
     provider: AccountId,
@@ -22,12 +21,10 @@ fn sample_subscription_state(
         billing_trigger_id,
     }
 }
-
 async fn response_json(resp: Response) -> Value {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     norito::json::from_slice(&body).unwrap()
 }
-
 async fn assert_action_draft(
     resp: Response,
     expected_id: &NftId,
@@ -59,7 +56,6 @@ async fn assert_action_draft(
     assert!(json.get("tx_hash_hex").is_none());
     json
 }
-
 fn state_with_plans_and_subscriptions(
     provider: AccountId,
     subscriber: AccountId,
@@ -95,7 +91,6 @@ fn state_with_plans_and_subscriptions(
         .collect();
     state_with_asset_definitions_and_nfts(provider, subscriber, asset_definitions, nfts)
 }
-
 fn state_with_asset_definitions_and_nfts(
     provider: AccountId,
     subscriber: AccountId,
@@ -117,7 +112,6 @@ fn state_with_asset_definitions_and_nfts(
         LiveQueryStore::start_test(),
     ))
 }
-
 #[tokio::test]
 async fn handle_v1_subscription_plans_filters_provider() {
     let provider = ALICE_ID.clone();
@@ -173,7 +167,6 @@ async fn handle_v1_subscription_plans_filters_provider() {
     let plan_id = plan_primary_id.to_string();
     assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
 }
-
 #[tokio::test]
 async fn handle_v1_subscription_plans_filters_provider_alias() {
     let provider = ALICE_ID.clone();
@@ -212,7 +205,6 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
         Vec::new(),
     );
     bind_account_alias_for_test(&state, &provider, "billing@universal");
-
     let params = SubscriptionPlanListParams {
         provider: Some("billing@universal".to_string()),
         limit: None,
@@ -231,7 +223,6 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
     let plan_id = plan_primary_id.to_string();
     assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
 }
-
 #[tokio::test]
 async fn handle_v1_subscriptions_filters_status() {
     let provider = ALICE_ID.clone();
@@ -309,7 +300,6 @@ async fn handle_v1_subscriptions_filters_status() {
         norito::json::from_value(items[0]["subscription"].clone()).unwrap();
     assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
 }
-
 #[tokio::test]
 async fn handle_v1_subscriptions_filters_account_aliases() {
     let provider = ALICE_ID.clone();
@@ -364,7 +354,6 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
     );
     bind_account_alias_for_test(&state, &provider, "billing@universal");
     bind_account_alias_for_test(&state, &subscriber, "member@universal");
-
     let params = SubscriptionListParams {
         owned_by: Some("member@universal".to_string()),
         provider: Some("billing@universal".to_string()),
@@ -390,7 +379,6 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
         norito::json::from_value(items[0]["subscription"].clone()).unwrap();
     assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
 }
-
 #[tokio::test]
 async fn handle_v1_subscription_get_includes_invoice() {
     let provider = ALICE_ID.clone();
@@ -460,7 +448,6 @@ async fn handle_v1_subscription_get_includes_invoice() {
         norito::json::from_value(json["invoice"].clone()).unwrap();
     assert_eq!(parsed_invoice, invoice);
 }
-
 #[tokio::test]
 async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
     let provider = ALICE_ID.clone();
@@ -476,14 +463,12 @@ async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
         plan_id: plan_id.clone(),
         plan,
     };
-
     let resp = handle_post_v1_subscription_plan(queue.clone(), state, NoritoJson(req))
         .await
         .expect("handler ok")
         .into_response();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(queue.queued_len(), 0);
-
     let json = response_json(resp).await;
     assert_eq!(json["submitted"].as_bool(), Some(false));
     let plan_id_str = plan_id.to_string();
@@ -493,7 +478,6 @@ async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
     assert!(json.get("private_key").is_none());
     assert!(json.get("tx_hash_hex").is_none());
 }
-
 #[tokio::test]
 async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
     let provider = ALICE_ID.clone();
@@ -517,13 +501,11 @@ async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
         first_charge_ms: Some(1_000),
         grant_usage_to_provider: None,
     };
-
     let resp = handle_post_v1_subscription_create(state, NoritoJson(req))
         .await
         .expect("handler ok")
         .into_response();
     assert_eq!(resp.status(), StatusCode::OK);
-
     let json = response_json(resp).await;
     assert_eq!(json["version"].as_u64(), Some(1));
     assert_eq!(json["action"].as_str(), Some("create"));
@@ -548,7 +530,6 @@ async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
     assert!(json.get("ok").is_none());
     assert!(json.get("tx_hash_hex").is_none());
 }
-
 #[tokio::test]
 async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
     let provider = ALICE_ID.clone();
@@ -607,7 +588,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         pause["details"]["resulting_subscription"]["status"]["status"].as_str(),
         Some("paused")
     );
-
     let resume_req = SubscriptionActionDto {
         authority: subscriber.clone(),
         charge_at_ms: Some(5_000),
@@ -626,7 +606,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         resume["details"]["effective_charge_ms"].as_u64(),
         Some(5_000)
     );
-
     let cancel_req = SubscriptionActionDto {
         authority: subscriber.clone(),
         charge_at_ms: None,
@@ -645,7 +624,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         cancel["details"]["resulting_subscription"]["status"]["status"].as_str(),
         Some("canceled")
     );
-
     let keep_req = SubscriptionActionDto {
         authority: subscriber.clone(),
         charge_at_ms: None,
@@ -657,7 +635,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
             .expect("keep ok")
             .into_response();
     assert_action_draft(resp, &keep_id, &subscriber, "keep", "none").await;
-
     let charge_req = SubscriptionActionDto {
         authority: subscriber.clone(),
         charge_at_ms: Some(9_000),
@@ -676,7 +653,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         charge["details"]["effective_charge_ms"].as_u64(),
         Some(9_000)
     );
-
     let queue = test_queue();
     let usage_req = SubscriptionUsageRequestDto {
         authority: subscriber,
@@ -706,7 +682,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
     assert!(usage.get("private_key").is_none());
     assert!(usage.get("tx_hash_hex").is_none());
 }
-
 #[tokio::test]
 async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window() {
     let provider = ALICE_ID.clone();
@@ -731,7 +706,6 @@ async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window
         vec![(plan_id, plan)],
         vec![(subscription_id.clone(), subscription_state, None)],
     );
-
     let req = SubscriptionActionDto {
         authority: subscriber.clone(),
         charge_at_ms: None,
@@ -751,7 +725,6 @@ async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window
         draft["details"]["resulting_subscription"]["cancel_at_ms"].as_u64(),
         Some(expected_cancel_at_ms)
     );
-
     let view = state.view();
     let nft = view
         .world()
@@ -764,7 +737,6 @@ async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window
     assert!(!updated_state.cancel_at_period_end);
     assert_eq!(updated_state.cancel_at_ms, None);
 }
-
 #[test]
 fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
     let plan = SubscriptionPlanCreateDto {
@@ -784,7 +756,6 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
     assert!(
         norito::json::from_value::<SubscriptionPlanCreateDto>(Value::Object(plan_value)).is_err()
     );
-
     let create = SubscriptionCreateDto {
         authority: BOB_ID.clone(),
         subscription_id: "sub-strict-create$wonderland.universal".parse().unwrap(),
@@ -806,7 +777,6 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
     assert!(
         norito::json::from_value::<SubscriptionCreateDto>(Value::Object(create_value)).is_err()
     );
-
     let action = SubscriptionActionDto {
         authority: BOB_ID.clone(),
         charge_at_ms: None,
@@ -824,7 +794,6 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
     assert!(
         norito::json::from_value::<SubscriptionActionDto>(Value::Object(action_value)).is_err()
     );
-
     let usage = SubscriptionUsageRequestDto {
         authority: BOB_ID.clone(),
         unit_key: "requests".parse().unwrap(),
@@ -845,7 +814,6 @@ fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
             .is_err()
     );
 }
-
 #[test]
 fn subscription_cancel_mode_has_one_exact_tagged_shape() {
     assert_eq!(
@@ -860,7 +828,6 @@ fn subscription_cancel_mode_has_one_exact_tagged_shape() {
         "legacy string cancellation modes must not decode"
     );
 }
-
 #[tokio::test]
 async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
     let provider = ALICE_ID.clone();
@@ -883,7 +850,6 @@ async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
             None,
         )],
     );
-
     let pause = handle_post_v1_subscription_pause(
         state.clone(),
         subscription_id.clone(),
@@ -895,7 +861,6 @@ async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
     )
     .await;
     assert!(pause.is_err(), "pause must reject charge options");
-
     let cancel = handle_post_v1_subscription_cancel(
         state,
         subscription_id,

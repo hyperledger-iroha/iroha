@@ -1,11 +1,9 @@
 use url::Url;
-
 use super::{
     ZkProofsFilter, is_verifier_backend_registry_label_v1, join_torii_url,
     join_torii_url_with_path_segments, normalize_hex32_lower,
     require_verifier_backend_registry_label_v1, validate_zk_proofs_filter,
 };
-
 #[test]
 fn join_prover_reports_paths() {
     let base = Url::parse("http://localhost:8080/api/").unwrap();
@@ -17,25 +15,21 @@ fn join_prover_reports_paths() {
         "http://localhost:8080/api/v1/zk/prover/reports/abcd"
     );
 }
-
 #[test]
 fn join_vote_tally_path() {
     let base = Url::parse("http://localhost:8080/api/").unwrap();
     let u = join_torii_url(&base, "v1/zk/vote/tally");
     assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/vote/tally");
 }
-
 #[test]
 fn join_vk_path_encodes_slash_containing_backend_segment() {
     let base = Url::parse("http://localhost:8080/api/").unwrap();
     let u = join_torii_url_with_path_segments(&base, "v1/zk/vk", &["halo2/ipa", "ivm_execution"]);
-
     assert_eq!(
         u.as_str(),
         "http://localhost:8080/api/v1/zk/vk/halo2%2Fipa/ivm_execution"
     );
 }
-
 #[test]
 fn join_proof_path_encodes_slash_containing_backend_segment() {
     let base = Url::parse("http://localhost:8080/api/").unwrap();
@@ -46,10 +40,8 @@ fn join_proof_path_encodes_slash_containing_backend_segment() {
         &["halo2/ipa", proof_hash.as_str()],
     );
     let expected = format!("http://localhost:8080/api/v1/zk/proof/halo2%2Fipa/{proof_hash}");
-
     assert_eq!(u.as_str(), expected.as_str());
 }
-
 #[test]
 fn zk_client_backend_guard_accepts_exact_registry_labels() {
     for &backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
@@ -64,7 +56,6 @@ fn zk_client_backend_guard_accepts_exact_registry_labels() {
         );
     }
 }
-
 #[test]
 fn zk_client_backend_guard_rejects_protocol_trusted_setup_and_path_labels() {
     for backend in [
@@ -152,7 +143,6 @@ fn zk_client_backend_guard_rejects_protocol_trusted_setup_and_path_labels() {
         );
     }
 }
-
 #[test]
 fn zk_client_proof_filter_rejects_unsupported_backends_before_request() {
     for backend in [
@@ -175,14 +165,12 @@ fn zk_client_proof_filter_rejects_unsupported_backends_before_request() {
         assert!(format!("{err}").contains("exact supported verifier-registry label"));
     }
 }
-
 #[test]
 fn zk_client_proof_hash_canonicalizes_and_rejects_malformed_values() {
     assert_eq!(
         normalize_hex32_lower(&format!("0x{}", "AA".repeat(32)), "proof hash").expect("hash"),
         "aa".repeat(32)
     );
-
     for hash in [
         String::new(),
         "abc".to_string(),

@@ -5,13 +5,6 @@
 //! duplicate, oversized, truncated, or suffix-extended witnesses have no
 //! alternate interpretation.  Proof bytes use a separate codec because they
 //! are consensus-visible while this container is a local prover input.
-
-use core::fmt;
-
-use iroha_data_model::privacy::{ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CHAIN_BYTES_V1};
-use thiserror::Error;
-use zeroize::Zeroize;
-
 use super::{
     der_air::ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1,
     merkle::{
@@ -23,11 +16,13 @@ use super::{
         ZK_X509_MIN_CHAIN_DEPTH_V1, ZK_X509_RELATION_VERSION_V1,
     },
 };
-
+use core::fmt;
+use iroha_data_model::privacy::{ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CHAIN_BYTES_V1};
+use thiserror::Error;
+use zeroize::Zeroize;
 const WITNESS_MAGIC_V1: [u8; 8] = *b"IRX509W1";
 pub(crate) const ZK_X509_WALLET_SIGNATURE_RS_BYTES_V1: usize = 64;
 const MAX_DISCLOSED_ATTRIBUTES_V1: usize = 4;
-
 const _: () = {
     assert!(
         ZK_X509_MAX_CERTIFICATE_BYTES_V1 as usize
@@ -40,7 +35,6 @@ const _: () = {
     assert!(ZK_X509_MAX_CRL_BYTES_V1 == ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1);
     assert!(ZK_X509_CRL_COMMITMENT_MAX_DER_BYTES_V1 == ZK_X509_MAX_CRL_BYTES_V1);
 };
-
 /// One private opening of a publicly committed subject attribute.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZkX509AttributeOpeningV1 {
@@ -49,7 +43,6 @@ pub(crate) struct ZkX509AttributeOpeningV1 {
     /// Fixed-width private commitment salt.
     pub(crate) salt: [u8; ZK_X509_ATTRIBUTE_SALT_BYTES_V1],
 }
-
 impl fmt::Debug for ZkX509AttributeOpeningV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -59,14 +52,12 @@ impl fmt::Debug for ZkX509AttributeOpeningV1 {
             .finish()
     }
 }
-
 impl Zeroize for ZkX509AttributeOpeningV1 {
     fn zeroize(&mut self) {
         self.index.zeroize();
         self.salt.zeroize();
     }
 }
-
 /// Complete bounded private input to the native reference relation and prover.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509WitnessV1 {
@@ -82,13 +73,11 @@ pub(crate) struct ZkX509WitnessV1 {
     /// Private attribute salts in strict disclosed-index order.
     pub(crate) attribute_openings: Vec<ZkX509AttributeOpeningV1>,
 }
-
 impl fmt::Debug for ZkX509WitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ZkX509WitnessV1 { [REDACTED] }")
     }
 }
-
 impl Zeroize for ZkX509WitnessV1 {
     fn zeroize(&mut self) {
         for certificate in &mut self.certificate_chain_der {
@@ -102,13 +91,11 @@ impl Zeroize for ZkX509WitnessV1 {
         self.attribute_openings.zeroize();
     }
 }
-
 impl Drop for ZkX509WitnessV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Canonical witness decoding or encoding failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509WitnessCodecErrorV1 {
@@ -140,12 +127,10 @@ pub(crate) enum ZkX509WitnessCodecErrorV1 {
     #[error("zk-X509 witness length overflows")]
     LengthOverflow,
 }
-
 impl ZkX509WitnessV1 {
     /// Encode one canonical local prover witness.
     pub(crate) fn encode_v1(&self) -> Result<Vec<u8>, ZkX509WitnessCodecErrorV1> {
         validate_witness_shape_v1(self)?;
-
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&WITNESS_MAGIC_V1);
         encoded.extend_from_slice(&ZK_X509_RELATION_VERSION_V1.to_be_bytes());
@@ -174,7 +159,6 @@ impl ZkX509WitnessV1 {
         }
         Ok(encoded)
     }
-
     /// Decode exactly one canonical local prover witness.
     pub(crate) fn decode_exact_v1(encoded: &[u8]) -> Result<Self, ZkX509WitnessCodecErrorV1> {
         let mut reader = WitnessReaderV1::new(encoded);
@@ -183,7 +167,6 @@ impl ZkX509WitnessV1 {
         {
             return Err(ZkX509WitnessCodecErrorV1::InvalidHeader);
         }
-
         let chain_depth = usize::from(reader.read_u8()?);
         if !(ZK_X509_MIN_CHAIN_DEPTH_V1..=ZK_X509_MAX_CHAIN_DEPTH_V1).contains(&chain_depth) {
             return Err(ZkX509WitnessCodecErrorV1::InvalidChainDepth);
@@ -204,7 +187,6 @@ impl ZkX509WitnessV1 {
                 ZkX509WitnessCodecErrorV1::InvalidCrlLength,
             )?
             .to_vec();
-
         let index = reader.read_u16()?;
         if usize::from(index) >= ZK_X509_CA_COMPACT_TREE_CAPACITY_V1 {
             return Err(ZkX509WitnessCodecErrorV1::InvalidCaPathIndex);
@@ -217,12 +199,10 @@ impl ZkX509WitnessV1 {
                 .map_err(|_| ZkX509WitnessCodecErrorV1::Truncated)?;
             siblings.push(sibling);
         }
-
         let wallet_ownership_signature_rs = reader
             .take(ZK_X509_WALLET_SIGNATURE_RS_BYTES_V1)?
             .try_into()
             .map_err(|_| ZkX509WitnessCodecErrorV1::Truncated)?;
-
         let opening_count = usize::from(reader.read_u8()?);
         if opening_count > MAX_DISCLOSED_ATTRIBUTES_V1 {
             return Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings);
@@ -239,7 +219,6 @@ impl ZkX509WitnessV1 {
         if !reader.is_empty() {
             return Err(ZkX509WitnessCodecErrorV1::TrailingBytes);
         }
-
         let witness = Self {
             certificate_chain_der,
             crl_der,
@@ -256,7 +235,6 @@ impl ZkX509WitnessV1 {
         Ok(witness)
     }
 }
-
 fn validate_witness_shape_v1(witness: &ZkX509WitnessV1) -> Result<(), ZkX509WitnessCodecErrorV1> {
     if !(ZK_X509_MIN_CHAIN_DEPTH_V1..=ZK_X509_MAX_CHAIN_DEPTH_V1)
         .contains(&witness.certificate_chain_der.len())
@@ -290,7 +268,6 @@ fn validate_witness_shape_v1(witness: &ZkX509WitnessV1) -> Result<(), ZkX509Witn
     }
     Ok(())
 }
-
 fn push_u32_len_prefixed(
     encoded: &mut Vec<u8>,
     value: &[u8],
@@ -300,20 +277,16 @@ fn push_u32_len_prefixed(
     encoded.extend_from_slice(value);
     Ok(())
 }
-
 struct WitnessReaderV1<'a> {
     remaining: &'a [u8],
 }
-
 impl<'a> WitnessReaderV1<'a> {
     const fn new(encoded: &'a [u8]) -> Self {
         Self { remaining: encoded }
     }
-
     const fn is_empty(&self) -> bool {
         self.remaining.is_empty()
     }
-
     fn take(&mut self, len: usize) -> Result<&'a [u8], ZkX509WitnessCodecErrorV1> {
         let (value, remaining) = self
             .remaining
@@ -322,11 +295,9 @@ impl<'a> WitnessReaderV1<'a> {
         self.remaining = remaining;
         Ok(value)
     }
-
     fn read_u8(&mut self) -> Result<u8, ZkX509WitnessCodecErrorV1> {
         Ok(self.take(1)?[0])
     }
-
     fn read_u16(&mut self) -> Result<u16, ZkX509WitnessCodecErrorV1> {
         Ok(u16::from_be_bytes(
             self.take(2)?
@@ -334,7 +305,6 @@ impl<'a> WitnessReaderV1<'a> {
                 .map_err(|_| ZkX509WitnessCodecErrorV1::Truncated)?,
         ))
     }
-
     fn read_u32(&mut self) -> Result<u32, ZkX509WitnessCodecErrorV1> {
         Ok(u32::from_be_bytes(
             self.take(4)?
@@ -342,7 +312,6 @@ impl<'a> WitnessReaderV1<'a> {
                 .map_err(|_| ZkX509WitnessCodecErrorV1::Truncated)?,
         ))
     }
-
     fn read_u32_len_prefixed(
         &mut self,
         min: usize,
@@ -357,11 +326,9 @@ impl<'a> WitnessReaderV1<'a> {
         self.take(len)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn witness() -> ZkX509WitnessV1 {
         ZkX509WitnessV1 {
             certificate_chain_der: vec![vec![0x30, 0], vec![0x30, 0]],
@@ -383,7 +350,6 @@ mod tests {
             ],
         }
     }
-
     #[test]
     fn witness_codec_round_trips_exactly() {
         let witness = witness();
@@ -393,7 +359,6 @@ mod tests {
             witness
         );
     }
-
     #[test]
     fn witness_codec_rejects_every_truncation_and_suffix() {
         let encoded = witness().encode_v1().expect("encode");
@@ -410,7 +375,6 @@ mod tests {
             Err(ZkX509WitnessCodecErrorV1::TrailingBytes)
         );
     }
-
     #[test]
     fn witness_codec_rejects_noncanonical_counts_lengths_and_openings() {
         let mut shallow = witness();
@@ -419,28 +383,24 @@ mod tests {
             shallow.encode_v1(),
             Err(ZkX509WitnessCodecErrorV1::InvalidChainDepth)
         );
-
         let mut oversized_crl = witness();
         oversized_crl.crl_der = vec![0; ZK_X509_CRL_COMMITMENT_MAX_DER_BYTES_V1 + 1];
         assert_eq!(
             oversized_crl.encode_v1(),
             Err(ZkX509WitnessCodecErrorV1::InvalidCrlLength)
         );
-
         let mut duplicate = witness();
         duplicate.attribute_openings[1].index = duplicate.attribute_openings[0].index;
         assert_eq!(
             duplicate.encode_v1(),
             Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
-
         let mut reordered = witness();
         reordered.attribute_openings.swap(0, 1);
         assert_eq!(
             reordered.encode_v1(),
             Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
-
         let mut invalid_index = witness();
         invalid_index.ca_membership_path.index =
             u16::try_from(ZK_X509_CA_COMPACT_TREE_CAPACITY_V1).expect("capacity fits u16");
@@ -449,7 +409,6 @@ mod tests {
             Err(ZkX509WitnessCodecErrorV1::InvalidCaPathIndex)
         );
     }
-
     #[test]
     fn witness_decoder_rejects_raw_header_count_and_length_attacks() {
         let encoded = witness().encode_v1().expect("encode");
@@ -460,7 +419,6 @@ mod tests {
             first_certificate_length_offset + 4 + first_certificate_bytes;
         let second_certificate_bytes = witness().certificate_chain_der[1].len();
         let crl_length_offset = second_certificate_length_offset + 4 + second_certificate_bytes;
-
         for offset in 0..WITNESS_MAGIC_V1.len() + 2 {
             let mut changed = encoded.clone();
             changed[offset] ^= 1;
@@ -514,7 +472,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn witness_decoder_rejects_duplicate_reordered_and_excess_openings() {
         let canonical = witness();
@@ -524,14 +481,12 @@ mod tests {
             encoded.len() - 1 - canonical.attribute_openings.len() * opening_record_bytes;
         let first_index_offset = opening_count_offset + 1;
         let second_index_offset = first_index_offset + opening_record_bytes;
-
         let mut duplicate = encoded.clone();
         duplicate[second_index_offset] = duplicate[first_index_offset];
         assert_eq!(
             ZkX509WitnessV1::decode_exact_v1(&duplicate),
             Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
-
         let mut reordered = encoded.clone();
         reordered[first_index_offset] = 3;
         reordered[second_index_offset] = 0;
@@ -539,7 +494,6 @@ mod tests {
             ZkX509WitnessV1::decode_exact_v1(&reordered),
             Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
-
         let mut excess = encoded;
         excess[opening_count_offset] =
             u8::try_from(MAX_DISCLOSED_ATTRIBUTES_V1 + 1).expect("opening cap fits u8");
@@ -548,7 +502,6 @@ mod tests {
             Err(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
     }
-
     #[test]
     fn witness_codec_pins_big_endian_index_and_rejects_boundary_mutation() {
         let canonical = witness();
@@ -564,19 +517,16 @@ mod tests {
             + 4
             + canonical.crl_der.len();
         assert_eq!(&encoded[index_offset..index_offset + 2], &[0x0f, 0xff]);
-
         encoded[index_offset..index_offset + 2].copy_from_slice(&4_096_u16.to_be_bytes());
         assert_eq!(
             ZkX509WitnessV1::decode_exact_v1(&encoded),
             Err(ZkX509WitnessCodecErrorV1::InvalidCaPathIndex)
         );
-
         let mut first = witness();
         first.ca_membership_path.index = 0;
         let first_encoded = first.encode_v1().expect("first");
         assert_eq!(ZkX509WitnessV1::decode_exact_v1(&first_encoded), Ok(first));
     }
-
     #[test]
     fn private_witness_debug_is_redacted_and_recursive_zeroize_covers_every_field() {
         let mut witness = witness();
@@ -584,7 +534,6 @@ mod tests {
         assert_eq!(debug, "ZkX509WitnessV1 { [REDACTED] }");
         assert!(!debug.contains("111111"));
         assert!(!debug.contains("303030"));
-
         witness.zeroize();
         assert!(witness.certificate_chain_der.is_empty());
         assert!(witness.crl_der.is_empty());

@@ -1,5 +1,4 @@
 #![no_main]
-
 use arbitrary::Arbitrary;
 use flate2::{
     Compression as FlateCompression,
@@ -13,7 +12,6 @@ use libfuzzer_sys::fuzz_target;
 use norito::{decode_from_bytes, to_bytes};
 use std::io::Write;
 use zstd::stream::encode_all as zstd_encode_all;
-
 #[derive(Debug, Arbitrary)]
 struct MetadataSeed {
     key: String,
@@ -21,7 +19,6 @@ struct MetadataSeed {
     value: Vec<u8>,
     visibility: u8,
 }
-
 #[derive(Debug, Arbitrary)]
 struct FuzzCase {
     lane: u32,
@@ -37,21 +34,18 @@ struct FuzzCase {
     include_manifest: bool,
     compression: u8,
 }
-
 fn limit_vec_64(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<u8>> {
     let len = u.int_in_range(0..=64_usize)?;
     let mut bytes = vec![0u8; len];
     u.fill_buffer(&mut bytes)?;
     Ok(bytes)
 }
-
 fn limit_vec_2048(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<u8>> {
     let len = u.int_in_range(0..=2_048_usize)?;
     let mut bytes = vec![0u8; len];
     u.fill_buffer(&mut bytes)?;
     Ok(bytes)
 }
-
 fn limit_string_32(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<String> {
     let len = u.int_in_range(0..=32_usize)?;
     let mut buf = vec![0u8; len];
@@ -65,7 +59,6 @@ fn limit_string_32(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Str
         .collect::<Vec<_>>();
     Ok(String::from_utf8_lossy(&filtered).into_owned())
 }
-
 fn limit_metadata(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<MetadataSeed>> {
     let mut items = Vec::new();
     let count = u.int_in_range(0..=8_usize)?;
@@ -74,13 +67,11 @@ fn limit_metadata(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<
     }
     Ok(items)
 }
-
 #[derive(Debug)]
 struct ConstructedCase {
     request: DaIngestRequest,
     manifest: Option<DaManifestV1>,
 }
-
 fn build_case(seed: FuzzCase) -> ConstructedCase {
     let payload = if seed.payload.is_empty() {
         vec![0u8; 1]
@@ -116,7 +107,6 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
         Compression::Zstd => zstd_encode_all(payload.as_slice(), 0)
             .expect("encoding zstd payload in memory must succeed"),
     };
-
     let client_blob_id = BlobDigest::new(iroha_crypto::blake3_256(&payload));
     let blob_class = match seed.blob_class % 4 {
         0 => BlobClass::TaikaiSegment,
@@ -124,7 +114,6 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
         2 => BlobClass::GovernanceArtifact,
         _ => BlobClass::Custom((seed.blob_class / 4) as u16),
     };
-
     let metadata_items = seed
         .metadata
         .into_iter()
@@ -147,25 +136,20 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
             }
         })
         .collect::<Vec<_>>();
-
     let extra_metadata = ExtraMetadata {
         items: metadata_items,
     };
-
     let codec = if seed.codec.is_empty() {
         BlobCodec::new("octet-stream")
     } else {
         BlobCodec::new(seed.codec)
     };
-
     let erasure_profile = ErasureProfile::default();
     let retention_policy = RetentionPolicy::default();
     let chunk_size = 1 << 10;
     let total_size = payload.len() as u64;
-
     let keypair = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
         .expect("fixed fuzz signing seed must derive an Ed25519 key");
-
     let mut manifest = None;
     let manifest_bytes = if seed.include_manifest {
         let blob_hash = BlobDigest::new(iroha_crypto::blake3_256(&payload));
@@ -197,7 +181,6 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
     } else {
         None
     };
-
     let request = DaIngestRequestIntentV1 {
         network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0xA5; 32]),
@@ -221,10 +204,8 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
     }
     .try_sign(&keypair)
     .expect("fixed Ed25519 key must sign the fuzz request");
-
     ConstructedCase { request, manifest }
 }
-
 fuzz_target!(|seed: FuzzCase| {
     let constructed = build_case(seed);
     let request_bytes =
@@ -232,7 +213,6 @@ fuzz_target!(|seed: FuzzCase| {
     let decoded_request: DaIngestRequest =
         decode_from_bytes(&request_bytes).expect("encoded request should decode");
     assert_eq!(constructed.request, decoded_request);
-
     if let Some(manifest) = constructed.manifest {
         let manifest_bytes = to_bytes(&manifest).expect("DA manifest should Norito-encode cleanly");
         let decoded_manifest: DaManifestV1 =

@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for non-conflicting FFI exports.
-
 #[path = "export_getset.rs"]
 mod export_getset;
 #[path = "export_shared_fns.rs"]

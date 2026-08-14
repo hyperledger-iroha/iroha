@@ -1,7 +1,6 @@
 struct TestStorage {
     existing: AtomicBool,
 }
-
 impl ProviderIngestLocalStorageV1<Vec<u8>> for TestStorage {
     fn verify_existing<'a>(
         &'a self,
@@ -21,7 +20,6 @@ impl ProviderIngestLocalStorageV1<Vec<u8>> for TestStorage {
             }))
         })
     }
-
     fn store<'a>(
         &'a self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -47,11 +45,9 @@ impl ProviderIngestLocalStorageV1<Vec<u8>> for TestStorage {
         })
     }
 }
-
 struct TestPayloadBuilder {
     network_id: NetworkId,
 }
-
 impl ProviderIngestCompletionPayloadBuilderV1 for TestPayloadBuilder {
     fn build_payload<'a>(
         &'a self,
@@ -89,7 +85,6 @@ impl ProviderIngestCompletionPayloadBuilderV1 for TestPayloadBuilder {
         })
     }
 }
-
 struct TestSigner {
     key: KeyPair,
     authority: AccountId,
@@ -98,16 +93,13 @@ struct TestSigner {
     eligibility_flip_to_revision: u64,
     eligibility_calls: AtomicUsize,
 }
-
 impl ProviderIngestCompletionSignerV1 for TestSigner {
     fn runtime_handle(&self) -> &str {
         "pkcs11:sorafs-provider-ingest-unit"
     }
-
     fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     fn qualification(
         &self,
     ) -> Result<ProviderIngestCompletionSignerQualificationV1, ProviderIngestCompletionSignerErrorV1>
@@ -119,11 +111,9 @@ impl ProviderIngestCompletionSignerV1 for TestSigner {
             self.key.public_key().clone(),
         ))
     }
-
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         completion_signer_policy(self.signer_policy_revision.load(Ordering::SeqCst))
     }
-
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerErrorV1> {
@@ -142,7 +132,6 @@ impl ProviderIngestCompletionSignerV1 for TestSigner {
             Err(ProviderIngestCompletionSignerErrorV1::Rejected)
         }
     }
-
     fn sign<'a>(
         &'a self,
         payload: TransactionPayload,
@@ -155,17 +144,14 @@ impl ProviderIngestCompletionSignerV1 for TestSigner {
         })
     }
 }
-
 struct TestResolver {
     wrong_authority: AtomicBool,
     signer_policy_revision: Arc<AtomicU64>,
     eligibility_flip_on_call: AtomicUsize,
     eligibility_flip_to_revision: AtomicU64,
 }
-
 impl ProviderIngestCompletionSignerResolverV1 for TestResolver {
     type Signer = TestSigner;
-
     fn resolve<'a>(
         &'a self,
         _context: ProviderIngestCompletionSignerResolutionContextV1,
@@ -195,7 +181,6 @@ impl ProviderIngestCompletionSignerResolverV1 for TestResolver {
         })
     }
 }
-
 struct TestIngress {
     outbox: ProviderIngestOutbox,
     job_id: [u8; 32],
@@ -205,10 +190,8 @@ struct TestIngress {
     observe_calls: AtomicUsize,
     events: Mutex<Vec<&'static str>>,
 }
-
 impl ProviderIngestTransactionIngressV1 for TestIngress {
     type Prepared = SignedTransaction;
-
     fn prepare<'a>(
         &'a self,
         transaction: SignedTransaction,
@@ -232,7 +215,6 @@ impl ProviderIngestTransactionIngressV1 for TestIngress {
             }
         })
     }
-
     fn expose<'a>(
         &'a self,
         prepared: Self::Prepared,
@@ -251,7 +233,6 @@ impl ProviderIngestTransactionIngressV1 for TestIngress {
         let disposition = *self.disposition.lock().unwrap();
         Box::pin(async move { disposition })
     }
-
     fn observe<'a>(
         &'a self,
         _transaction_hash: [u8; 32],
@@ -261,12 +242,10 @@ impl ProviderIngestTransactionIngressV1 for TestIngress {
         Box::pin(async move { observation })
     }
 }
-
 struct TestClock {
     start: Instant,
     base_ms: AtomicU64,
 }
-
 impl ProviderIngestClockV1 for TestClock {
     fn now_ms(&self) -> u64 {
         self.base_ms
@@ -274,7 +253,6 @@ impl ProviderIngestClockV1 for TestClock {
             .saturating_add(u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
 }
-
 type TestRuntime = ProviderIngestRuntimeV1<
     TestLedger,
     TestFetch,
@@ -284,7 +262,6 @@ type TestRuntime = ProviderIngestRuntimeV1<
     TestIngress,
     TestClock,
 >;
-
 fn test_runtime_with_network_id(
     row: ProviderIngestFinalizedAssignmentV1,
     existing: bool,
@@ -352,7 +329,6 @@ fn test_runtime_with_network_id(
     )?;
     Ok((runtime, ledger, fetch, ingress))
 }
-
 fn test_runtime(
     row: ProviderIngestFinalizedAssignmentV1,
     existing: bool,
@@ -377,7 +353,6 @@ fn test_runtime(
     )
     .expect("runtime")
 }
-
 #[test]
 fn runtime_requires_marked_network_identity_and_preserves_it_exactly() {
     let row = fixture_row(0x30);
@@ -395,7 +370,6 @@ fn runtime_requires_marked_network_identity_and_preserves_it_exactly() {
         ),
         Err(ProviderIngestRuntimeErrorV1::InvalidNetworkId)
     ));
-
     let (runtime, _, _, _) = test_runtime(
         row,
         true,
@@ -406,27 +380,23 @@ fn runtime_requires_marked_network_identity_and_preserves_it_exactly() {
     );
     assert_eq!(runtime.network_id, test_network_id());
 }
-
 #[test]
 fn finalized_page_rejects_cursor_order_and_pagination_substitution() {
     let row = fixture_row(0x31);
     let page = fixture_page(row.clone());
     validate_page(&page, None, cursor(8), 16).expect("valid page");
-
     let mut wrong_cursor = page.clone();
     wrong_cursor.finalized_cursor = cursor(9);
     assert!(matches!(
         validate_page(&wrong_cursor, None, cursor(8), 16),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedPage)
     ));
-
     let mut duplicate = page.clone();
     duplicate.rows.push(row);
     assert!(matches!(
         validate_page(&duplicate, None, cursor(8), 16),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedPage)
     ));
-
     let mut forged_next = page;
     forged_next.next_after_order_id = Some([0xFF; 32]);
     assert!(matches!(
@@ -434,7 +404,6 @@ fn finalized_page_rejects_cursor_order_and_pagination_substitution() {
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedPage)
     ));
 }
-
 #[test]
 fn finalized_cursor_and_order_lifecycle_fail_closed_on_substitution() {
     assert!(validate_monotonic_finalized_cursor(None, cursor(8)).is_ok());
@@ -451,7 +420,6 @@ fn finalized_cursor_and_order_lifecycle_fail_closed_on_substitution() {
         validate_monotonic_finalized_cursor(Some(cursor(8)), fork),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedPage)
     ));
-
     let mut unassigned_completion = fixture_row(0x30);
     unassigned_completion
         .order
@@ -470,7 +438,6 @@ fn finalized_cursor_and_order_lifecycle_fail_closed_on_substitution() {
         ),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
-
     let mut inconsistent_status = fixture_row(0x31);
     inconsistent_status.order.status = ReplicationOrderStatus::Completed(8);
     assert!(matches!(
@@ -483,7 +450,6 @@ fn finalized_cursor_and_order_lifecycle_fail_closed_on_substitution() {
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
 }
-
 #[test]
 fn finalized_claim_factory_and_runtime_reject_musubi_binding_substitution() {
     let factory = ProviderIngestFinalizedClaimFactoryV1::new(test_network_id(), LOCAL_PROVIDER);
@@ -533,14 +499,12 @@ fn finalized_claim_factory_and_runtime_reject_musubi_binding_substitution() {
         norito::to_bytes(&receipt.to_stored()).unwrap().len()
             <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1
     );
-
     let mut missing_claim = row.clone();
     missing_claim.musubi_archive = None;
     assert!(matches!(
         validate_assignment(&missing_claim, cursor(8), LOCAL_PROVIDER, runtime_policy(),),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
-
     let other_order = fixture_row(0x33);
     assert_eq!(
         factory.seal_musubi_archive(
@@ -553,14 +517,12 @@ fn finalized_claim_factory_and_runtime_reject_musubi_binding_substitution() {
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
         "a reader cannot seal another order's publisher-shaped binding"
     );
-
     row.pin.manifest.content_length = row.pin.manifest.content_length.saturating_add(1);
     assert!(matches!(
         validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
 }
-
 #[test]
 fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
     let factory = ProviderIngestFinalizedClaimFactoryV1::new(test_network_id(), LOCAL_PROVIDER);
@@ -579,7 +541,6 @@ fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
         "a pending local provider cannot receive a completed-row capability"
     );
     assert!(validate_assignment(&pending, cursor(8), LOCAL_PROVIDER, runtime_policy()).is_ok());
-
     let mut completed_other = pending.clone();
     completed_other
         .order
@@ -599,7 +560,6 @@ fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
         .is_ok(),
         "another provider's completion must not require a local completed claim"
     );
-
     pending.order.provider_completions.push(completion_record(
         ProviderId::new(LOCAL_PROVIDER),
         account(8),
@@ -629,7 +589,6 @@ fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
         validate_assignment(&pending, cursor(8), LOCAL_PROVIDER, runtime_policy()).is_ok(),
         "a completed Musubi row must carry its exact post-completion capability"
     );
-
     let mut substituted_claim = pending.clone();
     substituted_claim
         .completed_musubi_archive
@@ -645,14 +604,12 @@ fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
         ),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
-
     let mut missing = pending.clone();
     missing.completed_musubi_archive = None;
     assert!(matches!(
         validate_assignment(&missing, cursor(8), LOCAL_PROVIDER, runtime_policy()),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
-
     let mut generic = fixture_row(0x35);
     generic.order.provider_completions.push(completion_record(
         ProviderId::new(LOCAL_PROVIDER),
@@ -669,7 +626,6 @@ fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
 }
-
 #[test]
 fn musubi_claims_and_receipts_remain_valid_across_later_finalized_scans() {
     let row = fixture_musubi_row(0x38, 0x85);
@@ -679,7 +635,6 @@ fn musubi_claims_and_receipts_remain_valid_across_later_finalized_scans() {
     let admitted_claim = row.musubi_archive.as_ref().expect("Musubi admission claim");
     let admitted_receipt = test_verified_musubi_receipt(admitted_claim, &admission);
     assert!(admitted_receipt.validate_stored(&admission));
-
     let mut later_claim = admitted_claim.clone();
     later_claim.observed_finalized_cursor = cursor(9);
     assert!(later_claim.matches_authorization(&admission));
@@ -693,7 +648,6 @@ fn musubi_claims_and_receipts_remain_valid_across_later_finalized_scans() {
         Err(ProviderIngestSourceFetchErrorV1::Rejected),
         "a durable Musubi authorization cannot be downgraded to a generic fetch"
     );
-
     let generic_authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_state(
         admission.finalized_height(),
         admission.finalized_block_hash(),
@@ -716,13 +670,11 @@ fn musubi_claims_and_receipts_remain_valid_across_later_finalized_scans() {
         Err(ProviderIngestSourceFetchErrorV1::Rejected),
         "a generic authorization cannot be upgraded by an informational fetch binding"
     );
-
     let later_receipt = test_verified_musubi_receipt(&later_claim, &admission);
     assert!(later_receipt.validate_stored(&admission));
     let mut latest_claim = later_claim.clone();
     latest_claim.observed_finalized_cursor = cursor(10);
     assert!(later_receipt.matches(&latest_claim, &admission));
-
     let replay_authorization = FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
         cursor(9).height,
         cursor(9).block_hash,
@@ -786,20 +738,16 @@ fn musubi_claims_and_receipts_remain_valid_across_later_finalized_scans() {
         Some(&latest_claim),
         Some(stored_receipt.as_ref()),
     ));
-
     let mut stale_claim = admitted_claim.clone();
     stale_claim.observed_finalized_cursor = cursor(7);
     assert!(!stale_claim.matches_authorization(&admission));
-
     let mut forked_claim = admitted_claim.clone();
     forked_claim.observed_finalized_cursor.block_hash = [0xF8; 32];
     assert!(!forked_claim.matches_authorization(&admission));
-
     let mut receipt_from_future = later_receipt;
     receipt_from_future.observed_finalized_cursor = cursor(11);
     assert!(!receipt_from_future.matches(&latest_claim, &admission));
 }
-
 #[test]
 fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence() {
     let VerifiedAttestationBundleFixtureV1 {
@@ -808,7 +756,6 @@ fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence()
         ..
     } = verified_attestation_bundle_fixture(0xD1);
     let claim = completed_attestation_claim(commitment.clone());
-
     let first = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
         &claim, &verified,
     )
@@ -817,7 +764,6 @@ fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence()
         &claim, &verified,
     )
     .expect("derive deterministic approval request");
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let ambient = {
@@ -827,7 +773,6 @@ fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence()
         )
         .expect("derive ambient-independent approval request")
     };
-
     assert_eq!(first, second);
     assert_eq!(first, ambient);
     assert_ne!(first.completion_claim_digest(), [0; 32]);
@@ -871,7 +816,6 @@ fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence()
         first.payload().signing_hash(),
         second.payload().signing_hash()
     );
-
     let mut later_claim = claim.clone();
     later_claim.observed_finalized_cursor = cursor(9);
     let later = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
@@ -886,7 +830,6 @@ fn musubi_attestation_approval_request_binds_exact_completed_verified_evidence()
     );
     assert_eq!(later.observed_finalized_cursor(), cursor(9));
 }
-
 #[test]
 fn musubi_attestation_approval_request_rejects_substituted_evidence() {
     let VerifiedAttestationBundleFixtureV1 {
@@ -904,7 +847,6 @@ fn musubi_attestation_approval_request_rejects_substituted_evidence() {
         Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
         "verified bundle evidence from another commitment must fail"
     );
-
     let mut substituted_bundle_commitment = claim.clone();
     substituted_bundle_commitment
         .binding
@@ -922,7 +864,6 @@ fn musubi_attestation_approval_request_rejects_substituted_evidence() {
         Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
         "verified evidence must retain the exact archive identity, not only projected fields"
     );
-
     let mut substituted_descriptor_commitment = claim.clone();
     substituted_descriptor_commitment
         .binding
@@ -940,7 +881,6 @@ fn musubi_attestation_approval_request_rejects_substituted_evidence() {
         Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
         "a substituted descriptor commitment must fail even with a self-consistent archive ID"
     );
-
     let mut substituted_completion = claim.clone();
     substituted_completion.completion.provider_id = ProviderId::new(SOURCE_PROVIDER);
     assert_eq!(
@@ -951,7 +891,6 @@ fn musubi_attestation_approval_request_rejects_substituted_evidence() {
         Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
         "another provider's completion must fail"
     );
-
     let mut substituted_cursor = claim;
     substituted_cursor.observed_finalized_cursor.block_hash = [0xD5; 32];
     assert_eq!(
@@ -962,7 +901,6 @@ fn musubi_attestation_approval_request_rejects_substituted_evidence() {
         Err(ProviderIngestMusubiAttestationApprovalRequestErrorV1::Rejected),
         "a same-height cursor that does not cover the completion anchor must fail"
     );
-
     let mut lower_cursor = substituted_cursor;
     lower_cursor.observed_finalized_cursor = cursor(7);
     assert_eq!(
@@ -974,14 +912,12 @@ fn musubi_attestation_approval_request_rejects_substituted_evidence() {
         "a cursor below the completed-row anchor must fail"
     );
 }
-
 #[test]
 fn completed_musubi_claim_matches_only_exact_authorization_and_finalized_prefix() {
     let fixture = verified_attestation_bundle_fixture(0xD8);
     let mut claim = completed_attestation_claim(fixture.commitment.clone());
     let authorization = completed_attestation_authorization(&claim, [0x93; 32]);
     assert!(claim.matches_authorization(&authorization));
-
     claim.observed_finalized_cursor = cursor(10);
     claim.completion.finalized_anchor = ProviderIngestFinalizedAnchorV1 {
         height: 9,
@@ -992,25 +928,20 @@ fn completed_musubi_claim_matches_only_exact_authorization_and_finalized_prefix(
         claim.matches_authorization(&late_admission),
         "a completed row may first be observed after its own finalized anchor"
     );
-
     let mut stale = claim.clone();
     stale.observed_finalized_cursor = cursor(8);
     assert!(!stale.matches_authorization(&late_admission));
-
     let mut substituted_network = claim.clone();
     substituted_network.network_id = foreign_test_network_id();
     assert!(!substituted_network.matches_authorization(&late_admission));
-
     let mut substituted_commitment = claim.clone();
     substituted_commitment.binding.commitment.por_root = MusubiContentDigestV1::new([0xDA; 32]);
     substituted_commitment.binding.archive_id =
         substituted_commitment.binding.commitment.archive_id();
     assert!(!substituted_commitment.matches_authorization(&late_admission));
-
     let mut inert_cursor = claim.clone();
     inert_cursor.observed_finalized_cursor.block_hash = [0; 32];
     assert!(!inert_cursor.matches_authorization(&late_admission));
-
     let conflicting_admission =
         FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
             claim.completion.finalized_anchor.height,
@@ -1032,7 +963,6 @@ fn completed_musubi_claim_matches_only_exact_authorization_and_finalized_prefix(
         "admission and completion cannot name different blocks at one height"
     );
 }
-
 #[test]
 fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() {
     let fixture = verified_attestation_bundle_fixture(0xD9);
@@ -1065,7 +995,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
         .expect("completed-attestation fixture is store-bound");
     let authorization = completed_attestation_authorization(&claim, manifest_digest);
     let schedulers = StorageSchedulersRuntime::new(StorageSchedulerConfig::default());
-
     let first_request = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
         &claim,
         &fixture.verified,
@@ -1117,7 +1046,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
         musubi_provider_attestation_approval_id_v1(&restarted_request),
         "the ephemeral authority must not enter the durable approval ID"
     );
-
     let mut unbound_claim = claim.clone();
     unbound_claim.completed_musubi_store_instance = None;
     assert_eq!(
@@ -1148,7 +1076,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
         first_reader_still_available,
         "foreign instance must fail before any admitted payload reader opens"
     );
-
     assert_eq!(fixture.verified.archive_id(), claim.archive_id());
     let (request, fourth_reader_rejected) = backend
         .with_admitted_payload_read_lease_by_digest(&manifest_digest, &schedulers, |lease| {
@@ -1172,7 +1099,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
         "verification must consume exactly three fresh readers"
     );
     assert_eq!(request.payload().binding.archive_id, claim.archive_id());
-
     let mut substituted_plan = fixture.plan.clone();
     substituted_plan.payload_digest = blake3::hash(b"substituted admitted payload");
     assert_eq!(
@@ -1189,7 +1115,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
             .expect("completed-attestation payload remains admitted"),
         Err(ProviderIngestLocalStorageErrorV1::Permanent),
     );
-
     let substituted_authorization = completed_attestation_authorization(&claim, [0xDC; 32]);
     assert_eq!(
         backend
@@ -1205,7 +1130,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
             .expect("completed-attestation payload remains admitted"),
         Err(ProviderIngestLocalStorageErrorV1::Permanent),
     );
-
     let mut stale_claim = claim.clone();
     stale_claim.observed_finalized_cursor = cursor(7);
     assert_eq!(
@@ -1222,7 +1146,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
             .expect("completed-attestation payload remains admitted"),
         Err(ProviderIngestLocalStorageErrorV1::Permanent),
     );
-
     let mut substituted_claim = claim;
     substituted_claim.binding.commitment.bundle_digest = MusubiContentDigestV1::new([0xDD; 32]);
     substituted_claim.binding.archive_id = substituted_claim.binding.commitment.archive_id();
@@ -1241,7 +1164,6 @@ fn store_bound_admitted_payload_lease_mints_completed_musubi_approval_request() 
         Err(ProviderIngestLocalStorageErrorV1::Permanent),
     );
 }
-
 #[test]
 fn completed_musubi_lease_preserves_transient_reader_classification() {
     for kind in [
@@ -1265,7 +1187,6 @@ fn completed_musubi_lease_preserves_transient_reader_classification() {
         ));
     }
 }
-
 #[test]
 fn verified_musubi_receipt_rejects_archive_identity_substitution() {
     let VerifiedAttestationBundleFixtureV1 {
@@ -1308,7 +1229,6 @@ fn verified_musubi_receipt_rejects_archive_identity_substitution() {
         &verified,
     )
     .expect("exact verifier evidence");
-
     let mut substituted = claim;
     substituted.binding.commitment.bundle_digest = MusubiContentDigestV1::new([0xAF; 32]);
     substituted.binding.archive_id = substituted.binding.commitment.archive_id();
@@ -1327,7 +1247,6 @@ fn verified_musubi_receipt_rejects_archive_identity_substitution() {
         "a verifier result cannot be replayed under a different archive identity"
     );
 }
-
 #[test]
 fn completed_musubi_claim_factory_rejects_completion_substitutions() {
     let factory = ProviderIngestFinalizedClaimFactoryV1::new(test_network_id(), LOCAL_PROVIDER);
@@ -1338,7 +1257,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         8,
     ));
     let binding = musubi_binding_for_row(&row, 0x83);
-
     assert_eq!(
         factory.seal_completed_musubi_archive(
             &foreign_test_network_id(),
@@ -1374,7 +1292,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         ),
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
     );
-
     let mut substituted_pin = row.pin.manifest.clone();
     substituted_pin.por_root = [0xE8; 32];
     assert_eq!(
@@ -1388,7 +1305,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         ),
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
     );
-
     let mut substituted_completion = row.order.clone();
     substituted_completion.provider_completions[0].assignment_revision = 2;
     assert_eq!(
@@ -1402,7 +1318,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         ),
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
     );
-
     let mut duplicate_completion = row.order.clone();
     duplicate_completion
         .provider_completions
@@ -1418,7 +1333,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         ),
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
     );
-
     let mut unassigned_order = row.order.clone();
     let mut canonical_order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
         &unassigned_order.canonical_order,
@@ -1440,7 +1354,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         ),
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
     );
-
     let other = fixture_musubi_row(0x37, 0x84);
     assert_eq!(
         factory.seal_completed_musubi_archive(
@@ -1454,7 +1367,6 @@ fn completed_musubi_claim_factory_rejects_completion_substitutions() {
         Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
     );
 }
-
 #[tokio::test]
 async fn runtime_recovers_durable_finalized_high_water_before_scanning() {
     let row = fixture_row(0x2F);
@@ -1495,7 +1407,6 @@ async fn runtime_recovers_durable_finalized_high_water_before_scanning() {
         Some(cursor(9))
     );
 }
-
 #[tokio::test]
 async fn finalized_block_time_equivocation_is_rejected_after_restart() {
     let row = fixture_row(0x44);
@@ -1538,7 +1449,6 @@ async fn finalized_block_time_equivocation_is_rejected_after_restart() {
         Some((cursor(8), 8_000))
     );
 }
-
 #[tokio::test]
 async fn local_existing_path_skips_network_and_preflights_before_ambiguity() {
     let row = fixture_row(0x32);
@@ -1567,7 +1477,6 @@ async fn local_existing_path_skips_network_and_preflights_before_ambiguity() {
         }
     ));
 }
-
 #[test]
 fn musubi_local_stored_without_verifier_receipt_is_never_checkpointed() {
     let row = fixture_musubi_row(0x6A, 0xB1);
@@ -1609,7 +1518,6 @@ fn musubi_local_stored_without_verifier_receipt_is_never_checkpointed() {
     ));
     assert!(ingress.events.lock().unwrap().is_empty());
 }
-
 #[tokio::test]
 async fn single_replica_without_remote_sources_releases_source_claim_for_retry() {
     let mut row = fixture_row(0x35);
@@ -1624,7 +1532,6 @@ async fn single_replica_without_remote_sources_releases_source_claim_for_retry()
         .retain(|assignment| assignment.provider_id == LOCAL_PROVIDER);
     order.validate().expect("valid single-replica order");
     row.order.canonical_order = norito::to_bytes(&order).expect("order bytes");
-
     let (mut runtime, _, fetch, ingress) = test_runtime(
         row,
         false,
@@ -1633,7 +1540,6 @@ async fn single_replica_without_remote_sources_releases_source_claim_for_retry()
         ProviderIngestIngressDispositionV1::Submitted,
         false,
     );
-
     let outcome = runtime.tick().await.expect("single-replica source tick");
     assert_eq!(outcome.source_jobs_claimed, 1);
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
@@ -1645,7 +1551,6 @@ async fn single_replica_without_remote_sources_releases_source_claim_for_retry()
         }
     ));
 }
-
 #[tokio::test]
 async fn corrupt_authenticated_source_is_retryable_not_a_permanent_dead_letter() {
     let row = fixture_row(0x33);
@@ -1667,7 +1572,6 @@ async fn corrupt_authenticated_source_is_retryable_not_a_permanent_dead_letter()
         }
     ));
 }
-
 #[tokio::test]
 async fn authenticated_source_binding_rejection_is_terminal_for_the_tick() {
     let row = fixture_row(0x34);
@@ -1679,7 +1583,6 @@ async fn authenticated_source_binding_rejection_is_terminal_for_the_tick() {
         ProviderIngestIngressDispositionV1::Submitted,
         false,
     );
-
     assert!(matches!(
         runtime.tick().await,
         Err(ProviderIngestRuntimeErrorV1::SourceProtocolViolation)
@@ -1693,7 +1596,6 @@ async fn authenticated_source_binding_rejection_is_terminal_for_the_tick() {
         }
     ));
 }
-
 #[tokio::test]
 async fn ineligible_early_source_does_not_consume_fair_work_budget() {
     let first = fixture_row(0x10);
@@ -1731,7 +1633,6 @@ async fn ineligible_early_source_does_not_consume_fair_work_budget() {
         )
         .unwrap();
     runtime.policy.max_source_jobs_per_tick = 1;
-
     let outcome = runtime.tick().await.expect("fair source tick");
     assert_eq!(outcome.source_jobs_claimed, 1);
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 1);
@@ -1751,7 +1652,6 @@ async fn ineligible_early_source_does_not_consume_fair_work_budget() {
         }
     ));
 }
-
 #[tokio::test]
 async fn slow_fetch_renews_the_source_lease_until_atomic_storage_finishes() {
     let row = fixture_row(0x34);
@@ -1770,7 +1670,6 @@ async fn slow_fetch_renews_the_source_lease_until_atomic_storage_finishes() {
         ProviderIngestDeliveryStateV1::LocalStored { .. }
     ));
 }
-
 #[tokio::test]
 async fn semantic_completion_from_another_replica_wins_over_ambiguous_local_hash() {
     let row = fixture_row(0x35);
@@ -1790,7 +1689,6 @@ async fn semantic_completion_from_another_replica_wins_over_ambiguous_local_hash
             ..
         }
     ));
-
     {
         let mut page = ledger.page.lock().unwrap();
         page.finalized_cursor = cursor(9);
@@ -1818,7 +1716,6 @@ async fn semantic_completion_from_another_replica_wins_over_ambiguous_local_hash
         page.rows[0].order.status = ReplicationOrderStatus::Completed(9);
         page.rows[0].completion_epoch = Some(9);
     }
-
     runtime.tick().await.expect("semantic reconciliation");
     assert!(matches!(
         runtime.outbox.status(ingress.job_id).unwrap().state,
@@ -1830,7 +1727,6 @@ async fn semantic_completion_from_another_replica_wins_over_ambiguous_local_hash
         } if completed_by == account(9)
     ));
 }
-
 #[tokio::test]
 async fn finalized_completion_first_row_bypasses_full_active_capacity() {
     let mut completed = fixture_row(0x2E);
@@ -1868,7 +1764,6 @@ async fn finalized_completion_first_row_bypasses_full_active_capacity() {
             .active,
         runtime.outbox.policy().max_active_entries
     );
-
     let outcome = runtime.tick().await.expect("finalized reconciliation");
     assert_eq!(outcome.rows_scanned, 1);
     assert_eq!(outcome.jobs_inserted, 0);
@@ -1883,7 +1778,6 @@ async fn finalized_completion_first_row_bypasses_full_active_capacity() {
         }
     ));
 }
-
 #[tokio::test]
 async fn preflight_rejection_resigns_without_entering_ambiguous_state() {
     let row = fixture_row(0x39);
@@ -1909,7 +1803,6 @@ async fn preflight_rejection_resigns_without_entering_ambiguous_state() {
         }
     ));
 }
-
 #[tokio::test]
 async fn payload_and_preflight_failures_are_durably_backed_off() {
     let payload_row = fixture_row(0x3B);
@@ -1949,7 +1842,6 @@ async fn payload_and_preflight_failures_are_durably_backed_off() {
             ..
         }
     ));
-
     let ingress_row = fixture_row(0x3C);
     let (mut ingress_runtime, _, _, ingress) = test_runtime(
         ingress_row,
@@ -1980,7 +1872,6 @@ async fn payload_and_preflight_failures_are_durably_backed_off() {
     ingress_runtime.tick().await.expect("signed retry not due");
     assert_eq!(*ingress.events.lock().unwrap(), vec!["prepare_signed"]);
 }
-
 #[tokio::test]
 async fn ambiguous_unknown_retries_only_after_a_later_finalized_cursor() {
     let row = fixture_row(0x3A);
@@ -1994,7 +1885,6 @@ async fn ambiguous_unknown_retries_only_after_a_later_finalized_cursor() {
     );
     runtime.tick().await.expect("ambiguous submit");
     *ingress.observation.lock().unwrap() = ProviderIngestTransactionObservationV1::Unknown;
-
     {
         let mut page = ledger.page.lock().unwrap();
         page.finalized_cursor = cursor(9);
@@ -2005,7 +1895,6 @@ async fn ambiguous_unknown_retries_only_after_a_later_finalized_cursor() {
         };
         page.rows[0].completion_epoch = Some(9);
     }
-
     runtime.tick().await.expect("finalized absence");
     assert!(matches!(
         runtime.outbox.status(ingress.job_id).unwrap().state,
@@ -2018,7 +1907,6 @@ async fn ambiguous_unknown_retries_only_after_a_later_finalized_cursor() {
         } if baseline_finalized_cursor == cursor(9)
     ));
 }
-
 #[tokio::test]
 async fn committed_hash_outcome_never_substitutes_for_semantic_completion() {
     let row = fixture_row(0x3D);
@@ -2031,7 +1919,6 @@ async fn committed_hash_outcome_never_substitutes_for_semantic_completion() {
         false,
     );
     runtime.tick().await.expect("submitted transaction");
-
     *ingress.observation.lock().unwrap() = ProviderIngestTransactionObservationV1::CommittedSuccess;
     {
         let mut page = ledger.page.lock().unwrap();
@@ -2043,7 +1930,6 @@ async fn committed_hash_outcome_never_substitutes_for_semantic_completion() {
         };
         page.rows[0].completion_epoch = Some(9);
     }
-
     let outcome = runtime.tick().await.expect("committed-success observation");
     assert_eq!(outcome.jobs_finalized, 0);
     assert!(matches!(
@@ -2053,7 +1939,6 @@ async fn committed_hash_outcome_never_substitutes_for_semantic_completion() {
             ..
         }
     ));
-
     *ingress.observation.lock().unwrap() =
         ProviderIngestTransactionObservationV1::CommittedRejected;
     runtime
@@ -2071,7 +1956,6 @@ async fn committed_hash_outcome_never_substitutes_for_semantic_completion() {
         }
     ));
 }
-
 #[tokio::test]
 async fn owner_rotation_reconciles_exposed_transaction_before_authority_change() {
     let row = fixture_row(0x3F);
@@ -2084,7 +1968,6 @@ async fn owner_rotation_reconciles_exposed_transaction_before_authority_change()
         false,
     );
     runtime.tick().await.expect("submitted transaction");
-
     *ingress.observation.lock().unwrap() = ProviderIngestTransactionObservationV1::CommittedSuccess;
     {
         let mut page = ledger.page.lock().unwrap();
@@ -2101,7 +1984,6 @@ async fn owner_rotation_reconciles_exposed_transaction_before_authority_change()
         ));
         page.rows[0].completion_epoch = Some(9);
     }
-
     runtime.tick().await.expect("owner rotation");
     assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
@@ -2112,7 +1994,6 @@ async fn owner_rotation_reconciles_exposed_transaction_before_authority_change()
         }
     ));
 }
-
 #[tokio::test]
 async fn signer_policy_rotation_reconciles_exposed_transaction_before_authority_change() {
     let row = fixture_row(0x41);
@@ -2125,7 +2006,6 @@ async fn signer_policy_rotation_reconciles_exposed_transaction_before_authority_
         false,
     );
     runtime.tick().await.expect("submitted transaction");
-
     *ingress.observation.lock().unwrap() = ProviderIngestTransactionObservationV1::CommittedSuccess;
     runtime
         .signer_resolver
@@ -2141,7 +2021,6 @@ async fn signer_policy_rotation_reconciles_exposed_transaction_before_authority_
         };
         page.rows[0].completion_epoch = Some(9);
     }
-
     runtime.tick().await.expect("signer policy rotation");
     assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
@@ -2152,7 +2031,6 @@ async fn signer_policy_rotation_reconciles_exposed_transaction_before_authority_
         }
     ));
 }
-
 #[tokio::test]
 async fn owner_removal_reconciles_exposed_transaction_before_authority_change() {
     let row = fixture_row(0x40);
@@ -2165,7 +2043,6 @@ async fn owner_removal_reconciles_exposed_transaction_before_authority_change() 
         false,
     );
     runtime.tick().await.expect("submitted transaction");
-
     *ingress.observation.lock().unwrap() = ProviderIngestTransactionObservationV1::CommittedSuccess;
     {
         let mut page = ledger.page.lock().unwrap();
@@ -2179,7 +2056,6 @@ async fn owner_removal_reconciles_exposed_transaction_before_authority_change() 
         page.rows[0].completion_authority = None;
         page.rows[0].completion_epoch = None;
     }
-
     runtime.tick().await.expect("owner removal");
     assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
@@ -2190,7 +2066,6 @@ async fn owner_removal_reconciles_exposed_transaction_before_authority_change() 
         }
     ));
 }
-
 #[tokio::test]
 async fn owner_rotation_invalidates_never_exposed_signed_bytes_without_preflight() {
     let row = fixture_row(0x42);
@@ -2219,7 +2094,6 @@ async fn owner_rotation_invalidates_never_exposed_signed_bytes_without_preflight
             ..
         }
     ));
-
     {
         let mut page = ledger.page.lock().unwrap();
         page.finalized_cursor = cursor(9);
@@ -2235,7 +2109,6 @@ async fn owner_rotation_invalidates_never_exposed_signed_bytes_without_preflight
         ));
         page.rows[0].completion_epoch = Some(9);
     }
-
     runtime.tick().await.expect("invalidate stale owner");
     assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 0);
     assert_eq!(*ingress.events.lock().unwrap(), vec!["prepare_signed"]);
@@ -2250,7 +2123,6 @@ async fn owner_rotation_invalidates_never_exposed_signed_bytes_without_preflight
         }
     ));
 }
-
 #[tokio::test]
 async fn signer_policy_rotation_invalidates_never_exposed_signed_bytes_without_preflight() {
     let row = fixture_row(0x43);
@@ -2281,7 +2153,6 @@ async fn signer_policy_rotation_invalidates_never_exposed_signed_bytes_without_p
         };
         page.rows[0].completion_epoch = Some(9);
     }
-
     runtime
         .tick()
         .await
@@ -2299,7 +2170,6 @@ async fn signer_policy_rotation_invalidates_never_exposed_signed_bytes_without_p
         }
     ));
 }
-
 #[tokio::test]
 async fn policy_rotation_after_durable_begin_never_reaches_ingress_exposure() {
     let row = fixture_row(0x44);
@@ -2330,7 +2200,6 @@ async fn policy_rotation_after_durable_begin_never_reaches_ingress_exposure() {
         } => next_attempt_at_ms,
         other => panic!("expected a signed retry, got {other:?}"),
     };
-
     *ingress.prepare_error.lock().unwrap() = None;
     runtime
         .signer_resolver
@@ -2344,7 +2213,6 @@ async fn policy_rotation_after_durable_begin_never_reaches_ingress_exposure() {
         .clock
         .base_ms
         .store(next_attempt_at_ms, Ordering::SeqCst);
-
     let second = runtime
         .tick()
         .await
@@ -2366,7 +2234,6 @@ async fn policy_rotation_after_durable_begin_never_reaches_ingress_exposure() {
         }
     ));
 }
-
 #[tokio::test]
 async fn mutating_storage_soft_timeout_awaits_late_success_without_retry() {
     let row = fixture_row(0x3E);
@@ -2378,7 +2245,6 @@ async fn mutating_storage_soft_timeout_awaits_late_success_without_retry() {
         ProviderIngestIngressDispositionV1::Submitted,
         false,
     );
-
     let outcome = runtime.tick().await.expect("late atomic store");
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 1);
     assert_eq!(outcome.manifests_stored, 1);
@@ -2387,7 +2253,6 @@ async fn mutating_storage_soft_timeout_awaits_late_success_without_retry() {
         ProviderIngestDeliveryStateV1::LocalStored { .. }
     ));
 }
-
 #[tokio::test]
 async fn newly_admitted_quarantine_is_a_receipt_bound_terminal() {
     let row = fixture_row(0x45);
@@ -2400,14 +2265,12 @@ async fn newly_admitted_quarantine_is_a_receipt_bound_terminal() {
         ProviderIngestIngressDispositionV1::Submitted,
         false,
     );
-
     let outcome = runtime.tick().await.expect("quarantine transition");
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 1);
     assert_eq!(outcome.manifests_stored, 0);
     assert_eq!(outcome.completions_signed, 0);
     assert_eq!(outcome.completion_submissions, 0);
     assert!(ingress.events.lock().unwrap().is_empty());
-
     let terminal = runtime
         .outbox
         .status(ingress.job_id)
@@ -2426,7 +2289,6 @@ async fn newly_admitted_quarantine_is_a_receipt_bound_terminal() {
         } if observed_finalized_cursor == cursor(8)
     ));
 }
-
 #[tokio::test]
 async fn wrong_owner_signer_is_released_and_fails_the_supervised_runtime() {
     let row = fixture_row(0x36);
@@ -2453,7 +2315,6 @@ async fn wrong_owner_signer_is_released_and_fails_the_supervised_runtime() {
         }
     ));
 }
-
 #[tokio::test]
 async fn finalized_expiry_cancels_retained_work_without_fetching() {
     let mut row = fixture_row(0x37);
@@ -2480,7 +2341,6 @@ async fn finalized_expiry_cancels_retained_work_without_fetching() {
         }
     ));
 }
-
 #[tokio::test]
 async fn cooperative_shutdown_drains_active_store_before_skipping_next_row() {
     let first = fixture_row(0x3E);
@@ -2499,7 +2359,6 @@ async fn cooperative_shutdown_drains_active_store_before_skipping_next_row() {
     );
     ledger.page.lock().unwrap().rows = vec![first, second];
     let shutdown_requested = AtomicBool::new(false);
-
     let request_shutdown = async {
         tokio::time::sleep(Duration::from_millis(270)).await;
         shutdown_requested.store(true, Ordering::Release);
@@ -2509,7 +2368,6 @@ async fn cooperative_shutdown_drains_active_store_before_skipping_next_row() {
         request_shutdown
     );
     let outcome = result.expect("drained cooperative shutdown");
-
     assert_eq!(outcome.rows_scanned, 1);
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
@@ -2517,7 +2375,6 @@ async fn cooperative_shutdown_drains_active_store_before_skipping_next_row() {
         Err(ProviderIngestOutboxError::UnknownJob)
     ));
 }
-
 #[tokio::test]
 async fn pre_signalled_shutdown_returns_without_detaching_work() {
     let row = fixture_row(0x38);

@@ -1,11 +1,4 @@
 //! CLI helpers for authoring capacity marketplace artefacts.
-
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::FromHex;
 use norito::json::{self, Map, Value};
@@ -21,7 +14,11 @@ use sorafs_manifest::{
     deal::XorQuantity,
     provider_advert::{CapabilityType, StakePointer},
 };
-
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 /// Entry point for the `capacity` sub-commands.
 pub fn run<I>(mut args: I) -> Result<(), String>
 where
@@ -30,7 +27,6 @@ where
     let Some(subcommand) = args.next() else {
         return Err(capacity_usage());
     };
-
     match subcommand.as_str() {
         "declaration" => run_declaration(args),
         "telemetry" => run_telemetry(args),
@@ -45,7 +41,6 @@ where
         )),
     }
 }
-
 fn capacity_usage() -> String {
     r#"usage: sorafs_manifest_builder capacity <subcommand> [options]
 
@@ -59,7 +54,6 @@ Run `sorafs_manifest_builder capacity <subcommand> --help` for detailed usage.
 "#
     .to_owned()
 }
-
 fn declaration_usage() -> &'static str {
     r#"usage: sorafs_manifest_builder capacity declaration --spec=<file> [options]
 
@@ -77,7 +71,6 @@ Options:
 The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 "#
 }
-
 fn telemetry_usage() -> &'static str {
     r#"usage: sorafs_manifest_builder capacity telemetry --spec=<file> [options]
 
@@ -94,7 +87,6 @@ When present, `effective_capacity_gib` (or `effective_gib`) overrides the defaul
 derived from `utilised_capacity_gib` in the generated summary.
 "#
 }
-
 fn replication_usage() -> &'static str {
     r#"usage: sorafs_manifest_builder capacity replication-order --spec=<file> [options]
 
@@ -109,7 +101,6 @@ Options:
 The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 "#
 }
-
 fn dispute_usage() -> &'static str {
     r#"usage: sorafs_manifest_builder capacity dispute --spec=<file> [options]
 
@@ -124,7 +115,6 @@ Options:
 The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 "#
 }
-
 fn run_declaration<I>(args: I) -> Result<(), String>
 where
     I: Iterator<Item = String>,
@@ -157,25 +147,20 @@ where
         .spec
         .clone()
         .ok_or_else(|| "missing required --spec=<file> option".to_string())?;
-
     let spec_bytes = fs::read(&spec_path)
         .map_err(|err| format!("failed to read spec `{}`: {err}", spec_path.display()))?;
     let spec_value: Value = norito::json::from_slice(&spec_bytes)
         .map_err(|err| format!("failed to parse spec JSON `{}`: {err}", spec_path.display()))?;
-
     let artefacts = build_artefacts(spec_value, &opts)?;
-
     let canonical_bytes = norito::to_bytes(&artefacts.declaration)
         .map_err(|err| format!("failed to encode capacity declaration: {err}"))?;
     let declaration_b64 = BASE64_STD.encode(&canonical_bytes);
-
     if let Some(path) = opts.norito_out.as_ref() {
         write_binary(path, &canonical_bytes)?;
     }
     if let Some(path) = opts.base64_out.as_ref() {
         write_text(path, &declaration_b64)?;
     }
-
     let summary = build_declaration_summary(&artefacts, &declaration_b64)?;
     if let Some(path) = opts.json_out.as_ref() {
         let json_text = json::to_string_pretty(&summary)
@@ -183,14 +168,11 @@ where
             + "\n";
         write_text(path, &json_text)?;
     }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{declaration_b64}");
     }
-
     Ok(())
 }
-
 fn run_telemetry<I>(args: I) -> Result<(), String>
 where
     I: Iterator<Item = String>,
@@ -216,30 +198,24 @@ where
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
-
     let spec_path = opts
         .spec
         .clone()
         .ok_or_else(|| "missing required --spec=<file> option".to_string())?;
-
     let spec_bytes = fs::read(&spec_path)
         .map_err(|err| format!("failed to read spec `{}`: {err}", spec_path.display()))?;
     let spec_value: Value = norito::json::from_slice(&spec_bytes)
         .map_err(|err| format!("failed to parse spec JSON `{}`: {err}", spec_path.display()))?;
-
     let telemetry_artefacts = build_telemetry(spec_value)?;
-
     let canonical_bytes = norito::to_bytes(&telemetry_artefacts.telemetry)
         .map_err(|err| format!("failed to encode capacity telemetry: {err}"))?;
     let telemetry_b64 = BASE64_STD.encode(&canonical_bytes);
-
     if let Some(path) = opts.norito_out.as_ref() {
         write_binary(path, &canonical_bytes)?;
     }
     if let Some(path) = opts.base64_out.as_ref() {
         write_text(path, &telemetry_b64)?;
     }
-
     if let Some(path) = opts.json_out.as_ref() {
         let summary = build_telemetry_summary(&telemetry_artefacts, &telemetry_b64)?;
         let json_text = json::to_string_pretty(&summary)
@@ -247,14 +223,11 @@ where
             + "\n";
         write_text(path, &json_text)?;
     }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{telemetry_b64}");
     }
-
     Ok(())
 }
-
 fn run_replication_order<I>(args: I) -> Result<(), String>
 where
     I: Iterator<Item = String>,
@@ -280,30 +253,24 @@ where
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
-
     let spec_path = opts
         .spec
         .clone()
         .ok_or_else(|| "missing required --spec=<file> option".to_string())?;
-
     let spec_bytes = fs::read(&spec_path)
         .map_err(|err| format!("failed to read spec `{}`: {err}", spec_path.display()))?;
     let spec_value: Value = norito::json::from_slice(&spec_bytes)
         .map_err(|err| format!("failed to parse spec JSON `{}`: {err}", spec_path.display()))?;
-
     let order = build_replication_order(spec_value)?;
-
     let canonical_bytes = norito::to_bytes(&order)
         .map_err(|err| format!("failed to encode replication order: {err}"))?;
     let order_b64 = BASE64_STD.encode(&canonical_bytes);
-
     if let Some(path) = opts.norito_out.as_ref() {
         write_binary(path, &canonical_bytes)?;
     }
     if let Some(path) = opts.base64_out.as_ref() {
         write_text(path, &order_b64)?;
     }
-
     if let Some(path) = opts.json_out.as_ref() {
         let summary = build_replication_order_summary(&order, &order_b64)?;
         let json_text = json::to_string_pretty(&summary)
@@ -311,14 +278,11 @@ where
             + "\n";
         write_text(path, &json_text)?;
     }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{order_b64}");
     }
-
     Ok(())
 }
-
 fn run_dispute<I>(args: I) -> Result<(), String>
 where
     I: Iterator<Item = String>,
@@ -344,30 +308,24 @@ where
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
-
     let spec_path = opts
         .spec
         .clone()
         .ok_or_else(|| "missing required --spec=<file> option".to_string())?;
-
     let spec_bytes = fs::read(&spec_path)
         .map_err(|err| format!("failed to read spec `{}`: {err}", spec_path.display()))?;
     let spec_value: Value = norito::json::from_slice(&spec_bytes)
         .map_err(|err| format!("failed to parse spec JSON `{}`: {err}", spec_path.display()))?;
-
     let dispute = build_dispute(spec_value)?;
-
     let canonical_bytes = norito::to_bytes(&dispute)
         .map_err(|err| format!("failed to encode capacity dispute: {err}"))?;
     let dispute_b64 = BASE64_STD.encode(&canonical_bytes);
-
     if let Some(path) = opts.norito_out.as_ref() {
         write_binary(path, &canonical_bytes)?;
     }
     if let Some(path) = opts.base64_out.as_ref() {
         write_text(path, &dispute_b64)?;
     }
-
     if let Some(path) = opts.json_out.as_ref() {
         let summary = build_dispute_summary(&dispute, &dispute_b64)?;
         let json_text = json::to_string_pretty(&summary)
@@ -375,14 +333,11 @@ where
             + "\n";
         write_text(path, &json_text)?;
     }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{dispute_b64}");
     }
-
     Ok(())
 }
-
 #[derive(Debug, Default)]
 struct DeclarationOptions {
     spec: Option<PathBuf>,
@@ -394,7 +349,6 @@ struct DeclarationOptions {
     base64_out: Option<PathBuf>,
     quiet: bool,
 }
-
 struct DeclarationArtefacts {
     declaration: CapacityDeclarationV1,
     metadata: Vec<CapacityMetadataEntry>,
@@ -402,7 +356,6 @@ struct DeclarationArtefacts {
     valid_from_epoch: u64,
     valid_until_epoch: u64,
 }
-
 #[derive(Debug, Default)]
 struct TelemetryOptions {
     spec: Option<PathBuf>,
@@ -411,12 +364,10 @@ struct TelemetryOptions {
     base64_out: Option<PathBuf>,
     quiet: bool,
 }
-
 struct TelemetryArtefacts {
     telemetry: CapacityTelemetryV1,
     effective_gib: u64,
 }
-
 #[derive(Debug, Default)]
 struct ReplicationOrderOptions {
     spec: Option<PathBuf>,
@@ -425,7 +376,6 @@ struct ReplicationOrderOptions {
     base64_out: Option<PathBuf>,
     quiet: bool,
 }
-
 #[derive(Debug, Default)]
 struct DisputeOptions {
     spec: Option<PathBuf>,
@@ -434,7 +384,6 @@ struct DisputeOptions {
     base64_out: Option<PathBuf>,
     quiet: bool,
 }
-
 fn build_artefacts(
     value: Value,
     opts: &DeclarationOptions,
@@ -442,10 +391,8 @@ fn build_artefacts(
     let map = value
         .as_object()
         .ok_or_else(|| "capacity declaration spec must be a JSON object".to_string())?;
-
     let provider_id_hex = require_string(map, "provider_id_hex")?;
     let provider_id = parse_fixed_hex::<32>(provider_id_hex, "provider_id_hex")?;
-
     let stake_value = require_object(map, "stake")?;
     let pool_id_hex = require_string(stake_value, "pool_id_hex")?;
     let pool_id = parse_fixed_hex::<32>(pool_id_hex, "stake.pool_id_hex")?;
@@ -453,10 +400,8 @@ fn build_artefacts(
         .get("stake_amount")
         .ok_or_else(|| "missing `stake.stake_amount` field".to_string())?;
     let stake_amount = parse_xor_quantity_value(stake_amount_value, "stake.stake_amount")?;
-
     let committed_capacity =
         parse_u64_value(map.get("committed_capacity_gib"), "committed_capacity_gib")?;
-
     let chunker_commitments_value = require_array(map, "chunker_commitments")?;
     if chunker_commitments_value.is_empty() {
         return Err("chunker_commitments must contain at least one entry".into());
@@ -492,7 +437,6 @@ fn build_artefacts(
             capability_refs,
         });
     }
-
     let lane_commitments_value = map.get("lane_commitments");
     let lane_commitments = if let Some(value) = lane_commitments_value {
         let array = value
@@ -511,22 +455,17 @@ fn build_artefacts(
     } else {
         Vec::new()
     };
-
     let pricing = map.get("pricing").map(parse_pricing).transpose()?;
-
     let valid_from = parse_u64_value(map.get("valid_from"), "valid_from")?;
     let valid_until = parse_u64_value(map.get("valid_until"), "valid_until")?;
-
     if valid_from > valid_until {
         return Err("valid_from must not exceed valid_until".into());
     }
-
     let metadata_entries = map
         .get("metadata")
         .map(parse_metadata_entries)
         .transpose()?
         .unwrap_or_default();
-
     let declaration = CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
         provider_id,
@@ -542,14 +481,11 @@ fn build_artefacts(
         valid_until,
         metadata: metadata_entries.clone(),
     };
-
     declaration
         .validate()
         .map_err(|err| format!("capacity declaration validation failed: {err}"))?;
-
     let (registered_epoch, valid_from_epoch, valid_until_epoch) =
         parse_record_window(map, opts, valid_from, valid_until)?;
-
     Ok(DeclarationArtefacts {
         declaration,
         metadata: metadata_entries,
@@ -558,7 +494,6 @@ fn build_artefacts(
         valid_until_epoch,
     })
 }
-
 fn parse_record_window(
     map: &Map,
     opts: &DeclarationOptions,
@@ -587,13 +522,11 @@ fn parse_record_window(
             opts.valid_until_epoch.unwrap_or(valid_until),
         ));
     }
-
     let registered = opts.registered_epoch.unwrap_or(default_from);
     let valid_from_epoch = opts.valid_from_epoch.unwrap_or(default_from);
     let valid_until_epoch = opts.valid_until_epoch.unwrap_or(default_until);
     Ok((registered, valid_from_epoch, valid_until_epoch))
 }
-
 fn parse_capability_array(value: &Value) -> Result<Vec<CapabilityType>, String> {
     let array = value
         .as_array()
@@ -613,7 +546,6 @@ fn parse_capability_array(value: &Value) -> Result<Vec<CapabilityType>, String> 
     }
     Ok(out)
 }
-
 fn lookup_canonical_profile(
     handle: &str,
 ) -> Result<&'static chunker_registry::ChunkerProfileDescriptor, String> {
@@ -631,7 +563,6 @@ fn lookup_canonical_profile(
     }
     Ok(descriptor)
 }
-
 fn parse_capability_name(name: &str) -> Option<CapabilityType> {
     match name {
         "torii_gateway" => Some(CapabilityType::ToriiGateway),
@@ -643,7 +574,6 @@ fn parse_capability_name(name: &str) -> Option<CapabilityType> {
         _ => None,
     }
 }
-
 fn parse_pricing(value: &Value) -> Result<PricingScheduleV1, String> {
     let obj = value
         .as_object()
@@ -674,7 +604,6 @@ fn parse_pricing(value: &Value) -> Result<PricingScheduleV1, String> {
     };
     Ok(pricing)
 }
-
 fn parse_metadata_entries(value: &Value) -> Result<Vec<CapacityMetadataEntry>, String> {
     let obj = value
         .as_object()
@@ -691,7 +620,6 @@ fn parse_metadata_entries(value: &Value) -> Result<Vec<CapacityMetadataEntry>, S
     }
     Ok(entries)
 }
-
 fn build_declaration_summary(
     artefacts: &DeclarationArtefacts,
     declaration_b64: &str,
@@ -743,7 +671,6 @@ fn build_declaration_summary(
         "declaration_b64".into(),
         Value::String(declaration_b64.to_owned()),
     );
-
     let mut commitments = Vec::with_capacity(artefacts.declaration.chunker_commitments.len());
     for commitment in &artefacts.declaration.chunker_commitments {
         let mut item = Map::new();
@@ -775,7 +702,6 @@ fn build_declaration_summary(
         commitments.push(Value::Object(item));
     }
     root.insert("chunker_commitments".into(), Value::Array(commitments));
-
     if !artefacts.declaration.lane_commitments.is_empty() {
         let lanes = artefacts
             .declaration
@@ -794,7 +720,6 @@ fn build_declaration_summary(
             .collect::<Result<Vec<_>, String>>()?;
         root.insert("lane_commitments".into(), Value::Array(lanes));
     }
-
     if let Some(pricing) = &artefacts.declaration.pricing {
         let mut pricing_map = Map::new();
         pricing_map.insert("currency".into(), Value::String(pricing.currency.clone()));
@@ -815,7 +740,6 @@ fn build_declaration_summary(
         );
         root.insert("pricing".into(), Value::Object(pricing_map));
     }
-
     if !artefacts.metadata.is_empty() {
         let mut metadata_map = Map::new();
         for entry in &artefacts.metadata {
@@ -823,15 +747,12 @@ fn build_declaration_summary(
         }
         root.insert("metadata".into(), Value::Object(metadata_map));
     }
-
     Ok(Value::Object(root))
 }
-
 fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String> {
     let map = telemetry_value
         .as_object()
         .ok_or_else(|| "capacity telemetry spec must be a JSON object".to_string())?;
-
     let provider_id_hex = require_string(map, "provider_id_hex")?;
     let provider_id = parse_fixed_hex::<32>(provider_id_hex, "provider_id_hex")?;
     let epoch_start = parse_u64_value(map.get("epoch_start"), "epoch_start")?;
@@ -840,7 +761,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
         parse_u64_value(map.get("declared_capacity_gib"), "declared_capacity_gib")?;
     let utilised_capacity =
         parse_u64_value(map.get("utilised_capacity_gib"), "utilised_capacity_gib")?;
-
     let successful_replications = parse_u32_value(
         require_value(map, "successful_replications")?,
         "successful_replications",
@@ -857,7 +777,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
         require_value(map, "por_success_percent_milli")?,
         "por_success_percent_milli",
     )?;
-
     let effective_override = match (map.get("effective_capacity_gib"), map.get("effective_gib")) {
         (Some(_), Some(_)) => {
             return Err(
@@ -868,7 +787,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
         (None, Some(value)) => Some(parse_u64_value(Some(value), "effective_gib")?),
         (None, None) => None,
     };
-
     let notes = match map.get("notes") {
         Some(value) => Some(
             value
@@ -878,7 +796,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
         ),
         None => None,
     };
-
     let effective_capacity = effective_override.unwrap_or(utilised_capacity);
     if effective_capacity > declared_capacity {
         return Err(format!(
@@ -890,7 +807,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
             "`utilised_capacity_gib` ({utilised_capacity}) must not exceed effective capacity ({effective_capacity})"
         ));
     }
-
     let telemetry = CapacityTelemetryV1 {
         version: CAPACITY_TELEMETRY_VERSION_V1,
         provider_id,
@@ -904,7 +820,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
         por_success_percent_milli: por_percent,
         notes,
     };
-
     telemetry
         .validate()
         .map_err(|err| format!("capacity telemetry validation failed: {err}"))?;
@@ -913,7 +828,6 @@ fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String>
         effective_gib: effective_capacity,
     })
 }
-
 fn build_telemetry_summary(
     artefacts: &TelemetryArtefacts,
     telemetry_b64: &str,
@@ -980,25 +894,19 @@ fn build_telemetry_summary(
     );
     Ok(Value::Object(root))
 }
-
 fn build_replication_order(order_value: Value) -> Result<ReplicationOrderV1, String> {
     let map = order_value
         .as_object()
         .ok_or_else(|| "replication order spec must be a JSON object".to_string())?;
-
     let order_id_hex = require_string(map, "order_id_hex")?;
     let order_id = parse_fixed_hex::<32>(order_id_hex, "order_id_hex")?;
-
     let manifest_cid_hex = require_string(map, "manifest_cid_hex")?;
     let manifest_cid = parse_vec_hex(manifest_cid_hex, "manifest_cid_hex")?;
-
     let manifest_digest_hex = require_string(map, "manifest_digest_hex")?;
     let manifest_digest = parse_fixed_hex::<32>(manifest_digest_hex, "manifest_digest_hex")?;
-
     let chunking_profile = require_string(map, "chunking_profile")?.to_owned();
     let target_replicas =
         parse_u16_value(require_value(map, "target_replicas")?, "target_replicas")?;
-
     let assignments_value = require_array(map, "assignments")?;
     if assignments_value.is_empty() {
         return Err("assignments must contain at least one entry".into());
@@ -1026,10 +934,8 @@ fn build_replication_order(order_value: Value) -> Result<ReplicationOrderV1, Str
             lane,
         });
     }
-
     let issued_at = parse_u64_value(map.get("issued_at"), "issued_at")?;
     let deadline_at = parse_u64_value(map.get("deadline_at"), "deadline_at")?;
-
     let sla_obj = require_object(map, "sla")?;
     let ingest_deadline = parse_u32_value(
         require_value(sla_obj, "ingest_deadline_secs")?,
@@ -1048,13 +954,11 @@ fn build_replication_order(order_value: Value) -> Result<ReplicationOrderV1, Str
         min_availability_percent_milli: min_availability,
         min_por_success_percent_milli: min_por,
     };
-
     let metadata_entries = map
         .get("metadata")
         .map(parse_metadata_entries)
         .transpose()?
         .unwrap_or_default();
-
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id,
@@ -1068,13 +972,11 @@ fn build_replication_order(order_value: Value) -> Result<ReplicationOrderV1, Str
         sla,
         metadata: metadata_entries,
     };
-
     order
         .validate()
         .map_err(|err| format!("replication order validation failed: {err}"))?;
     Ok(order)
 }
-
 fn build_replication_order_summary(
     order: &ReplicationOrderV1,
     order_b64: &str,
@@ -1101,7 +1003,6 @@ fn build_replication_order_summary(
         json::to_value(&order.target_replicas)
             .map_err(|err| format!("failed to serialize target_replicas: {err}"))?,
     );
-
     let assignments = order
         .assignments
         .iter()
@@ -1125,7 +1026,6 @@ fn build_replication_order_summary(
         })
         .collect::<Result<Vec<_>, String>>()?;
     root.insert("assignments".into(), Value::Array(assignments));
-
     root.insert(
         "issued_at".into(),
         json::to_value(&order.issued_at)
@@ -1136,7 +1036,6 @@ fn build_replication_order_summary(
         json::to_value(&order.deadline_at)
             .map_err(|err| format!("failed to serialize deadline_at: {err}"))?,
     );
-
     let mut sla_map = Map::new();
     sla_map.insert(
         "ingest_deadline_secs".into(),
@@ -1154,7 +1053,6 @@ fn build_replication_order_summary(
             .map_err(|err| format!("failed to serialize min_por_success_percent_milli: {err}"))?,
     );
     root.insert("sla".into(), Value::Object(sla_map));
-
     if !order.metadata.is_empty() {
         let mut metadata_map = Map::new();
         for entry in &order.metadata {
@@ -1164,25 +1062,20 @@ fn build_replication_order_summary(
     } else {
         root.insert("metadata".into(), Value::Null);
     }
-
     root.insert(
         "replication_order_b64".into(),
         Value::String(order_b64.to_owned()),
     );
     Ok(Value::Object(root))
 }
-
 fn build_dispute(dispute_value: Value) -> Result<CapacityDisputeV1, String> {
     let map = dispute_value
         .as_object()
         .ok_or_else(|| "capacity dispute spec must be a JSON object".to_string())?;
-
     let provider_id_hex = require_string(map, "provider_id_hex")?;
     let provider_id = parse_fixed_hex::<32>(provider_id_hex, "provider_id_hex")?;
-
     let complainant_id_hex = require_string(map, "complainant_id_hex")?;
     let complainant_id = parse_fixed_hex::<32>(complainant_id_hex, "complainant_id_hex")?;
-
     let replication_order_id = match map.get("replication_order_id_hex") {
         Some(value) => {
             let text = value
@@ -1192,14 +1085,10 @@ fn build_dispute(dispute_value: Value) -> Result<CapacityDisputeV1, String> {
         }
         None => None,
     };
-
     let kind_value = require_string(map, "kind")?;
     let kind = parse_dispute_kind(kind_value)?;
-
     let submitted_epoch = parse_u64_value(map.get("submitted_epoch"), "submitted_epoch")?;
-
     let description = require_string(map, "description")?.to_owned();
-
     let requested_remedy = match map.get("requested_remedy") {
         Some(value) => {
             let text = value
@@ -1209,7 +1098,6 @@ fn build_dispute(dispute_value: Value) -> Result<CapacityDisputeV1, String> {
         }
         None => None,
     };
-
     let evidence_value = require_object(map, "evidence")?;
     let digest_hex = require_string(evidence_value, "digest_hex")?;
     let evidence_digest = parse_fixed_hex::<32>(digest_hex, "evidence.digest_hex")?;
@@ -1235,14 +1123,12 @@ fn build_dispute(dispute_value: Value) -> Result<CapacityDisputeV1, String> {
         Some(value) => Some(parse_u64_value(Some(value), "evidence.size_bytes")?),
         None => None,
     };
-
     let evidence = CapacityDisputeEvidenceV1 {
         evidence_digest,
         media_type,
         uri,
         size_bytes,
     };
-
     let dispute = CapacityDisputeV1 {
         version: CAPACITY_DISPUTE_VERSION_V1,
         provider_id,
@@ -1254,13 +1140,11 @@ fn build_dispute(dispute_value: Value) -> Result<CapacityDisputeV1, String> {
         description,
         requested_remedy,
     };
-
     dispute
         .validate()
         .map_err(|err| format!("capacity dispute validation failed: {err}"))?;
     Ok(dispute)
 }
-
 fn build_dispute_summary(dispute: &CapacityDisputeV1, dispute_b64: &str) -> Result<Value, String> {
     let mut root = Map::new();
     root.insert(
@@ -1297,7 +1181,6 @@ fn build_dispute_summary(dispute: &CapacityDisputeV1, dispute_b64: &str) -> Resu
     } else {
         root.insert("requested_remedy".into(), Value::Null);
     }
-
     let mut evidence_map = Map::new();
     evidence_map.insert(
         "digest_hex".into(),
@@ -1329,12 +1212,9 @@ fn build_dispute_summary(dispute: &CapacityDisputeV1, dispute_b64: &str) -> Resu
     };
     evidence_map.insert("size_bytes".into(), size_value);
     root.insert("evidence".into(), Value::Object(evidence_map));
-
     root.insert("dispute_b64".into(), Value::String(dispute_b64.to_owned()));
-
     Ok(Value::Object(root))
 }
-
 fn parse_dispute_kind(kind: &str) -> Result<CapacityDisputeKind, String> {
     match kind {
         "replication_shortfall" => Ok(CapacityDisputeKind::ReplicationShortfall),
@@ -1350,7 +1230,6 @@ fn parse_dispute_kind(kind: &str) -> Result<CapacityDisputeKind, String> {
         )),
     }
 }
-
 fn dispute_kind_to_str(kind: CapacityDisputeKind) -> &'static str {
     match kind {
         CapacityDisputeKind::ReplicationShortfall => "replication_shortfall",
@@ -1360,7 +1239,6 @@ fn dispute_kind_to_str(kind: CapacityDisputeKind) -> &'static str {
         CapacityDisputeKind::Other => "other",
     }
 }
-
 fn capability_label(cap: &CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
@@ -1371,14 +1249,12 @@ fn capability_label(cap: &CapabilityType) -> &'static str {
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
-
 fn parse_u64(value: &str, context: &str) -> Result<u64, String> {
     require_canonical_unsigned_decimal(context, value)?;
     value
         .parse::<u64>()
         .map_err(|err| format!("invalid {context}: {err}"))
 }
-
 fn parse_u64_value(value: Option<&Value>, context: &str) -> Result<u64, String> {
     let val = value.ok_or_else(|| format!("missing `{context}` field"))?;
     if let Some(num) = val.as_u64() {
@@ -1392,7 +1268,6 @@ fn parse_u64_value(value: Option<&Value>, context: &str) -> Result<u64, String> 
     }
     Err(format!("`{context}` must be a number or string"))
 }
-
 fn parse_u32_value(value: &Value, context: &str) -> Result<u32, String> {
     if let Some(num) = value.as_u64() {
         return u32::try_from(num)
@@ -1408,7 +1283,6 @@ fn parse_u32_value(value: &Value, context: &str) -> Result<u32, String> {
     }
     Err(format!("`{context}` must be a number or string"))
 }
-
 fn parse_xor_quantity_value(value: &Value, context: &str) -> Result<XorQuantity, String> {
     let text = value
         .as_str()
@@ -1423,7 +1297,6 @@ fn parse_xor_quantity_value(value: &Value, context: &str) -> Result<XorQuantity,
     }
     Ok(quantity)
 }
-
 fn parse_u16_value(value: &Value, context: &str) -> Result<u16, String> {
     if let Some(num) = value.as_u64() {
         return u16::try_from(num)
@@ -1439,7 +1312,6 @@ fn parse_u16_value(value: &Value, context: &str) -> Result<u16, String> {
     }
     Err(format!("`{context}` must be a number or string"))
 }
-
 fn require_canonical_unsigned_decimal(context: &str, value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err(format!("`{context}` must not be empty"));
@@ -1462,11 +1334,9 @@ fn require_canonical_unsigned_decimal(context: &str, value: &str) -> Result<(), 
     }
     Ok(())
 }
-
 fn require_value<'a>(map: &'a Map, key: &str) -> Result<&'a Value, String> {
     map.get(key).ok_or_else(|| format!("missing `{key}` field"))
 }
-
 fn parse_vec_hex(value: &str, context: &str) -> Result<Vec<u8>, String> {
     require_canonical_hex(context, value, None)?;
     let bytes = Vec::from_hex(value).map_err(|err| format!("invalid hex in `{context}`: {err}"))?;
@@ -1475,25 +1345,21 @@ fn parse_vec_hex(value: &str, context: &str) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-
 fn require_string<'a>(map: &'a Map, key: &str) -> Result<&'a str, String> {
     map.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing string field `{key}`"))
 }
-
 fn require_object<'a>(map: &'a Map, key: &str) -> Result<&'a Map, String> {
     map.get(key)
         .and_then(Value::as_object)
         .ok_or_else(|| format!("missing object field `{key}`"))
 }
-
 fn require_array<'a>(map: &'a Map, key: &str) -> Result<&'a Vec<Value>, String> {
     map.get(key)
         .and_then(Value::as_array)
         .ok_or_else(|| format!("missing array field `{key}`"))
 }
-
 fn parse_string_array(value: &Value, context: &str) -> Result<Vec<String>, String> {
     let array = value
         .as_array()
@@ -1507,7 +1373,6 @@ fn parse_string_array(value: &Value, context: &str) -> Result<Vec<String>, Strin
     }
     Ok(out)
 }
-
 fn parse_fixed_hex<const N: usize>(value: &str, context: &str) -> Result<[u8; N], String> {
     require_canonical_hex(context, value, Some(N * 2))?;
     let bytes = Vec::from_hex(value).map_err(|err| format!("invalid hex in `{context}`: {err}"))?;
@@ -1524,7 +1389,6 @@ fn parse_fixed_hex<const N: usize>(value: &str, context: &str) -> Result<[u8; N]
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn require_canonical_hex(
     context: &str,
     value: &str,
@@ -1561,7 +1425,6 @@ fn require_canonical_hex(
     }
     Ok(())
 }
-
 fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path == Path::new("-") {
         io::stdout()
@@ -1573,7 +1436,6 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
 }
-
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
     if path == Path::new("-") {
         io::stdout()
@@ -1586,7 +1448,6 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-
     let mut file = super::open_output_file(path, "capacity text output")?;
     file.write_all(text.as_bytes())
         .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
@@ -1596,18 +1457,15 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::{TempDir, tempdir};
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     #[test]
     fn capability_names_round_trip_only_the_v1_canonical_labels() {
         let canonical = [
@@ -1622,7 +1480,6 @@ mod tests {
             assert_eq!(parse_capability_name(name), Some(capability));
             assert_eq!(capability_label(&capability), name);
         }
-
         for alias in [
             "torii",
             "quic",
@@ -1643,7 +1500,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn profile_lookup_requires_the_exact_canonical_handle() {
         lookup_canonical_profile("sorafs.sf1@1.0.0").expect("canonical profile");
@@ -1657,7 +1513,6 @@ mod tests {
             lookup_canonical_profile(alias).expect_err("profile alias must fail");
         }
     }
-
     #[test]
     fn numeric_string_parsers_reject_noncanonical_tokens() {
         assert_eq!(parse_u64("0", "--registered-epoch").expect("zero"), 0);
@@ -1700,7 +1555,6 @@ mod tests {
             parse_xor_quantity_value(&value, "stake.stake_amount")
                 .expect_err("noncanonical or non-string XOR quantity must fail");
         }
-
         for value in ["", "01", "+1", "-1", "1 ", "1_000", "18446744073709551616"] {
             let err =
                 parse_u64(value, "--registered-epoch").expect_err("noncanonical decimal must fail");
@@ -1709,12 +1563,10 @@ mod tests {
                 "error should name context for {value:?}: {err}"
             );
         }
-
         let err = parse_u16_value(&Value::String("65536".into()), "target_replicas")
             .expect_err("u16 overflow must fail");
         assert!(err.contains("target_replicas"), "unexpected error: {err}");
     }
-
     #[test]
     fn hex_parsers_reject_noncanonical_tokens() {
         let fixed = "11".repeat(32);
@@ -1726,7 +1578,6 @@ mod tests {
             parse_vec_hex("aabbccdd", "manifest_cid_hex").expect("vec hex"),
             vec![0xaa, 0xbb, 0xcc, 0xdd]
         );
-
         for (value, expected) in [
             ("", "must not be empty"),
             ("11", "exactly 64"),
@@ -1755,7 +1606,6 @@ mod tests {
                 "error for {value:?} should contain {expected:?}, got: {err}"
             );
         }
-
         for (value, expected) in [
             ("AABB", "lowercase"),
             ("aabb ", "whitespace"),
@@ -1771,14 +1621,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn dispute_kind_requires_canonical_lowercase() {
         assert_eq!(
             parse_dispute_kind("replication_shortfall").expect("kind"),
             CapacityDisputeKind::ReplicationShortfall
         );
-
         for value in ["Replication_Shortfall", "proof-failure", " proof_failure"] {
             let err = parse_dispute_kind(value).expect_err("noncanonical kind must fail");
             assert!(
@@ -1787,20 +1635,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn write_binary_creates_parent_and_writes_all_bytes() {
         let (_temp, temp_path) = canonical_tempdir();
         let output_path = temp_path.join("nested").join("payload.to");
-
         write_binary(&output_path, b"sorafs-capacity").expect("write binary");
-
         assert_eq!(
             fs::read(&output_path).expect("read output"),
             b"sorafs-capacity"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_text_rejects_symlink_output() {
@@ -1809,9 +1653,7 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("payload.txt");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
-
         assert!(
             err.contains("must not be a symlink"),
             "unexpected error: {err}"

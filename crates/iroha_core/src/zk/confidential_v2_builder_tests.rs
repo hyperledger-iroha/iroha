@@ -33,7 +33,6 @@ fn kagemusha_topup_shield_v2_builder_rejects_zero_amount_bad_path_and_key_substi
             .expect_err("zero operation")
             .contains("operation_id must be non-zero")
     );
-
     let mut bad_direction = zero_path.clone();
     bad_direction.directions[0] ^= 1;
     assert!(
@@ -48,7 +47,6 @@ fn kagemusha_topup_shield_v2_builder_rejects_zero_amount_bad_path_and_key_substi
             .expect_err("root substitution")
             .contains("does not prove the supplied root_hint")
     );
-
     let transfer_vk = super::confidential_transfer_v2_vk_box().expect("transfer vk");
     let key_error = build(1, [0x64; 32], &zero_path, &transfer_vk)
         .expect_err("cross-circuit verifier substitution");
@@ -57,7 +55,6 @@ fn kagemusha_topup_shield_v2_builder_rejects_zero_amount_bad_path_and_key_substi
         "unexpected key-substitution error: {key_error}"
     );
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk() {
@@ -78,7 +75,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
     let vk_record =
         super::confidential_unshield_v2_vk_record("vk_unshield", 4).expect("unshield vk");
     let vk_box = vk_record.key.clone().expect("inline unshield vk");
-
     let proof = super::build_confidential_unshield_proof_v2(
         &network_id,
         asset_definition_id,
@@ -96,14 +92,12 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         &vk_box,
     )
     .expect("build unshield v2 proof");
-
     assert_eq!(proof.nullifiers.len(), 1);
     assert_eq!(proof.root, root_hint);
     assert!(
         crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
         "generated confidential unshield v2 proof should verify against the cached canonical VK"
     );
-
     let input_path = super::compute_confidential_merkle_path_v2(&tree_commitments, 0)
         .expect("input membership path");
     let dummy_path =
@@ -136,7 +130,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         ),
         "explicit-path full redemption must use the terminal full-unshield verifier",
     );
-
     let mut wrong_leaf_path = input_path;
     wrong_leaf_path.directions[0] ^= 1;
     assert!(
@@ -166,7 +159,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         .is_err(),
         "full redemption must reject a substituted input direction",
     );
-
     let mut tampered = proof.proof.clone();
     let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
         norito::decode_from_bytes(&tampered.bytes).expect("OpenVerifyEnvelope");
@@ -177,7 +169,6 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
         "unshield v2 proof must reject verifier-key hash substitution"
     );
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
@@ -199,7 +190,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
     let vk_record =
         super::confidential_unshield_v3_vk_record("vk_unshield_v3", 5).expect("unshield v3 vk");
     let vk_box = vk_record.key.clone().expect("inline unshield v3 vk");
-
     let terminal = super::build_confidential_unshield_proof_v3(
         &network_id,
         asset_definition_id,
@@ -258,7 +248,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         &terminal_with_paths.proof,
         Some(&vk_box),
     ));
-
     let missing_change = super::build_confidential_unshield_proof_v3(
         &network_id,
         asset_definition_id,
@@ -281,7 +270,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         missing_change.contains("requires a private change output"),
         "unexpected missing-change error: {missing_change}"
     );
-
     let bad_change = super::build_confidential_unshield_proof_v3(
         &network_id,
         asset_definition_id,
@@ -307,7 +295,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         bad_change.contains("change note amount mismatch"),
         "unexpected bad-change error: {bad_change}"
     );
-
     let overflow_input_0_rho = [0xB1_u8; 32];
     let overflow_input_1_rho = [0xB2_u8; 32];
     let overflow_input_0_diversifier =
@@ -372,7 +359,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         overflow.contains("input amount sum overflows u128"),
         "unexpected overflow error: {overflow}"
     );
-
     let proof = super::build_confidential_unshield_proof_v3(
         &network_id,
         asset_definition_id,
@@ -394,7 +380,6 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         &vk_box,
     )
     .expect("build unshield v3 proof");
-
     let expected_change_owner_tag =
         super::derive_confidential_owner_tag_v2(&spend_key).expect("valid default owner tag");
     let expected_change_commitment = super::derive_confidential_note_v2(

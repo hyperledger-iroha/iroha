@@ -2,10 +2,8 @@
 //!
 //! Runs a small suite across a few vector sizes and reports ns/op. Use these
 //! results to adjust `ivm::gas::cost_of_zk_ipa_open` coefficients.
-
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use iroha_zkp_halo2::{Params, Polynomial, PrimeField64, Transcript};
-
 fn bench_verify_open(c: &mut Criterion) {
     let sizes = [8usize, 16, 32, 64];
     for &n in &sizes {
@@ -30,6 +28,5 @@ fn bench_verify_open(c: &mut Criterion) {
         });
     }
 }
-
 criterion_group!(benches, bench_verify_open);
 criterion_main!(benches);

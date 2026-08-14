@@ -1,4 +1,10 @@
 //! Crate containing FFI related macro functionality
+use crate::{
+    attr_parse::derive::Derive,
+    convert::{FfiTypeData, FfiTypeInput, derive_ffi_type},
+    emitter_ext::EmitterExt,
+    utils::darling_result,
+};
 use darling::FromDeriveInput;
 use impl_visitor::{FnDescriptor, ImplDescriptor};
 use manyhow::{Emitter, emit, manyhow};
@@ -6,14 +12,6 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Item;
 use wrapper::wrap_method;
-
-use crate::{
-    attr_parse::derive::Derive,
-    convert::{FfiTypeData, FfiTypeInput, derive_ffi_type},
-    emitter_ext::EmitterExt,
-    utils::darling_result,
-};
-
 mod attr_parse;
 mod convert;
 mod emitter_ext;
@@ -22,24 +20,18 @@ mod getset_gen;
 mod impl_visitor;
 mod utils;
 mod wrapper;
-
 struct FfiItems(Vec<FfiTypeInput>);
-
 impl syn::parse::Parse for FfiItems {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut items = Vec::new();
-
         while !input.is_empty() {
             let input = input.parse::<syn::DeriveInput>()?;
             let input = FfiTypeInput::from_derive_input(&input)?;
-
             items.push(input);
         }
-
         Ok(Self(items))
     }
 }
-
 /// A test utility function that parses multiple attributes
 #[cfg(test)]
 fn parse_attributes(ts: TokenStream) -> Vec<syn::Attribute> {
@@ -49,12 +41,10 @@ fn parse_attributes(ts: TokenStream) -> Vec<syn::Attribute> {
             syn::Attribute::parse_outer(input).map(Attributes)
         }
     }
-
     syn::parse2::<Attributes>(ts)
         .expect("Failed to parse attributes")
         .0
 }
-
 /// Replace struct/enum/union definition with opaque pointer. This applies to types that
 /// are converted to an opaque pointer when sent across FFI but does not affect any other
 /// item wrapped with this macro (e.g. fieldless enums). This is so that most of the time
@@ -83,16 +73,13 @@ pub fn ffi(input: TokenStream) -> TokenStream {
         Ok(items) => items.0,
         Err(err) => return err.to_compile_error(),
     };
-
     let mut emitter = Emitter::new();
-
     let items = items
         .into_iter()
         .map(|item| {
             if !matches!(item.vis, syn::Visibility::Public(_)) {
                 emit!(emitter, item.span, "Only public types are allowed in FFI");
             }
-
             if !item.is_opaque() {
                 let item = item.ast;
                 return quote! {
@@ -100,7 +87,6 @@ pub fn ffi(input: TokenStream) -> TokenStream {
                     #item
                 };
             }
-
             if let FfiTypeData::Struct(fields) = &item.data
                 && item
                     .derive_attr
@@ -116,12 +102,10 @@ pub fn ffi(input: TokenStream) -> TokenStream {
                     fields,
                 )
                 .collect();
-
                 let ffi_fns: Vec<_> = derived_methods
                     .iter()
                     .map(|fn_| ffi_fn::gen_declaration(fn_, None))
                     .collect();
-
                 let impl_block = wrapper::wrap_impl_items(&ImplDescriptor {
                     attrs: Vec::new(),
                     trait_name: None,
@@ -129,22 +113,17 @@ pub fn ffi(input: TokenStream) -> TokenStream {
                     fns: derived_methods,
                 });
                 let opaque = wrapper::wrap_as_opaque(&mut emitter, item);
-
                 return quote! {
                     #opaque
-
                     #impl_block
                     #(#ffi_fns)*
                 };
             }
-
             wrapper::wrap_as_opaque(&mut emitter, item)
         })
         .collect::<Vec<_>>();
-
     emitter.finish_token_stream_with(quote! { #(#items)* })
 }
-
 // NOTE: `ffi_type(local)` should be reserved for enums that truly borrow stack-bound
 // data and therefore cannot implement `NonLocal`. Most data-carrying enums no longer
 // require this escape hatch.
@@ -208,19 +187,15 @@ pub fn ffi(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(FfiType, attributes(ffi_type))]
 pub fn ffi_type_derive(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(item) = emitter.handle(syn::parse2::<syn::DeriveInput>(input)) else {
         return emitter.finish_token_stream();
     };
-
     if !matches!(item.vis, syn::Visibility::Public(_)) {
         emit!(emitter, item, "Only public types are allowed in FFI");
     }
-
     let result = derive_ffi_type(&mut emitter, &item);
     emitter.finish_token_stream_with(result)
 }
-
 /// Generate FFI functions
 ///
 /// When placed on a structure, it integrates with `getset` to export derived getter/setter methods.
@@ -297,13 +272,10 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error(),
     };
-
     let mut emitter = Emitter::new();
-
     if !attr.is_empty() {
         emit!(emitter, item, "Unknown tokens in the attribute");
     }
-
     let result = match item {
         Item::Impl(item) => {
             let Some(impl_descriptor) = ImplDescriptor::from_impl(&mut emitter, &item) else {
@@ -314,7 +286,6 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .fns
                 .iter()
                 .map(|fn_| ffi_fn::gen_definition(fn_, impl_descriptor.trait_name()));
-
             quote! {
                 #item
                 #(#ffi_fns)*
@@ -326,7 +297,6 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return emitter.finish_token_stream();
             };
             let ffi_fn = ffi_fn::gen_definition(&fn_descriptor, None);
-
             quote! {
                 #item
                 #ffi_fn
@@ -340,7 +310,6 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
             else {
                 return emitter.finish_token_stream();
             };
-
             // we don't need ffi fns for getset accessors if the type is not opaque or there are no accessors
             if !input.is_opaque()
                 || !input
@@ -352,11 +321,9 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let input = input.ast;
                 return emitter.finish_token_stream_with(quote! { #input });
             }
-
             let darling::ast::Data::Struct(fields) = &input.data else {
                 unreachable!("We parsed struct above");
             };
-
             if !input.generics.params.is_empty() {
                 emit!(
                     emitter,
@@ -374,7 +341,6 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
                 fields,
             )
             .map(|fn_| ffi_fn::gen_definition(&fn_, None));
-
             quote! {
                 #item
                 #(#derived_ffi_fns)*
@@ -387,10 +353,8 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote!()
         }
     };
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Replace the function's body with a call to FFI function. Counterpart of [`macro@ffi_export`]
 ///
 /// When placed on a structure, it integrates with `getset` to import derived getter/setter methods.
@@ -441,11 +405,9 @@ pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error(),
     };
     let mut emitter = Emitter::new();
-
     if !attr.is_empty() {
         emit!(emitter, item, "Unknown tokens in the attribute");
     }
-
     let result = match item {
         Item::Impl(item) => {
             let attrs = &item.attrs;
@@ -454,7 +416,6 @@ pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return emitter.finish_token_stream();
             };
             let wrapped_items = wrapper::wrap_impl_items(&impl_desc);
-
             let is_shared_fn = impl_desc
                 .trait_name
                 .filter(|name| {
@@ -465,7 +426,6 @@ pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {
                         || name.is_ident("Ord")
                 })
                 .is_some();
-
             let ffi_fns = if is_shared_fn {
                 Vec::new()
             } else {
@@ -475,7 +435,6 @@ pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .map(|fn_| ffi_fn::gen_declaration(fn_, impl_desc.trait_name()))
                     .collect()
             };
-
             quote! {
                 #(#attrs)*
                 #wrapped_items
@@ -489,7 +448,6 @@ pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {
             };
             let ffi_fn = ffi_fn::gen_declaration(&fn_descriptor, None);
             let wrapped_item = wrap_method(&fn_descriptor, None);
-
             quote! {
                 #wrapped_item
                 #ffi_fn
@@ -503,6 +461,5 @@ pub fn ffi_import(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote!()
         }
     };
-
     emitter.finish_token_stream_with(result)
 }

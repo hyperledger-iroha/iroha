@@ -194,9 +194,11 @@ export interface PrivacyCapabilitiesNodeClientV1 {
   getNodeCapabilities(options: PrivacyCapabilitiesNodeRequestOptions): Promise<unknown>;
 }
 
-export interface PrivacyCapabilitiesBrowserClientV1
-  extends PrivacyCapabilitiesNodeClientV1 {
+export interface PrivacyCapabilitiesBrowserClientV1 {
   readonly baseUrl: string;
+  getNodeCapabilities(
+    options: PrivacyCapabilitiesBrowserRequestOptions,
+  ): Promise<unknown>;
 }
 
 /**

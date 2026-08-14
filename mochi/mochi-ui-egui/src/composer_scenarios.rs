@@ -1,7 +1,5 @@
 //! Scenario-first composer affordances.
-
 use super::*;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComposerScenarioCard {
     FundAccount,
@@ -10,7 +8,6 @@ enum ComposerScenarioCard {
     TestImplicitReceive,
     PublishManifest,
 }
-
 impl ComposerScenarioCard {
     fn label(self) -> &'static str {
         match self {
@@ -21,7 +18,6 @@ impl ComposerScenarioCard {
             Self::PublishManifest => "Publish manifest",
         }
     }
-
     fn description(self) -> &'static str {
         match self {
             Self::FundAccount => {
@@ -33,7 +29,6 @@ impl ComposerScenarioCard {
             Self::PublishManifest => "Prefill a sample Space Directory manifest registration.",
         }
     }
-
     fn apply(self, app: &mut MochiApp, signers: &[SigningAuthority]) {
         match self {
             Self::FundAccount => {
@@ -53,7 +48,6 @@ impl ComposerScenarioCard {
             }
         }
     }
-
     fn all() -> [Self; 5] {
         [
             Self::FundAccount,
@@ -64,7 +58,6 @@ impl ComposerScenarioCard {
         ]
     }
 }
-
 impl MochiApp {
     pub(super) fn render_composer_mode_selector(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -89,7 +82,6 @@ impl MochiApp {
         });
         ui.add_space(6.0);
     }
-
     pub(super) fn render_composer_scenario_cards(
         &mut self,
         ui: &mut egui::Ui,
@@ -98,7 +90,6 @@ impl MochiApp {
         ui.label(RichText::new("Scenario quickstarts").strong());
         ui.small("Pick a story first, then tweak the generated drafts below if you need to.");
         ui.add_space(4.0);
-
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
             for scenario in ComposerScenarioCard::all() {

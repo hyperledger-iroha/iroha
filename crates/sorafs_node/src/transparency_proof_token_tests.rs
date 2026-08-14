@@ -1,5 +1,4 @@
 // Transparency source-entry and proof-token regressions.
-
 #[test]
 fn transparency_ledger_source_entries_reject_duplicate_and_out_of_window() {
     let cycle_id = *b"cycle-src-test01";
@@ -10,7 +9,6 @@ fn transparency_ledger_source_entries_reject_duplicate_and_out_of_window() {
         "gar-receipt-1",
         0x50,
     );
-
     let err = build_transparency_ledger_entries_from_source_events(
         cycle_id,
         100,
@@ -23,7 +21,6 @@ fn transparency_ledger_source_entries_reject_duplicate_and_out_of_window() {
         err,
         TransparencyLedgerIngestError::DuplicateSourceEntry { .. }
     ));
-
     let err = build_transparency_ledger_entries_from_source_events(
         cycle_id,
         100,
@@ -43,7 +40,6 @@ fn transparency_ledger_source_entries_reject_duplicate_and_out_of_window() {
         TransparencyLedgerIngestError::EntryOutsideCycle { .. }
     ));
 }
-
 #[test]
 fn proof_token_issuance_from_base64_verifies_and_derives_public_record() {
     let issuance = proof_token_issuance_from_base64(
@@ -57,7 +53,6 @@ fn proof_token_issuance_from_base64_verifies_and_derives_public_record() {
         }],
     )
     .expect("valid proof-token issuance");
-
     assert_eq!(issuance.version, PROOF_TOKEN_ISSUANCE_VERSION_V1);
     assert_eq!(issuance.token_id, [0x61; 16]);
     assert_eq!(issuance.issued_at_unix, 1_800_000_030);
@@ -74,12 +69,10 @@ fn proof_token_issuance_from_base64_verifies_and_derives_public_record() {
     assert_eq!(issuance.policy_digest, Some([0x66; 32]));
     assert_eq!(issuance.metadata[0].key, "issuer");
 }
-
 #[test]
 fn proof_token_issuance_from_base64_rejects_bad_signature_key() {
     let mut signer_key = valid_signer_key();
     signer_key[0] ^= 0x01;
-
     let err = proof_token_issuance_from_base64(
         VALID_PROOF_TOKEN_B64,
         signer_key,
@@ -88,7 +81,6 @@ fn proof_token_issuance_from_base64_rejects_bad_signature_key() {
         Vec::new(),
     )
     .expect_err("wrong signer key must fail");
-
     assert!(matches!(
         err,
         ProofTokenIssuanceIngestError::InvalidSignature { .. }

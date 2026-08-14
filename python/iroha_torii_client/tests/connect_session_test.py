@@ -18,6 +18,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import ToriiClient  # noqa: E402
+from iroha_torii_client.connect_session import normalize_connect_session_request  # noqa: E402
 from sumeragi_exact_json_test_support import RecordingSession, StubResponse  # noqa: E402
 
 
@@ -88,7 +89,6 @@ def _session_fixture(
         "token_wallet": token_wallet,
         "token_management": token_management,
         "token_relay": token_relay,
-        "ttl": 30,
     }
     response.pop("node")
     return request, response
@@ -102,7 +102,7 @@ def test_request_matches_exact_sid_vector() -> None:
         "nonce": _base64url(bytes(range(0xA0, 0xB0))),
     }
 
-    assert client_module._normalize_connect_session_request(
+    assert normalize_connect_session_request(
         request,
         hash_literal=client_module._offline_hash_literal,
     ) == request
@@ -123,7 +123,6 @@ def test_create_and_delete_session() -> None:
     assert session_info.app_pk == request["app_pk"]
     assert session_info.nonce == request["nonce"]
     assert session_info.token_relay == response["token_relay"]
-    assert session_info.extra["ttl"] == 30
     assert deleted is True
     assert json.loads(session.calls[0]["data"]) == request
     assert session.calls[1]["headers"] == {
@@ -184,3 +183,31 @@ def test_rejects_duplicate_uri_identity_parameter() -> None:
 
     with pytest.raises(ValueError, match="duplicate parameters"):
         client.create_connect_session(request)
+
+
+def test_rejects_response_extension_field() -> None:
+    request, response = _session_fixture()
+    response["ttl"] = 30
+    session = RecordingSession()
+    session.queue(StubResponse(payload=response))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match="inexact field set"):
+        client.create_connect_session(request)
+
+
+@pytest.mark.parametrize(
+    ("sid", "token"),
+    [
+        ("../status", _base64url(bytes([0x63]) * 32)),
+        (_base64url(bytes([0x41]) * 32), "management-token"),
+    ],
+)
+def test_delete_rejects_noncanonical_sid_or_token(sid: str, token: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match="canonical unpadded base64url"):
+        client.delete_connect_session(sid, token)
+
+    assert session.calls == []

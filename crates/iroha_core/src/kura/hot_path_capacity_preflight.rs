@@ -3,7 +3,6 @@ struct CanonicalAssociationStagePublication {
     bytes: Vec<u8>,
     additional_bytes: u64,
 }
-
 /// Ordered physical-byte projection for a group of claim mutations.
 ///
 /// `current_delta` describes the durable namespace after the mutations already
@@ -15,7 +14,6 @@ struct AutonomousClaimMutationPeak {
     current_delta: i128,
     peak_delta: i128,
 }
-
 impl AutonomousClaimMutationPeak {
     fn add_physical(&mut self, bytes: u64) -> std::result::Result<(), &'static str> {
         self.current_delta = self
@@ -25,7 +23,6 @@ impl AutonomousClaimMutationPeak {
         self.peak_delta = self.peak_delta.max(self.current_delta);
         Ok(())
     }
-
     fn remove_physical(&mut self, bytes: u64) -> std::result::Result<(), &'static str> {
         self.current_delta = self
             .current_delta
@@ -33,7 +30,6 @@ impl AutonomousClaimMutationPeak {
             .ok_or("autonomous claim capacity removal overflows")?;
         Ok(())
     }
-
     /// Project promotion of an already-accounted named temp over a stable main.
     fn promote_named_temp_over_main(
         &mut self,
@@ -41,7 +37,6 @@ impl AutonomousClaimMutationPeak {
     ) -> std::result::Result<(), &'static str> {
         self.remove_physical(replaced_main_bytes)
     }
-
     /// Project an atomic replacement: the new temp overlaps the old main until rename.
     fn atomic_replace(
         &mut self,
@@ -51,12 +46,10 @@ impl AutonomousClaimMutationPeak {
         self.add_physical(replacement_bytes)?;
         self.remove_physical(replaced_main_bytes)
     }
-
     fn additional_peak_bytes(&self) -> std::result::Result<u64, &'static str> {
         u64::try_from(self.peak_delta).map_err(|_| "autonomous claim capacity peak is outside u64")
     }
 }
-
 impl Kura {
     fn prepare_canonical_association_stage(
         &self,
@@ -102,7 +95,6 @@ impl Kura {
             additional_bytes,
         })
     }
-
     /// Return the exact encoded bytes which would be added by the association stage.
     fn canonical_association_stage_additional_bytes(
         &self,
@@ -113,7 +105,6 @@ impl Kura {
             .prepare_canonical_association_stage(block, merge_entry)?
             .additional_bytes)
     }
-
     /// Validate the complete live namespace and projected crash-staging peak
     /// before claim preparation mutates any file.
     fn preflight_autonomous_lane_entrypoint_claims_locked(
@@ -180,7 +171,6 @@ impl Kura {
             } else {
                 0
             };
-
             if existing
                 .as_ref()
                 .is_some_and(|claim| claim.active_for_payload(payload))
@@ -230,7 +220,6 @@ impl Kura {
                     "autonomous entrypoint is already claimed by another lane payload",
                 ));
             }
-
             if let Some(pending) = pending {
                 if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
                     if !pending.active_for_payload(payload) {
@@ -273,7 +262,6 @@ impl Kura {
                     ));
                 }
             }
-
             let bytes = norito::encode_canonical(&incoming).map_err(Error::NoritoFrame)?;
             if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
                 return Err(Self::invalid_lane_artifact_error(

@@ -1,8 +1,3 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
 use assert_cmd::Command;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
@@ -23,20 +18,21 @@ use soradns_resolver::{
     directory::signing_payload_bytes,
     rad::compute_rad_digest,
 };
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tempfile::TempDir;
-
 #[test]
 fn rad_verify_accepts_valid_entries() {
     let temp = TempDir::new().expect("tempdir");
     let rad_path = temp.path().join("rad.norito");
     write_rad_file(&rad_path, base_rad());
-
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args(["rad", "verify", rad_path.to_str().unwrap()])
         .assert()
         .success();
 }
-
 #[test]
 fn rad_verify_rejects_invalid_entries() {
     let temp = TempDir::new().expect("tempdir");
@@ -44,13 +40,11 @@ fn rad_verify_rejects_invalid_entries() {
     rad.canonical_hosts.pretty_host = "example.com".to_string();
     let bad_path = temp.path().join("bad-rad.norito");
     write_rad_file(&bad_path, rad);
-
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args(["rad", "verify", bad_path.to_str().unwrap()])
         .assert()
         .failure();
 }
-
 #[test]
 fn directory_fetch_downloads_and_verifies_bundle() {
     let temp = TempDir::new().expect("tempdir");
@@ -59,7 +53,6 @@ fn directory_fetch_downloads_and_verifies_bundle() {
     fs::write(&record_path, &record_bytes).expect("write record");
     let directory_path = temp.path().join("directory.json");
     fs::write(&directory_path, &directory_bytes).expect("write directory");
-
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args([
             "directory",
@@ -73,11 +66,9 @@ fn directory_fetch_downloads_and_verifies_bundle() {
         ])
         .assert()
         .success();
-
     assert!(temp.path().join("record.json").exists());
     assert!(temp.path().join("directory.json").exists());
 }
-
 #[test]
 fn directory_fetch_fails_on_digest_mismatch() {
     let temp = TempDir::new().expect("tempdir");
@@ -91,7 +82,6 @@ fn directory_fetch_fails_on_digest_mismatch() {
     fs::write(&bad_record_path, corrupted).expect("write corrupt record");
     let directory_path = temp.path().join("directory.json");
     fs::write(&directory_path, &directory_bytes).expect("write directory");
-
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args([
             "directory",
@@ -106,12 +96,10 @@ fn directory_fetch_fails_on_digest_mismatch() {
         .assert()
         .failure();
 }
-
 #[test]
 fn directory_verify_accepts_valid_bundle() {
     let temp = TempDir::new().expect("tempdir");
     write_sample_bundle(temp.path());
-
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args([
             "directory",
@@ -122,13 +110,11 @@ fn directory_verify_accepts_valid_bundle() {
         .assert()
         .success();
 }
-
 #[test]
 fn directory_verify_detects_missing_rad() {
     let temp = TempDir::new().expect("tempdir");
     let rad_path = write_sample_bundle(temp.path());
     fs::remove_file(&rad_path).expect("remove rad file");
-
     Command::new(assert_cmd::cargo::cargo_bin!("soradns-resolver"))
         .args([
             "directory",
@@ -139,7 +125,6 @@ fn directory_verify_detects_missing_rad() {
         .assert()
         .failure();
 }
-
 fn base_rad() -> ResolverAttestationDocumentV1 {
     let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
     let operator_account = {
@@ -149,7 +134,6 @@ fn base_rad() -> ResolverAttestationDocumentV1 {
                 .expect("public key literal");
         AccountId::new(public_key)
     };
-
     ResolverAttestationDocumentV1 {
         version: 1,
         resolver_id: [1; 32],
@@ -199,19 +183,16 @@ fn base_rad() -> ResolverAttestationDocumentV1 {
         telemetry_endpoint: None,
     }
 }
-
 fn write_rad_file(path: &Path, rad: ResolverAttestationDocumentV1) {
     let bytes = to_bytes(&vec![rad]).expect("serialize rad");
     fs::write(path, bytes).expect("write rad");
 }
-
 fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>) {
     let rad = base_rad();
     let resolver_id_hex = hex::encode(rad.resolver_id);
     let rad_digest = compute_rad_digest(&rad).expect("digest");
     let leaf_hash = hash_leaf(&rad_digest);
     let root_hash = leaf_hash;
-
     let directory_json = Value::Object({
         let mut map = json::Map::new();
         map.insert("version".into(), Value::Number(Number::U64(1)));
@@ -241,7 +222,6 @@ fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>
         canonicalize_json_bytes(&json::to_vec(&directory_json).expect("serialize directory"))
             .expect("canonicalize directory");
     let directory_sha = sha256_digest(&directory_bytes);
-
     let builder_keys = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
         .expect("fixture SoraDNS directory builder key");
     let mut record = ResolverDirectoryRecordV1 {
@@ -261,10 +241,8 @@ fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>
     record.builder_signature = Signature::try_new(builder_keys.private_key(), &payload)
         .expect("directory record should sign");
     let record_bytes = norito::json::to_vec(&record).expect("serialize record");
-
     (rad, directory_bytes, record_bytes)
 }
-
 fn write_sample_bundle(root: &Path) -> PathBuf {
     let (rad, directory_bytes, record_bytes) = sample_directory_bundle();
     let record_path = root.join("record.json");
@@ -278,7 +256,6 @@ fn write_sample_bundle(root: &Path) -> PathBuf {
     write_rad_file(&rad_path, rad);
     rad_path
 }
-
 fn hash_leaf(rad_digest: &[u8; 32]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();

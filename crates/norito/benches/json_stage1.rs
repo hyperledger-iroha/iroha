@@ -1,7 +1,6 @@
 //! Stage-1 (structural index) micro-benchmarks: scalar vs NEON.
 #[cfg(all(feature = "json", feature = "simd-accel"))]
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-
 #[cfg(all(feature = "json", feature = "simd-accel"))]
 fn make_large_json(doc_kib: usize) -> String {
     // Deterministic large JSON: array of small objects with tricky strings.
@@ -24,14 +23,12 @@ fn make_large_json(doc_kib: usize) -> String {
     s.push(']');
     s
 }
-
 #[cfg(all(feature = "json", feature = "simd-accel"))]
 fn bench_stage1(c: &mut Criterion) {
     let mut group = c.benchmark_group("stage1_struct_index");
     for kib in [64usize, 256, 1024] {
         let doc = make_large_json(kib);
         group.throughput(Throughput::Bytes(doc.len() as u64));
-
         // Scalar reference builder (exposed via bench-internal feature)
         group.bench_function(BenchmarkId::new("scalar", kib), |b| {
             b.iter_batched(
@@ -50,7 +47,6 @@ fn bench_stage1(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         // NEON (or fallback if not available at runtime)
         group.bench_function(BenchmarkId::new("neon_or_fallback", kib), |b| {
             b.iter_batched(
@@ -65,13 +61,10 @@ fn bench_stage1(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[cfg(all(feature = "json", feature = "simd-accel"))]
 criterion_group!(benches, bench_stage1);
-
 #[cfg(all(feature = "json", feature = "simd-accel"))]
 criterion_main!(benches);
-
 #[cfg(not(all(feature = "json", feature = "simd-accel")))]
 fn main() {
     eprintln!("Enable `json` and `simd-accel` features to run this benchmark.");

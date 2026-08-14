@@ -1,7 +1,4 @@
 //! Rust client helpers for the Sora Name Service registrar routes.
-
-use eyre::Result;
-
 use crate::{
     client::{Client, ResponseReport, join_torii_url},
     data_model::sns::{
@@ -10,9 +7,8 @@ use crate::{
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
-
+use eyre::Result;
 const APPLICATION_JSON: &str = "application/json";
-
 fn ensure_status(
     response: &Response<Vec<u8>>,
     expected: StatusCode,
@@ -27,12 +23,10 @@ fn ensure_status(
     };
     Err(report)
 }
-
 /// Typed helper exposed by [`Client::sns()`].
 pub struct SnsApi<'a> {
     client: &'a Client,
 }
-
 /// Namespace selector used by the ledger-backed SNS HTTP API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnsNamespacePath {
@@ -43,7 +37,6 @@ pub enum SnsNamespacePath {
     /// Dataspace-alias literals.
     Dataspace,
 }
-
 impl SnsNamespacePath {
     /// Stable Torii path segment for this namespace.
     #[must_use]
@@ -54,7 +47,6 @@ impl SnsNamespacePath {
             Self::Dataspace => "dataspace",
         }
     }
-
     /// Resolve the namespace from the fixed on-chain suffix id.
     ///
     /// # Errors
@@ -69,7 +61,6 @@ impl SnsNamespacePath {
             other => Err(eyre::eyre!("unsupported SNS namespace suffix id `{other}`")),
         }
     }
-
     /// Fixed on-chain suffix id for this namespace.
     #[must_use]
     pub const fn suffix_id(self) -> SuffixId {
@@ -80,16 +71,13 @@ impl SnsNamespacePath {
         }
     }
 }
-
 fn name_path(namespace: SnsNamespacePath, literal: &str) -> String {
     format!("v1/sns/names/{}/{literal}", namespace.as_path())
 }
-
 impl<'a> SnsApi<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
     }
-
     /// GET `/v1/sns/policies/{suffix_id}`.
     ///
     /// # Errors
@@ -109,7 +97,6 @@ impl<'a> SnsApi<'a> {
         ensure_status(&response, StatusCode::OK, "unexpected SNS policy response")?;
         Ok(norito::json::from_slice(response.body())?)
     }
-
     /// GET `/v1/sns/names/{namespace}/{literal}`.
     ///
     /// # Errors
@@ -119,7 +106,6 @@ impl<'a> SnsApi<'a> {
         let response = self.get_name_response(namespace, literal)?;
         Self::decode_name_response(&response)
     }
-
     fn get_name_response(
         &self,
         namespace: SnsNamespacePath,
@@ -133,7 +119,6 @@ impl<'a> SnsApi<'a> {
             .build()?
             .send()
     }
-
     fn decode_name_response(response: &Response<Vec<u8>>) -> Result<NameRecordV1> {
         ensure_status(
             response,
@@ -143,33 +128,27 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 }
-
 impl Client {
     /// Access the SNS registrar helper.
     pub fn sns(&self) -> SnsApi<'_> {
         SnsApi::new(self)
     }
 }
-
 #[cfg(test)]
 mod tests {
     //! SNS client helper tests.
-
     use super::*;
-
     fn response_with_status(status: StatusCode, body: &[u8]) -> Response<Vec<u8>> {
         Response::builder()
             .status(status)
             .body(body.to_vec())
             .expect("response build")
     }
-
     #[test]
     fn ensure_status_accepts_expected_status_code() {
         let response = response_with_status(StatusCode::OK, br#"{"ok":true}"#);
         ensure_status(&response, StatusCode::OK, "status check").expect("status must pass");
     }
-
     #[test]
     fn ensure_status_reports_text_body_when_status_mismatches() {
         let response = response_with_status(StatusCode::BAD_REQUEST, b"invalid JSON body");
@@ -185,7 +164,6 @@ mod tests {
             "expected response body in error message, got: {message}"
         );
     }
-
     #[test]
     fn namespace_path_maps_to_fixed_suffix_id() {
         assert_eq!(

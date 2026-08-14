@@ -79,10 +79,12 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
   node transport, while `"local_only"` disables cross-node forwarding. Compatibility aliases `"local-only"`
   and `"local"` normalize to `"local_only"`. Unsupported values are coerced to `"local_only"`; there is
   no centralized relay gateway mode.
-- Runtime status reflects both configured and effective relay behavior:
-  `/v1/connect/status.policy.relay_strategy` (configured),
-  `/v1/connect/status.policy.relay_effective_strategy` (effective), and
-  `/v1/connect/status.policy.relay_p2p_attached` (P2P relay availability).
+- Operator-only aggregate status reflects both configured and effective relay
+  behavior under `/v1/connect/status/aggregate`: `policy.relay_strategy`
+  (configured), `policy.relay_effective_strategy` (effective), and
+  `policy.relay_p2p_attached` (P2P relay availability). The disjoint
+  `/v1/connect/status?sid=...` protocol route returns only one session after
+  management-token authentication.
 - WebSocket is the only Connect V1 client transport; WebRTC is unsupported.
 - Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
 - Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.

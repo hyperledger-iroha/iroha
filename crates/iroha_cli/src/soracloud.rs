@@ -5,24 +5,29 @@
 //! locally and then call the authoritative Soracloud control plane through
 //! Torii. Model-training, Hugging Face shared-lease, and weight-lifecycle
 //! helpers also execute through live Torii endpoints. Outbound mutation DTOs
-//! carry signed provenance only; account identity is authenticated by the HTTP
-//! signature/witness headers and private keys never enter request JSON.
-
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    process::Command as ProcessCommand,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
-use base64::Engine as _;
+//! carry signed provenance only; single-signature account headers use canonical
+//! lowercase hex while signed bodies and paths retain I105. Protected GETs
+//! require the exact NetworkId and local key.
+use crate::{Run, RunContext};
 use eyre::{Report, Result, WrapErr, eyre};
+#[cfg(test)]
+use iroha::data_model::{
+    nexus::{DataSpaceId, FeeDebitSource},
+    soracloud::{
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+    },
+    transaction::SignedTransaction,
+};
 use iroha::{
-    client::Client,
+    client::{
+        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1, Client, canonical_network_request_hash,
+        canonical_network_request_signature_message, canonical_request_account_header_value,
+        canonical_request_signature_header_value, canonical_request_timestamp_header_value,
+        canonical_request_witness_header_value,
+    },
     config::Config as ClientConfig,
     data_model::{
         Encode,
@@ -88,10 +93,11 @@ use iroha_core::soracloud_runtime::{
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
 use iroha_primitives::{json::Json, numeric::Quantity};
-use norito::{
-    json::{self, JsonDeserialize, JsonSerialize},
-    to_bytes,
+#[cfg(test)]
+use iroha_torii_shared::{
+    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
 };
+use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore as _},
     rngs::OsRng,
@@ -112,26 +118,17 @@ use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
 };
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    process::Command as ProcessCommand,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tiny_keccak::{Hasher as _, Sha3};
-
-#[cfg(test)]
-use iroha::data_model::{
-    nexus::{DataSpaceId, FeeDebitSource},
-    soracloud::{
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
-        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
-    },
-    transaction::SignedTransaction,
-};
-#[cfg(test)]
-use iroha_torii_shared::{
-    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
-};
-
-use crate::{Run, RunContext};
-
 const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_manifest_v1.json";
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
 const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
@@ -159,12 +156,12 @@ const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
 const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
 const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
-
+const SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1: u64 =
+    (CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1 * 2) as u64;
 thread_local! {
     static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
     static SORACLOUD_FEE_PAYMENT: RefCell<Option<Result<FeePaymentIntent, String>>> = const { RefCell::new(None) };
 }
-
 /// Soracloud control-plane commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -184,7 +181,6 @@ pub enum Command {
     #[command(subcommand)]
     Agent(AgentCommand),
 }
-
 impl Command {
     pub(crate) fn allows_fallback_config(&self) -> bool {
         match self {
@@ -196,7 +192,6 @@ impl Command {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ServiceCommand {
     /// Scaffold baseline container/service manifests.
@@ -242,7 +237,6 @@ pub enum ServiceCommand {
     /// Advance or fail a rollout step using health-gated canary controls.
     Rollout(RolloutArgs),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AgentCommand {
     /// Register a persistent AI apartment manifest in the live control plane.
@@ -285,7 +279,6 @@ pub enum AgentCommand {
     #[command(name = "autonomy-status")]
     AutonomyStatus(AgentAutonomyStatusArgs),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModelCommand {
     /// Start a distributed training job in live Torii control-plane mode.
@@ -336,7 +329,6 @@ pub enum ModelCommand {
     #[command(name = "host-status")]
     HostStatus(ModelHostStatusArgs),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum HfCommand {
     /// Join or create a shared Hugging Face lease pool in live Torii control-plane mode.
@@ -352,7 +344,6 @@ pub enum HfCommand {
     #[command(name = "lease-renew")]
     LeaseRenew(HfLeaseRenewArgs),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AppCommand {
     /// Scaffold a buildable single-service or split-plane Soracloud app workspace.
@@ -379,7 +370,6 @@ pub enum AppCommand {
     /// Show app-scoped Soracloud service status from the control plane.
     Status(AppStatusArgs),
 }
-
 impl AppCommand {
     fn allows_fallback_config(&self) -> bool {
         matches!(
@@ -393,7 +383,6 @@ impl AppCommand {
                 | Self::Status(_)
         )
     }
-
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
@@ -429,7 +418,6 @@ impl AppCommand {
         }
     }
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
@@ -451,7 +439,6 @@ impl Run for Command {
         }
     }
 }
-
 impl ServiceCommand {
     fn allows_fallback_config(&self) -> bool {
         matches!(
@@ -469,7 +456,6 @@ impl ServiceCommand {
                 | Self::SecretStatus(_)
         )
     }
-
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
@@ -526,7 +512,6 @@ impl ServiceCommand {
         }
     }
 }
-
 impl AgentCommand {
     fn allows_fallback_config(&self) -> bool {
         matches!(
@@ -534,7 +519,6 @@ impl AgentCommand {
             Self::Status(_) | Self::MailboxStatus(_) | Self::AutonomyStatus(_)
         )
     }
-
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Deploy(args) => {
@@ -583,7 +567,6 @@ impl AgentCommand {
         }
     }
 }
-
 impl ModelCommand {
     fn allows_fallback_config(&self) -> bool {
         matches!(
@@ -596,7 +579,6 @@ impl ModelCommand {
                 | Self::HostStatus(_)
         )
     }
-
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::TrainingJobStart(args) => {
@@ -652,12 +634,10 @@ impl ModelCommand {
         }
     }
 }
-
 impl HfCommand {
     fn allows_fallback_config(&self) -> bool {
         matches!(self, Self::Status(_))
     }
-
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Deploy(args) => {
@@ -676,7 +656,6 @@ impl HfCommand {
         }
     }
 }
-
 /// Arguments for `iroha soracloud service init`.
 #[derive(clap::Args, Debug)]
 pub struct InitArgs {
@@ -696,7 +675,6 @@ pub struct InitArgs {
     #[arg(long)]
     overwrite: bool,
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum InitTemplate {
     /// Generate only Soracloud control-plane manifests.
@@ -713,7 +691,6 @@ enum InitTemplate {
     /// Generate a Hayahi app starter with wallet sessions and Soracloud-backed state.
     HayahiApp,
 }
-
 impl InitTemplate {
     fn as_str(self) -> &'static str {
         match self {
@@ -726,7 +703,6 @@ impl InitTemplate {
         }
     }
 }
-
 impl InitArgs {
     fn run(self) -> Result<InitOutput> {
         fs::create_dir_all(&self.output_dir).wrap_err_with(|| {
@@ -735,7 +711,6 @@ impl InitArgs {
                 self.output_dir.display()
             )
         })?;
-
         let service_name: Name = self
             .service_name
             .parse()
@@ -743,32 +718,26 @@ impl InitArgs {
         if self.service_version.trim().is_empty() {
             return Err(eyre!("--service-version must not be empty"));
         }
-
         let mut container =
             load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
         let mut service =
             load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
-
         apply_init_template_defaults(self.template, &service_name, &mut service, &mut container)?;
-
         service.service_name = service_name;
         service.service_version = self.service_version;
         let container_hash = Hash::new(Encode::encode(&container));
         service.container.manifest_hash = container_hash;
         service.container.expected_schema_version = container.schema_version;
-
         let bundle = SoraDeploymentBundleV1 {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container: container.clone(),
             service: service.clone(),
         };
         bundle.validate_for_admission()?;
-
         let container_path = self.output_dir.join("container_manifest.json");
         let service_path = self.output_dir.join("service_manifest.json");
         ensure_can_write(&container_path, self.overwrite)?;
         ensure_can_write(&service_path, self.overwrite)?;
-
         write_json(&container_path, &container)?;
         write_json(&service_path, &service)?;
         let template_artifacts = scaffold_init_template(
@@ -777,7 +746,6 @@ impl InitArgs {
             service.service_name.as_ref(),
             self.overwrite,
         )?;
-
         Ok(InitOutput {
             template: self.template.as_str().to_owned(),
             container_manifest_path: container_path.to_string_lossy().into_owned(),
@@ -788,7 +756,6 @@ impl InitArgs {
         })
     }
 }
-
 /// Arguments for `soracloud service bundle-pack`.
 #[derive(clap::Args, Debug)]
 pub struct BundlePackArgs {
@@ -805,12 +772,10 @@ pub struct BundlePackArgs {
     #[arg(long, default_value_t = false)]
     executable: bool,
 }
-
 impl BundlePackArgs {
     fn run(self) -> Result<BundlePackOutput> {
         let source = read_stable_bundle_pack_source(&self.source)?;
         reject_bundle_pack_source_output_alias(&self.source, &self.output, &source)?;
-
         let archive_member_mode = if self.executable { 0o755 } else { 0o644 };
         let archive_file = BundleArchiveFile::new(
             self.archive_path.as_str(),
@@ -841,7 +806,6 @@ impl BundlePackArgs {
         source.revalidate(&self.source)?;
         let (bundle_hash, bundle_size_bytes) =
             staged.finish_and_install(&self.output, &self.source, &source, written_bytes)?;
-
         Ok(BundlePackOutput {
             source_file: self.source.to_string_lossy().into_owned(),
             source_size_bytes: source.snapshot.size(),
@@ -853,7 +817,6 @@ impl BundlePackArgs {
         })
     }
 }
-
 /// Arguments for `soracloud service sync-manifests`.
 #[derive(clap::Args, Debug)]
 pub struct SyncManifestsArgs {
@@ -871,7 +834,6 @@ pub struct SyncManifestsArgs {
     #[arg(long, value_name = "PATH")]
     bundle_file: Option<PathBuf>,
 }
-
 impl SyncManifestsArgs {
     fn run(self) -> Result<SyncManifestsOutput> {
         if let Some(app_manifest_path) = self.app_manifest.as_ref() {
@@ -899,7 +861,6 @@ impl SyncManifestsArgs {
                 services,
             });
         }
-
         let synced = sync_manifest_pair(
             &self.container,
             &self.service,
@@ -918,7 +879,6 @@ impl SyncManifestsArgs {
         })
     }
 }
-
 /// Arguments for `soracloud service plan`.
 #[derive(clap::Args, Debug)]
 pub struct LocalPlanArgs {
@@ -929,13 +889,11 @@ pub struct LocalPlanArgs {
     #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
     service: PathBuf,
 }
-
 impl LocalPlanArgs {
     fn run(self) -> Result<ServiceLocalPlanOutput> {
         build_service_local_plan_output(&self.container, &self.service)
     }
 }
-
 /// Arguments for `soracloud service dev`.
 #[derive(clap::Args, Debug)]
 pub struct LocalDevArgs {
@@ -949,7 +907,6 @@ pub struct LocalDevArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 impl LocalDevArgs {
     fn run(self) -> Result<ServiceWorkspaceScriptOutput> {
         let plan = build_service_workspace_plan(&self.container, &self.service)?;
@@ -976,7 +933,6 @@ impl LocalDevArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let command = vec!["./dev.sh".to_owned()];
-
         if self.dry_run {
             return Ok(ServiceWorkspaceScriptOutput {
                 service_name,
@@ -1002,7 +958,6 @@ impl LocalDevArgs {
                 notes,
             });
         }
-
         let status = ProcessCommand::new(&script_path)
             .current_dir(&working_dir)
             .status()
@@ -1054,7 +1009,6 @@ impl LocalDevArgs {
                 script_path.display()
             ));
         }
-
         Ok(ServiceWorkspaceScriptOutput {
             service_name,
             container_manifest_path: self.container.to_string_lossy().into_owned(),
@@ -1080,7 +1034,6 @@ impl LocalDevArgs {
         })
     }
 }
-
 /// Arguments for `soracloud service build`.
 #[derive(clap::Args, Debug)]
 pub struct BuildAndSyncArgs {
@@ -1094,7 +1047,6 @@ pub struct BuildAndSyncArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 impl BuildAndSyncArgs {
     fn run(self) -> Result<ServiceWorkspaceScriptOutput> {
         let plan = build_service_workspace_plan(&self.container, &self.service)?;
@@ -1121,7 +1073,6 @@ impl BuildAndSyncArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let command = vec!["./build-and-sync.sh".to_owned()];
-
         if self.dry_run {
             return Ok(ServiceWorkspaceScriptOutput {
                 service_name,
@@ -1147,7 +1098,6 @@ impl BuildAndSyncArgs {
                 notes,
             });
         }
-
         let status = ProcessCommand::new(&script_path)
             .current_dir(&working_dir)
             .status()
@@ -1169,7 +1119,6 @@ impl BuildAndSyncArgs {
                 script_path.display()
             ));
         }
-
         let mut notes = notes;
         notes.push("build-and-sync completed through the manifest-adjacent root script".to_owned());
         Ok(ServiceWorkspaceScriptOutput {
@@ -1197,7 +1146,6 @@ impl BuildAndSyncArgs {
         })
     }
 }
-
 /// Arguments for `soracloud service deploy` and `soracloud service upgrade`.
 #[derive(clap::Args, Debug)]
 pub struct WorkspaceMutationArgs {
@@ -1226,7 +1174,6 @@ pub struct WorkspaceMutationArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 impl WorkspaceMutationArgs {
     fn run(self, mode: MutationMode) -> Result<ServiceWorkspaceMutationScriptOutput> {
         let plan = build_service_workspace_plan(&self.container, &self.service)?;
@@ -1275,7 +1222,6 @@ impl WorkspaceMutationArgs {
                     .to_owned(),
             );
         }
-
         if self.dry_run {
             return Ok(ServiceWorkspaceMutationScriptOutput {
                 service_name,
@@ -1303,7 +1249,6 @@ impl WorkspaceMutationArgs {
                 notes,
             });
         }
-
         let mut process = ProcessCommand::new(&script_path);
         process
             .current_dir(&working_dir)
@@ -1340,7 +1285,6 @@ impl WorkspaceMutationArgs {
                 script_path.display()
             ));
         }
-
         notes.push(format!(
             "{} completed through the manifest-adjacent root script",
             mode.label_lowercase()
@@ -1372,7 +1316,6 @@ impl WorkspaceMutationArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app init`.
 #[derive(clap::Args, Debug)]
 pub struct AppInitArgs {
@@ -1401,7 +1344,6 @@ pub struct AppInitArgs {
     #[arg(long)]
     overwrite: bool,
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum AppInitTemplate {
     /// Generate a root-bound app with a static frontend and one deterministic API service.
@@ -1411,7 +1353,6 @@ enum AppInitTemplate {
     #[value(alias = "nexus-split-app")]
     SplitApp,
 }
-
 impl AppInitTemplate {
     fn as_str(self) -> &'static str {
         match self {
@@ -1420,7 +1361,6 @@ impl AppInitTemplate {
         }
     }
 }
-
 impl AppInitArgs {
     fn run(self) -> Result<AppInitOutput> {
         if self.existing_repo && self.template != AppInitTemplate::SplitApp {
@@ -1433,7 +1373,6 @@ impl AppInitArgs {
             AppInitTemplate::SplitApp => self.run_split_app(),
         }
     }
-
     fn run_single_api(self) -> Result<AppInitOutput> {
         fs::create_dir_all(&self.output_dir).wrap_err_with(|| {
             format!(
@@ -1441,19 +1380,16 @@ impl AppInitArgs {
                 self.output_dir.display()
             )
         })?;
-
         let app_name = normalized_service_label(&self.app_name);
         let host = self.resolve_public_host(&app_name)?;
         let public_url = format!("https://{host}");
         let static_site_dist_dir = self.resolve_static_site_dist_dir("web/dist")?;
         let manifest_path = self.output_dir.join("app_manifest.json");
         ensure_can_write(&manifest_path, self.overwrite)?;
-
         let mut container =
             load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
         let mut service =
             load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
-
         let api_service_name: Name = format!("{app_name}_api")
             .parse()
             .wrap_err("invalid derived api service name for soracloud app scaffold")?;
@@ -1473,7 +1409,6 @@ impl AppInitArgs {
         container.capabilities.allow_state_writes = true;
         container.capabilities.allow_model_training = false;
         container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
-
         service.service_name = api_service_name.clone();
         service.service_version = self.app_version.clone();
         service.route = Some(SoraRouteTargetV1 {
@@ -1497,7 +1432,6 @@ impl AppInitArgs {
         let container_hash = Hash::new(Encode::encode(&container));
         service.container.manifest_hash = container_hash;
         service.container.expected_schema_version = container.schema_version;
-
         let api_dir = self.output_dir.join("services").join("api");
         let container_path = api_dir.join("container_manifest.json");
         let service_path = api_dir.join("service_manifest.json");
@@ -1508,7 +1442,6 @@ impl AppInitArgs {
         write_json(&service_path, &service)?;
         let template_artifacts =
             scaffold_single_api_app_template(&self.output_dir, &self.app_name, self.overwrite)?;
-
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: self.app_name,
@@ -1532,7 +1465,6 @@ impl AppInitArgs {
         };
         manifest.validate()?;
         write_json(&manifest_path, &manifest)?;
-
         Ok(AppInitOutput {
             template: self.template.as_str().to_owned(),
             manifest_path: manifest_path.to_string_lossy().into_owned(),
@@ -1544,7 +1476,6 @@ impl AppInitArgs {
             template_artifacts,
         })
     }
-
     fn run_split_app(self) -> Result<AppInitOutput> {
         fs::create_dir_all(&self.output_dir).wrap_err_with(|| {
             format!(
@@ -1552,7 +1483,6 @@ impl AppInitArgs {
                 self.output_dir.display()
             )
         })?;
-
         let app_name = normalized_service_label(&self.app_name);
         let host = self.resolve_public_host(&app_name)?;
         let public_url = format!("https://{host}");
@@ -1560,11 +1490,9 @@ impl AppInitArgs {
         let existing_repo = self.existing_repo;
         let manifest_path = self.output_dir.join("app_manifest.json");
         ensure_can_write(&manifest_path, self.overwrite)?;
-
         let live_bundle = build_split_app_live_service_bundle(&app_name, &host, &self.app_version)?;
         let vault_bundle =
             build_split_app_vault_service_bundle(&app_name, &host, &self.app_version)?;
-
         let live_dir = self.output_dir.join("services").join("live");
         let vault_dir = self.output_dir.join("services").join("vault");
         let live_container_path = live_dir.join("container_manifest.json");
@@ -1583,7 +1511,6 @@ impl AppInitArgs {
         write_json(&live_service_path, &live_bundle.service)?;
         write_json(&vault_container_path, &vault_bundle.container)?;
         write_json(&vault_service_path, &vault_bundle.service)?;
-
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: self.app_name.clone(),
@@ -1629,7 +1556,6 @@ impl AppInitArgs {
             self.overwrite,
             existing_repo,
         )?;
-
         Ok(AppInitOutput {
             template: self.template.as_str().to_owned(),
             manifest_path: manifest_path.to_string_lossy().into_owned(),
@@ -1643,7 +1569,6 @@ impl AppInitArgs {
             template_artifacts,
         })
     }
-
     fn resolve_public_host(&self, default_host: &str) -> Result<String> {
         let Some(host) = self.public_host.as_deref() else {
             return Ok(format!("{default_host}.sora"));
@@ -1657,7 +1582,6 @@ impl AppInitArgs {
         }
         Ok(host.to_owned())
     }
-
     fn resolve_static_site_dist_dir(&self, default_dist_dir: &str) -> Result<String> {
         let Some(dist_dir) = self.static_site_dist_dir.as_deref() else {
             return Ok(default_dist_dir.to_owned());
@@ -1669,7 +1593,6 @@ impl AppInitArgs {
         Ok(dist_dir.to_owned())
     }
 }
-
 /// Arguments for `soracloud app deploy` and `soracloud app upgrade`.
 #[derive(clap::Args, Debug)]
 pub struct AppDeployArgs {
@@ -1686,7 +1609,6 @@ pub struct AppDeployArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AppDeployArgs {
     fn run(
         self,
@@ -1718,7 +1640,6 @@ impl AppDeployArgs {
         )?;
         let routes = build_app_local_plan_output(&manifest_path)?.routes;
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-
         let mode_label = match mode {
             MutationMode::Deploy => "deploy",
             MutationMode::Upgrade => "upgrade",
@@ -1925,12 +1846,10 @@ impl AppDeployArgs {
                 notes,
             });
         }
-
         ensure_app_static_site_root_binding_attached(
             static_site_root_binding.as_ref(),
             static_site_binding_attached,
         )?;
-
         let has_mixed_planes = hosted_http_service_count > 0 && deterministic_service_count > 0;
         let mut notes = Vec::new();
         let app_infra_manifest = build_app_infra_manifest(
@@ -1996,7 +1915,6 @@ impl AppDeployArgs {
                     .to_owned(),
             );
         }
-
         let report = build_soracloud_app_report(
             manifest.app_name.clone(),
             root.manifest_path.clone(),
@@ -2043,7 +1961,6 @@ impl AppDeployArgs {
                 root.manifest_path
             ),
         );
-
         Ok(AppMutationOutput {
             report,
             app_name: manifest.app_name,
@@ -2068,7 +1985,6 @@ impl AppDeployArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app status`.
 #[derive(clap::Args, Debug)]
 pub struct AppStatusArgs {
@@ -2085,7 +2001,6 @@ pub struct AppStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AppStatusArgs {
     fn run(self) -> Result<AppStatusOutput> {
         let manifest_path = self.manifest.clone();
@@ -2183,7 +2098,6 @@ impl AppStatusArgs {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-
         let mut services = Vec::with_capacity(manifest.services.len());
         let mut hosted_http_service_count = 0_u32;
         let mut deterministic_service_count = 0_u32;
@@ -2198,7 +2112,6 @@ impl AppStatusArgs {
                 &service_path,
                 &service,
             )?;
-
             let service_name = service.service_name.to_string();
             let is_hosted_http = service.execution_plane
                 == SoraServiceExecutionPlaneV1::HttpService
@@ -2212,7 +2125,6 @@ impl AppStatusArgs {
             if is_deterministic {
                 deterministic_service_count += 1;
             }
-
             let service_workspace_dir = app_service_workspace_dir(&container_path, &service_path);
             let mut notes = Vec::new();
             if is_hosted_http {
@@ -2231,9 +2143,7 @@ impl AppStatusArgs {
                         .to_owned(),
                 );
             }
-
             let workspace_scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
-
             services.push(AppServiceStatusOutput {
                 service_name,
                 container_manifest_path: container_path.to_string_lossy().into_owned(),
@@ -2259,7 +2169,6 @@ impl AppStatusArgs {
                 notes,
             });
         }
-
         let has_mixed_planes = hosted_http_service_count > 0 && deterministic_service_count > 0;
         let mut notes = Vec::new();
         if has_mixed_planes {
@@ -2271,7 +2180,6 @@ impl AppStatusArgs {
         if let Some(note) = service_status_note {
             notes.push(note);
         }
-
         let blockers = services
             .iter()
             .filter(|service| !service.present_in_control_plane)
@@ -2308,7 +2216,6 @@ impl AppStatusArgs {
                 "Resolve app status blockers before promoting this release.".to_owned()
             },
         );
-
         Ok(AppStatusOutput {
             report,
             app_name: manifest.app_name,
@@ -2331,7 +2238,6 @@ impl AppStatusArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app plan`.
 #[derive(clap::Args, Debug)]
 pub struct AppLocalPlanArgs {
@@ -2339,13 +2245,11 @@ pub struct AppLocalPlanArgs {
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
 }
-
 impl AppLocalPlanArgs {
     fn run(self) -> Result<AppLocalPlanOutput> {
         build_app_local_plan_output(self.manifest.as_path())
     }
 }
-
 /// Arguments for `soracloud app doctor`.
 #[derive(clap::Args, Debug)]
 pub struct AppDoctorArgs {
@@ -2353,7 +2257,6 @@ pub struct AppDoctorArgs {
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
 }
-
 impl AppDoctorArgs {
     fn run(self) -> Result<AppDoctorOutput> {
         let manifest_path = self.manifest.clone();
@@ -2366,7 +2269,6 @@ impl AppDoctorArgs {
         let plan = build_app_local_plan_output(manifest_path.as_path())?;
         let mut checks = Vec::new();
         let mut failing_checks = Vec::new();
-
         let mut push_check = |name: &str, passed: bool, detail: String| {
             if !passed {
                 failing_checks.push(name.to_owned());
@@ -2377,7 +2279,6 @@ impl AppDoctorArgs {
                 detail,
             });
         };
-
         push_check(
             "root_scripts",
             plan.workspace_scripts.local_dev.is_some()
@@ -2396,7 +2297,6 @@ impl AppDoctorArgs {
                 plan.workspace_scripts.upgrade.is_some()
             ),
         );
-
         let static_site = manifest.static_site.as_ref();
         push_check(
             "frontend_publish_mode",
@@ -2415,7 +2315,6 @@ impl AppDoctorArgs {
                 None => "app manifest has no static_site section".to_owned(),
             },
         );
-
         let hosted_services = plan
             .services
             .iter()
@@ -2439,7 +2338,6 @@ impl AppDoctorArgs {
                 deterministic_services.len()
             ),
         );
-
         let live_prefix_ok = hosted_services
             .iter()
             .all(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
@@ -2462,7 +2360,6 @@ impl AppDoctorArgs {
                     .join(", ")
             },
         );
-
         let mut service_manifest_summaries = Vec::new();
         for service_ref in &manifest.services {
             let container_path =
@@ -2488,7 +2385,6 @@ impl AppDoctorArgs {
                     })
                     .unwrap_or_else(|| "<none>".to_owned()),
             );
-
             let service_workspace_dir = app_service_workspace_dir(&container_path, &service_path);
             let bundle_is_in_service_workspace = service_workspace_dir
                 .as_ref()
@@ -2510,10 +2406,8 @@ impl AppDoctorArgs {
                     service_ref.service_name, container.runtime
                 ),
             );
-
             service_manifest_summaries.push((service_ref.service_name.clone(), container, service));
         }
-
         let live_storage_ok =
             service_manifest_summaries
                 .iter()
@@ -2546,7 +2440,6 @@ impl AppDoctorArgs {
                 .collect::<Vec<_>>()
                 .join(", "),
         );
-
         let vault_routes_ok =
             service_manifest_summaries
                 .iter()
@@ -2596,7 +2489,6 @@ impl AppDoctorArgs {
                 .collect::<Vec<_>>()
                 .join(", "),
         );
-
         let mut duplicate_routes = BTreeMap::<(String, String), BTreeSet<String>>::new();
         for route in &plan.routes {
             duplicate_routes
@@ -2630,7 +2522,6 @@ impl AppDoctorArgs {
                     .join("; ")
             },
         );
-
         let app_infra_bundles = service_manifest_summaries
             .iter()
             .map(|(_, container, service)| SoraDeploymentBundleV1 {
@@ -2658,7 +2549,6 @@ impl AppDoctorArgs {
                 })
                 .unwrap_or_else(|error| format!("{error:#}")),
         );
-
         let ok = failing_checks.is_empty();
         let mut notes = plan.notes.clone();
         if ok {
@@ -2672,7 +2562,6 @@ impl AppDoctorArgs {
                 failing_checks.join(", ")
             ));
         }
-
         let blockers = failing_checks
             .iter()
             .map(|check| format!("doctor check `{check}` failed"))
@@ -2702,7 +2591,6 @@ impl AppDoctorArgs {
                 "Fix failing doctor checks, then rerun `iroha soracloud app doctor`.".to_owned()
             },
         );
-
         Ok(AppDoctorOutput {
             report,
             app_name: plan.app_name,
@@ -2723,7 +2611,6 @@ impl AppDoctorArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app release`.
 #[derive(clap::Args, Debug)]
 pub struct AppReleaseArgs {
@@ -2746,7 +2633,6 @@ pub struct AppReleaseArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 impl AppReleaseArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<AppReleaseOutput> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
@@ -2759,7 +2645,6 @@ impl AppReleaseArgs {
         if uses_api_token {
             notes.push("API token will be forwarded to the Torii control plane".to_owned());
         }
-
         let build_and_sync = if self.skip_build {
             notes.push("release skipped the root build-and-sync step".to_owned());
             None
@@ -2787,10 +2672,8 @@ impl AppReleaseArgs {
                 synced.len()
             ));
         }
-
         let plan = build_app_local_plan_output(self.manifest.as_path())?;
         notes.extend(plan.notes.iter().cloned());
-
         if self.dry_run {
             let report = build_soracloud_app_report(
                 plan.app_name.clone(),
@@ -2836,7 +2719,6 @@ impl AppReleaseArgs {
                 notes,
             });
         }
-
         let doctor = AppDoctorArgs {
             manifest: self.manifest.clone(),
         }
@@ -2847,7 +2729,6 @@ impl AppReleaseArgs {
                 doctor.report.blockers.join(", ")
             ));
         }
-
         let deploy_args = AppDeployArgs {
             manifest: self.manifest.clone(),
             torii_url: Some(torii_url.clone()),
@@ -2873,7 +2754,6 @@ impl AppReleaseArgs {
                 }
                 Err(error) => return Err(error),
             };
-
         notes.extend(release_response.notes.iter().cloned());
         let status_response = AppStatusArgs {
             manifest: self.manifest.clone(),
@@ -2956,7 +2836,6 @@ impl AppReleaseArgs {
         })
     }
 }
-
 /// Arguments for `iroha soracloud app simulate`.
 #[derive(clap::Args, Debug)]
 pub struct AppSimulateArgs {
@@ -2964,7 +2843,6 @@ pub struct AppSimulateArgs {
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
 }
-
 impl AppSimulateArgs {
     fn run(self, _authority: &AccountId, key_pair: &KeyPair) -> Result<AppSimulateOutput> {
         let manifest_path = self.manifest.clone();
@@ -3050,7 +2928,6 @@ impl AppSimulateArgs {
             "Run `iroha soracloud app release` against a Torii URL to publish and submit."
                 .to_owned(),
         );
-
         Ok(AppSimulateOutput {
             report,
             mode: "simulated".to_owned(),
@@ -3062,7 +2939,6 @@ impl AppSimulateArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app dev`.
 #[derive(clap::Args, Debug)]
 pub struct AppLocalDevArgs {
@@ -3073,7 +2949,6 @@ pub struct AppLocalDevArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 impl AppLocalDevArgs {
     fn run(self) -> Result<AppLocalDevOutput> {
         let plan = build_app_local_plan_output(self.manifest.as_path())?;
@@ -3083,7 +2958,6 @@ impl AppLocalDevArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let command = vec!["./dev.sh".to_owned()];
-
         if self.dry_run {
             return Ok(AppLocalDevOutput {
                 app_name: plan.app_name,
@@ -3106,7 +2980,6 @@ impl AppLocalDevArgs {
                 notes: plan.notes.clone(),
             });
         }
-
         let status = ProcessCommand::new(&script_path)
             .current_dir(&working_dir)
             .status()
@@ -3154,7 +3027,6 @@ impl AppLocalDevArgs {
                 script_path.display()
             ));
         }
-
         Ok(AppLocalDevOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
@@ -3177,7 +3049,6 @@ impl AppLocalDevArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app build`.
 #[derive(clap::Args, Debug)]
 pub struct AppBuildAndSyncArgs {
@@ -3188,7 +3059,6 @@ pub struct AppBuildAndSyncArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 impl AppBuildAndSyncArgs {
     fn run(self) -> Result<AppBuildAndSyncOutput> {
         let script_path = resolve_app_root_script(self.manifest.as_path(), "build-and-sync.sh")?;
@@ -3197,7 +3067,6 @@ impl AppBuildAndSyncArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let command = vec!["./build-and-sync.sh".to_owned()];
-
         if self.dry_run {
             let plan = build_app_local_plan_output(self.manifest.as_path())?;
             return Ok(AppBuildAndSyncOutput {
@@ -3221,7 +3090,6 @@ impl AppBuildAndSyncArgs {
                 notes: plan.notes.clone(),
             });
         }
-
         let status = ProcessCommand::new(&script_path)
             .current_dir(&working_dir)
             .status()
@@ -3242,7 +3110,6 @@ impl AppBuildAndSyncArgs {
                 script_path.display()
             ));
         }
-
         let plan = build_app_local_plan_output(self.manifest.as_path())?;
         let mut notes = plan.notes;
         notes.push("build-and-sync completed through the manifest-adjacent root script".to_owned());
@@ -3268,7 +3135,6 @@ impl AppBuildAndSyncArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app doctor`.
 #[cfg(test)]
 #[derive(clap::Args, Debug)]
@@ -3280,7 +3146,6 @@ pub struct AppDoctorWorkspaceArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 #[cfg(test)]
 impl AppDoctorWorkspaceArgs {
     fn run(self) -> Result<AppDoctorWorkspaceOutput> {
@@ -3291,7 +3156,6 @@ impl AppDoctorWorkspaceArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let command = vec!["./doctor.sh".to_owned()];
-
         if self.dry_run {
             let mut notes = plan.notes.clone();
             notes.push("doctor will run the manifest-adjacent root doctor script".to_owned());
@@ -3317,7 +3181,6 @@ impl AppDoctorWorkspaceArgs {
                 notes,
             });
         }
-
         let status = ProcessCommand::new(&script_path)
             .current_dir(&working_dir)
             .status()
@@ -3338,7 +3201,6 @@ impl AppDoctorWorkspaceArgs {
                 script_path.display()
             ));
         }
-
         let mut notes = plan.notes;
         notes.push("doctor completed through the manifest-adjacent root script".to_owned());
         Ok(AppDoctorWorkspaceOutput {
@@ -3364,7 +3226,6 @@ impl AppDoctorWorkspaceArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app deploy` and `soracloud app upgrade`.
 #[cfg(test)]
 #[derive(clap::Args, Debug)]
@@ -3385,7 +3246,6 @@ pub struct AppWorkspaceMutationArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 #[cfg(test)]
 impl AppWorkspaceMutationArgs {
     fn run(self, mode: MutationMode) -> Result<AppWorkspaceMutationScriptOutput> {
@@ -3409,7 +3269,6 @@ impl AppWorkspaceMutationArgs {
                     .to_owned(),
             );
         }
-
         if self.dry_run {
             return Ok(AppWorkspaceMutationScriptOutput {
                 app_name: plan.app_name,
@@ -3435,7 +3294,6 @@ impl AppWorkspaceMutationArgs {
                 notes,
             });
         }
-
         let mut process = ProcessCommand::new(&script_path);
         process
             .current_dir(&working_dir)
@@ -3465,7 +3323,6 @@ impl AppWorkspaceMutationArgs {
                 script_path.display()
             ));
         }
-
         notes.push(format!(
             "{} completed through the manifest-adjacent root script",
             mode.label_lowercase()
@@ -3495,7 +3352,6 @@ impl AppWorkspaceMutationArgs {
         })
     }
 }
-
 /// Arguments for `soracloud app release`.
 #[cfg(test)]
 #[derive(clap::Args, Debug)]
@@ -3516,7 +3372,6 @@ pub struct AppReleaseWorkspaceArgs {
     #[arg(long, default_value_t = false)]
     dry_run: bool,
 }
-
 #[cfg(test)]
 impl AppReleaseWorkspaceArgs {
     fn run(self) -> Result<AppWorkspaceMutationScriptOutput> {
@@ -3539,7 +3394,6 @@ impl AppReleaseWorkspaceArgs {
                     .to_owned(),
             );
         }
-
         if self.dry_run {
             return Ok(AppWorkspaceMutationScriptOutput {
                 app_name: plan.app_name,
@@ -3565,7 +3419,6 @@ impl AppReleaseWorkspaceArgs {
                 notes,
             });
         }
-
         let mut process = ProcessCommand::new(&script_path);
         process
             .current_dir(&working_dir)
@@ -3593,7 +3446,6 @@ impl AppReleaseWorkspaceArgs {
                 script_path.display()
             ));
         }
-
         notes.push("release completed through the manifest-adjacent root script".to_owned());
         Ok(AppWorkspaceMutationScriptOutput {
             app_name: plan.app_name,
@@ -3620,7 +3472,6 @@ impl AppReleaseWorkspaceArgs {
         })
     }
 }
-
 fn resolve_app_root_script(manifest_path: &Path, script_name: &str) -> Result<PathBuf> {
     let manifest_dir = manifest_path
         .parent()
@@ -3641,7 +3492,6 @@ fn resolve_app_root_script(manifest_path: &Path, script_name: &str) -> Result<Pa
         )
     })
 }
-
 fn canonicalize_cli_arg_path(path: Option<&Path>, flag_name: &str) -> Result<Option<PathBuf>> {
     let Some(path) = path else {
         return Ok(None);
@@ -3650,7 +3500,6 @@ fn canonicalize_cli_arg_path(path: Option<&Path>, flag_name: &str) -> Result<Opt
         .wrap_err_with(|| format!("failed to resolve {flag_name} path `{}`", path.display()))?;
     Ok(Some(canonical))
 }
-
 fn build_service_workspace_mutation_command(
     script_name: &str,
     timeout_secs: u64,
@@ -3670,7 +3519,6 @@ fn build_service_workspace_mutation_command(
     command.push(timeout_secs.to_string());
     command
 }
-
 #[cfg(test)]
 fn build_app_workspace_mutation_command(script_name: &str, timeout_secs: u64) -> Vec<String> {
     vec![
@@ -3679,7 +3527,6 @@ fn build_app_workspace_mutation_command(script_name: &str, timeout_secs: u64) ->
         timeout_secs.to_string(),
     ]
 }
-
 fn resolve_optional_workspace_service_name(
     service_name: Option<String>,
     container_manifest: Option<&Path>,
@@ -3691,7 +3538,6 @@ fn resolve_optional_workspace_service_name(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-
     match (container_manifest, service_manifest) {
         (None, None) => Ok(normalized_service_name),
         (Some(_), None) | (None, Some(_)) => Err(eyre!(
@@ -3713,7 +3559,6 @@ fn resolve_optional_workspace_service_name(
         }
     }
 }
-
 fn resolve_required_workspace_service_name(
     service_name: Option<String>,
     container_manifest: Option<&Path>,
@@ -3732,12 +3577,10 @@ fn resolve_required_workspace_service_name(
         )
     })
 }
-
 fn workspace_script_path_if_exists(workspace_dir: &Path, script_name: &str) -> Option<String> {
     let path = workspace_dir.join(script_name);
     path.is_file().then(|| path.to_string_lossy().into_owned())
 }
-
 fn app_service_workspace_dir(
     container_manifest: &Path,
     service_manifest: &Path,
@@ -3746,7 +3589,6 @@ fn app_service_workspace_dir(
     let service_dir = service_manifest.parent()?;
     (container_dir == service_dir).then(|| container_dir.to_path_buf())
 }
-
 fn app_service_workspace_scripts(
     service_workspace_dir: Option<&Path>,
 ) -> AppLocalServiceWorkspaceScriptsOutput {
@@ -3758,7 +3600,6 @@ fn app_service_workspace_scripts(
             .and_then(|dir| workspace_script_path_if_exists(dir, "verify-build.sh")),
     }
 }
-
 struct ServiceWorkspacePlan {
     service_name: String,
     execution_plane: String,
@@ -3775,7 +3616,6 @@ struct ServiceWorkspacePlan {
     workspace_scripts: ServiceWorkspaceScriptsOutput,
     notes: Vec<String>,
 }
-
 fn resolve_service_workspace_script(
     container_manifest: &Path,
     service_manifest: &Path,
@@ -3812,7 +3652,6 @@ fn resolve_service_workspace_script(
         )
     })
 }
-
 fn build_service_workspace_plan(
     container_manifest: &Path,
     service_manifest: &Path,
@@ -3836,7 +3675,6 @@ fn build_service_workspace_plan(
             service_manifest.display()
         )
     })?;
-
     let mut notes = Vec::new();
     if service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
         && container.runtime == SoraContainerRuntimeV1::Inrou
@@ -3874,7 +3712,6 @@ fn build_service_workspace_plan(
             certified_response: None,
             mailbox_queue: None,
         });
-
         for handler in &service.handlers {
             if let Some(handler_path) = handler.route_path.as_deref() {
                 routes.push(ServiceLocalRouteOutput {
@@ -3892,7 +3729,6 @@ fn build_service_workspace_plan(
             }
         }
     }
-
     Ok(ServiceWorkspacePlan {
         service_name: service.service_name.to_string(),
         execution_plane: format!("{:?}", service.execution_plane),
@@ -3920,7 +3756,6 @@ fn build_service_workspace_plan(
         notes,
     })
 }
-
 fn build_service_local_plan_output(
     container_manifest: &Path,
     service_manifest: &Path,
@@ -3945,7 +3780,6 @@ fn build_service_local_plan_output(
         notes: plan.notes,
     })
 }
-
 fn build_direct_service_mutation_output(
     container_manifest: &Path,
     service_manifest: &Path,
@@ -3978,7 +3812,6 @@ fn build_direct_service_mutation_output(
         .get("traffic_percent")
         .and_then(norito::json::Value::as_u64)
         .and_then(|value| u8::try_from(value).ok());
-
     ServiceMutationOutput {
         service_name: plan.service_name,
         container_manifest_path: container_manifest.to_string_lossy().into_owned(),
@@ -4012,7 +3845,6 @@ fn build_direct_service_mutation_output(
         notes,
     }
 }
-
 fn attach_service_plan_to_output(
     output: &mut json::Value,
     service_plan: Option<ServiceLocalPlanOutput>,
@@ -4026,7 +3858,6 @@ fn attach_service_plan_to_output(
     root.insert("service_plan".to_owned(), json::to_value(&service_plan)?);
     Ok(())
 }
-
 fn app_phase_report(
     name: &str,
     ok: bool,
@@ -4040,11 +3871,9 @@ fn app_phase_report(
         diagnostics,
     }
 }
-
 fn skipped_app_phase(name: &str, reason: &str) -> SoracloudAppPhaseReportV1 {
     app_phase_report(name, true, true, vec![reason.to_owned()])
 }
-
 fn app_report_services_from_plan(
     services: &[AppLocalServicePlanOutput],
 ) -> Vec<SoracloudAppReportServiceV1> {
@@ -4057,7 +3886,6 @@ fn app_report_services_from_plan(
         })
         .collect()
 }
-
 fn app_report_services_from_mutation(
     services: &[AppServiceMutationOutput],
 ) -> Vec<SoracloudAppReportServiceV1> {
@@ -4070,7 +3898,6 @@ fn app_report_services_from_mutation(
         })
         .collect()
 }
-
 fn app_report_services_from_status(
     services: &[AppServiceStatusOutput],
 ) -> Vec<SoracloudAppReportServiceV1> {
@@ -4083,7 +3910,6 @@ fn app_report_services_from_status(
         })
         .collect()
 }
-
 fn build_soracloud_app_report(
     app_name: String,
     manifest_path: String,
@@ -4110,7 +3936,6 @@ fn build_soracloud_app_report(
         next_action,
     }
 }
-
 fn maybe_service_local_plan(
     container_manifest: Option<&Path>,
     service_manifest: Option<&Path>,
@@ -4122,7 +3947,6 @@ fn maybe_service_local_plan(
         _ => Ok(None),
     }
 }
-
 fn build_app_frontend_projection(
     public_url: &str,
     static_site: Option<&SoracloudAppStaticSiteV1>,
@@ -4146,7 +3970,6 @@ fn build_app_frontend_projection(
         }
     }))
 }
-
 #[derive(Clone, Debug)]
 struct AppRootProjection {
     manifest_path: String,
@@ -4155,7 +3978,6 @@ struct AppRootProjection {
     workspace_dir: String,
     workspace_scripts: AppLocalWorkspaceScriptsOutput,
 }
-
 fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<AppRootProjection> {
     let manifest_dir = manifest_path
         .parent()
@@ -4166,7 +3988,6 @@ fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<A
         .host_str()
         .ok_or_else(|| eyre!("app manifest public_url must include a hostname"))?
         .to_owned();
-
     Ok(AppRootProjection {
         manifest_path: manifest_path.to_string_lossy().into_owned(),
         public_url: public_url.to_owned(),
@@ -4182,7 +4003,6 @@ fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<A
         },
     })
 }
-
 fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutput> {
     let manifest: SoracloudAppManifestV1 = load_json(manifest_path)?;
     manifest.validate()?;
@@ -4191,18 +4011,15 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let root = build_app_root_projection(manifest_path, &manifest.public_url)?;
-
     let frontend = build_app_frontend_projection(
         &manifest.public_url,
         manifest.static_site.as_ref(),
         manifest_path,
     )?;
-
     let mut services = Vec::with_capacity(manifest.services.len());
     let mut routes = Vec::new();
     let mut hosted_http_service_count = 0_u32;
     let mut deterministic_service_count = 0_u32;
-
     for service_ref in &manifest.services {
         let container_path = resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
         let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
@@ -4225,7 +4042,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         };
         let container = bundle.container;
         let service = bundle.service;
-
         let is_hosted_http = service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
             && container.runtime == SoraContainerRuntimeV1::Inrou;
         let is_deterministic = service.execution_plane
@@ -4237,7 +4053,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         if is_deterministic {
             deterministic_service_count += 1;
         }
-
         let route_host = service.route.as_ref().map(|route| route.host.clone());
         let route_path_prefix = service
             .route
@@ -4250,7 +4065,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         let service_workspace_dir = app_service_workspace_dir(&container_path, &service_path);
         let service_workspace_scripts =
             app_service_workspace_scripts(service_workspace_dir.as_deref());
-
         services.push(AppLocalServicePlanOutput {
             service_name: service.service_name.to_string(),
             container_manifest_path: container_path.to_string_lossy().into_owned(),
@@ -4273,7 +4087,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
             handler_count: u32::try_from(service.handlers.len())
                 .expect("service handler count fits in u32"),
         });
-
         if let Some(route) = service.route.as_ref() {
             routes.push(AppLocalRoutePlanOutput {
                 service_name: service.service_name.to_string(),
@@ -4289,7 +4102,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
                 certified_response: None,
                 mailbox_queue: None,
             });
-
             for handler in &service.handlers {
                 if let Some(handler_path) = handler.route_path.as_deref() {
                     routes.push(AppLocalRoutePlanOutput {
@@ -4309,7 +4121,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
             }
         }
     }
-
     let has_mixed_planes = hosted_http_service_count > 0 && deterministic_service_count > 0;
     let mut notes = Vec::new();
     if has_mixed_planes {
@@ -4326,7 +4137,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
                 .to_owned(),
         );
     }
-
     Ok(AppLocalPlanOutput {
         app_name: manifest.app_name,
         manifest_path: root.manifest_path,
@@ -4343,7 +4153,6 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         notes,
     })
 }
-
 /// Arguments for `soracloud service deploy`.
 #[derive(clap::Args, Debug)]
 pub struct DeployArgs {
@@ -4369,7 +4178,6 @@ pub struct DeployArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl DeployArgs {
     fn run(
         self,
@@ -4390,7 +4198,6 @@ impl DeployArgs {
             load_initial_service_configs(self.initial_configs.as_deref())?;
         let initial_service_secrets =
             load_initial_service_secrets(self.initial_secrets.as_deref())?;
-
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
         let published_public_discovery = attach_public_service_discovery_config(
             &bundle,
@@ -4424,7 +4231,6 @@ impl DeployArgs {
         ))
     }
 }
-
 /// Arguments for `soracloud service upgrade`.
 #[derive(clap::Args, Debug)]
 pub struct UpgradeArgs {
@@ -4450,7 +4256,6 @@ pub struct UpgradeArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl UpgradeArgs {
     fn run(
         self,
@@ -4471,7 +4276,6 @@ impl UpgradeArgs {
             load_initial_service_configs(self.initial_configs.as_deref())?;
         let initial_service_secrets =
             load_initial_service_secrets(self.initial_secrets.as_deref())?;
-
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
         let published_public_discovery = attach_public_service_discovery_config(
             &bundle,
@@ -4505,7 +4309,6 @@ impl UpgradeArgs {
         ))
     }
 }
-
 /// Arguments for `soracloud service status`.
 #[derive(clap::Args, Debug)]
 pub struct StatusArgs {
@@ -4529,7 +4332,6 @@ pub struct StatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl StatusArgs {
     fn run(self) -> Result<StatusOutput> {
         let service_plan = match (self.container.as_deref(), self.service.as_deref()) {
@@ -4554,7 +4356,6 @@ impl StatusArgs {
         StatusOutput::from_network(endpoint, payload, service_plan)
     }
 }
-
 /// Arguments for `iroha soracloud service config-set`.
 #[derive(clap::Args, Debug)]
 pub struct ConfigSetArgs {
@@ -4586,7 +4387,6 @@ pub struct ConfigSetArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ConfigSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -4619,7 +4419,6 @@ impl ConfigSetArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud service config-delete`.
 #[derive(clap::Args, Debug)]
 pub struct ConfigDeleteArgs {
@@ -4645,7 +4444,6 @@ pub struct ConfigDeleteArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ConfigDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -4675,7 +4473,6 @@ impl ConfigDeleteArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `soracloud service config-status`.
 #[derive(clap::Args, Debug)]
 pub struct ConfigStatusArgs {
@@ -4701,7 +4498,6 @@ pub struct ConfigStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ConfigStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -4725,7 +4521,6 @@ impl ConfigStatusArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud service secret-set`.
 #[derive(clap::Args, Debug)]
 pub struct SecretSetArgs {
@@ -4754,7 +4549,6 @@ pub struct SecretSetArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl SecretSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -4787,7 +4581,6 @@ impl SecretSetArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud service secret-delete`.
 #[derive(clap::Args, Debug)]
 pub struct SecretDeleteArgs {
@@ -4813,7 +4606,6 @@ pub struct SecretDeleteArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl SecretDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -4843,7 +4635,6 @@ impl SecretDeleteArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `soracloud service secret-status`.
 #[derive(clap::Args, Debug)]
 pub struct SecretStatusArgs {
@@ -4869,7 +4660,6 @@ pub struct SecretStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl SecretStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -4893,7 +4683,6 @@ impl SecretStatusArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `soracloud service rollback`.
 #[derive(clap::Args, Debug)]
 pub struct RollbackArgs {
@@ -4919,7 +4708,6 @@ pub struct RollbackArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl RollbackArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan = match (self.container.as_deref(), self.service.as_deref()) {
@@ -4960,7 +4748,6 @@ impl RollbackArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `soracloud service rollout`.
 #[derive(clap::Args, Debug)]
 pub struct RolloutArgs {
@@ -4995,7 +4782,6 @@ pub struct RolloutArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl RolloutArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan = match (self.container.as_deref(), self.service.as_deref()) {
@@ -5039,7 +4825,6 @@ impl RolloutArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud agent deploy`.
 #[derive(clap::Args, Debug)]
 pub struct AgentDeployArgs {
@@ -5062,7 +4847,6 @@ pub struct AgentDeployArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_ticks == 0 {
@@ -5074,7 +4858,6 @@ impl AgentDeployArgs {
         let manifest: AgentApartmentManifestV1 = load_json(&self.manifest)?;
         manifest.validate()?;
         let apartment_name = manifest.apartment_name.to_string();
-
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_deploy_request(
             manifest,
@@ -5099,7 +4882,6 @@ impl AgentDeployArgs {
         build_agent_mutation_output(payload, &status_payload, &apartment_name, "Deploy")
     }
 }
-
 /// Arguments for `iroha soracloud agent lease-renew`.
 #[derive(clap::Args, Debug)]
 pub struct AgentLeaseRenewArgs {
@@ -5119,13 +4901,11 @@ pub struct AgentLeaseRenewArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_ticks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
-
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_lease_renew_request(
             &self.apartment_name,
@@ -5149,7 +4929,6 @@ impl AgentLeaseRenewArgs {
         build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "LeaseRenew")
     }
 }
-
 /// Arguments for `iroha soracloud agent restart`.
 #[derive(clap::Args, Debug)]
 pub struct AgentRestartArgs {
@@ -5169,7 +4948,6 @@ pub struct AgentRestartArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentRestartArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5191,7 +4969,6 @@ impl AgentRestartArgs {
         build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "Restart")
     }
 }
-
 /// Arguments for `iroha soracloud agent status`.
 #[derive(clap::Args, Debug)]
 pub struct AgentStatusArgs {
@@ -5208,7 +4985,6 @@ pub struct AgentStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5221,7 +4997,6 @@ impl AgentStatusArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud agent wallet-spend`.
 #[derive(clap::Args, Debug)]
 pub struct AgentWalletSpendArgs {
@@ -5244,7 +5019,6 @@ pub struct AgentWalletSpendArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentWalletSpendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5271,7 +5045,6 @@ impl AgentWalletSpendArgs {
         build_wallet_spend_output(payload, &status_payload, &self.apartment_name)
     }
 }
-
 /// Arguments for `iroha soracloud agent wallet-approve`.
 #[derive(clap::Args, Debug)]
 pub struct AgentWalletApproveArgs {
@@ -5291,7 +5064,6 @@ pub struct AgentWalletApproveArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentWalletApproveArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5322,7 +5094,6 @@ impl AgentWalletApproveArgs {
         )
     }
 }
-
 /// Arguments for `iroha soracloud agent policy-revoke`.
 #[derive(clap::Args, Debug)]
 pub struct AgentPolicyRevokeArgs {
@@ -5345,7 +5116,6 @@ pub struct AgentPolicyRevokeArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentPolicyRevokeArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5377,7 +5147,6 @@ impl AgentPolicyRevokeArgs {
         )
     }
 }
-
 /// Arguments for `iroha soracloud agent message-send`.
 #[derive(clap::Args, Debug)]
 pub struct AgentMessageSendArgs {
@@ -5403,7 +5172,6 @@ pub struct AgentMessageSendArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentMessageSendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5437,7 +5205,6 @@ impl AgentMessageSendArgs {
         )
     }
 }
-
 /// Arguments for `iroha soracloud agent message-ack`.
 #[derive(clap::Args, Debug)]
 pub struct AgentMessageAckArgs {
@@ -5457,7 +5224,6 @@ pub struct AgentMessageAckArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentMessageAckArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5483,7 +5249,6 @@ impl AgentMessageAckArgs {
         build_message_ack_output(payload, &mailbox_status_payload, &self.message_id)
     }
 }
-
 /// Arguments for `iroha soracloud agent mailbox-status`.
 #[derive(clap::Args, Debug)]
 pub struct AgentMailboxStatusArgs {
@@ -5500,7 +5265,6 @@ pub struct AgentMailboxStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentMailboxStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5513,7 +5277,6 @@ impl AgentMailboxStatusArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud agent artifact-allow`.
 #[derive(clap::Args, Debug)]
 pub struct AgentArtifactAllowArgs {
@@ -5536,7 +5299,6 @@ pub struct AgentArtifactAllowArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentArtifactAllowArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5568,7 +5330,6 @@ impl AgentArtifactAllowArgs {
         )
     }
 }
-
 /// Arguments for `iroha soracloud agent autonomy-run`.
 #[derive(clap::Args, Debug)]
 pub struct AgentAutonomyRunArgs {
@@ -5603,13 +5364,11 @@ pub struct AgentAutonomyRunArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentAutonomyRunArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.budget_units == 0 {
             return Err(eyre!("--budget-units must be greater than zero"));
         }
-
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let apartment_name = self.apartment_name.clone();
         let artifact_hash = self.artifact_hash.clone();
@@ -5693,7 +5452,6 @@ impl AgentAutonomyRunArgs {
         Ok(final_status)
     }
 }
-
 /// Arguments for `iroha soracloud agent autonomy-status`.
 #[derive(clap::Args, Debug)]
 pub struct AgentAutonomyStatusArgs {
@@ -5710,7 +5468,6 @@ pub struct AgentAutonomyStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl AgentAutonomyStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -5723,7 +5480,6 @@ impl AgentAutonomyStatusArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud model training-job-start`.
 #[derive(clap::Args, Debug)]
 pub struct TrainingJobStartArgs {
@@ -5773,7 +5529,6 @@ pub struct TrainingJobStartArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl TrainingJobStartArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -5831,7 +5586,6 @@ impl TrainingJobStartArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model training-job-checkpoint`.
 #[derive(clap::Args, Debug)]
 pub struct TrainingJobCheckpointArgs {
@@ -5866,7 +5620,6 @@ pub struct TrainingJobCheckpointArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl TrainingJobCheckpointArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -5905,7 +5658,6 @@ impl TrainingJobCheckpointArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model training-job-retry`.
 #[derive(clap::Args, Debug)]
 pub struct TrainingJobRetryArgs {
@@ -5934,7 +5686,6 @@ pub struct TrainingJobRetryArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl TrainingJobRetryArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -5965,7 +5716,6 @@ impl TrainingJobRetryArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model training-job-status`.
 #[derive(clap::Args, Debug)]
 pub struct TrainingJobStatusArgs {
@@ -5991,7 +5741,6 @@ pub struct TrainingJobStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl TrainingJobStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -6015,7 +5764,6 @@ impl TrainingJobStatusArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model artifact-register`.
 #[derive(clap::Args, Debug)]
 pub struct ModelArtifactRegisterArgs {
@@ -6059,7 +5807,6 @@ pub struct ModelArtifactRegisterArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelArtifactRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6095,7 +5842,6 @@ impl ModelArtifactRegisterArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model artifact-status`.
 #[derive(clap::Args, Debug)]
 pub struct ModelArtifactStatusArgs {
@@ -6121,7 +5867,6 @@ pub struct ModelArtifactStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelArtifactStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -6145,7 +5890,6 @@ impl ModelArtifactStatusArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model weight-register`.
 #[derive(clap::Args, Debug)]
 pub struct ModelWeightRegisterArgs {
@@ -6195,7 +5939,6 @@ pub struct ModelWeightRegisterArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelWeightRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6233,7 +5976,6 @@ impl ModelWeightRegisterArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model weight-promote`.
 #[derive(clap::Args, Debug)]
 pub struct ModelWeightPromoteArgs {
@@ -6268,7 +6010,6 @@ pub struct ModelWeightPromoteArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelWeightPromoteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6301,7 +6042,6 @@ impl ModelWeightPromoteArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model weight-rollback`.
 #[derive(clap::Args, Debug)]
 pub struct ModelWeightRollbackArgs {
@@ -6333,7 +6073,6 @@ pub struct ModelWeightRollbackArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelWeightRollbackArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6365,7 +6104,6 @@ impl ModelWeightRollbackArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model weight-status`.
 #[derive(clap::Args, Debug)]
 pub struct ModelWeightStatusArgs {
@@ -6391,7 +6129,6 @@ pub struct ModelWeightStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelWeightStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -6415,7 +6152,6 @@ impl ModelWeightStatusArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model upload-encryption-recipient`.
 #[derive(clap::Args, Debug)]
 pub struct ModelUploadEncryptionRecipientArgs {
@@ -6435,7 +6171,6 @@ pub struct ModelUploadEncryptionRecipientArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelUploadEncryptionRecipientArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -6450,7 +6185,6 @@ impl ModelUploadEncryptionRecipientArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud model upload-register`.
 #[derive(clap::Args, Debug)]
 pub struct ModelUploadRegisterArgs {
@@ -6479,7 +6213,6 @@ pub struct ModelUploadRegisterArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelUploadRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6512,7 +6245,6 @@ impl ModelUploadRegisterArgs {
         Ok(output)
     }
 }
-
 fn apply_uploaded_model_register_service_name_override(
     bundle: &mut SoraUploadedModelBundleV1,
     finalize: &mut UploadedModelFinalizePayload,
@@ -6527,7 +6259,6 @@ fn apply_uploaded_model_register_service_name_override(
     finalize.service_name = service_name.to_owned();
     Ok(())
 }
-
 /// Arguments for `iroha soracloud model upload-status`.
 #[derive(clap::Args, Debug)]
 pub struct ModelUploadStatusArgs {
@@ -6562,7 +6293,6 @@ pub struct ModelUploadStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelUploadStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -6590,7 +6320,6 @@ impl ModelUploadStatusArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud hf deploy`.
 #[derive(clap::Args, Debug)]
 pub struct HfDeployArgs {
@@ -6637,7 +6366,6 @@ pub struct HfDeployArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl HfDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6685,7 +6413,6 @@ impl HfDeployArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud hf status`.
 #[derive(clap::Args, Debug)]
 pub struct HfStatusArgs {
@@ -6720,7 +6447,6 @@ pub struct HfStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl HfStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let service_plan =
@@ -6740,7 +6466,6 @@ impl HfStatusArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud hf lease-leave`.
 #[derive(clap::Args, Debug)]
 pub struct HfLeaseLeaveArgs {
@@ -6778,7 +6503,6 @@ pub struct HfLeaseLeaveArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl HfLeaseLeaveArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6823,7 +6547,6 @@ impl HfLeaseLeaveArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud hf lease-renew`.
 #[derive(clap::Args, Debug)]
 pub struct HfLeaseRenewArgs {
@@ -6870,7 +6593,6 @@ pub struct HfLeaseRenewArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl HfLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan =
@@ -6918,7 +6640,6 @@ impl HfLeaseRenewArgs {
         Ok(output)
     }
 }
-
 /// Arguments for `iroha soracloud model host-advertise`.
 #[derive(clap::Args, Debug)]
 pub struct ModelHostAdvertiseArgs {
@@ -6962,7 +6683,6 @@ pub struct ModelHostAdvertiseArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelHostAdvertiseArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
@@ -6979,7 +6699,6 @@ impl ModelHostAdvertiseArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud model host-heartbeat`.
 #[derive(clap::Args, Debug)]
 pub struct ModelHostHeartbeatArgs {
@@ -6996,7 +6715,6 @@ pub struct ModelHostHeartbeatArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelHostHeartbeatArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -7012,7 +6730,6 @@ impl ModelHostHeartbeatArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud model host-withdraw`.
 #[derive(clap::Args, Debug)]
 pub struct ModelHostWithdrawArgs {
@@ -7026,7 +6743,6 @@ pub struct ModelHostWithdrawArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelHostWithdrawArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -7041,7 +6757,6 @@ impl ModelHostWithdrawArgs {
         Ok(payload)
     }
 }
-
 /// Arguments for `iroha soracloud model host-status`.
 #[derive(clap::Args, Debug)]
 pub struct ModelHostStatusArgs {
@@ -7058,7 +6773,6 @@ pub struct ModelHostStatusArgs {
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl ModelHostStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
@@ -7071,13 +6785,11 @@ impl ModelHostStatusArgs {
         Ok(payload)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MutationMode {
     Deploy,
     Upgrade,
 }
-
 impl MutationMode {
     const fn label_lowercase(self) -> &'static str {
         match self {
@@ -7085,7 +6797,6 @@ impl MutationMode {
             Self::Upgrade => "upgrade",
         }
     }
-
     const fn workspace_script_name(self) -> &'static str {
         match self {
             Self::Deploy => "deploy.sh",
@@ -7093,12 +6804,10 @@ impl MutationMode {
         }
     }
 }
-
 fn should_retry_app_deploy_as_upgrade(error: &Report) -> bool {
     let detail = format!("{error:#}").to_ascii_lowercase();
     detail.contains("already deployed") || detail.contains("already exists")
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum HfStorageClassArg {
     Hot,
@@ -7106,7 +6815,6 @@ enum HfStorageClassArg {
     Warm,
     Cold,
 }
-
 impl HfStorageClassArg {
     const fn to_storage_class(self) -> StorageClass {
         match self {
@@ -7116,13 +6824,11 @@ impl HfStorageClassArg {
         }
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelHostBackendArg {
     Transformers,
     Gguf,
 }
-
 impl ModelHostBackendArg {
     const fn to_backend_family(self) -> SoraHfBackendFamilyV1 {
         match self {
@@ -7131,14 +6837,12 @@ impl ModelHostBackendArg {
         }
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelHostModelFormatArg {
     Safetensors,
     Pytorch,
     Gguf,
 }
-
 impl ModelHostModelFormatArg {
     const fn to_model_format(self) -> SoraHfModelFormatV1 {
         match self {
@@ -7148,20 +6852,17 @@ impl ModelHostModelFormatArg {
         }
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum RolloutHealth {
     #[default]
     Healthy,
     Unhealthy,
 }
-
 impl RolloutHealth {
     fn is_healthy(self) -> bool {
         matches!(self, Self::Healthy)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "action", content = "value")]
 enum SoracloudAction {
@@ -7170,7 +6871,6 @@ enum SoracloudAction {
     Rollback,
     Rollout,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "stage", content = "value")]
 enum RolloutStage {
@@ -7178,7 +6878,6 @@ enum RolloutStage {
     Promoted,
     RolledBack,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct RolloutRuntimeState {
     rollout_handle: String,
@@ -7195,7 +6894,6 @@ struct RolloutRuntimeState {
     created_sequence: u64,
     updated_sequence: u64,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ControlPlaneServiceRevision {
     sequence: u64,
@@ -7227,7 +6925,6 @@ struct ControlPlaneServiceRevision {
     public_discovery_cid_host_url: Option<String>,
     state_binding_count: u32,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct InitOutput {
     template: String,
@@ -7238,7 +6935,6 @@ struct InitOutput {
     #[norito(default)]
     template_artifacts: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct BundlePackOutput {
     source_file: String,
@@ -7249,7 +6945,6 @@ struct BundlePackOutput {
     bundle_size_bytes: u64,
     bundle_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SyncManifestsOutput {
     #[norito(default)]
@@ -7276,7 +6971,6 @@ struct SyncManifestsOutput {
     #[norito(default)]
     services: Vec<SyncManifestEntryOutput>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SyncManifestEntryOutput {
     service_name: String,
@@ -7289,7 +6983,6 @@ struct SyncManifestEntryOutput {
     bundle_file: Option<String>,
     bundle_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct StatusOutput {
     source: String,
@@ -7314,7 +7007,6 @@ struct StatusOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     service_plan: Option<ServiceLocalPlanOutput>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceStatusOutput {
     service_name: String,
@@ -7338,7 +7030,6 @@ struct ServiceStatusOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     last_rollout: Option<RolloutRuntimeState>,
 }
-
 impl StatusOutput {
     fn from_network(
         endpoint: String,
@@ -7390,7 +7081,6 @@ impl StatusOutput {
         })
     }
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudAppManifestV1 {
     schema_version: u16,
@@ -7405,7 +7095,6 @@ struct SoracloudAppManifestV1 {
     #[norito(default)]
     services: Vec<SoracloudAppServiceRefV1>,
 }
-
 impl SoracloudAppManifestV1 {
     fn validate(&self) -> Result<()> {
         if self.schema_version != SORACLOUD_APP_MANIFEST_VERSION_V1 {
@@ -7433,7 +7122,6 @@ impl SoracloudAppManifestV1 {
         if self.services.is_empty() {
             return Err(eyre!("app manifest must declare at least one service"));
         }
-
         let mut seen_service_names = BTreeSet::new();
         for service in &self.services {
             service.validate()?;
@@ -7444,15 +7132,12 @@ impl SoracloudAppManifestV1 {
                 ));
             }
         }
-
         if let Some(static_site) = self.static_site.as_ref() {
             static_site.validate()?;
         }
-
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudAppStaticSiteV1 {
     dist_dir: String,
@@ -7466,14 +7151,11 @@ struct SoracloudAppStaticSiteV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     publish_label: Option<String>,
 }
-
 const APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING: &str = "RootBinding";
 const APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY: &str = "CidOnly";
-
 fn default_app_static_site_publish_mode() -> String {
     APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING.to_owned()
 }
-
 impl SoracloudAppStaticSiteV1 {
     fn validate(&self) -> Result<()> {
         if self.dist_dir.trim().is_empty() {
@@ -7501,7 +7183,6 @@ impl SoracloudAppStaticSiteV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudAppServiceRefV1 {
     service_name: String,
@@ -7517,7 +7198,6 @@ struct SoracloudAppServiceRefV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     initial_secrets: Option<String>,
 }
-
 impl SoracloudAppServiceRefV1 {
     fn validate(&self) -> Result<()> {
         if self.service_name.trim().is_empty() {
@@ -7546,7 +7226,6 @@ impl SoracloudAppServiceRefV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppInitOutput {
     template: String,
@@ -7556,9 +7235,7 @@ struct AppInitOutput {
     #[norito(default)]
     template_artifacts: Vec<String>,
 }
-
 const SORACLOUD_APP_REPORT_SCHEMA_VERSION: &str = "soracloud.app.report.v1";
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudAppPhaseReportV1 {
     name: String,
@@ -7567,14 +7244,12 @@ struct SoracloudAppPhaseReportV1 {
     #[norito(default)]
     diagnostics: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudAppReportServiceV1 {
     service_name: String,
     execution_plane: String,
     runtime: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudAppReportV1 {
     schema_version: String,
@@ -7596,7 +7271,6 @@ struct SoracloudAppReportV1 {
     blockers: Vec<String>,
     next_action: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppMutationOutput {
     report: SoracloudAppReportV1,
@@ -7633,7 +7307,6 @@ struct AppMutationOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppServiceMutationOutput {
     service_name: String,
@@ -7665,7 +7338,6 @@ struct AppServiceMutationOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceWorkspaceScriptOutput {
     service_name: String,
@@ -7700,7 +7372,6 @@ struct ServiceWorkspaceScriptOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceWorkspaceMutationScriptOutput {
     service_name: String,
@@ -7737,7 +7408,6 @@ struct ServiceWorkspaceMutationScriptOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceMutationOutput {
     service_name: String,
@@ -7786,7 +7456,6 @@ struct ServiceMutationOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceLocalPlanOutput {
     service_name: String,
@@ -7813,7 +7482,6 @@ struct ServiceLocalPlanOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceWorkspaceScriptsOutput {
     #[norito(default)]
@@ -7835,7 +7503,6 @@ struct ServiceWorkspaceScriptsOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     upgrade: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceLocalRouteOutput {
     route_kind: String,
@@ -7854,7 +7521,6 @@ struct ServiceLocalRouteOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     mailbox_queue: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppStatusOutput {
     report: SoracloudAppReportV1,
@@ -7886,14 +7552,12 @@ struct AppStatusOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppDoctorCheckOutput {
     name: String,
     status: String,
     detail: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppDoctorOutput {
     report: SoracloudAppReportV1,
@@ -7917,7 +7581,6 @@ struct AppDoctorOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppReleaseOutput {
     report: SoracloudAppReportV1,
@@ -7939,7 +7602,6 @@ struct AppReleaseOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppSimulateOutput {
     report: SoracloudAppReportV1,
@@ -7955,7 +7617,6 @@ struct AppSimulateOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppServiceStatusOutput {
     service_name: String,
@@ -7981,7 +7642,6 @@ struct AppServiceStatusOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalPlanOutput {
     app_name: String,
@@ -8001,7 +7661,6 @@ struct AppLocalPlanOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalWorkspaceScriptsOutput {
     #[norito(default)]
@@ -8023,7 +7682,6 @@ struct AppLocalWorkspaceScriptsOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     upgrade: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalDevOutput {
     app_name: String,
@@ -8052,7 +7710,6 @@ struct AppLocalDevOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppBuildAndSyncOutput {
     app_name: String,
@@ -8081,7 +7738,6 @@ struct AppBuildAndSyncOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppDoctorWorkspaceOutput {
@@ -8112,7 +7768,6 @@ struct AppDoctorWorkspaceOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppWorkspaceMutationScriptOutput {
@@ -8145,7 +7800,6 @@ struct AppWorkspaceMutationScriptOutput {
     #[norito(default)]
     notes: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalFrontendPlanOutput {
     dist_dir: String,
@@ -8161,7 +7815,6 @@ struct AppLocalFrontendPlanOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     root_binding_url: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalServicePlanOutput {
     service_name: String,
@@ -8185,7 +7838,6 @@ struct AppLocalServicePlanOutput {
     lease_volume_count: u32,
     handler_count: u32,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalServiceWorkspaceScriptsOutput {
     #[norito(default)]
@@ -8198,7 +7850,6 @@ struct AppLocalServiceWorkspaceScriptsOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     verify_build: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalRoutePlanOutput {
     service_name: String,
@@ -8218,7 +7869,6 @@ struct AppLocalRoutePlanOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     mailbox_queue: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppStaticSiteBindingV1 {
     schema_version: u16,
@@ -8233,7 +7883,6 @@ struct AppStaticSiteBindingV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     api_base_path: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppStaticSitePublishOutput {
     hostname: String,
@@ -8245,7 +7894,6 @@ struct AppStaticSitePublishOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     manifest_id_hex: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct InrouGuestImageArtifactPublishOutput {
     service_name: String,
@@ -8261,7 +7909,6 @@ struct InrouGuestImageArtifactPublishOutput {
     distribution: SoraArtifactDistributionPolicyV1,
     note: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceBundlePublishOutput {
     service_name: String,
@@ -8274,14 +7921,12 @@ struct ServiceBundlePublishOutput {
     bundle_hash: String,
     note: String,
 }
-
 #[derive(Clone, Debug)]
 struct PublishedSorafsDirectoryArtifact {
     content_cid: String,
     manifest_digest_hex: String,
     manifest_id_hex: Option<String>,
 }
-
 #[derive(Clone, Debug)]
 struct PublishedSorafsFileArtifact {
     content_cid: String,
@@ -8289,13 +7934,11 @@ struct PublishedSorafsFileArtifact {
     manifest_id_hex: Option<String>,
     payload_hash: Hash,
 }
-
 #[derive(Clone, Debug)]
 struct AppStaticSiteRootBindingPlan {
     target_host: String,
     binding_value: Json,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudPublicServiceDiscoveryV1 {
     schema_version: u16,
@@ -8323,7 +7966,6 @@ struct SoracloudPublicServiceDiscoveryV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     manifest_id_hex: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SoracloudPublicServiceDiscoveryRegistryV1 {
     schema_version: u16,
@@ -8331,7 +7973,6 @@ struct SoracloudPublicServiceDiscoveryRegistryV1 {
     current_version: String,
     revisions: BTreeMap<String, SoracloudPublicServiceDiscoveryV1>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct PublicServiceDiscoveryPublishOutput {
     service_name: String,
@@ -8349,20 +7990,17 @@ struct PublicServiceDiscoveryPublishOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     manifest_id_hex: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ServiceConfigSetPayload {
     service_name: String,
     config_name: String,
     value_json: Json,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedServiceConfigSetRequest {
     payload: ServiceConfigSetPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8375,13 +8013,11 @@ struct ServiceConfigDeletePayload {
     service_name: String,
     config_name: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedServiceConfigDeleteRequest {
     payload: ServiceConfigDeletePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8395,13 +8031,11 @@ struct ServiceSecretSetPayload {
     secret_name: String,
     secret: SecretEnvelopeV1,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedServiceSecretSetRequest {
     payload: ServiceSecretSetPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8414,13 +8048,11 @@ struct ServiceSecretDeletePayload {
     service_name: String,
     secret_name: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedServiceSecretDeleteRequest {
     payload: ServiceSecretDeletePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedBundleRequest {
     bundle: SoraDeploymentBundleV1,
@@ -8430,7 +8062,6 @@ struct SignedBundleRequest {
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     provenance: ManifestProvenance,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAppInfraRequest {
     #[norito(default)]
@@ -8440,7 +8071,6 @@ struct SignedAppInfraRequest {
     manifest: SoraAppInfraManifestV1,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8454,13 +8084,11 @@ struct RollbackPayload {
     #[norito(default)]
     target_version: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedRollbackRequest {
     payload: RollbackPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8477,13 +8105,11 @@ struct RolloutAdvancePayload {
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedRolloutAdvanceRequest {
     payload: RolloutAdvancePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8498,13 +8124,11 @@ struct AgentDeployPayload {
     #[norito(default)]
     autonomy_budget_units: Option<u64>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentDeployRequest {
     payload: AgentDeployPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8517,13 +8141,11 @@ struct AgentLeaseRenewPayload {
     apartment_name: String,
     lease_ticks: u64,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentLeaseRenewRequest {
     payload: AgentLeaseRenewPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8547,7 +8169,6 @@ struct HfDeployPayload {
     lease_asset_definition_id: AssetDefinitionId,
     base_fee: Quantity,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedHfDeployRequest {
     payload: HfDeployPayload,
@@ -8557,7 +8178,6 @@ struct SignedHfDeployRequest {
     #[norito(default)]
     generated_apartment_provenance: Option<ManifestProvenance>,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8580,13 +8200,11 @@ struct HfLeaseLeavePayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     apartment_name: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedHfLeaseLeaveRequest {
     payload: HfLeaseLeavePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8610,7 +8228,6 @@ struct HfLeaseRenewPayload {
     lease_asset_definition_id: AssetDefinitionId,
     base_fee: Quantity,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedHfLeaseRenewRequest {
     payload: HfLeaseRenewPayload,
@@ -8620,7 +8237,6 @@ struct SignedHfLeaseRenewRequest {
     #[norito(default)]
     generated_apartment_provenance: Option<ManifestProvenance>,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8632,13 +8248,11 @@ struct SignedHfLeaseRenewRequest {
 struct ModelHostAdvertisePayload {
     capability: SoraModelHostCapabilityRecordV1,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelHostAdvertiseRequest {
     payload: ModelHostAdvertisePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8651,13 +8265,11 @@ struct ModelHostHeartbeatPayload {
     validator_account_id: AccountId,
     heartbeat_expires_at_ms: u64,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelHostHeartbeatRequest {
     payload: ModelHostHeartbeatPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8669,13 +8281,11 @@ struct SignedModelHostHeartbeatRequest {
 struct ModelHostWithdrawPayload {
     validator_account_id: AccountId,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelHostWithdrawRequest {
     payload: ModelHostWithdrawPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8688,13 +8298,11 @@ struct AgentRestartPayload {
     apartment_name: String,
     reason: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentRestartRequest {
     payload: AgentRestartPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8710,13 +8318,11 @@ struct AgentPolicyRevokePayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentPolicyRevokeRequest {
     payload: AgentPolicyRevokePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8730,13 +8336,11 @@ struct AgentWalletSpendPayload {
     asset_definition: String,
     amount: Quantity,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentWalletSpendRequest {
     payload: AgentWalletSpendPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8749,13 +8353,11 @@ struct AgentWalletApprovePayload {
     apartment_name: String,
     request_id: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentWalletApproveRequest {
     payload: AgentWalletApprovePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8770,13 +8372,11 @@ struct AgentMessageSendPayload {
     channel: String,
     payload: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentMessageSendRequest {
     payload: AgentMessageSendPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8789,13 +8389,11 @@ struct AgentMessageAckPayload {
     apartment_name: String,
     message_id: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentMessageAckRequest {
     payload: AgentMessageAckPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8811,13 +8409,11 @@ struct AgentArtifactAllowPayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     provenance_hash: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentArtifactAllowRequest {
     payload: AgentArtifactAllowPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8838,19 +8434,16 @@ struct AgentAutonomyRunPayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     workflow_input_json: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentAutonomyRunRequest {
     payload: AgentAutonomyRunPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AgentAutonomyFinalizeRequest {
     apartment_name: String,
     run_id: String,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8871,13 +8464,11 @@ struct TrainingJobStartPayload {
     compute_budget_units: u64,
     storage_budget_bytes: u64,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedTrainingJobStartRequest {
     payload: TrainingJobStartPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8893,13 +8484,11 @@ struct TrainingJobCheckpointPayload {
     checkpoint_size_bytes: u64,
     metrics_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedTrainingJobCheckpointRequest {
     payload: TrainingJobCheckpointPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8913,13 +8502,11 @@ struct TrainingJobRetryPayload {
     job_id: String,
     reason: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedTrainingJobRetryRequest {
     payload: TrainingJobRetryPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8938,13 +8525,11 @@ struct ModelArtifactRegisterPayload {
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelArtifactRegisterRequest {
     payload: ModelArtifactRegisterPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8967,13 +8552,11 @@ struct ModelWeightRegisterPayload {
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelWeightRegisterRequest {
     payload: ModelWeightRegisterPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -8989,13 +8572,11 @@ struct ModelWeightPromotePayload {
     gate_approved: bool,
     gate_report_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelWeightPromoteRequest {
     payload: ModelWeightPromotePayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -9010,13 +8591,11 @@ struct ModelWeightRollbackPayload {
     target_version: String,
     reason: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedModelWeightRollbackRequest {
     payload: ModelWeightRollbackPayload,
     provenance: ManifestProvenance,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -9038,7 +8617,6 @@ struct UploadedModelFinalizePayload {
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -9057,23 +8635,19 @@ struct UploadedModelRegisterPayload {
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedUploadedModelRegisterRequest {
     payload: UploadedModelRegisterPayload,
     bundle_provenance: ManifestProvenance,
     finalize_provenance: ManifestProvenance,
 }
-
 struct SoracloudTempDir {
     path: PathBuf,
 }
-
 impl SoracloudTempDir {
     fn new(prefix: &str) -> Result<Self> {
         Self::new_with_rng(prefix, &mut OsRng)
     }
-
     fn new_with_rng<R: TryCryptoRng + ?Sized>(prefix: &str, rng: &mut R) -> Result<Self> {
         for _ in 0..8 {
             let mut suffix = [0_u8; 8];
@@ -9094,18 +8668,15 @@ impl SoracloudTempDir {
             "failed to allocate a unique Soracloud temporary directory"
         ))
     }
-
     fn path(&self) -> &Path {
         &self.path
     }
 }
-
 impl Drop for SoracloudTempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
-
 fn run_service_bundle_mutation(
     mode: MutationMode,
     bundle: SoraDeploymentBundleV1,
@@ -9126,7 +8697,6 @@ fn run_service_bundle_mutation(
     )?;
     run_signed_service_bundle_mutation(mode, &request, torii_url, api_token, timeout_secs)
 }
-
 fn run_signed_service_bundle_mutation(
     mode: MutationMode,
     request: &SignedBundleRequest,
@@ -9153,7 +8723,6 @@ fn run_signed_service_bundle_mutation(
         },
     )
 }
-
 fn run_app_infra_mutation(
     mode: MutationMode,
     request: &SignedAppInfraRequest,
@@ -9179,7 +8748,6 @@ fn run_app_infra_mutation(
     }
     Ok(payload)
 }
-
 fn should_fallback_app_infra_to_service_level(error: &Report) -> bool {
     let detail = format!("{error:#}").to_ascii_lowercase();
     detail.contains("/v1/soracloud/apps/")
@@ -9188,7 +8756,6 @@ fn should_fallback_app_infra_to_service_level(error: &Report) -> bool {
             || detail.contains("not found")
             || detail.contains("unknown"))
 }
-
 fn build_app_static_site_binding_value(
     app_name: &str,
     _public_url: &str,
@@ -9210,7 +8777,6 @@ fn build_app_static_site_binding_value(
         "failed to encode app static site binding JSON",
     )?))
 }
-
 fn plan_app_static_site_root_binding(
     app_name: &str,
     public_url: &str,
@@ -9234,7 +8800,6 @@ fn plan_app_static_site_root_binding(
         _ => Ok(None),
     }
 }
-
 fn apply_app_static_site_root_binding(
     service_name: &str,
     service_manifest: &SoraServiceManifestV1,
@@ -9269,7 +8834,6 @@ fn apply_app_static_site_root_binding(
     );
     Ok(true)
 }
-
 fn ensure_app_static_site_root_binding_attached(
     binding_plan: Option<&AppStaticSiteRootBindingPlan>,
     binding_attached: bool,
@@ -9284,7 +8848,6 @@ fn ensure_app_static_site_root_binding_attached(
     }
     Ok(())
 }
-
 fn normalize_app_public_origin_url(public_url: &str, manifest_path: &Path) -> Result<reqwest::Url> {
     let mut public_origin = reqwest::Url::parse(public_url).wrap_err_with(|| {
         format!(
@@ -9303,7 +8866,6 @@ fn normalize_app_public_origin_url(public_url: &str, manifest_path: &Path) -> Re
     }
     Ok(public_origin)
 }
-
 fn join_service_route_path(path_prefix: &str, route_path: &str) -> String {
     if route_path == "/" {
         return format!("{}/", path_prefix.trim_end_matches('/'));
@@ -9314,7 +8876,6 @@ fn join_service_route_path(path_prefix: &str, route_path: &str) -> String {
     }
     format!("{trimmed_prefix}/{}", route_path.trim_start_matches('/'))
 }
-
 fn service_uses_public_inrou_http_route(bundle: &SoraDeploymentBundleV1) -> bool {
     bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
         && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
@@ -9324,7 +8885,6 @@ fn service_uses_public_inrou_http_route(bundle: &SoraDeploymentBundleV1) -> bool
             .as_ref()
             .is_some_and(|route| route.visibility == SoraRouteVisibilityV1::Public)
 }
-
 fn normalize_public_service_base_url(bundle: &SoraDeploymentBundleV1) -> Result<reqwest::Url> {
     let route = bundle.service.route.as_ref().ok_or_else(|| {
         eyre!(
@@ -9350,7 +8910,6 @@ fn normalize_public_service_base_url(bundle: &SoraDeploymentBundleV1) -> Result<
     base_url.set_fragment(None);
     Ok(base_url)
 }
-
 fn sorafs_cid_host_suffix_for_hostname(hostname: &str) -> String {
     let hostname = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
     if hostname == "taira.sora.org" || hostname.ends_with(".taira.sora.org") {
@@ -9364,7 +8923,6 @@ fn sorafs_cid_host_suffix_for_hostname(hostname: &str) -> String {
     }
     format!("sorafs.{hostname}")
 }
-
 fn fetch_existing_public_service_discovery_registry(
     torii_url: &str,
     service_name: &str,
@@ -9385,23 +8943,12 @@ fn fetch_existing_public_service_discovery_registry(
         query.append_pair("service_name", service_name.as_str());
         query.append_pair("config_name", PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME);
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for public service discovery config status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii public discovery config status response body")?;
+    let (_, status, body) = send_torii_soracloud_authenticated_get(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii public-discovery config status",
+    )?;
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -9431,7 +8978,6 @@ fn fetch_existing_public_service_discovery_registry(
         .wrap_err("failed to decode public service discovery registry JSON")?;
     Ok(Some(registry))
 }
-
 fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>, blake3::Hash)> {
     let manifest_bytes = manifest
         .encode()
@@ -9439,12 +8985,10 @@ fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>,
     let manifest_digest = blake3::hash(&manifest_bytes);
     Ok((manifest_bytes, manifest_digest))
 }
-
 fn sign_soracloud_payload(key_pair: &KeyPair, payload: &[u8]) -> Result<Signature> {
     Signature::try_new(key_pair.private_key(), payload)
         .wrap_err("failed to sign Soracloud CLI payload")
 }
-
 fn attach_sorafs_release_governance(
     mut manifest: ManifestV1,
     key_pair: &KeyPair,
@@ -9479,7 +9023,6 @@ fn attach_sorafs_release_governance(
     };
     Ok(manifest)
 }
-
 fn sorafs_pin_manifest_registered(client: &Client, manifest_digest_hex: &str) -> Result<bool> {
     let response = client
         .get_sorafs_pin_manifest(manifest_digest_hex)
@@ -9496,7 +9039,6 @@ fn sorafs_pin_manifest_registered(client: &Client, manifest_digest_hex: &str) ->
         )),
     }
 }
-
 fn wait_for_sorafs_pin_manifest(
     client: &Client,
     manifest_digest_hex: &str,
@@ -9518,7 +9060,6 @@ fn wait_for_sorafs_pin_manifest(
         std::thread::sleep((deadline - now).min(Duration::from_secs(2)));
     }
 }
-
 fn register_sorafs_pin_manifest_and_wait(
     client: &Client,
     args: iroha::client::SorafsPinRegisterArgs<'_>,
@@ -9534,7 +9075,6 @@ fn register_sorafs_pin_manifest_and_wait(
         .wrap_err_with(|| format!("failed to register {description} manifest"))?;
     wait_for_sorafs_pin_manifest(client, manifest_digest_hex, description, timeout_secs)
 }
-
 fn sorafs_pin_retention_epoch() -> Result<u64> {
     let current_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -9544,7 +9084,6 @@ fn sorafs_pin_retention_epoch() -> Result<u64> {
         .checked_add(SORAFS_DEFAULT_PIN_RETENTION_EPOCHS)
         .ok_or_else(|| eyre!("SoraFS pin retention epoch overflow"))
 }
-
 fn publish_public_service_discovery(
     bundle: &SoraDeploymentBundleV1,
     torii_url: &str,
@@ -9570,7 +9109,6 @@ fn publish_public_service_discovery(
         url.set_fragment(None);
         url.to_string()
     });
-
     let tempdir = SoracloudTempDir::new("iroha-public-service-discovery")
         .wrap_err("failed to create temporary public discovery dir")?;
     let discovery_stub = SoracloudPublicServiceDiscoveryV1 {
@@ -9598,7 +9136,6 @@ fn publish_public_service_discovery(
         &discovery_stub,
     )
     .wrap_err("failed to write public discovery document")?;
-
     let descriptor = chunker_registry::default_descriptor();
     let (plan, payload) =
         CarBuildPlan::from_directory_with_profile(tempdir.path(), descriptor.profile).map_err(
@@ -9680,7 +9217,6 @@ fn publish_public_service_discovery(
     let public_discovery_cid_host_url = format!(
         "https://{content_cid}.{cid_host_suffix}/{PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT}"
     );
-
     let discovery = SoracloudPublicServiceDiscoveryV1 {
         content_cid: content_cid.clone(),
         public_discovery_url: public_discovery_url.to_string(),
@@ -9703,7 +9239,6 @@ fn publish_public_service_discovery(
     };
     Ok((discovery, output))
 }
-
 fn attach_public_service_discovery_config(
     bundle: &SoraDeploymentBundleV1,
     initial_service_configs: &mut BTreeMap<String, Json>,
@@ -9722,7 +9257,6 @@ fn attach_public_service_discovery_config(
     if !service_uses_public_inrou_http_route(bundle) {
         return Ok(None);
     }
-
     let existing_registry = fetch_existing_public_service_discovery_registry(
         torii_url,
         bundle.service.service_name.as_ref(),
@@ -9751,7 +9285,6 @@ fn attach_public_service_discovery_config(
     );
     Ok(Some(publication))
 }
-
 fn publish_app_static_site(
     app_manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
@@ -9833,13 +9366,11 @@ fn publish_app_static_site(
         timeout_secs,
     )?;
     let manifest_id_hex = None;
-
     Ok(AppStaticSitePublishOutput {
         manifest_id_hex,
         ..planned
     })
 }
-
 fn plan_app_static_site_publication(
     app_manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
@@ -9852,7 +9383,6 @@ fn plan_app_static_site_publication(
             static_site.mount_path
         ));
     }
-
     let mut public_url = reqwest::Url::parse(&app_manifest.public_url).wrap_err_with(|| {
         format!(
             "app manifest field `public_url` is not a valid URL: {}",
@@ -9878,7 +9408,6 @@ fn plan_app_static_site_publication(
             "app manifest field `public_url` resolved to an empty hostname"
         ));
     }
-
     let dist_dir = resolve_manifest_path(manifest_dir, &static_site.dist_dir);
     let metadata = fs::metadata(&dist_dir).wrap_err_with(|| {
         format!(
@@ -9892,7 +9421,6 @@ fn plan_app_static_site_publication(
             dist_dir.display()
         ));
     }
-
     let descriptor = chunker_registry::default_descriptor();
     let (plan, payload) = CarBuildPlan::from_directory_with_profile(&dist_dir, descriptor.profile)
         .map_err(|err| {
@@ -9947,7 +9475,6 @@ fn plan_app_static_site_publication(
     let content_cid = encode_content_cid(&manifest.root_cid);
     let mut cid_gateway_url = public_url.clone();
     cid_gateway_url.set_path(&format!("/sorafs/cid/{content_cid}"));
-
     Ok(AppStaticSitePublishOutput {
         hostname,
         public_url: public_url.to_string(),
@@ -9957,7 +9484,6 @@ fn plan_app_static_site_publication(
         manifest_id_hex: None,
     })
 }
-
 fn publish_sorafs_directory_artifact(
     input_dir: &Path,
     description: &str,
@@ -9974,7 +9500,6 @@ fn publish_sorafs_directory_artifact(
             input_dir.display()
         ));
     }
-
     let descriptor = chunker_registry::default_descriptor();
     let (plan, payload) = CarBuildPlan::from_directory_with_profile(input_dir, descriptor.profile)
         .map_err(|err| {
@@ -10046,14 +9571,12 @@ fn publish_sorafs_directory_artifact(
     )?;
     let manifest_id_hex = None;
     let content_cid = encode_content_cid(&manifest.root_cid);
-
     Ok(PublishedSorafsDirectoryArtifact {
         content_cid,
         manifest_digest_hex,
         manifest_id_hex,
     })
 }
-
 fn publish_sorafs_file_artifact(
     input_file: &Path,
     description: &str,
@@ -10124,7 +9647,6 @@ fn publish_sorafs_file_artifact(
         .digest()
         .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-
     let mut client_config = soracloud_submission_config()?;
     client_config.torii_api_url = url::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
@@ -10145,7 +9667,6 @@ fn publish_sorafs_file_artifact(
     )?;
     let manifest_id_hex = None;
     let content_cid = encode_content_cid(&manifest.root_cid);
-
     Ok(PublishedSorafsFileArtifact {
         content_cid,
         manifest_digest_hex,
@@ -10153,7 +9674,6 @@ fn publish_sorafs_file_artifact(
         payload_hash,
     })
 }
-
 fn inrou_member_path(path: &str) -> Result<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -10169,7 +9689,6 @@ fn inrou_member_path(path: &str) -> Result<String> {
             )
         })
 }
-
 fn validate_local_inrou_member(inrou_dir: &Path, member_path: &str) -> Result<String> {
     let relative_member = inrou_member_path(member_path)?;
     let local_path = inrou_dir.join(&relative_member);
@@ -10187,7 +9706,6 @@ fn validate_local_inrou_member(inrou_dir: &Path, member_path: &str) -> Result<St
     }
     Ok(relative_member)
 }
-
 fn publish_inrou_guest_image_artifacts(
     service_workspace_dir: Option<&Path>,
     bundle: &mut SoraDeploymentBundleV1,
@@ -10201,7 +9719,6 @@ fn publish_inrou_guest_image_artifacts(
     {
         return Ok(Vec::new());
     }
-
     let Some(inrou) = bundle.container.inrou.as_mut() else {
         return Ok(Vec::new());
     };
@@ -10212,7 +9729,6 @@ fn publish_inrou_guest_image_artifacts(
         )
     })?;
     let inrou_dir = workspace_dir.join("inrou");
-
     let mut outputs = Vec::new();
     let guest_isas = inrou.guest_images.keys().copied().collect::<Vec<_>>();
     for guest_isa in guest_isas {
@@ -10255,7 +9771,6 @@ fn publish_inrou_guest_image_artifacts(
                 validate_local_inrou_member(&inrou_dir, &format!("/inrou/{member_path}"))
             })
             .collect::<Result<Vec<_>>>()?;
-
         let staged_artifact = SoracloudTempDir::new("iroha-inrou-guest-image-artifact")
             .wrap_err_with(|| {
                 format!(
@@ -10282,7 +9797,6 @@ fn publish_inrou_guest_image_artifacts(
                 )
             })?;
         }
-
         let published = publish_sorafs_directory_artifact(
             staged_artifact.path(),
             &format!("Inrou guest-image artifact ({})", guest_isa.as_str()),
@@ -10291,7 +9805,6 @@ fn publish_inrou_guest_image_artifacts(
             key_pair,
             timeout_secs,
         )?;
-
         let image = inrou
             .guest_images
             .get_mut(&guest_isa)
@@ -10315,15 +9828,12 @@ fn publish_inrou_guest_image_artifacts(
             note: "hosts hydrate these members from SoraFS; geography targets are best-effort and fall back to lower observed latency when host geography is unknown".to_owned(),
         });
     }
-
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
     bundle
         .validate_for_admission()
         .wrap_err("published Inrou guest-image artifact refs made the deployment bundle invalid")?;
-
     Ok(outputs)
 }
-
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     let mut hasher = Sha3::v256();
     for chunk in chunks {
@@ -10335,18 +9845,15 @@ fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     hasher.finalize(&mut digest);
     digest
 }
-
 fn encode_content_cid(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if bytes.is_empty() {
         return "b".to_owned();
     }
-
     let mut acc = 0u32;
     let mut bits = 0u32;
     let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
     out.push(b'b');
-
     for byte in bytes {
         acc = (acc << 8) | (*byte as u32);
         bits += 8;
@@ -10356,15 +9863,12 @@ fn encode_content_cid(bytes: &[u8]) -> String {
             bits -= 5;
         }
     }
-
     if bits > 0 {
         let index = ((acc << (5 - bits)) & 0x1f) as usize;
         out.push(ALPHABET[index]);
     }
-
     String::from_utf8(out).expect("lowercase base32 CID should be valid UTF-8")
 }
-
 fn signed_bundle_request(
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
@@ -10389,7 +9893,6 @@ fn signed_bundle_request(
         },
     })
 }
-
 fn signed_app_infra_request(
     mode: MutationMode,
     manifest: SoraAppInfraManifestV1,
@@ -10413,7 +9916,6 @@ fn signed_app_infra_request(
         },
     })
 }
-
 fn build_app_infra_manifest(
     app_manifest: &SoracloudAppManifestV1,
     static_site_publication: Option<&AppStaticSitePublishOutput>,
@@ -10440,7 +9942,6 @@ fn build_app_infra_manifest(
         .wrap_err("app infra manifest failed canonical validation")?;
     Ok(manifest)
 }
-
 fn derive_app_infra_version(
     app_manifest: &SoracloudAppManifestV1,
     services: &[SoraAppInfraServiceRefV1],
@@ -10464,7 +9965,6 @@ fn derive_app_infra_version(
     }
     format!("services-{}", Hash::new(Encode::encode(&services.to_vec())))
 }
-
 fn build_app_infra_static_site_binding(
     app_manifest: &SoracloudAppManifestV1,
     static_site_publication: Option<&AppStaticSitePublishOutput>,
@@ -10484,7 +9984,6 @@ fn build_app_infra_static_site_binding(
             api_base_path: static_site.api_base_path.clone(),
         })
 }
-
 fn build_app_infra_service_ref(
     bundle: &SoraDeploymentBundleV1,
 ) -> Result<SoraAppInfraServiceRefV1> {
@@ -10510,7 +10009,6 @@ fn build_app_infra_service_ref(
         .iter()
         .map(|volume| volume.volume_name.clone())
         .collect::<Vec<_>>();
-
     Ok(SoraAppInfraServiceRefV1 {
         schema_version: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
         service_name: service.service_name.clone(),
@@ -10524,7 +10022,6 @@ fn build_app_infra_service_ref(
         shard: app_service_shard_label(&bundle.container),
     })
 }
-
 fn app_service_shard_label(container: &SoraContainerManifestV1) -> Option<String> {
     let mut entries = [
         "HAYAHI_CRAWLER_SHARD_ID",
@@ -10542,7 +10039,6 @@ fn app_service_shard_label(container: &SoraContainerManifestV1) -> Option<String
         Some(entries.join(";"))
     }
 }
-
 fn parse_service_material_name_arg(flag_name: &str, value: &str) -> Result<String> {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -10561,7 +10057,6 @@ fn parse_service_material_name_arg(flag_name: &str, value: &str) -> Result<Strin
     }
     Ok(normalized.to_owned())
 }
-
 fn load_initial_service_configs(path: Option<&Path>) -> Result<BTreeMap<String, Json>> {
     let Some(path) = path else {
         return Ok(BTreeMap::new());
@@ -10577,7 +10072,6 @@ fn load_initial_service_configs(path: Option<&Path>) -> Result<BTreeMap<String, 
         })
         .collect()
 }
-
 fn load_initial_service_secrets(path: Option<&Path>) -> Result<BTreeMap<String, SecretEnvelopeV1>> {
     let Some(path) = path else {
         return Ok(BTreeMap::new());
@@ -10593,7 +10087,6 @@ fn load_initial_service_secrets(path: Option<&Path>) -> Result<BTreeMap<String, 
         })
         .collect()
 }
-
 fn load_service_config_value(
     value_json: Option<&str>,
     value_file: Option<&Path>,
@@ -10612,7 +10105,6 @@ fn load_service_config_value(
         }
     }
 }
-
 fn signed_service_config_set_request(
     service_name: &str,
     config_name: &str,
@@ -10644,7 +10136,6 @@ fn signed_service_config_set_request(
         },
     })
 }
-
 fn signed_service_config_delete_request(
     service_name: &str,
     config_name: &str,
@@ -10673,7 +10164,6 @@ fn signed_service_config_delete_request(
         },
     })
 }
-
 fn signed_service_secret_set_request(
     service_name: &str,
     secret_name: &str,
@@ -10705,7 +10195,6 @@ fn signed_service_secret_set_request(
         },
     })
 }
-
 fn signed_service_secret_delete_request(
     service_name: &str,
     secret_name: &str,
@@ -10734,7 +10223,6 @@ fn signed_service_secret_delete_request(
         },
     })
 }
-
 fn signed_rollback_request(
     service_name: &str,
     target_version: Option<&str>,
@@ -10759,7 +10247,6 @@ fn signed_rollback_request(
         },
     })
 }
-
 fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>> {
     encode_rollback_provenance_payload(
         payload.service_name.as_str(),
@@ -10767,7 +10254,6 @@ fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8
     )
     .wrap_err("failed to encode rollback signature payload tuple")
 }
-
 fn signed_rollout_request(
     service_name: &str,
     rollout_handle: &str,
@@ -10804,7 +10290,6 @@ fn signed_rollout_request(
         },
     })
 }
-
 fn signed_agent_deploy_request(
     manifest: AgentApartmentManifestV1,
     lease_ticks: u64,
@@ -10828,7 +10313,6 @@ fn signed_agent_deploy_request(
         },
     })
 }
-
 fn signed_agent_lease_renew_request(
     apartment_name: &str,
     lease_ticks: u64,
@@ -10856,7 +10340,6 @@ fn signed_agent_lease_renew_request(
         },
     })
 }
-
 fn normalize_hf_token(flag_name: &str, value: &str, max_bytes: usize) -> Result<String> {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -10872,26 +10355,21 @@ fn normalize_hf_token(flag_name: &str, value: &str, max_bytes: usize) -> Result<
     }
     Ok(normalized.to_owned())
 }
-
 fn parse_hf_repo_id_arg(repo_id: &str) -> Result<String> {
     normalize_hf_token("--repo-id", repo_id, HF_REPO_ID_MAX_BYTES)
 }
-
 fn parse_hf_revision_arg(revision: &str) -> Result<String> {
     normalize_hf_token("--revision", revision, HF_REVISION_MAX_BYTES)
 }
-
 fn resolve_hf_revision_arg(revision: Option<&str>) -> Result<String> {
     revision
         .map(parse_hf_revision_arg)
         .transpose()
         .map(|value| value.unwrap_or_else(|| HF_DEFAULT_RESOLVED_REVISION.to_owned()))
 }
-
 fn parse_hf_model_name_arg(model_name: &str) -> Result<String> {
     normalize_hf_token("--model-name", model_name, HF_MODEL_NAME_MAX_BYTES)
 }
-
 fn default_hf_model_name(repo_id: &str) -> Result<String> {
     let repo_id = parse_hf_repo_id_arg(repo_id)?;
     let slug = repo_id
@@ -10900,7 +10378,6 @@ fn default_hf_model_name(repo_id: &str) -> Result<String> {
         .unwrap_or(repo_id.as_str());
     parse_hf_model_name_arg(slug)
 }
-
 fn parse_hf_service_name_arg(service_name: &str) -> Result<String> {
     service_name
         .trim()
@@ -10908,7 +10385,6 @@ fn parse_hf_service_name_arg(service_name: &str) -> Result<String> {
         .map(|name| name.to_string())
         .wrap_err("invalid --service-name")
 }
-
 fn parse_hf_apartment_name_arg(apartment_name: Option<&str>) -> Result<Option<String>> {
     apartment_name
         .map(|name| {
@@ -10919,7 +10395,6 @@ fn parse_hf_apartment_name_arg(apartment_name: Option<&str>) -> Result<Option<St
         })
         .transpose()
 }
-
 fn parse_hf_account_id_arg(account_id: Option<&str>) -> Result<Option<String>> {
     account_id
         .map(|literal| {
@@ -10929,7 +10404,6 @@ fn parse_hf_account_id_arg(account_id: Option<&str>) -> Result<Option<String>> {
         })
         .transpose()
 }
-
 fn parse_asset_definition_arg(
     flag_name: &str,
     asset_definition: &str,
@@ -10939,7 +10413,6 @@ fn parse_asset_definition_arg(
         .parse()
         .wrap_err_with(|| format!("invalid {flag_name}"))
 }
-
 fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String> {
     let quantity = value
         .parse::<Quantity>()
@@ -10952,13 +10425,11 @@ fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String>
     }
     Ok(quantity)
 }
-
 fn hf_source_hash(repo_id: &str, resolved_revision: &str) -> Result<Hash> {
     let payload = norito::to_bytes(&(repo_id, resolved_revision))
         .wrap_err("failed to encode hf source id payload")?;
     Ok(Hash::new(payload))
 }
-
 fn sign_generated_hf_service_provenance(
     bundle: &SoraDeploymentBundleV1,
     key_pair: &KeyPair,
@@ -10971,7 +10442,6 @@ fn sign_generated_hf_service_provenance(
         signature: sign_soracloud_payload(key_pair, &payload)?,
     })
 }
-
 fn sign_generated_hf_apartment_provenance(
     manifest: &AgentApartmentManifestV1,
     key_pair: &KeyPair,
@@ -10987,7 +10457,6 @@ fn sign_generated_hf_apartment_provenance(
         signature: sign_soracloud_payload(key_pair, &payload)?,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn signed_hf_deploy_request(
     repo_id: &str,
@@ -11071,7 +10540,6 @@ fn signed_hf_deploy_request(
         generated_apartment_provenance,
     })
 }
-
 fn signed_hf_lease_leave_request(
     repo_id: &str,
     revision: Option<&str>,
@@ -11104,7 +10572,6 @@ fn signed_hf_lease_leave_request(
         },
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn signed_hf_lease_renew_request(
     repo_id: &str,
@@ -11188,7 +10655,6 @@ fn signed_hf_lease_renew_request(
         generated_apartment_provenance,
     })
 }
-
 fn signed_model_host_advertise_request(
     args: ModelHostAdvertiseArgs,
     authority: &AccountId,
@@ -11258,7 +10724,6 @@ fn signed_model_host_advertise_request(
         },
     })
 }
-
 fn signed_model_host_heartbeat_request(
     heartbeat_expires_at_ms: u64,
     authority: &AccountId,
@@ -11282,7 +10747,6 @@ fn signed_model_host_heartbeat_request(
         },
     })
 }
-
 fn signed_model_host_withdraw_request(
     authority: &AccountId,
     key_pair: &KeyPair,
@@ -11301,7 +10765,6 @@ fn signed_model_host_withdraw_request(
         },
     })
 }
-
 fn signed_agent_restart_request(
     apartment_name: &str,
     reason: &str,
@@ -11329,7 +10792,6 @@ fn signed_agent_restart_request(
         },
     })
 }
-
 fn signed_agent_policy_revoke_request(
     apartment_name: &str,
     capability: &str,
@@ -11359,7 +10821,6 @@ fn signed_agent_policy_revoke_request(
         },
     })
 }
-
 fn signed_agent_wallet_spend_request(
     apartment_name: &str,
     asset_definition: &str,
@@ -11392,7 +10853,6 @@ fn signed_agent_wallet_spend_request(
         },
     })
 }
-
 fn signed_agent_wallet_approve_request(
     apartment_name: &str,
     request_id: &str,
@@ -11420,7 +10880,6 @@ fn signed_agent_wallet_approve_request(
         },
     })
 }
-
 fn signed_agent_message_send_request(
     from_apartment: &str,
     to_apartment: &str,
@@ -11458,7 +10917,6 @@ fn signed_agent_message_send_request(
         },
     })
 }
-
 fn signed_agent_message_ack_request(
     apartment_name: &str,
     message_id: &str,
@@ -11486,7 +10944,6 @@ fn signed_agent_message_ack_request(
         },
     })
 }
-
 fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
     if value.is_empty() {
         return Err(eyre!("{flag_name} must not be empty"));
@@ -11509,7 +10966,6 @@ fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn canonicalize_agent_workflow_input_json(workflow_input_json: &str) -> Result<String> {
     let normalized = workflow_input_json.trim();
     if normalized.is_empty() {
@@ -11531,7 +10987,6 @@ fn canonicalize_agent_workflow_input_json(workflow_input_json: &str) -> Result<S
     }
     Ok(canonical)
 }
-
 fn signed_agent_artifact_allow_request(
     apartment_name: &str,
     artifact_hash: &str,
@@ -11562,7 +11017,6 @@ fn signed_agent_artifact_allow_request(
         },
     })
 }
-
 fn signed_agent_autonomy_run_request(
     apartment_name: &str,
     artifact_hash: &str,
@@ -11609,7 +11063,6 @@ fn signed_agent_autonomy_run_request(
         },
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn signed_training_job_start_request(
     service_name: &str,
@@ -11677,7 +11130,6 @@ fn signed_training_job_start_request(
         },
     })
 }
-
 fn signed_training_job_checkpoint_request(
     service_name: &str,
     job_id: &str,
@@ -11717,7 +11169,6 @@ fn signed_training_job_checkpoint_request(
         },
     })
 }
-
 fn signed_training_job_retry_request(
     service_name: &str,
     job_id: &str,
@@ -11750,7 +11201,6 @@ fn signed_training_job_retry_request(
         },
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn signed_model_artifact_register_request(
     service_name: &str,
@@ -11797,7 +11247,6 @@ fn signed_model_artifact_register_request(
         },
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn signed_model_weight_register_request(
     service_name: &str,
@@ -11854,7 +11303,6 @@ fn signed_model_weight_register_request(
         },
     })
 }
-
 fn signed_model_weight_promote_request(
     service_name: &str,
     model_name: &str,
@@ -11891,7 +11339,6 @@ fn signed_model_weight_promote_request(
         },
     })
 }
-
 fn signed_model_weight_rollback_request(
     service_name: &str,
     model_name: &str,
@@ -11929,7 +11376,6 @@ fn signed_model_weight_rollback_request(
         },
     })
 }
-
 fn signed_uploaded_model_register_request(
     bundle: SoraUploadedModelBundleV1,
     finalize: UploadedModelFinalizePayload,
@@ -11984,7 +11430,6 @@ fn signed_uploaded_model_register_request(
         reproducibility_hash: finalize.reproducibility_hash,
         provenance_attestation_hash: finalize.provenance_attestation_hash,
     };
-
     let bundle_encoded =
         encode_uploaded_model_bundle_register_provenance_payload(payload.bundle.clone())
             .wrap_err("failed to encode uploaded model register bundle signature payload")?;
@@ -12014,7 +11459,6 @@ fn signed_uploaded_model_register_request(
         },
     })
 }
-
 fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<Vec<u8>> {
     encode_rollout_provenance_payload(
         payload.service_name.as_str(),
@@ -12025,7 +11469,6 @@ fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<V
     )
     .wrap_err("failed to encode rollout signature payload tuple")
 }
-
 fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result<Vec<u8>> {
     encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
@@ -12034,7 +11477,6 @@ fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result
     )
     .wrap_err("failed to encode agent deploy signature payload tuple")
 }
-
 fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) -> Result<Vec<u8>> {
     encode_agent_lease_renew_provenance_payload(
         payload.apartment_name.as_str(),
@@ -12042,7 +11484,6 @@ fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) 
     )
     .wrap_err("failed to encode agent lease renew signature payload tuple")
 }
-
 fn encode_agent_restart_signature_payload(payload: &AgentRestartPayload) -> Result<Vec<u8>> {
     encode_agent_restart_provenance_payload(
         payload.apartment_name.as_str(),
@@ -12050,7 +11491,6 @@ fn encode_agent_restart_signature_payload(payload: &AgentRestartPayload) -> Resu
     )
     .wrap_err("failed to encode agent restart signature payload tuple")
 }
-
 fn encode_agent_policy_revoke_signature_payload(
     payload: &AgentPolicyRevokePayload,
 ) -> Result<Vec<u8>> {
@@ -12061,7 +11501,6 @@ fn encode_agent_policy_revoke_signature_payload(
     )
     .wrap_err("failed to encode agent policy revoke signature payload tuple")
 }
-
 fn encode_agent_wallet_spend_signature_payload(
     payload: &AgentWalletSpendPayload,
 ) -> Result<Vec<u8>> {
@@ -12072,7 +11511,6 @@ fn encode_agent_wallet_spend_signature_payload(
     )
     .wrap_err("failed to encode agent wallet spend signature payload tuple")
 }
-
 fn encode_agent_wallet_approve_signature_payload(
     payload: &AgentWalletApprovePayload,
 ) -> Result<Vec<u8>> {
@@ -12082,7 +11520,6 @@ fn encode_agent_wallet_approve_signature_payload(
     )
     .wrap_err("failed to encode agent wallet approve signature payload tuple")
 }
-
 fn encode_agent_message_send_signature_payload(
     payload: &AgentMessageSendPayload,
 ) -> Result<Vec<u8>> {
@@ -12094,7 +11531,6 @@ fn encode_agent_message_send_signature_payload(
     )
     .wrap_err("failed to encode agent message send signature payload tuple")
 }
-
 fn encode_agent_message_ack_signature_payload(payload: &AgentMessageAckPayload) -> Result<Vec<u8>> {
     encode_agent_message_ack_provenance_payload(
         payload.apartment_name.as_str(),
@@ -12102,7 +11538,6 @@ fn encode_agent_message_ack_signature_payload(payload: &AgentMessageAckPayload) 
     )
     .wrap_err("failed to encode agent message ack signature payload tuple")
 }
-
 fn encode_agent_artifact_allow_signature_payload(
     payload: &AgentArtifactAllowPayload,
 ) -> Result<Vec<u8>> {
@@ -12113,7 +11548,6 @@ fn encode_agent_artifact_allow_signature_payload(
     )
     .wrap_err("failed to encode agent artifact allow signature payload tuple")
 }
-
 fn encode_agent_autonomy_run_signature_payload(
     payload: &AgentAutonomyRunPayload,
 ) -> Result<Vec<u8>> {
@@ -12127,7 +11561,6 @@ fn encode_agent_autonomy_run_signature_payload(
     )
     .wrap_err("failed to encode agent autonomy run signature payload tuple")
 }
-
 fn encode_hf_deploy_signature_payload(payload: &HfDeployPayload) -> Result<Vec<u8>> {
     let resolved_revision = resolve_hf_revision_arg(payload.revision.as_deref())?;
     encode_hf_shared_lease_join_provenance_payload(
@@ -12143,7 +11576,6 @@ fn encode_hf_deploy_signature_payload(payload: &HfDeployPayload) -> Result<Vec<u
     )
     .wrap_err("failed to encode hf deploy signature payload tuple")
 }
-
 fn encode_hf_lease_leave_signature_payload(payload: &HfLeaseLeavePayload) -> Result<Vec<u8>> {
     let resolved_revision = resolve_hf_revision_arg(payload.revision.as_deref())?;
     encode_hf_shared_lease_leave_provenance_payload(
@@ -12156,7 +11588,6 @@ fn encode_hf_lease_leave_signature_payload(payload: &HfLeaseLeavePayload) -> Res
     )
     .wrap_err("failed to encode hf lease leave signature payload tuple")
 }
-
 fn encode_hf_lease_renew_signature_payload(payload: &HfLeaseRenewPayload) -> Result<Vec<u8>> {
     let resolved_revision = resolve_hf_revision_arg(payload.revision.as_deref())?;
     encode_hf_shared_lease_renew_provenance_payload(
@@ -12172,14 +11603,12 @@ fn encode_hf_lease_renew_signature_payload(payload: &HfLeaseRenewPayload) -> Res
     )
     .wrap_err("failed to encode hf lease renew signature payload tuple")
 }
-
 fn encode_model_host_advertise_signature_payload(
     payload: &ModelHostAdvertisePayload,
 ) -> Result<Vec<u8>> {
     encode_model_host_advertise_provenance_payload(&payload.capability)
         .wrap_err("failed to encode model host advertise signature payload tuple")
 }
-
 fn encode_model_host_heartbeat_signature_payload(
     payload: &ModelHostHeartbeatPayload,
 ) -> Result<Vec<u8>> {
@@ -12189,14 +11618,12 @@ fn encode_model_host_heartbeat_signature_payload(
     )
     .wrap_err("failed to encode model host heartbeat signature payload tuple")
 }
-
 fn encode_model_host_withdraw_signature_payload(
     payload: &ModelHostWithdrawPayload,
 ) -> Result<Vec<u8>> {
     encode_model_host_withdraw_provenance_payload(&payload.validator_account_id)
         .wrap_err("failed to encode model host withdraw signature payload tuple")
 }
-
 fn encode_training_job_start_signature_payload(
     payload: &TrainingJobStartPayload,
 ) -> Result<Vec<u8>> {
@@ -12214,7 +11641,6 @@ fn encode_training_job_start_signature_payload(
     )
     .wrap_err("failed to encode training job start signature payload tuple")
 }
-
 fn encode_training_job_checkpoint_signature_payload(
     payload: &TrainingJobCheckpointPayload,
 ) -> Result<Vec<u8>> {
@@ -12227,7 +11653,6 @@ fn encode_training_job_checkpoint_signature_payload(
     )
     .wrap_err("failed to encode training job checkpoint signature payload tuple")
 }
-
 fn encode_training_job_retry_signature_payload(
     payload: &TrainingJobRetryPayload,
 ) -> Result<Vec<u8>> {
@@ -12238,7 +11663,6 @@ fn encode_training_job_retry_signature_payload(
     )
     .wrap_err("failed to encode training job retry signature payload tuple")
 }
-
 fn encode_model_artifact_register_signature_payload(
     payload: &ModelArtifactRegisterPayload,
 ) -> Result<Vec<u8>> {
@@ -12254,7 +11678,6 @@ fn encode_model_artifact_register_signature_payload(
     )
     .wrap_err("failed to encode model artifact register signature payload tuple")
 }
-
 fn encode_model_weight_register_signature_payload(
     payload: &ModelWeightRegisterPayload,
 ) -> Result<Vec<u8>> {
@@ -12272,7 +11695,6 @@ fn encode_model_weight_register_signature_payload(
     )
     .wrap_err("failed to encode model weight register signature payload tuple")
 }
-
 fn encode_model_weight_promote_signature_payload(
     payload: &ModelWeightPromotePayload,
 ) -> Result<Vec<u8>> {
@@ -12285,7 +11707,6 @@ fn encode_model_weight_promote_signature_payload(
     )
     .wrap_err("failed to encode model weight promote signature payload tuple")
 }
-
 fn encode_model_weight_rollback_signature_payload(
     payload: &ModelWeightRollbackPayload,
 ) -> Result<Vec<u8>> {
@@ -12297,7 +11718,6 @@ fn encode_model_weight_rollback_signature_payload(
     )
     .wrap_err("failed to encode model weight rollback signature payload tuple")
 }
-
 fn soracloud_submission_config() -> Result<ClientConfig> {
     SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
         slot.borrow()
@@ -12305,7 +11725,6 @@ fn soracloud_submission_config() -> Result<ClientConfig> {
             .ok_or_else(|| eyre!("Soracloud submission config is not initialized"))
     })
 }
-
 fn soracloud_fee_payment() -> Result<FeePaymentIntent> {
     SORACLOUD_FEE_PAYMENT.with(|slot| match slot.borrow().as_ref() {
         Some(Ok(intent)) => Ok(intent.clone()),
@@ -12315,84 +11734,46 @@ fn soracloud_fee_payment() -> Result<FeePaymentIntent> {
         )),
     })
 }
-
-fn canonical_query_string(raw: Option<&str>) -> String {
-    let Some(raw) = raw else {
-        return String::new();
-    };
-    if raw.is_empty() {
-        return String::new();
-    }
-    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in pairs {
-        serializer.append_pair(&key, &value);
-    }
-    serializer.finish()
-}
-
-fn canonical_request_message(method: &str, endpoint: &reqwest::Url, body: &[u8]) -> Vec<u8> {
-    let body_hash = Sha256::digest(body);
-    format!(
-        "{}\n{}\n{}\n{}",
-        method.to_ascii_uppercase(),
-        endpoint.path(),
-        canonical_query_string(endpoint.query()),
-        hex::encode(body_hash)
-    )
-    .into_bytes()
-}
-
-fn canonical_network_request_message(
-    network_id: &iroha::data_model::NetworkId,
-    method: &str,
-    endpoint: &reqwest::Url,
-    body: &[u8],
-) -> Vec<u8> {
-    const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
-    let request = canonical_request_message(method, endpoint, body);
-    let mut message =
-        Vec::with_capacity(DOMAIN.len() + network_id.as_bytes().len() + request.len());
-    message.extend_from_slice(DOMAIN);
-    message.extend_from_slice(network_id.as_bytes());
-    message.extend_from_slice(&request);
-    message
-}
-
-fn canonical_network_request_hash(
-    network_id: &iroha::data_model::NetworkId,
-    method: &str,
-    endpoint: &reqwest::Url,
-    body: &[u8],
-) -> Hash {
-    Hash::new(canonical_network_request_message(
-        network_id, method, endpoint, body,
-    ))
-}
-
-fn canonical_network_request_signature_message(
-    network_id: &iroha::data_model::NetworkId,
-    method: &str,
-    endpoint: &reqwest::Url,
-    body: &[u8],
-    timestamp_ms: u64,
-    nonce: &str,
-) -> Vec<u8> {
-    let mut message = canonical_network_request_message(network_id, method, endpoint, body);
-    message.push(b'\n');
-    message.extend_from_slice(timestamp_ms.to_string().as_bytes());
-    message.push(b'\n');
-    message.extend_from_slice(nonce.as_bytes());
-    message
-}
-
 fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1> {
-    let bytes = fs::read(path)
+    let mut file = fs::File::open(path)
+        .wrap_err_with(|| format!("failed to open Soracloud witness file `{}`", path.display()))?;
+    let file_bytes = file
+        .metadata()
+        .wrap_err_with(|| {
+            format!(
+                "failed to inspect Soracloud witness file `{}`",
+                path.display()
+            )
+        })?
+        .len();
+    if file_bytes > SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "Soracloud witness file `{}` exceeds the V1 limit of {SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1} bytes",
+            path.display()
+        ));
+    }
+    let file_bytes = usize::try_from(file_bytes)
+        .wrap_err("Soracloud witness file length exceeds platform capacity")?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(file_bytes)
+        .wrap_err_with(|| format!("failed to reserve {file_bytes} Soracloud witness bytes"))?;
+    bytes.resize(file_bytes, 0);
+    file.read_exact(&mut bytes)
         .wrap_err_with(|| format!("failed to read Soracloud witness file `{}`", path.display()))?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).wrap_err_with(|| {
+        format!(
+            "failed to finish Soracloud witness file `{}`",
+            path.display()
+        )
+    })? != 0
+    {
+        return Err(eyre!(
+            "Soracloud witness file `{}` changed while it was being read",
+            path.display()
+        ));
+    }
     let witness: CanonicalRequestWitnessV1 = json::from_slice(&bytes).wrap_err_with(|| {
         format!(
             "failed to decode Soracloud witness file `{}`",
@@ -12408,7 +11789,6 @@ fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1>
     }
     Ok(witness)
 }
-
 fn build_soracloud_mutation_auth_headers(
     submission_config: &ClientConfig,
     endpoint: &reqwest::Url,
@@ -12416,7 +11796,6 @@ fn build_soracloud_mutation_auth_headers(
 ) -> Result<Vec<(&'static str, String)>> {
     build_soracloud_mutation_auth_headers_with_rng(submission_config, endpoint, body, &mut OsRng)
 }
-
 fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
     submission_config: &ClientConfig,
     endpoint: &reqwest::Url,
@@ -12432,24 +11811,48 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
                 submission_config.account
             ));
         }
-        let expected_hash =
-            canonical_network_request_hash(&submission_config.network_id, "POST", endpoint, body);
+        let expected_hash = canonical_network_request_hash(
+            &submission_config.network_id,
+            &reqwest::Method::POST,
+            endpoint,
+            body,
+        )?;
         if witness.canonical_request_hash != expected_hash {
             return Err(eyre!(
                 "Soracloud witness canonical_request_hash does not match the POST {} request",
                 endpoint.path()
             ));
         }
-        return Ok(vec![
-            (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
-            (
-                HEADER_IROHA_WITNESS,
-                base64::engine::general_purpose::STANDARD
-                    .encode(to_bytes(&witness).wrap_err("failed to encode Soracloud witness")?),
-            ),
-        ]);
+        let witness_header = canonical_request_witness_header_value(&witness)
+            .wrap_err("failed to encode Soracloud witness header")?;
+        let mut headers = Vec::new();
+        headers
+            .try_reserve_exact(1)
+            .wrap_err("failed to reserve Soracloud witness header")?;
+        headers.push((HEADER_IROHA_WITNESS, witness_header));
+        return Ok(headers);
     }
-
+    build_soracloud_signature_auth_headers_with_rng(submission_config, "POST", endpoint, body, rng)
+}
+fn build_soracloud_read_auth_headers(
+    submission_config: &ClientConfig,
+    endpoint: &reqwest::Url,
+) -> Result<Vec<(&'static str, String)>> {
+    build_soracloud_signature_auth_headers_with_rng(
+        submission_config,
+        "GET",
+        endpoint,
+        &[],
+        &mut OsRng,
+    )
+}
+fn build_soracloud_signature_auth_headers_with_rng<R: TryCryptoRng>(
+    submission_config: &ClientConfig,
+    method: &str,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+    rng: &mut R,
+) -> Result<Vec<(&'static str, String)>> {
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -12458,29 +11861,44 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
         .unwrap_or(u64::MAX);
     let mut nonce_bytes = [0_u8; 16];
     rng.try_fill_bytes(&mut nonce_bytes)
-        .map_err(|error| eyre!("Soracloud mutation signature nonce OS RNG failed: {error}"))?;
-    let nonce = hex::encode(nonce_bytes);
+        .map_err(|error| eyre!("Soracloud request signature nonce OS RNG failed: {error}"))?;
+    let nonce_encoded_bytes = nonce_bytes
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| eyre!("Soracloud request signature nonce length exceeds capacity"))?;
+    let mut nonce_encoded = Vec::new();
+    nonce_encoded
+        .try_reserve_exact(nonce_encoded_bytes)
+        .wrap_err("failed to reserve Soracloud request signature nonce")?;
+    nonce_encoded.resize(nonce_encoded_bytes, 0);
+    hex::encode_to_slice(nonce_bytes, &mut nonce_encoded)
+        .wrap_err("failed to encode Soracloud request signature nonce")?;
+    let nonce = String::from_utf8(nonce_encoded)
+        .wrap_err("Soracloud request signature nonce is not UTF-8")?;
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .wrap_err("invalid Soracloud canonical request method")?;
     let message = canonical_network_request_signature_message(
         &submission_config.network_id,
-        "POST",
+        &method,
         endpoint,
         body,
         timestamp_ms,
         &nonce,
-    );
+    )?;
     let signature = sign_soracloud_payload(&submission_config.key_pair, &message)?;
-
-    Ok(vec![
-        (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
-        (
-            HEADER_IROHA_SIGNATURE,
-            base64::engine::general_purpose::STANDARD.encode(signature.payload()),
-        ),
-        (HEADER_IROHA_TIMESTAMP_MS, timestamp_ms.to_string()),
-        (HEADER_IROHA_NONCE, nonce),
-    ])
+    let account = canonical_request_account_header_value(&submission_config.account)?;
+    let signature = canonical_request_signature_header_value(&signature)?;
+    let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;
+    let mut headers = Vec::new();
+    headers
+        .try_reserve_exact(4)
+        .wrap_err("failed to reserve Soracloud canonical auth headers")?;
+    headers.push((HEADER_IROHA_ACCOUNT, account));
+    headers.push((HEADER_IROHA_SIGNATURE, signature));
+    headers.push((HEADER_IROHA_TIMESTAMP_MS, timestamp));
+    headers.push((HEADER_IROHA_NONCE, nonce));
+    Ok(headers)
 }
-
 fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
     let instructions = payload
         .get("tx_instructions")
@@ -12504,7 +11922,6 @@ fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<Instruc
     }
     Ok(decoded)
 }
-
 fn submit_soracloud_draft_transaction(
     torii_url: &str,
     timeout_secs: u64,
@@ -12549,14 +11966,12 @@ fn submit_soracloud_draft_transaction(
         .map(Some)
         .wrap_err("failed to submit Soracloud mutation transaction")
 }
-
 fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
     Ok(payload
         .as_object()
         .map(|root| root.get(field).cloned())
         .flatten())
 }
-
 fn post_torii_soracloud_mutation<T>(
     torii_url: &str,
     endpoint_path: &str,
@@ -12575,13 +11990,13 @@ where
         .wrap_err("failed to encode soracloud mutation request payload")?;
     let submission_config = soracloud_submission_config()?;
     let auth_headers = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
-
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .build()
         .wrap_err("failed to build HTTP client for soracloud mutation")?;
-
     let mut request = client
         .post(endpoint.clone())
         .header(header::ACCEPT, HeaderValue::from_static("application/json"))
@@ -12596,7 +12011,6 @@ where
     if let Some(token) = api_token {
         request = request.header("x-api-token", token);
     }
-
     let response = request
         .send()
         .wrap_err_with(|| format!("failed to call `{}`", endpoint.as_str()))?;
@@ -12636,11 +12050,9 @@ where
     }
     Ok((endpoint.to_string(), payload))
 }
-
 fn action_value(label: &str) -> json::Value {
     norito::json!({ "action": label })
 }
-
 fn merge_submission_metadata(
     target: &mut json::Value,
     mutation_payload: &json::Value,
@@ -12658,7 +12070,6 @@ fn merge_submission_metadata(
     }
     Ok(())
 }
-
 fn control_plane_service_from_status<'a>(
     payload: &'a json::Value,
     service_name: &str,
@@ -12682,7 +12093,6 @@ fn control_plane_service_from_status<'a>(
             )
         })
 }
-
 fn agent_apartment_from_status<'a>(
     payload: &'a json::Value,
     apartment_name: &str,
@@ -12702,7 +12112,6 @@ fn agent_apartment_from_status<'a>(
             eyre!("apartment `{apartment_name}` not found in authoritative Soracloud agent status")
         })
 }
-
 fn mailbox_message_from_status<'a>(
     payload: &'a json::Value,
     from_apartment: &str,
@@ -12734,7 +12143,6 @@ fn mailbox_message_from_status<'a>(
             )
         })
 }
-
 fn build_service_mutation_output(
     mutation_payload: json::Value,
     status_payload: &json::Value,
@@ -12769,7 +12177,6 @@ fn build_service_mutation_output(
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
-
 fn build_agent_mutation_output(
     mutation_payload: json::Value,
     status_payload: &json::Value,
@@ -12800,7 +12207,6 @@ fn build_agent_mutation_output(
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
-
 fn build_hf_mutation_output(
     mutation_payload: json::Value,
     status_payload: &json::Value,
@@ -12820,7 +12226,6 @@ fn build_hf_mutation_output(
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
-
 fn build_wallet_spend_output(
     mutation_payload: json::Value,
     status_payload: &json::Value,
@@ -12845,7 +12250,6 @@ fn build_wallet_spend_output(
     );
     Ok(output)
 }
-
 fn build_message_send_output(
     mutation_payload: json::Value,
     mailbox_status_payload: &json::Value,
@@ -12872,7 +12276,6 @@ fn build_message_send_output(
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
-
 fn build_message_ack_output(
     mutation_payload: json::Value,
     mailbox_status_payload: &json::Value,
@@ -12890,7 +12293,6 @@ fn build_message_ack_output(
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
-
 fn find_agent_autonomy_run_id(
     status_payload: &json::Value,
     artifact_hash: &str,
@@ -12924,7 +12326,64 @@ fn find_agent_autonomy_run_id(
         .map(ToOwned::to_owned)
         .ok_or_else(|| eyre!("agent autonomy status entry is missing `run_id`"))
 }
-
+fn send_torii_soracloud_authenticated_get(
+    endpoint: reqwest::Url,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    response_context: &'static str,
+) -> Result<(reqwest::Url, reqwest::StatusCode, Vec<u8>)> {
+    let submission_config = soracloud_submission_config()
+        .wrap_err("Soracloud protected GET requires an initialized local account signer")?;
+    let auth_headers = build_soracloud_read_auth_headers(&submission_config, &endpoint)?;
+    let client = BlockingHttpClient::builder()
+        .timeout(Duration::from_secs(timeout_secs.max(1)))
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .wrap_err("failed to build exact-auth Soracloud HTTP client")?;
+    let mut request = client
+        .get(endpoint.clone())
+        .header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    for (name, value) in auth_headers {
+        request = request.header(name, value);
+    }
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err_with(|| format!("failed to read {response_context} response body"))?
+        .to_vec();
+    Ok((endpoint, status, body))
+}
+fn fetch_torii_soracloud_authenticated_json(
+    endpoint: reqwest::Url,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    response_context: &'static str,
+) -> Result<(String, norito::json::Value)> {
+    let (endpoint, status, body) = send_torii_soracloud_authenticated_get(
+        endpoint,
+        api_token,
+        timeout_secs,
+        response_context,
+    )?;
+    if !status.is_success() {
+        return Err(eyre!(
+            "Torii {} returned {}: {}",
+            endpoint.path(),
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+    let payload = json::from_slice(&body)
+        .wrap_err_with(|| format!("failed to decode {response_context} JSON payload"))?;
+    Ok((endpoint.to_string(), payload))
+}
 fn fetch_torii_soracloud_status(
     torii_url: &str,
     service_name: Option<&str>,
@@ -12935,41 +12394,15 @@ fn fetch_torii_soracloud_status(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/status")
         .wrap_err("failed to derive /v1/soracloud/status URL from --torii-url")?;
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let mut payload: norito::json::Value =
-        json::from_slice(&body).wrap_err("failed to decode Torii soracloud status JSON payload")?;
+    let (endpoint, mut payload) = fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud status",
+    )?;
     filter_soracloud_status_payload(&mut payload, service_name);
-    Ok((endpoint.to_string(), payload))
+    Ok((endpoint, payload))
 }
-
 fn fetch_torii_soracloud_app_infra_status(
     torii_url: &str,
     app_name: Option<&str>,
@@ -12993,40 +12426,13 @@ fn fetch_torii_soracloud_app_infra_status(
             .join("v1/soracloud/apps/status")
             .wrap_err("failed to derive /v1/soracloud/apps/status URL from --torii-url")?;
     }
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud app infra status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii app infra status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/apps/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud app infra status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud app-infra status",
+    )
 }
-
 fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_name: Option<&str>) {
     let Some(service_name) = service_name
         .map(str::trim)
@@ -13050,7 +12456,6 @@ fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_na
         else {
             return;
         };
-
         services.retain(|entry| {
             entry
                 .as_object()
@@ -13060,7 +12465,6 @@ fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_na
         });
         u64::try_from(services.len()).unwrap_or(u64::MAX)
     };
-
     if let Some(service_count) = control_plane_map.get_mut("service_count") {
         *service_count = norito::json::Value::from(filtered_service_count);
     }
@@ -13077,7 +12481,6 @@ fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_na
         });
     }
 }
-
 fn fetch_torii_soracloud_service_config_status(
     torii_url: &str,
     service_name: &str,
@@ -13104,36 +12507,13 @@ fn fetch_torii_soracloud_service_config_status(
             query.append_pair("config_name", config_name);
         }
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud service config status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii service config status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/service/config/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii service config status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud service-config status",
+    )
 }
-
 fn fetch_torii_soracloud_service_secret_status(
     torii_url: &str,
     service_name: &str,
@@ -13160,36 +12540,13 @@ fn fetch_torii_soracloud_service_secret_status(
             query.append_pair("secret_name", secret_name);
         }
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud service secret status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii service secret status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/service/secret/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii service secret status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud service-secret status",
+    )
 }
-
 fn fetch_torii_soracloud_agent_status(
     torii_url: &str,
     apartment_name: Option<&str>,
@@ -13207,40 +12564,13 @@ fn fetch_torii_soracloud_agent_status(
             .query_pairs_mut()
             .append_pair("apartment_name", apartment_name.trim());
     }
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud agent status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii agent status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/agent/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud agent status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud agent status",
+    )
 }
-
 fn fetch_torii_soracloud_agent_mailbox_status(
     torii_url: &str,
     apartment_name: &str,
@@ -13251,7 +12581,6 @@ fn fetch_torii_soracloud_agent_mailbox_status(
     if apartment_name.is_empty() {
         return Err(eyre!("--apartment-name must not be empty"));
     }
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/mailbox/status")
@@ -13259,40 +12588,13 @@ fn fetch_torii_soracloud_agent_mailbox_status(
     endpoint
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud agent mailbox status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii agent mailbox status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/agent/mailbox/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud agent mailbox status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud agent-mailbox status",
+    )
 }
-
 fn fetch_torii_soracloud_agent_autonomy_status(
     torii_url: &str,
     apartment_name: &str,
@@ -13303,7 +12605,6 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     if apartment_name.is_empty() {
         return Err(eyre!("--apartment-name must not be empty"));
     }
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/autonomy/status")
@@ -13311,40 +12612,13 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     endpoint
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud agent autonomy status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii agent autonomy status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/agent/autonomy/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud agent autonomy status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud agent-autonomy status",
+    )
 }
-
 fn fetch_torii_soracloud_training_job_status(
     torii_url: &str,
     service_name: &str,
@@ -13360,7 +12634,6 @@ fn fetch_torii_soracloud_training_job_status(
     if job_id.is_empty() {
         return Err(eyre!("--job-id must not be empty"));
     }
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/training/job/status")
@@ -13369,40 +12642,13 @@ fn fetch_torii_soracloud_training_job_status(
         .query_pairs_mut()
         .append_pair("service_name", service_name)
         .append_pair("job_id", job_id);
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud training job status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii training job status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/training/job/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii training job status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud training-job status",
+    )
 }
-
 fn fetch_torii_soracloud_model_artifact_status(
     torii_url: &str,
     service_name: &str,
@@ -13418,7 +12664,6 @@ fn fetch_torii_soracloud_model_artifact_status(
     if training_job_id.is_empty() {
         return Err(eyre!("--training-job-id must not be empty"));
     }
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/model/artifact/status")
@@ -13427,40 +12672,13 @@ fn fetch_torii_soracloud_model_artifact_status(
         .query_pairs_mut()
         .append_pair("service_name", service_name)
         .append_pair("training_job_id", training_job_id);
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud model artifact status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii model artifact status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model/artifact/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii model artifact status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud model-artifact status",
+    )
 }
-
 fn fetch_torii_soracloud_model_weight_status(
     torii_url: &str,
     service_name: &str,
@@ -13476,7 +12694,6 @@ fn fetch_torii_soracloud_model_weight_status(
     if model_name.is_empty() {
         return Err(eyre!("--model-name must not be empty"));
     }
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/model/weight/status")
@@ -13485,40 +12702,13 @@ fn fetch_torii_soracloud_model_weight_status(
         .query_pairs_mut()
         .append_pair("service_name", service_name)
         .append_pair("model_name", model_name);
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud model weight status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii model weight status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model/weight/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii model weight status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud model-weight status",
+    )
 }
-
 fn fetch_torii_soracloud_uploaded_model_encryption_recipient(
     torii_url: &str,
     api_token: Option<&str>,
@@ -13559,7 +12749,6 @@ fn fetch_torii_soracloud_uploaded_model_encryption_recipient(
         .wrap_err("failed to decode Torii uploaded-model encryption recipient JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn fetch_torii_soracloud_uploaded_model_status(
     torii_url: &str,
@@ -13585,7 +12774,6 @@ fn fetch_torii_soracloud_uploaded_model_status(
     if model_id.is_none() && model_name.is_none() {
         return Err(eyre!("--model-id or --model-name is required"));
     }
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join(endpoint_path)
@@ -13604,36 +12792,13 @@ fn fetch_torii_soracloud_uploaded_model_status(
             query.append_pair("bundle_root", &json::to_json(&bundle_root)?);
         }
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for uploaded-model status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii uploaded-model status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /{endpoint_path} returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii uploaded-model status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud uploaded-model status",
+    )
 }
-
 const fn storage_class_query_label(storage_class: StorageClass) -> &'static str {
     match storage_class {
         StorageClass::Hot => "Hot",
@@ -13641,7 +12806,6 @@ const fn storage_class_query_label(storage_class: StorageClass) -> &'static str 
         StorageClass::Cold => "Cold",
     }
 }
-
 fn fetch_torii_soracloud_hf_status(
     torii_url: &str,
     repo_id: &str,
@@ -13659,7 +12823,6 @@ fn fetch_torii_soracloud_hf_status(
     let revision = revision.map(parse_hf_revision_arg).transpose()?;
     let account_id = parse_hf_account_id_arg(account_id)?;
     let storage_class = storage_class_query_label(storage_class);
-
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/hf/status")
@@ -13677,40 +12840,13 @@ fn fetch_torii_soracloud_hf_status(
             query.append_pair("account_id", account_id);
         }
     }
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud hf status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii hf status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/hf/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value =
-        json::from_slice(&body).wrap_err("failed to decode Torii hf status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud HF status",
+    )
 }
-
 fn fetch_torii_soracloud_model_host_status(
     torii_url: &str,
     validator_account_id: Option<&str>,
@@ -13727,45 +12863,17 @@ fn fetch_torii_soracloud_model_host_status(
             .query_pairs_mut()
             .append_pair("account_id", validator_account_id);
     }
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud model host status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii model host status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model-host/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii model host status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud model-host status",
+    )
 }
-
 fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
     torii_url
         .ok_or_else(|| eyre!("--torii-url is required for Soracloud live control-plane access"))
 }
-
 fn resolve_manifest_path(base_dir: &Path, path: &str) -> PathBuf {
     let candidate = PathBuf::from(path);
     if candidate.is_absolute() {
@@ -13774,7 +12882,6 @@ fn resolve_manifest_path(base_dir: &Path, path: &str) -> PathBuf {
         base_dir.join(candidate)
     }
 }
-
 fn relative_path_string(from_file: &Path, to_path: &Path) -> String {
     let base_dir = from_file.parent().unwrap_or_else(|| Path::new("."));
     pathdiff::diff_paths(to_path, base_dir)
@@ -13782,7 +12889,6 @@ fn relative_path_string(from_file: &Path, to_path: &Path) -> String {
         .to_string_lossy()
         .into_owned()
 }
-
 fn ensure_app_service_ref_matches_manifest_name(
     expected_service_name: &str,
     service_path: &Path,
@@ -13799,11 +12905,9 @@ fn ensure_app_service_ref_matches_manifest_name(
     }
     Ok(())
 }
-
 fn is_app_service_name_mismatch_error(error: &Report) -> bool {
     format!("{error:#}").contains("referenced service manifest declares")
 }
-
 fn sync_manifest_pair(
     container_path: &Path,
     service_path: &Path,
@@ -13820,7 +12924,6 @@ fn sync_manifest_pair(
     write_json(service_path, &bundle.service)?;
     Ok(entry)
 }
-
 fn project_sync_manifest_pair(
     container_path: &Path,
     service_path: &Path,
@@ -13847,14 +12950,12 @@ fn project_sync_manifest_pair(
     }
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
     service.container.expected_schema_version = container.schema_version;
-
     let bundle = SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container: container.clone(),
         service: service.clone(),
     };
     bundle.validate_for_admission()?;
-
     let entry = SyncManifestEntryOutput {
         service_name: service_name_override
             .map(str::to_owned)
@@ -13868,7 +12969,6 @@ fn project_sync_manifest_pair(
     };
     Ok((entry, bundle))
 }
-
 fn project_app_manifest_service_refs(
     manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
@@ -13893,7 +12993,6 @@ fn project_app_manifest_service_refs(
     }
     Ok((outputs, bundles))
 }
-
 fn sync_app_manifest_service_refs(
     manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
@@ -13915,7 +13014,6 @@ fn sync_app_manifest_service_refs(
     }
     Ok(outputs)
 }
-
 fn load_json<T>(path: &Path) -> Result<T>
 where
     T: JsonDeserialize,
@@ -13926,7 +13024,6 @@ where
         .wrap_err_with(|| format!("failed to decode {} as UTF-8", path.display()))?;
     json::from_str(&text).wrap_err_with(|| format!("failed to decode {}", path.display()))
 }
-
 fn write_json<T>(path: &Path, value: &T) -> Result<()>
 where
     T: JsonSerialize + ?Sized,
@@ -13940,7 +13037,6 @@ where
     let bytes = json::to_vec_pretty(value).wrap_err("failed to encode JSON")?;
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
-
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BundlePackFileSnapshot {
@@ -13955,12 +13051,10 @@ struct BundlePackFileSnapshot {
     changed_seconds: i64,
     changed_nanoseconds: i64,
 }
-
 #[cfg(unix)]
 impl BundlePackFileSnapshot {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt as _;
-
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -13974,32 +13068,25 @@ impl BundlePackFileSnapshot {
             changed_nanoseconds: metadata.ctime_nsec(),
         }
     }
-
     fn same_identity(self, other: Self) -> bool {
         self.device == other.device && self.inode == other.inode
     }
-
     fn unchanged(self, other: Self) -> bool {
         self == other
     }
-
     fn is_regular_single_file(self) -> bool {
         self.is_file && self.links == 1
     }
-
     fn is_direct_directory(self) -> bool {
         self.is_directory
     }
-
     const fn is_reparse_point(self) -> bool {
         false
     }
-
     const fn size(self) -> u64 {
         self.size
     }
 }
-
 #[cfg(windows)]
 const WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 #[cfg(windows)]
@@ -14010,7 +13097,6 @@ const WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 #[cfg(windows)]
 const WINDOWS_FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
-
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -14018,7 +13104,6 @@ struct BundlePackWindowsFileTime {
     low: u32,
     high: u32,
 }
-
 #[cfg(windows)]
 #[repr(C)]
 struct BundlePackWindowsByHandleFileInformation {
@@ -14033,7 +13118,6 @@ struct BundlePackWindowsByHandleFileInformation {
     file_index_high: u32,
     file_index_low: u32,
 }
-
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BundlePackFileSnapshot {
@@ -14045,70 +13129,56 @@ struct BundlePackFileSnapshot {
     creation_time: u64,
     last_write_time: u64,
 }
-
 #[cfg(windows)]
 impl BundlePackFileSnapshot {
     fn same_identity(self, other: Self) -> bool {
         self.volume_serial_number == other.volume_serial_number
             && self.file_index == other.file_index
     }
-
     fn unchanged(self, other: Self) -> bool {
         self == other
     }
-
     fn is_regular_single_file(self) -> bool {
         self.links == 1
             && self.file_attributes
                 & (WINDOWS_FILE_ATTRIBUTE_DIRECTORY | WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
                 == 0
     }
-
     fn is_direct_directory(self) -> bool {
         self.file_attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0
             && self.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT == 0
     }
-
     fn is_reparse_point(self) -> bool {
         self.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
-
     const fn size(self) -> u64 {
         self.size
     }
 }
-
 #[cfg(not(any(unix, windows)))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BundlePackFileSnapshot;
-
 #[cfg(not(any(unix, windows)))]
 impl BundlePackFileSnapshot {
     const fn same_identity(self, _other: Self) -> bool {
         false
     }
-
     const fn unchanged(self, _other: Self) -> bool {
         false
     }
-
     const fn is_regular_single_file(self) -> bool {
         false
     }
-
     const fn is_direct_directory(self) -> bool {
         false
     }
-
     const fn is_reparse_point(self) -> bool {
         false
     }
-
     const fn size(self) -> u64 {
         0
     }
 }
-
 #[cfg(windows)]
 #[link(name = "kernel32")]
 #[allow(unsafe_code)]
@@ -14125,19 +13195,16 @@ unsafe extern "system" {
         flags: u32,
     ) -> i32;
 }
-
 #[cfg(unix)]
 fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot> {
     file.metadata()
         .map(|metadata| BundlePackFileSnapshot::from_metadata(&metadata))
         .wrap_err("failed to snapshot Inrou bundle file handle")
 }
-
 #[cfg(windows)]
 #[allow(unsafe_code)]
 fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot> {
     use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
-
     let mut information = MaybeUninit::<BundlePackWindowsByHandleFileInformation>::uninit();
     // SAFETY: `file` owns a valid kernel handle for the duration of the call,
     // and `information` points to writable storage with the exact Win32 ABI
@@ -14169,14 +13236,12 @@ fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot
         ),
     })
 }
-
 #[cfg(not(any(unix, windows)))]
 fn snapshot_bundle_pack_handle(_file: &fs::File) -> Result<BundlePackFileSnapshot> {
     Err(eyre!(
         "this platform does not expose a stable direct-file identity for Inrou bundle packing"
     ))
 }
-
 #[cfg(unix)]
 fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
     let descriptor = rustix::fs::open(
@@ -14192,11 +13257,9 @@ fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
     })?;
     Ok(fs::File::from(descriptor))
 }
-
 #[cfg(windows)]
 fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     let mut options = fs::OpenOptions::new();
     options
         .read(true)
@@ -14209,7 +13272,6 @@ fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
         )
     })
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
     Err(eyre!(
@@ -14217,7 +13279,6 @@ fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
         path.display()
     ))
 }
-
 #[cfg(unix)]
 fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
     let descriptor = rustix::fs::open(
@@ -14236,11 +13297,9 @@ fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
     })?;
     Ok(fs::File::from(descriptor))
 }
-
 #[cfg(windows)]
 fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     let mut options = fs::OpenOptions::new();
     options
         .access_mode(0)
@@ -14253,7 +13312,6 @@ fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
         )
     })
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
     Err(eyre!(
@@ -14261,13 +13319,11 @@ fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
         path.display()
     ))
 }
-
 struct BundlePackSource {
     file: fs::File,
     snapshot: BundlePackFileSnapshot,
     payload: Vec<u8>,
 }
-
 impl BundlePackSource {
     fn revalidate(&self, path: &Path) -> Result<()> {
         let handle_snapshot = snapshot_bundle_pack_handle(&self.file)?;
@@ -14288,7 +13344,6 @@ impl BundlePackSource {
         Ok(())
     }
 }
-
 fn read_stable_bundle_pack_source(path: &Path) -> Result<BundlePackSource> {
     let path_metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to inspect Inrou bundle source `{}`", path.display()))?;
@@ -14338,7 +13393,6 @@ fn read_stable_bundle_pack_source(path: &Path) -> Result<BundlePackSource> {
             path.display()
         ));
     }
-
     let source = BundlePackSource {
         file,
         snapshot,
@@ -14347,11 +13401,9 @@ fn read_stable_bundle_pack_source(path: &Path) -> Result<BundlePackSource> {
     source.revalidate(path)?;
     Ok(source)
 }
-
 fn bundle_pack_paths_lexically_equal(left: &Path, right: &Path) -> bool {
     left.components().eq(right.components())
 }
-
 fn reject_bundle_pack_source_output_alias(
     source_path: &Path,
     output: &Path,
@@ -14391,7 +13443,6 @@ fn reject_bundle_pack_source_output_alias(
             output.display()
         ));
     }
-
     let output_file = open_direct_bundle_pack_file(output)?;
     let output_snapshot = snapshot_bundle_pack_handle(&output_file)?;
     if output_snapshot.is_reparse_point() {
@@ -14411,13 +13462,11 @@ fn reject_bundle_pack_source_output_alias(
     }
     Ok(())
 }
-
 struct BundlePackParentGuard {
     path: PathBuf,
     file: fs::File,
     snapshot: BundlePackFileSnapshot,
 }
-
 impl BundlePackParentGuard {
     fn open(output: &Path) -> Result<Self> {
         let path = output
@@ -14457,7 +13506,6 @@ impl BundlePackParentGuard {
             snapshot,
         })
     }
-
     fn revalidate(&self) -> Result<()> {
         let handle_snapshot = snapshot_bundle_pack_handle(&self.file)?;
         if !self.snapshot.same_identity(handle_snapshot) || !handle_snapshot.is_direct_directory() {
@@ -14476,7 +13524,6 @@ impl BundlePackParentGuard {
         }
         Ok(())
     }
-
     #[cfg(unix)]
     fn sync(&self) -> Result<()> {
         self.file.sync_all().wrap_err_with(|| {
@@ -14486,7 +13533,6 @@ impl BundlePackParentGuard {
             )
         })
     }
-
     #[cfg(not(unix))]
     fn sync(&self) -> Result<()> {
         let snapshot = snapshot_bundle_pack_handle(&self.file)?;
@@ -14499,13 +13545,11 @@ impl BundlePackParentGuard {
         Ok(())
     }
 }
-
 struct BundlePackArchiveWriter<'a> {
     inner: &'a mut fs::File,
     written_bytes: u64,
     max_bytes: u64,
 }
-
 impl<'a> BundlePackArchiveWriter<'a> {
     const fn new(inner: &'a mut fs::File, max_bytes: u64) -> Self {
         Self {
@@ -14514,12 +13558,10 @@ impl<'a> BundlePackArchiveWriter<'a> {
             max_bytes,
         }
     }
-
     const fn written_bytes(&self) -> u64 {
         self.written_bytes
     }
 }
-
 impl io::Write for BundlePackArchiveWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let requested = u64::try_from(bytes.len()).map_err(|_| {
@@ -14558,12 +13600,10 @@ impl io::Write for BundlePackArchiveWriter<'_> {
         })?;
         Ok(written)
     }
-
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
     }
 }
-
 fn ensure_bundle_pack_archive_size_within_limit(size: u64) -> Result<()> {
     if size > INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES {
         return Err(eyre!(
@@ -14573,7 +13613,6 @@ fn ensure_bundle_pack_archive_size_within_limit(size: u64) -> Result<()> {
     }
     Ok(())
 }
-
 fn remove_bundle_pack_file_if_owned(path: &Path, identity: BundlePackFileSnapshot) {
     let Ok(file) = open_direct_bundle_pack_file(path) else {
         return;
@@ -14586,7 +13625,6 @@ fn remove_bundle_pack_file_if_owned(path: &Path, identity: BundlePackFileSnapsho
         let _ = fs::remove_file(path);
     }
 }
-
 struct BundlePackAtomicOutput {
     path: PathBuf,
     snapshot: BundlePackFileSnapshot,
@@ -14594,26 +13632,22 @@ struct BundlePackAtomicOutput {
     parent: BundlePackParentGuard,
     installed: bool,
 }
-
 struct BundlePackStagingCreationGuard {
     path: PathBuf,
     file: Option<fs::File>,
 }
-
 impl BundlePackStagingCreationGuard {
     fn file(&self) -> Result<&fs::File> {
         self.file
             .as_ref()
             .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))
     }
-
     fn take_file(&mut self) -> Result<fs::File> {
         self.file
             .take()
             .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))
     }
 }
-
 impl Drop for BundlePackStagingCreationGuard {
     fn drop(&mut self) {
         let Some(file) = self.file.take() else {
@@ -14626,7 +13660,6 @@ impl Drop for BundlePackStagingCreationGuard {
         remove_bundle_pack_file_if_owned(&self.path, snapshot);
     }
 }
-
 impl BundlePackAtomicOutput {
     fn create(output: &Path) -> Result<Self> {
         if output.file_name().is_none() {
@@ -14649,13 +13682,11 @@ impl BundlePackAtomicOutput {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
-
                 options.mode(0o600);
             }
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 options.share_mode(WINDOWS_FILE_SHARE_READ_WRITE_DELETE);
             }
             match options.open(&path) {
@@ -14704,13 +13735,11 @@ impl BundlePackAtomicOutput {
             parent.path.display()
         ))
     }
-
     fn file_mut(&mut self) -> Result<&mut fs::File> {
         self.file
             .as_mut()
             .ok_or_else(|| eyre!("staged Inrou bundle file is already closed"))
     }
-
     fn finish_and_install(
         mut self,
         output: &Path,
@@ -14739,7 +13768,6 @@ impl BundlePackAtomicOutput {
             ));
         }
         ensure_bundle_pack_archive_size_within_limit(written_snapshot.size())?;
-
         let staged_path_file = open_direct_bundle_pack_file(&self.path)?;
         let staged_path_snapshot = snapshot_bundle_pack_handle(&staged_path_file)?;
         if !written_snapshot.unchanged(staged_path_snapshot) {
@@ -14748,7 +13776,6 @@ impl BundlePackAtomicOutput {
                 self.path.display()
             ));
         }
-
         staged_file
             .seek(SeekFrom::Start(0))
             .wrap_err("failed to rewind staged Inrou bundle")?;
@@ -14773,7 +13800,6 @@ impl BundlePackAtomicOutput {
         }
         source.revalidate(source_path)?;
         self.parent.revalidate()?;
-
         atomic_replace_bundle_pack_file(&self.path, output).wrap_err_with(|| {
             format!(
                 "failed to atomically install Inrou bundle `{}`",
@@ -14781,7 +13807,6 @@ impl BundlePackAtomicOutput {
             )
         })?;
         self.installed = true;
-
         let post_commit = (|| -> Result<()> {
             let retained_snapshot = snapshot_bundle_pack_handle(
                 self.file
@@ -14796,7 +13821,6 @@ impl BundlePackAtomicOutput {
                     "retained staging handle no longer identifies the installed archive"
                 ));
             }
-
             let mut installed_file = open_direct_bundle_pack_file(output)?;
             let installed_snapshot = snapshot_bundle_pack_handle(&installed_file)?;
             if !retained_snapshot.same_identity(installed_snapshot)
@@ -14845,7 +13869,6 @@ impl BundlePackAtomicOutput {
         Ok((bundle_hash, bundle_size_bytes))
     }
 }
-
 impl Drop for BundlePackAtomicOutput {
     fn drop(&mut self) {
         if self.installed {
@@ -14855,7 +13878,6 @@ impl Drop for BundlePackAtomicOutput {
         remove_bundle_pack_file_if_owned(&self.path, self.snapshot);
     }
 }
-
 #[cfg(unix)]
 fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
     fs::rename(staged, output).wrap_err_with(|| {
@@ -14866,11 +13888,9 @@ fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
         )
     })
 }
-
 #[cfg(windows)]
 fn windows_bundle_pack_wide_path(path: &Path) -> Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt as _;
-
     let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
     if wide.contains(&0) {
         return Err(eyre!(
@@ -14881,13 +13901,11 @@ fn windows_bundle_pack_wide_path(path: &Path) -> Result<Vec<u16>> {
     wide.push(0);
     Ok(wide)
 }
-
 #[cfg(windows)]
 #[allow(unsafe_code)]
 fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
-
     let staged_wide = windows_bundle_pack_wide_path(staged)?;
     let output_wide = windows_bundle_pack_wide_path(output)?;
     // SAFETY: both path buffers are NUL-terminated and remain alive for the
@@ -14911,14 +13929,12 @@ fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn atomic_replace_bundle_pack_file(_staged: &Path, _output: &Path) -> Result<()> {
     Err(eyre!(
         "atomic Inrou bundle replacement is unsupported on this platform"
     ))
 }
-
 fn ensure_can_write(path: &Path, overwrite: bool) -> Result<()> {
     if !overwrite && path.exists() {
         return Err(eyre!(
@@ -14928,14 +13944,12 @@ fn ensure_can_write(path: &Path, overwrite: bool) -> Result<()> {
     }
     Ok(())
 }
-
 fn workspace_fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join(path)
 }
-
 fn service_handler(
     handler_name: &str,
     class: SoraServiceHandlerClassV1,
@@ -14963,7 +13977,6 @@ fn service_handler(
         ),
     }
 }
-
 fn service_artifact(
     kind: SoraArtifactKindV1,
     artifact_path: &str,
@@ -14976,7 +13989,6 @@ fn service_artifact(
         handler_name: handler_name.map(|name| name.parse().expect("literal handler name is valid")),
     }
 }
-
 fn default_inrou_manifest() -> SoraInrouManifestV1 {
     SoraInrouManifestV1 {
         schema_version: SORA_INROU_MANIFEST_VERSION_V1,
@@ -15009,7 +14021,6 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
         ssh_authorized_keys: vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()],
     }
 }
-
 fn default_generic_http_service_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
     vec![
         SoraLeaseVolumeBindingV1 {
@@ -15028,7 +14039,6 @@ fn default_generic_http_service_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1>
         },
     ]
 }
-
 fn default_split_app_live_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
     vec![
         SoraLeaseVolumeBindingV1 {
@@ -15076,7 +14086,6 @@ fn default_split_app_live_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
         },
     ]
 }
-
 fn build_split_app_live_service_bundle(
     app_name: &str,
     host: &str,
@@ -15089,7 +14098,6 @@ fn build_split_app_live_service_bundle(
     let service_name: Name = format!("{app_name}_live")
         .parse()
         .wrap_err("invalid split-app live service name")?;
-
     container.runtime = SoraContainerRuntimeV1::Inrou;
     container.bundle_path = "/app/server.mjs".to_owned();
     container.entrypoint = "/app/server.mjs".to_owned();
@@ -15107,7 +14115,6 @@ fn build_split_app_live_service_bundle(
     container.capabilities.allow_model_inference = false;
     container.capabilities.allow_model_training = false;
     container.lifecycle.healthcheck_path = Some("/health".to_owned());
-
     service.service_name = service_name;
     service.service_version = app_version.to_owned();
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
@@ -15125,7 +14132,6 @@ fn build_split_app_live_service_bundle(
     service.artifacts.clear();
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
     service.container.expected_schema_version = container.schema_version;
-
     let bundle = SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container,
@@ -15134,7 +14140,6 @@ fn build_split_app_live_service_bundle(
     bundle.validate_for_admission()?;
     Ok(bundle)
 }
-
 fn build_split_app_vault_service_bundle(
     app_name: &str,
     host: &str,
@@ -15147,7 +14152,6 @@ fn build_split_app_vault_service_bundle(
     let service_name: Name = format!("{app_name}_vault")
         .parse()
         .wrap_err("invalid split-app vault service name")?;
-
     container.runtime = SoraContainerRuntimeV1::Ivm;
     container.bundle_path = "/bundles/vault-api.to".to_owned();
     container.entrypoint = "main".to_owned();
@@ -15180,7 +14184,6 @@ fn build_split_app_vault_service_bundle(
     container.capabilities.allow_model_inference = false;
     container.capabilities.allow_model_training = false;
     container.lifecycle.healthcheck_path = Some("/api/auth/me".to_owned());
-
     service.service_name = service_name;
     service.service_version = app_version.to_owned();
     service.execution_plane = SoraServiceExecutionPlaneV1::DeterministicService;
@@ -15323,7 +14326,6 @@ fn build_split_app_vault_service_bundle(
     ];
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
     service.container.expected_schema_version = container.schema_version;
-
     let bundle = SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container,
@@ -15332,7 +14334,6 @@ fn build_split_app_vault_service_bundle(
     bundle.validate_for_admission()?;
     Ok(bundle)
 }
-
 fn apply_init_template_defaults(
     template: InitTemplate,
     service_name: &Name,
@@ -15365,7 +14366,6 @@ fn apply_init_template_defaults(
             container.capabilities.allow_model_inference = false;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/health".to_owned());
-
             service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
             service.route = Some(SoraRouteTargetV1 {
                 host,
@@ -15398,7 +14398,6 @@ fn apply_init_template_defaults(
             container.capabilities.allow_state_writes = false;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
-
             service.route = Some(SoraRouteTargetV1 {
                 host,
                 path_prefix: "/".to_owned(),
@@ -15455,7 +14454,6 @@ fn apply_init_template_defaults(
             container.capabilities.allow_model_inference = false;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/api/v1/health".to_owned());
-
             service.route = Some(SoraRouteTargetV1 {
                 host,
                 path_prefix: "/api".to_owned(),
@@ -15553,7 +14551,6 @@ fn apply_init_template_defaults(
             container.capabilities.allow_state_writes = true;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/pii/api/healthz".to_owned());
-
             service.route = Some(SoraRouteTargetV1 {
                 host,
                 path_prefix: "/pii/api".to_owned(),
@@ -15703,7 +14700,6 @@ fn apply_init_template_defaults(
             container.capabilities.allow_state_writes = true;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
-
             service.route = Some(SoraRouteTargetV1 {
                 host,
                 path_prefix: "/api".to_owned(),
@@ -15924,7 +14920,6 @@ fn apply_init_template_defaults(
         }
     }
 }
-
 fn scaffold_init_template(
     template: InitTemplate,
     output_dir: &Path,
@@ -15944,7 +14939,6 @@ fn scaffold_init_template(
         }
     }
 }
-
 fn scaffold_site_template(
     output_dir: &Path,
     service_name: &str,
@@ -15980,7 +14974,6 @@ fn scaffold_site_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_single_api_app_template(
     output_dir: &Path,
     app_name: &str,
@@ -16051,7 +15044,6 @@ fn scaffold_single_api_app_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_http_service_template(
     output_dir: &Path,
     service_name: &str,
@@ -16093,7 +15085,6 @@ fn scaffold_http_service_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_webapp_template(
     output_dir: &Path,
     service_name: &str,
@@ -16139,7 +15130,6 @@ fn scaffold_webapp_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_pii_app_template(
     output_dir: &Path,
     service_name: &str,
@@ -16197,7 +15187,6 @@ fn scaffold_pii_app_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_hayahi_app_template(
     output_dir: &Path,
     service_name: &str,
@@ -16223,7 +15212,6 @@ fn scaffold_hayahi_app_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_split_app_template(
     output_dir: &Path,
     app_name: &str,
@@ -16233,7 +15221,6 @@ fn scaffold_split_app_template(
     if existing_repo {
         return scaffold_split_app_existing_repo_template(output_dir, app_name, overwrite);
     }
-
     let frontend_dir = output_dir.join("frontend");
     let live_dir = output_dir.join("services").join("live");
     let vault_dir = output_dir.join("services").join("vault");
@@ -16324,7 +15311,6 @@ fn scaffold_split_app_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn scaffold_split_app_existing_repo_template(
     output_dir: &Path,
     app_name: &str,
@@ -16351,7 +15337,6 @@ fn scaffold_split_app_existing_repo_template(
     ];
     write_template_files(files, overwrite)
 }
-
 fn write_template_files(files: Vec<(PathBuf, String)>, overwrite: bool) -> Result<Vec<String>> {
     let mut written = Vec::with_capacity(files.len());
     for (path, body) in files {
@@ -16360,7 +15345,6 @@ fn write_template_files(files: Vec<(PathBuf, String)>, overwrite: bool) -> Resul
     }
     Ok(written)
 }
-
 fn write_template_file(path: &Path, body: &str, overwrite: bool) -> Result<()> {
     ensure_can_write(path, overwrite)?;
     if let Some(parent) = path.parent()
@@ -16376,16 +15360,13 @@ fn write_template_file(path: &Path, body: &str, overwrite: bool) -> Result<()> {
     mark_template_file_executable(path)?;
     Ok(())
 }
-
 fn normalize_template_shell_vars(body: &str) -> String {
     body.replace("${{BASH_SOURCE[0]}}", "${BASH_SOURCE[0]}")
 }
-
 fn mark_template_file_executable(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let extension = path.extension().and_then(|value| value.to_str());
         if extension == Some("sh") {
             let mut permissions = fs::metadata(path)
@@ -16399,7 +15380,6 @@ fn mark_template_file_executable(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn normalized_service_label(service_name: &str) -> String {
     let mut out = String::new();
     for ch in service_name.chars() {
@@ -16418,7 +15398,6 @@ fn normalized_service_label(service_name: &str) -> String {
         out
     }
 }
-
 fn normalized_contract_identifier(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars() {
@@ -16486,132 +15465,107 @@ fn site_package_json(package_name: &str) -> String {
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn webapp_root_package_json(package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/webapp_root_package_json.tmpl"),
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn webapp_frontend_package_json(package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/webapp_frontend_package_json.tmpl"),
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn pii_app_root_package_json(package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/pii_app_root_package_json.tmpl"),
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn pii_app_frontend_package_json(package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/pii_app_frontend_package_json.tmpl"),
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn hayahi_app_root_package_json(package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/hayahi_app_root_package_json.tmpl"),
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn site_tsconfig_json() -> &'static str {
     include_str!("soracloud/templates/v1/site_tsconfig.json")
 }
-
 fn site_vite_config() -> &'static str {
     include_str!("soracloud/templates/v1/site_vite.config.ts")
 }
-
 fn single_api_frontend_vite_config() -> &'static str {
     include_str!("soracloud/templates/v1/single_api_frontend_vite.config.ts")
 }
-
 fn webapp_frontend_vite_config() -> &'static str {
     include_str!("soracloud/templates/v1/webapp_frontend_vite.config.ts")
 }
-
 fn pii_app_frontend_vite_config() -> &'static str {
     include_str!("soracloud/templates/v1/pii_app_frontend_vite.config.ts")
 }
-
 fn site_index_html() -> &'static str {
     include_str!("soracloud/templates/v1/site_index.html")
 }
-
 fn site_main_ts() -> &'static str {
     include_str!("soracloud/templates/v1/site_main.ts")
 }
-
 fn site_app_vue(service_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/site_app_vue.tmpl"),
         &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
-
 fn single_api_frontend_app_vue(app_name: &str) -> String {
     include_str!("soracloud/templates/v1/static/single_api_frontend_app.vue")
         .replace("__APP_NAME__", app_name)
 }
-
 fn webapp_frontend_app_vue(service_name: &str) -> String {
     include_str!("soracloud/templates/v1/static/webapp_frontend_app.vue")
         .replace("__SERVICE_NAME__", service_name)
 }
-
 fn single_api_contract_ko(app_name: &str) -> String {
     let seiyaku_name = format!("{}_api_service", normalized_contract_identifier(app_name));
     include_str!("soracloud/templates/v1/static/single_api_contract.ko")
         .replace("__CONTRACT_NAME__", &seiyaku_name)
         .replace("__APP_NAME__", app_name)
 }
-
 fn pii_app_frontend_app_vue(service_name: &str) -> String {
     include_str!("soracloud/templates/v1/static/pii_app_frontend_app.vue")
         .replace("__SERVICE_NAME__", service_name)
 }
-
 fn hayahi_app_contract_ko(service_name: &str) -> String {
     include_str!("soracloud/templates/v1/static/hayahi_app_contract.ko")
         .replace("__CONTRACT_NAME__", "HayahiSoracloudCore")
         .replace("__SERVICE_NAME__", service_name)
 }
-
 fn soracloud_auth_core_mjs() -> &'static str {
     include_str!("soracloud/templates/v1/soracloud_auth_core.mjs")
 }
-
 const WEBAPP_API_TAIL_V1: &str = include_str!("soracloud/assets/v1/webapp_api_tail.mjs");
 const PII_API_TAIL_V1: &str = include_str!("soracloud/assets/v1/pii_api_tail.mjs");
-
 fn webapp_api_server_mjs() -> String {
     let mut script = String::from(soracloud_auth_core_mjs());
     script.push_str(WEBAPP_API_TAIL_V1);
     script
 }
-
 fn pii_app_api_server_mjs() -> String {
     let mut script = String::from(soracloud_auth_core_mjs());
     script.push_str(PII_API_TAIL_V1);
     script
 }
-
 fn single_api_api_build_sh() -> String {
     include_str!("soracloud/templates/v1/single_api_api_build.sh").to_owned()
 }
-
 fn single_api_api_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/single_api_api_dev.sh")
 }
-
 fn single_api_api_dev_server_mjs(app_name: &str) -> String {
     let app_name_debug = format!("{app_name:?}");
     render_template(
@@ -16619,15 +15573,12 @@ fn single_api_api_dev_server_mjs(app_name: &str) -> String {
         &[(TEMPLATE_APP_NAME_DEBUG, &app_name_debug)],
     )
 }
-
 fn single_api_api_verify_build_sh() -> String {
     include_str!("soracloud/templates/v1/single_api_api_verify_build.sh").to_owned()
 }
-
 fn hayahi_app_build_sh() -> String {
     include_str!("soracloud/templates/v1/hayahi_app_build.sh").to_owned()
 }
-
 fn http_service_build_sh(bundle_name: &str) -> String {
     let prelude = iroha_shell_command_prelude();
     render_template(
@@ -16638,19 +15589,15 @@ fn http_service_build_sh(bundle_name: &str) -> String {
         ],
     )
 }
-
 fn http_service_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/http_service_dev.sh")
 }
-
 fn http_service_local_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/http_service_local_dev.sh")
 }
-
 fn iroha_shell_command_prelude() -> &'static str {
     include_str!("soracloud/templates/v1/iroha_shell_command_prelude.sh")
 }
-
 fn http_service_build_and_sync_sh(bundle_name: &str) -> String {
     let prelude = iroha_shell_command_prelude();
     render_template(
@@ -16661,31 +15608,26 @@ fn http_service_build_and_sync_sh(bundle_name: &str) -> String {
         ],
     )
 }
-
 fn http_service_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/http_service_doctor.sh")
         .replace("{prelude}", prelude)
 }
-
 fn http_service_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/http_service_release.sh")
         .replace("{prelude}", prelude)
 }
-
 fn http_service_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/http_service_deploy.sh")
         .replace("{prelude}", prelude)
 }
-
 fn http_service_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/http_service_upgrade.sh")
         .replace("{prelude}", prelude)
 }
-
 fn http_service_server_mjs(service_name: &str) -> String {
     let service_name_debug = format!("{service_name:?}");
     render_template(
@@ -16693,7 +15635,6 @@ fn http_service_server_mjs(service_name: &str) -> String {
         &[(TEMPLATE_SERVICE_NAME_DEBUG, &service_name_debug)],
     )
 }
-
 fn split_app_live_server_mjs(service_name: &str) -> String {
     let service_name_debug = format!("{service_name:?}");
     render_template(
@@ -16701,7 +15642,6 @@ fn split_app_live_server_mjs(service_name: &str) -> String {
         &[(TEMPLATE_SERVICE_NAME_DEBUG, &service_name_debug)],
     )
 }
-
 fn http_service_readme(service_name: &str, package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/http_service_readme.tmpl"),
@@ -16711,45 +15651,36 @@ fn http_service_readme(service_name: &str, package_name: &str) -> String {
         ],
     )
 }
-
 fn http_service_inrou_assets_readme() -> String {
     include_str!("soracloud/templates/v1/http_service_inrou_assets_readme.md").to_owned()
 }
-
 fn split_app_frontend_package_json(package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_frontend_package_json.tmpl"),
         &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
-
 fn split_app_frontend_validate_production_env_mjs() -> &'static str {
     include_str!("soracloud/templates/v1/split_app_frontend_validate_production_env.mjs")
 }
-
 fn split_app_frontend_vite_config() -> &'static str {
     include_str!("soracloud/templates/v1/split_app_frontend_vite.config.ts")
 }
-
 fn split_app_frontend_app_vue(app_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_frontend_app_vue.tmpl"),
         &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
-
 fn split_app_vault_build_sh() -> String {
     include_str!("soracloud/templates/v1/split_app_vault_build.sh").to_owned()
 }
-
 fn split_app_vault_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/split_app_vault_dev.sh")
 }
-
 fn split_app_vault_verify_build_sh() -> String {
     include_str!("soracloud/templates/v1/split_app_vault_verify_build.sh").to_owned()
 }
-
 fn split_app_vault_dev_server_mjs(app_name: &str) -> String {
     let app_name_debug = format!("{app_name:?}");
     render_template(
@@ -16757,7 +15688,6 @@ fn split_app_vault_dev_server_mjs(app_name: &str) -> String {
         &[(TEMPLATE_APP_NAME_DEBUG, &app_name_debug)],
     )
 }
-
 fn split_app_vault_contract_ko(app_name: &str) -> String {
     let seiyaku_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
     render_template(
@@ -16765,56 +15695,46 @@ fn split_app_vault_contract_ko(app_name: &str) -> String {
         &[(TEMPLATE_SEIYAKU_NAME, &seiyaku_name)],
     )
 }
-
 fn split_app_live_readme(app_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_live_readme.tmpl"),
         &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
-
 fn split_app_vault_readme(app_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_vault_readme.tmpl"),
         &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
-
 fn split_app_local_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/split_app_local_dev.sh")
 }
-
 fn split_app_build_and_sync_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/split_app_build_and_sync.sh")
         .replace("{prelude}", prelude)
 }
-
 fn split_app_existing_repo_build_and_sync_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/split_app_existing_repo_build_and_sync.sh")
         .replace("{prelude}", prelude)
 }
-
 fn split_app_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/split_app_doctor.sh").replace("{prelude}", prelude)
 }
-
 fn split_app_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/split_app_release.sh").replace("{prelude}", prelude)
 }
-
 fn split_app_deploy_sh() -> String {
     include_str!("soracloud/templates/v1/split_app_deploy.sh").to_owned()
 }
-
 fn split_app_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/split_app_upgrade.sh").replace("{prelude}", prelude)
 }
-
 fn split_app_readme(app_name: &str, package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_readme.tmpl"),
@@ -16824,26 +15744,21 @@ fn split_app_readme(app_name: &str, package_name: &str) -> String {
         ],
     )
 }
-
 fn split_app_existing_repo_readme(app_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_existing_repo_readme.tmpl"),
         &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
-
 fn pii_app_consent_policy_template() -> String {
     include_str!("soracloud/templates/v1/pii_app_consent_policy.json").to_owned()
 }
-
 fn pii_app_retention_policy_template() -> String {
     include_str!("soracloud/templates/v1/pii_app_retention_policy.json").to_owned()
 }
-
 fn pii_app_deletion_workflow_template() -> String {
     include_str!("soracloud/templates/v1/pii_app_deletion_workflow.json").to_owned()
 }
-
 fn site_readme(service_name: &str, dns_host: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/site_readme.tmpl"),
@@ -16853,46 +15768,38 @@ fn site_readme(service_name: &str, dns_host: &str) -> String {
         ],
     )
 }
-
 fn single_api_api_readme(app_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/single_api_api_readme.tmpl"),
         &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
-
 fn single_api_local_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/single_api_local_dev.sh")
 }
-
 fn single_api_build_and_sync_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/single_api_build_and_sync.sh")
         .replace("{prelude}", prelude)
 }
-
 fn single_api_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/single_api_doctor.sh").replace("{prelude}", prelude)
 }
-
 fn single_api_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/single_api_release.sh")
         .replace("{prelude}", prelude)
 }
-
 fn single_api_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/single_api_deploy.sh").replace("{prelude}", prelude)
 }
-
 fn single_api_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/single_api_upgrade.sh")
         .replace("{prelude}", prelude)
 }
-
 fn single_api_app_readme(app_name: &str, package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/single_api_app_readme.tmpl"),
@@ -16902,28 +15809,24 @@ fn single_api_app_readme(app_name: &str, package_name: &str) -> String {
         ],
     )
 }
-
 fn webapp_readme(service_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/webapp_readme.tmpl"),
         &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
-
 fn pii_app_readme(service_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/pii_app_readme.tmpl"),
         &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
-
 fn hayahi_app_readme(service_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/hayahi_app_readme.tmpl"),
         &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -16949,7 +15852,6 @@ mod tests {
         time::Duration,
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
-
     const STATIC_ASSETS_V1: [&str; 22] = [
         include_str!("soracloud/assets/v1/tests/http_local.sh"),
         include_str!("soracloud/assets/v1/tests/exit_130.sh"),
@@ -16980,7 +15882,6 @@ mod tests {
         include_str!("soracloud/assets/v1/tests/auth_handlers_success.mjs"),
         include_str!("soracloud/assets/v1/tests/auth_bad_requests.mjs"),
     ];
-
     const TEST_HARNESSES_V1: [&str; 25] = [
         include_str!("soracloud/assets/v1/tests/pii_startup_import.mjs"),
         include_str!("soracloud/assets/v1/tests/pii_auth_core_import.mjs"),
@@ -17008,36 +15909,27 @@ mod tests {
         include_str!("soracloud/assets/v1/tests/pii_origin_mismatch.mjs"),
         include_str!("soracloud/assets/v1/tests/pii_capability_authorization.mjs"),
     ];
-
     struct FailingSoracloudSignatureNonceRng;
-
     #[derive(Debug)]
     struct FailingSoracloudSignatureNonceRngError;
-
     impl fmt::Display for FailingSoracloudSignatureNonceRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing Soracloud signature nonce RNG")
         }
     }
-
     impl TryRngCore for FailingSoracloudSignatureNonceRng {
         type Error = FailingSoracloudSignatureNonceRngError;
-
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingSoracloudSignatureNonceRngError)
         }
-
         fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
             Err(FailingSoracloudSignatureNonceRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
             Err(FailingSoracloudSignatureNonceRngError)
         }
     }
-
     impl TryCryptoRng for FailingSoracloudSignatureNonceRng {}
-
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -17047,7 +15939,6 @@ mod tests {
         fs::create_dir_all(&path).expect("create temp dir");
         path
     }
-
     fn assert_request_has_no_inline_signing_fields(request: &impl JsonSerialize) {
         let Value::Object(body) =
             norito::json::to_value(request).expect("serialize Soracloud request")
@@ -17061,7 +15952,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn template_renderer_is_single_pass_for_adversarial_substitutions() {
         let first = "__SORACLOUD_SECOND__\n\"quoted\" {braced}";
@@ -17174,7 +16064,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&source, source_payload).expect("write bundle source");
         fs::create_dir_all(output.parent().expect("output parent")).expect("create output parent");
         fs::write(&output, b"stale archive").expect("write stale output");
-
         let first = BundlePackArgs {
             source: source.clone(),
             archive_path: "app/server.mjs".to_owned(),
@@ -17193,7 +16082,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("encode expected canonical archive");
         let installed = fs::read(&output).expect("read installed bundle");
-
         assert_eq!(installed, expected);
         assert_eq!(first.source_file, source.to_string_lossy().into_owned());
         assert_eq!(
@@ -17208,7 +16096,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             u64::try_from(expected.len()).expect("archive length")
         );
         assert_eq!(first.bundle_hash, Hash::new(&expected));
-
         let second = BundlePackArgs {
             source,
             archive_path: "app/server.mjs".to_owned(),
@@ -17232,7 +16119,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "successful packing must not leave staging files"
         );
     }
-
     #[test]
     fn bundle_pack_preserves_existing_output_when_archive_member_is_invalid() {
         let dir = temp_dir("bundle_pack_invalid_member");
@@ -17240,7 +16126,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let output = dir.join("service.tgz");
         fs::write(&source, b"source").expect("write source");
         fs::write(&output, b"previous").expect("write previous output");
-
         let error = BundlePackArgs {
             source,
             archive_path: "../escape".to_owned(),
@@ -17249,7 +16134,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect_err("parent-traversing archive path must fail");
-
         assert!(format!("{error:?}").contains("failed to encode canonical Inrou bundle member"));
         assert_eq!(
             fs::read(&output).expect("read preserved output"),
@@ -17268,13 +16152,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "failed packing must clean only its owned staging file"
         );
     }
-
     #[test]
     fn bundle_pack_rejects_source_as_output_without_changing_it() {
         let dir = temp_dir("bundle_pack_source_output_alias");
         let source = dir.join("server.mjs");
         fs::write(&source, b"source must survive").expect("write source");
-
         let error = BundlePackArgs {
             source: source.clone(),
             archive_path: "app/server.mjs".to_owned(),
@@ -17283,21 +16165,18 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect_err("source and output must not be the same path");
-
         assert!(format!("{error:?}").contains("must not replace its source file"));
         assert_eq!(
             fs::read(&source).expect("read preserved source"),
             b"source must survive"
         );
     }
-
     #[test]
     fn bundle_pack_non_executable_member_uses_canonical_0644_mode() {
         let dir = temp_dir("bundle_pack_non_executable");
         let source = dir.join("config.txt");
         let output = dir.join("config.tgz");
         fs::write(&source, b"configuration\n").expect("write source");
-
         let report = BundlePackArgs {
             source,
             archive_path: "app/config.txt".to_owned(),
@@ -17315,23 +16194,19 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             )],
         )
         .expect("encode expected non-executable archive");
-
         assert_eq!(report.archive_member_mode, 0o644);
         assert_eq!(fs::read(output).expect("read archive"), expected);
     }
-
     #[cfg(unix)]
     #[test]
     fn bundle_pack_rejects_symbolic_and_hard_link_sources() {
         use std::os::unix::fs::symlink;
-
         let dir = temp_dir("bundle_pack_indirect_source");
         let source = dir.join("server.mjs");
         let symbolic = dir.join("symbolic.mjs");
         let hard = dir.join("hard.mjs");
         fs::write(&source, b"source").expect("write source");
         symlink(&source, &symbolic).expect("create symbolic link");
-
         let symbolic_error = BundlePackArgs {
             source: symbolic,
             archive_path: "app/server.mjs".to_owned(),
@@ -17341,7 +16216,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run()
         .expect_err("symbolic-link source must fail");
         assert!(format!("{symbolic_error:?}").contains("stable single-link identity"));
-
         fs::hard_link(&source, &hard).expect("create hard link");
         let hard_error = BundlePackArgs {
             source,
@@ -17353,12 +16227,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect_err("hard-linked source must fail");
         assert!(format!("{hard_error:?}").contains("stable single-link identity"));
     }
-
     #[cfg(unix)]
     #[test]
     fn bundle_pack_replaces_output_symlink_without_touching_its_target() {
         use std::os::unix::fs::symlink;
-
         let dir = temp_dir("bundle_pack_output_symlink");
         let source = dir.join("server.mjs");
         let target = dir.join("target.tgz");
@@ -17366,7 +16238,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&source, b"service").expect("write source");
         fs::write(&target, b"target must survive").expect("write symlink target");
         symlink(&target, &output).expect("create output symlink");
-
         let report = BundlePackArgs {
             source,
             archive_path: "app/server.mjs".to_owned(),
@@ -17375,7 +16246,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("replace output symlink");
-
         assert_eq!(
             fs::read(&target).expect("read untouched target"),
             b"target must survive"
@@ -17388,7 +16258,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let output_bytes = fs::read(&output).expect("read installed archive");
         assert_eq!(report.bundle_hash, Hash::new(&output_bytes));
     }
-
     #[test]
     fn bundle_pack_archive_size_limit_accepts_boundary_and_rejects_overflow() {
         ensure_bundle_pack_archive_size_within_limit(INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES)
@@ -17398,7 +16267,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect_err("archive size above limit must fail");
         assert!(format!("{error:?}").contains("exceeds the"));
     }
-
     #[test]
     fn bundle_pack_archive_writer_stops_before_emitting_bytes_over_its_limit() {
         let dir = temp_dir("bundle_pack_archive_writer_limit");
@@ -17415,7 +16283,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         assert_eq!(fs::metadata(path).expect("inspect staged archive").len(), 4);
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_bundle_pack_snapshots_handles_and_atomically_replaces_existing_output() {
@@ -17424,7 +16291,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let output = dir.join("output.tgz");
         fs::write(&staged, b"new archive").expect("write staged archive");
         fs::write(&output, b"old archive").expect("write old archive");
-
         let staged_handle = open_direct_bundle_pack_file(&staged).expect("open staged archive");
         let staged_snapshot =
             snapshot_bundle_pack_handle(&staged_handle).expect("snapshot staged archive");
@@ -17433,7 +16299,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             staged_snapshot.size(),
             u64::try_from(b"new archive".len()).expect("test payload length")
         );
-
         atomic_replace_bundle_pack_file(&staged, &output)
             .expect("atomically replace existing output");
         let output_handle = open_direct_bundle_pack_file(&output).expect("open replaced output");
@@ -17445,11 +16310,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"new archive"
         );
     }
-
     #[test]
     fn generated_http_service_build_uses_offline_canonical_bundle_packer() {
         let script = http_service_build_sh("service.tgz");
-
         assert!(script.contains("IROHA_CARGO=(cargo)"));
         assert!(script.contains("IROHA_BIN"));
         assert!(script.contains("IROHA_MANIFEST_PATH"));
@@ -17462,17 +16325,14 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(!script.contains("STAGING_DIR"));
         assert!(!script.contains("rm -rf"));
     }
-
     #[test]
     fn bundle_pack_parses_as_offline_service_command() {
         use clap::Parser as _;
-
         #[derive(clap::Parser)]
         struct ServiceParser {
             #[command(subcommand)]
             command: ServiceCommand,
         }
-
         let parsed = ServiceParser::try_parse_from([
             "service",
             "bundle-pack",
@@ -17494,7 +16354,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(args.executable);
         assert!(parsed.command.allows_fallback_config());
     }
-
     #[test]
     fn positive_quantity_parser_accepts_exact_sub_nano_and_wide_values() {
         for canonical in [
@@ -17505,7 +16364,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert_eq!(quantity.to_string(), canonical);
         }
     }
-
     #[test]
     fn positive_quantity_parser_rejects_zero_and_noncanonical_values() {
         for invalid in [
@@ -17527,7 +16385,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             );
         }
     }
-
     #[test]
     fn generated_kotodama_contract_fixtures_compile_with_canonical_v1_surface() {
         for (name, source) in [
@@ -17540,11 +16397,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .unwrap_or_else(|error| panic!("{name} Kotodama fixture must compile: {error:?}"));
         }
     }
-
     #[test]
     fn soracloud_temp_dir_reports_suffix_rng_failure() {
         let mut rng = FailingSoracloudSignatureNonceRng;
-
         let error = match SoracloudTempDir::new_with_rng("iroha-soracloud-temp", &mut rng) {
             Ok(tempdir) => panic!(
                 "temporary directory suffix RNG unexpectedly succeeded at `{}`",
@@ -17553,11 +16408,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Err(error) => error,
         };
         let message = format!("{error:?}");
-
         assert!(message.contains("Soracloud temporary directory suffix OS RNG failed"));
         assert!(message.contains("failing Soracloud signature nonce RNG"));
     }
-
     fn assert_manifest_pair_service_plan(output: &norito::json::Value) {
         assert_eq!(
             output
@@ -17578,25 +16431,20 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .is_some_and(|path| path.ends_with("dev.sh"))
         );
     }
-
     fn fixture_container() -> SoraContainerManifestV1 {
         load_json(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST)).expect("container fixture")
     }
-
     fn fixture_service() -> SoraServiceManifestV1 {
         load_json(&workspace_fixture(DEFAULT_SERVICE_MANIFEST)).expect("service fixture")
     }
-
     fn fixture_agent_apartment() -> AgentApartmentManifestV1 {
         load_json(&workspace_fixture(DEFAULT_AGENT_APARTMENT_MANIFEST))
             .expect("agent apartment fixture")
     }
-
     fn soracloud_fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid Soracloud keypair")
     }
-
     fn assert_signed_mutation_omits_inline_signing_material<T: JsonSerialize + ?Sized>(
         request: &T,
     ) {
@@ -17613,12 +16461,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "signed mutation request must not serialize inline private key"
         );
     }
-
     #[test]
     fn signed_soracloud_mutation_requests_omit_inline_signing_material() {
         let key_pair = soracloud_fixture_key_pair(0x12);
         let authority = AccountId::new(key_pair.public_key().clone());
-
         let config_set = signed_service_config_set_request(
             "web_portal",
             "feature_flags",
@@ -17628,7 +16474,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed service config set request");
         assert_signed_mutation_omits_inline_signing_material(&config_set);
-
         let config_delete = signed_service_config_delete_request(
             "web_portal",
             "feature_flags",
@@ -17637,7 +16482,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed service config delete request");
         assert_signed_mutation_omits_inline_signing_material(&config_delete);
-
         let secret = SecretEnvelopeV1 {
             schema_version: SECRET_ENVELOPE_VERSION_V1,
             encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
@@ -17657,12 +16501,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed service secret set request");
         assert_signed_mutation_omits_inline_signing_material(&secret_set);
-
         let secret_delete =
             signed_service_secret_delete_request("web_portal", "api_token", &authority, &key_pair)
                 .expect("signed service secret delete request");
         assert_signed_mutation_omits_inline_signing_material(&secret_delete);
-
         let app_infra = signed_app_infra_request(
             MutationMode::Deploy,
             SoraAppInfraManifestV1 {
@@ -17678,16 +16520,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed app infra request");
         assert_signed_mutation_omits_inline_signing_material(&app_infra);
-
         let heartbeat = signed_model_host_heartbeat_request(1, &authority, &key_pair)
             .expect("signed model host heartbeat request");
         assert_signed_mutation_omits_inline_signing_material(&heartbeat);
-
         let withdraw = signed_model_host_withdraw_request(&authority, &key_pair)
             .expect("signed model host withdraw request");
         assert_signed_mutation_omits_inline_signing_material(&withdraw);
     }
-
     #[test]
     fn soracloud_fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(
@@ -17699,14 +16538,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "lease".parse().expect("name"),
         )
     }
-
     fn sample_uploaded_model_encryption_recipient() -> SoraUploadedModelEncryptionRecipientV1 {
         let public_key_bytes = vec![7_u8; 32];
         SoraUploadedModelEncryptionRecipientV1 {
@@ -17719,7 +16556,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             public_key_fingerprint: Hash::new(public_key_bytes),
         }
     }
-
     fn sample_uploaded_model_wrapped_key() -> SoraUploadedModelWrappedKeyV1 {
         let wrapped_key_ciphertext = vec![8_u8; 48];
         SoraUploadedModelWrappedKeyV1 {
@@ -17735,7 +16571,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             aad_digest: Hash::new([0xAA_u8]),
         }
     }
-
     fn sample_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
         SoraUploadedModelBundleV1 {
             schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
@@ -17760,7 +16595,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             decryption_policy_ref: "policy://release/default".to_owned(),
         }
     }
-
     fn sample_uploaded_model_finalize_payload() -> UploadedModelFinalizePayload {
         let bundle = sample_uploaded_model_bundle();
         UploadedModelFinalizePayload {
@@ -17777,7 +16611,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             provenance_attestation_hash: Hash::new(b"attestation"),
         }
     }
-
     fn uploaded_model_register_validation_error(
         bundle: SoraUploadedModelBundleV1,
         finalize: UploadedModelFinalizePayload,
@@ -17788,14 +16621,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect_err("uploaded-model register request must be rejected")
             .to_string()
     }
-
     #[test]
     fn decode_soracloud_tx_instructions_accepts_framed_payloads() {
         use iroha::data_model::{
             domain::Domain,
             isi::{Instruction, Register, frame_instruction_payload},
         };
-
         let instruction = InstructionBox::from(Register::domain(Domain::new(
             iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
                 .expect("domain id"),
@@ -17809,11 +16640,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             hex::encode(framed)
         ))
         .expect("build draft response");
-
         let decoded =
             decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
-
         assert_eq!(decoded.len(), 1);
         assert_eq!(Instruction::id(&**decoded_instruction), wire_id);
         assert_eq!(
@@ -17821,7 +16650,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             norito::to_bytes(&instruction).expect("encode expected"),
         );
     }
-
     #[test]
     fn decode_soracloud_tx_instructions_rejects_raw_wire_payloads() {
         let wire_id = "soracloud::UpgradeSoracloudService";
@@ -17834,16 +16662,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             hex::encode(&framed)
         ))
         .expect("build draft response");
-
         let error = decode_soracloud_tx_instructions(&response).expect_err("raw draft rejected");
-
         assert!(
             error
                 .to_string()
                 .contains("failed to decode Soracloud instruction skeleton")
         );
     }
-
     #[test]
     fn publish_app_static_site_queues_finalized_registry_ingest_and_keeps_cid_gateway_url() {
         let dir = temp_dir("publish_static_site_already_stored");
@@ -17854,7 +16679,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "<!doctype html><title>Travel Ops</title>",
         )
         .expect("write index");
-
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: "travel_ops".to_owned(),
@@ -17873,7 +16697,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .static_site
             .as_ref()
             .expect("static site should exist");
-
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/sorafs/pin/register".to_owned(),
             MockHttpResponse {
@@ -17882,7 +16705,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                     .expect("encode pin register response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x13);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -17896,7 +16718,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             5,
         )
         .expect("publish should register finalized provider ingest");
-
         assert_eq!(publication.hostname, "travel-ops.sora");
         assert_eq!(publication.public_url, "https://travel-ops.sora/");
         assert!(publication.content_cid.starts_with('b'));
@@ -17908,7 +16729,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             )
         );
         assert_eq!(publication.manifest_id_hex, None);
-
         let register_request = server
             .requests()
             .into_iter()
@@ -17919,7 +16739,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let published_manifest =
             sorafs_manifest::decode_manifest_v1_canonical(&registration.manifest_payload)
                 .expect("decode registered manifest");
-
         let descriptor = chunker_registry::default_descriptor();
         let (plan, payload) =
             CarBuildPlan::from_directory_with_profile(&dist_dir, descriptor.profile)
@@ -17930,7 +16749,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .write_to(&mut car_bytes)
             .expect("write published static-site CAR");
         let archive_digest = *blake3::hash(&car_bytes).as_bytes();
-
         assert_eq!(
             published_manifest.car_digest, archive_digest,
             "published manifest must bind every byte of the canonical CARv2 archive"
@@ -17945,7 +16763,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "CARv1 payload-section digest must not be published as ManifestV1.car_digest"
         );
     }
-
     fn write_test_inrou_guest_images(inrou_dir: &Path, label: &str) {
         for isa in ["x86_64", "aarch64"] {
             let isa_dir = inrou_dir.join(isa);
@@ -17962,27 +16779,23 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("write test inrou rootfs");
         }
     }
-
     #[derive(Clone)]
     struct MockHttpResponse {
         content_type: &'static str,
         body: Vec<u8>,
     }
-
     #[derive(Clone, Debug)]
     struct CapturedHttpRequest {
         method: String,
         path: String,
         body: Vec<u8>,
     }
-
     #[derive(Clone, Debug)]
     struct MockSorafsPinRegistration {
         manifest_payload: Vec<u8>,
         manifest_digest_hex: String,
         tx_hash_hex: String,
     }
-
     struct MockHttpServer {
         base_url: String,
         address: String,
@@ -17990,7 +16803,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         requests: Arc<Mutex<Vec<CapturedHttpRequest>>>,
         handle: Option<thread::JoinHandle<()>>,
     }
-
     impl MockHttpServer {
         fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
@@ -18108,7 +16920,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 handle: Some(handle),
             }
         }
-
         fn requests(&self) -> Vec<CapturedHttpRequest> {
             self.requests
                 .lock()
@@ -18116,7 +16927,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .clone()
         }
     }
-
     fn mock_fee_quote_response(request: &CapturedHttpRequest) -> Option<MockHttpResponse> {
         if request.method != "POST" || request.path != iroha_torii_shared::uri::FEES_QUOTE {
             return None;
@@ -18151,7 +16961,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             body: json::to_vec(&response).ok()?,
         })
     }
-
     fn mock_sorafs_pin_registration(
         request: &CapturedHttpRequest,
     ) -> Option<MockSorafsPinRegistration> {
@@ -18178,7 +16987,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             tx_hash_hex: hex::encode(transaction.hash().as_ref()),
         })
     }
-
     fn mock_sorafs_pin_registration_response(
         registration: &MockSorafsPinRegistration,
     ) -> MockHttpResponse {
@@ -18192,7 +17000,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("encode mock SoraFS pin registration response"),
         }
     }
-
     fn mock_sorafs_pin_registry_response(
         path: &str,
         registered_pin_manifests: &BTreeSet<String>,
@@ -18204,7 +17011,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect("encode mock SoraFS pin registry response"),
         })
     }
-
     fn mock_sorafs_pin_registry_path_is_registered<'a>(
         path: &'a str,
         registered_pin_manifests: &'a BTreeSet<String>,
@@ -18217,7 +17023,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .get(&digest.to_ascii_lowercase())
             .map(String::as_str)
     }
-
     #[test]
     fn mock_http_server_quotes_the_exact_requested_fee_intent() {
         let server = MockHttpServer::start(BTreeMap::new());
@@ -18236,9 +17041,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 Metadata::default(),
             )
             .expect("build exact unsigned fee quote payload");
-
         let quote = client.quote_fees(&payload).expect("quote mock fees");
-
         assert_eq!(quote.intent, requested_intent);
         assert_eq!(quote.observation.route_dataspace_id, DataSpaceId::UNIVERSAL);
         assert!(matches!(
@@ -18252,7 +17055,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             request.method == "POST" && request.path == iroha_torii_shared::uri::FEES_QUOTE
         }));
     }
-
     #[test]
     fn mock_http_server_helpers_track_sorafs_pin_registration_digest() {
         let manifest = ManifestBuilder::new()
@@ -18298,7 +17100,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             path: "/v1/sorafs/pin/register".to_owned(),
             body: transaction.encode_versioned(),
         };
-
         let registration =
             mock_sorafs_pin_registration(&request).expect("decode mock registration transaction");
         assert_eq!(registration.manifest_payload, manifest_bytes);
@@ -18307,14 +17108,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             registration.tx_hash_hex,
             hex::encode(transaction.hash().as_ref())
         );
-
         let mut registered_pin_manifests = BTreeSet::new();
         let path = format!("/v1/sorafs/pin/{digest}");
         assert!(
             mock_sorafs_pin_registry_response(&path, &registered_pin_manifests).is_none(),
             "unregistered mock pin records should return 404"
         );
-
         registered_pin_manifests.insert(digest.clone());
         assert_eq!(
             mock_sorafs_pin_registry_path_is_registered(&path, &registered_pin_manifests),
@@ -18325,7 +17124,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "registered mock pin records should be visible to polling GETs"
         );
     }
-
     impl Drop for MockHttpServer {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::SeqCst);
@@ -18335,7 +17133,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             }
         }
     }
-
     fn mock_http_connection_closed(error: &std::io::Error) -> bool {
         matches!(
             error.kind(),
@@ -18346,7 +17143,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 | std::io::ErrorKind::UnexpectedEof
         )
     }
-
     fn read_mock_http_request(stream: &mut TcpStream) -> CapturedHttpRequest {
         const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
         let mut request = Vec::new();
@@ -18385,7 +17181,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 Err(error) => panic!("read mock HTTP request failed: {error}"),
             }
         }
-
         let header_end = header_end.unwrap_or(request.len());
         let header_text = String::from_utf8_lossy(&request[..header_end]);
         let mut lines = header_text.lines();
@@ -18403,7 +17198,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
             }
         }
-
         let content_length = headers
             .get("content-length")
             .and_then(|value| value.parse::<usize>().ok())
@@ -18436,28 +17230,23 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             }
         }
         body.truncate(content_length);
-
         CapturedHttpRequest { method, path, body }
     }
-
     fn node_available() -> bool {
         match Command::new("node").arg("--version").output() {
             Ok(output) => output.status.success(),
             Err(_) => false,
         }
     }
-
     fn bash_available() -> bool {
         match Command::new("bash").arg("--version").output() {
             Ok(output) => output.status.success(),
             Err(_) => false,
         }
     }
-
     fn js_string_literal(path: &Path) -> String {
         format!("{:?}", path.to_string_lossy())
     }
-
     fn run_bash_syntax_check(script_path: &Path) {
         let output = Command::new("bash")
             .arg("-n")
@@ -18472,9 +17261,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
     static NODE_HARNESS_LOCK: Mutex<()> = Mutex::new(());
-
     fn run_node_harness(script_path: &Path) {
         let _guard = NODE_HARNESS_LOCK
             .lock()
@@ -18491,7 +17278,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
     fn assert_generated_pii_app_startup_import_fails(
         dir_name: &str,
         harness_name: &str,
@@ -18509,7 +17295,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -18524,7 +17309,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             }
             return;
         }
-
         let mut env_values = BTreeMap::from([
             ("AUTH_MODE".to_owned(), "strict".to_owned()),
             (
@@ -18556,7 +17340,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .map(|(name, value)| format!("process.env.{name} = {value:?};"))
             .collect::<Vec<_>>()
             .join("\n");
-
         let harness_path = dir.join(harness_name);
         let scenario = harness_name.trim_end_matches(".mjs");
         let mut script = TEST_HARNESSES_V1[0].to_owned();
@@ -18567,7 +17350,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     fn run_generated_pii_app_auth_core_harness(
         dir_name: &str,
         harness_name: &str,
@@ -18584,7 +17366,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             test_body,
         );
     }
-
     fn run_generated_pii_app_auth_core_harness_with_setup(
         dir_name: &str,
         harness_name: &str,
@@ -18603,7 +17384,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         let api = fs::read_to_string(&server_path).expect("read pii api");
         for marker in static_markers {
@@ -18616,14 +17396,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             eprintln!("node unavailable; static auth-core markers validated in scaffold");
             return;
         }
-
         let (auth_core, _) = api
             .split_once("\nimport http from \"node:http\";")
             .expect("generated pii api must include auth core before http server");
         let core_module_path = dir.join(format!("{harness_name}.generated.mjs"));
         fs::write(&core_module_path, format!("{auth_core}\n{test_body}"))
             .expect("write auth core harness module");
-
         let state_file = dir.join(format!("{harness_name}.state.json"));
         let mut env_values = BTreeMap::from([
             ("AUTH_MODE".to_owned(), "strict".to_owned()),
@@ -18653,7 +17431,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .map(|(name, value)| format!("process.env.{name} = {value:?};"))
             .collect::<Vec<_>>()
             .join("\n");
-
         let harness_path = dir.join(harness_name);
         let scenario = harness_name.trim_end_matches(".mjs");
         let mut script = TEST_HARNESSES_V1[1].to_owned();
@@ -18667,7 +17444,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     fn install_mock_submission_config(authority: &AccountId, key_pair: &KeyPair) {
         let mut config = crate::fallback_config();
         config.account = authority.clone();
@@ -18679,7 +17455,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             *slot.borrow_mut() = Some(Ok(FeePaymentIntent::authority(Vec::new(), None)));
         });
     }
-
+    fn install_mock_protected_read_signer() {
+        let key_pair = soracloud_fixture_key_pair(0x2f);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+    }
     fn mock_control_plane_status_payload(service_names: &[&str]) -> norito::json::Value {
         norito::json!({
             "schema_version": 1,
@@ -18699,7 +17479,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             }
         })
     }
-
     #[test]
     fn direct_service_mutation_output_hoists_authoritative_status_fields() {
         let response = norito::json!({
@@ -18742,7 +17521,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             None,
             response,
         );
-
         assert_eq!(output.current_version.as_deref(), Some("1.1.0"));
         assert_eq!(
             output.rollout_handle.as_deref(),
@@ -18766,7 +17544,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("Canary")
         );
     }
-
     fn mock_hf_status_path(
         base_url: &str,
         repo_id: &str,
@@ -18795,7 +17572,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let query = endpoint.query().unwrap_or_default();
         format!("{}?{query}", endpoint.path())
     }
-
     #[test]
     fn status_output_can_represent_torii_control_plane_snapshot() {
         let payload = norito::json!({
@@ -18825,7 +17601,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some(1)
         );
     }
-
     #[test]
     fn status_output_projects_embedded_control_plane_services() {
         let service_value = json::to_value(&ServiceStatusOutput {
@@ -18885,14 +17660,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 ]
             }
         });
-
         let output = StatusOutput::from_network(
             "http://127.0.0.1:8080/v1/soracloud/status".to_owned(),
             payload,
             None,
         )
         .expect("status output should decode");
-
         assert_eq!(output.schema_version, Some(1));
         assert_eq!(output.service_count, Some(1));
         assert_eq!(output.audit_event_count, Some(1));
@@ -18915,7 +17688,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("rollout-1")
         );
     }
-
     #[test]
     fn status_output_rejects_malformed_embedded_service_snapshot() {
         let payload = norito::json!({
@@ -18930,7 +17702,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 "recent_audit_events": []
             }
         });
-
         let error = StatusOutput::from_network(
             "http://127.0.0.1:8080/v1/soracloud/status".to_owned(),
             payload,
@@ -18943,7 +17714,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("failed to decode embedded Soracloud service status")
         );
     }
-
     #[test]
     fn filter_soracloud_status_payload_filters_embedded_control_plane_snapshot() {
         let mut payload = norito::json!({
@@ -18972,9 +17742,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 ]
             }
         });
-
         filter_soracloud_status_payload(&mut payload, Some("beta"));
-
         let control_plane = payload
             .get("control_plane")
             .and_then(norito::json::Value::as_object)
@@ -18985,7 +17753,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .and_then(norito::json::Value::as_u64),
             Some(1)
         );
-
         let services = control_plane
             .get("services")
             .and_then(norito::json::Value::as_array)
@@ -18997,7 +17764,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .and_then(norito::json::Value::as_str),
             Some("beta")
         );
-
         let audit_events = control_plane
             .get("recent_audit_events")
             .and_then(norito::json::Value::as_array)
@@ -19010,7 +17776,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("beta")
         );
     }
-
     #[test]
     fn status_args_can_resolve_service_filter_from_manifest_pair() {
         let dir = temp_dir("status_service_filter_from_manifest_pair");
@@ -19023,7 +17788,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let status_payload =
             mock_control_plane_status_payload(&["echo_console", "unrelated_service"]);
         let server = MockHttpServer::start(BTreeMap::from([(
@@ -19033,7 +17797,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&status_payload).expect("encode status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = StatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -19044,7 +17808,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("status should succeed");
-
         assert_eq!(output.schema_version, Some(1));
         assert_eq!(output.service_count, Some(1));
         assert_eq!(output.audit_event_count, Some(0));
@@ -19078,7 +17841,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .is_some_and(|path| path.ends_with("dev.sh"))
         );
     }
-
     #[test]
     fn status_args_reject_conflicting_service_name_against_manifest_pair() {
         let dir = temp_dir("status_service_name_manifest_mismatch");
@@ -19091,7 +17853,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let server = MockHttpServer::start(BTreeMap::new());
         let error = StatusArgs {
             service_name: Some("wrong_name".to_owned()),
@@ -19103,7 +17864,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect_err("conflicting manifest filter should fail");
-
         assert!(error.to_string().contains("wrong_name"));
         assert!(error.to_string().contains("echo_console"));
         assert!(
@@ -19111,7 +17871,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "manifest mismatch should fail before any network request"
         );
     }
-
     #[test]
     fn resolve_required_workspace_service_name_requires_explicit_or_manifest_identity() {
         let error = resolve_required_workspace_service_name(
@@ -19121,12 +17880,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "iroha soracloud service config-status",
         )
         .expect_err("missing service identity should fail");
-
         assert!(error.to_string().contains("--service-name"));
         assert!(error.to_string().contains("--container"));
         assert!(error.to_string().contains("--service"));
     }
-
     #[test]
     fn config_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("config_status_service_filter_from_manifest_pair");
@@ -19139,7 +17896,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({
             "service_name": "echo_console",
             "configs": [
@@ -19157,7 +17913,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode config status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = ConfigStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -19169,7 +17925,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("config-status should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -19204,7 +17959,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/service/config/status?service_name=echo_console&config_name=demo_config"
         );
     }
-
     #[test]
     fn secret_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("secret_status_service_filter_from_manifest_pair");
@@ -19217,7 +17971,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({
             "service_name": "echo_console",
             "secrets": [
@@ -19234,7 +17987,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode secret status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = SecretStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -19246,7 +17999,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("secret-status should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -19281,7 +18033,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret"
         );
     }
-
     #[test]
     fn rollback_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("rollback_service_name_from_manifest_pair");
@@ -19294,7 +18045,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let rollback_response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([
@@ -19313,7 +18063,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x14);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -19328,7 +18077,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("rollback should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -19369,7 +18117,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn rollout_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("rollout_service_name_from_manifest_pair");
@@ -19382,7 +18129,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let status_payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -19426,7 +18172,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x15);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -19444,7 +18189,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("rollout should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -19485,7 +18229,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn hf_deploy_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("hf_deploy_service_name_from_manifest_pair");
@@ -19498,7 +18241,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let key_pair = soracloud_fixture_key_pair(0x16);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -19534,7 +18276,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         install_mock_submission_config(&authority, &key_pair);
         let output = HfDeployArgs {
             repo_id: "openai/gpt-oss".to_owned(),
@@ -19555,7 +18296,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("hf deploy should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let deploy_request = server
             .requests()
             .into_iter()
@@ -19583,7 +18323,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert!(!deploy_payload.contains_key("base_fee_nanos"));
     }
-
     #[test]
     fn hf_status_args_can_attach_service_plan_from_manifest_pair() {
         let dir = temp_dir("hf_status_service_plan_from_manifest_pair");
@@ -19596,7 +18335,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let status_payload = norito::json!({
             "repo_id": "openai/gpt-oss",
             "storage_class": "Warm",
@@ -19618,7 +18356,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&status_payload).expect("encode hf status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = HfStatusArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: None,
@@ -19633,7 +18371,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("hf status should succeed");
-
         assert_manifest_pair_service_plan(&output);
         assert_eq!(
             output.get("repo_id").and_then(norito::json::Value::as_str),
@@ -19656,7 +18393,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             )
         );
     }
-
     #[test]
     fn hf_lease_leave_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("hf_lease_leave_service_name_from_manifest_pair");
@@ -19669,7 +18405,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let key_pair = soracloud_fixture_key_pair(0x17);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -19705,7 +18440,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         install_mock_submission_config(&authority, &key_pair);
         let output = HfLeaseLeaveArgs {
             repo_id: "openai/gpt-oss".to_owned(),
@@ -19723,7 +18457,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("hf lease leave should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let leave_request = server
             .requests()
             .into_iter()
@@ -19742,7 +18475,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn hf_lease_renew_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("hf_lease_renew_service_name_from_manifest_pair");
@@ -19755,7 +18487,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let key_pair = soracloud_fixture_key_pair(0x1F);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
@@ -19791,7 +18522,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         install_mock_submission_config(&authority, &key_pair);
         let output = HfLeaseRenewArgs {
             repo_id: "openai/gpt-oss".to_owned(),
@@ -19812,7 +18542,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("hf lease renew should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let renew_request = server
             .requests()
             .into_iter()
@@ -19842,7 +18571,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert!(!renew_payload.contains_key("base_fee_nanos"));
     }
-
     #[test]
     fn training_job_start_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("training_job_start_service_name_from_manifest_pair");
@@ -19855,7 +18583,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/training/job/start".to_owned(),
@@ -19864,7 +18591,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode training start response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x18);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -19888,7 +18614,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("training-job-start should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -19906,7 +18631,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn training_job_checkpoint_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("training_job_checkpoint_service_name_from_manifest_pair");
@@ -19919,7 +18643,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/training/job/checkpoint".to_owned(),
@@ -19928,7 +18651,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode training checkpoint response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x19);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -19947,7 +18669,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("training-job-checkpoint should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -19965,7 +18686,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn training_job_retry_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("training_job_retry_service_name_from_manifest_pair");
@@ -19978,7 +18698,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/training/job/retry".to_owned(),
@@ -19987,7 +18706,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode training retry response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x1A);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20004,7 +18722,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("training-job-retry should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -20022,7 +18739,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn training_job_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("training_job_status_service_name_from_manifest_pair");
@@ -20035,7 +18751,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({
             "service_name": "echo_console",
             "job_id": "job-1",
@@ -20048,7 +18763,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode training status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = TrainingJobStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -20060,7 +18775,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("training-job-status should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -20078,7 +18792,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/training/job/status?service_name=echo_console&job_id=job-1"
         );
     }
-
     #[test]
     fn model_artifact_register_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_artifact_register_service_name_from_manifest_pair");
@@ -20091,7 +18804,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/model/artifact/register".to_owned(),
@@ -20100,7 +18812,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model artifact response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x1B);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20122,7 +18833,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("model artifact-register should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -20140,7 +18850,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn model_artifact_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_artifact_status_service_name_from_manifest_pair");
@@ -20153,7 +18862,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({
             "service_name": "echo_console",
             "training_job_id": "job-1",
@@ -20167,7 +18875,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model artifact status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = ModelArtifactStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -20179,7 +18887,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("model artifact-status should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -20197,7 +18904,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/model/artifact/status?service_name=echo_console&training_job_id=job-1"
         );
     }
-
     #[test]
     fn model_weight_register_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_weight_register_service_name_from_manifest_pair");
@@ -20210,7 +18916,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/model/weight/register".to_owned(),
@@ -20219,7 +18924,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model weight register response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x1C);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20243,7 +18947,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("model weight-register should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -20261,7 +18964,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn model_weight_promote_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_weight_promote_service_name_from_manifest_pair");
@@ -20274,7 +18976,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/model/weight/promote".to_owned(),
@@ -20283,7 +18984,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model weight promote response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x1D);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20302,7 +19002,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("model weight-promote should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -20320,7 +19019,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn model_weight_rollback_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_weight_rollback_service_name_from_manifest_pair");
@@ -20333,7 +19031,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/model/weight/rollback".to_owned(),
@@ -20342,7 +19039,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model weight rollback response"),
             },
         )]));
-
         let key_pair = soracloud_fixture_key_pair(0x1E);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -20360,7 +19056,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run(&authority, &key_pair)
         .expect("model weight-rollback should succeed");
         assert_manifest_pair_service_plan(&output);
-
         let request = server
             .requests()
             .into_iter()
@@ -20378,7 +19073,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("echo_console")
         );
     }
-
     #[test]
     fn model_weight_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_weight_status_service_name_from_manifest_pair");
@@ -20391,7 +19085,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({
             "service_name": "echo_console",
             "model_name": "fare-model",
@@ -20405,7 +19098,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model weight status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = ModelWeightStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -20417,7 +19110,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("model weight-status should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -20435,7 +19127,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/model/weight/status?service_name=echo_console&model_name=fare-model"
         );
     }
-
     #[test]
     fn model_upload_status_args_can_resolve_service_name_from_manifest_pair() {
         let dir = temp_dir("model_upload_status_service_name_from_manifest_pair");
@@ -20448,7 +19139,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let response = norito::json!({
             "service_name": "echo_console",
             "weight_version": "v1",
@@ -20462,7 +19152,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&response).expect("encode model upload status response"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = ModelUploadStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -20477,7 +19167,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("model upload-status should succeed");
-
         assert_eq!(
             output
                 .get("service_name")
@@ -20495,7 +19184,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/model/upload/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
         );
     }
-
     #[test]
     fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {
         let dir = temp_dir("model_upload_encryption_recipient_service_plan_from_manifest_pair");
@@ -20508,7 +19196,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
             "recipient".to_owned(),
             json::to_value(&sample_uploaded_model_encryption_recipient())
@@ -20522,7 +19209,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                     .expect("encode uploaded-model recipient response"),
             },
         )]));
-
         let output = ModelUploadEncryptionRecipientArgs {
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -20532,7 +19218,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("model upload-encryption-recipient should succeed");
-
         assert_manifest_pair_service_plan(&output);
         assert!(
             output
@@ -20550,35 +19235,30 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "/v1/soracloud/model/upload/encryption-recipient"
         );
     }
-
     #[test]
     fn fetch_torii_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_status("not-a-url", None, None, 5)
             .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_agent_autonomy_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_agent_autonomy_status("not-a-url", "ops_agent", None, 5)
             .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_agent_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_agent_status("not-a-url", Some("ops_agent"), None, 5)
             .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_agent_mailbox_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_agent_mailbox_status("not-a-url", "ops_agent", None, 5)
             .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_training_job_status_rejects_invalid_url() {
         let err =
@@ -20586,7 +19266,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_model_artifact_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_model_artifact_status(
@@ -20599,7 +19278,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_model_weight_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_model_weight_status(
@@ -20612,7 +19290,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_torii_hf_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_hf_status(
@@ -20628,24 +19305,20 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("torii-url"));
     }
-
     #[test]
     fn sign_soracloud_payload_returns_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x21);
         let payload = b"soracloud cli checked signing";
         let signature =
             sign_soracloud_payload(&key_pair, payload).expect("checked signature construction");
-
         signature
             .verify(key_pair.public_key(), payload)
             .expect("checked signature should verify");
     }
-
     #[test]
     fn signed_request_builders_serialize_without_inline_signing_fields() {
         let key_pair = soracloud_fixture_key_pair(0x20);
         let authority = AccountId::new(key_pair.public_key().clone());
-
         let config_set = signed_service_config_set_request(
             "web_portal",
             "runtime",
@@ -20655,12 +19328,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed service config set request");
         assert_request_has_no_inline_signing_fields(&config_set);
-
         let config_delete =
             signed_service_config_delete_request("web_portal", "runtime", &authority, &key_pair)
                 .expect("signed service config delete request");
         assert_request_has_no_inline_signing_fields(&config_delete);
-
         let secret = SecretEnvelopeV1 {
             schema_version: iroha::data_model::soracloud::prelude::SECRET_ENVELOPE_VERSION_V1,
             encryption: iroha::data_model::soracloud::SecretEnvelopeEncryptionV1::ClientCiphertext,
@@ -20680,12 +19351,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed service secret set request");
         assert_request_has_no_inline_signing_fields(&secret_set);
-
         let secret_delete =
             signed_service_secret_delete_request("web_portal", "api_token", &authority, &key_pair)
                 .expect("signed service secret delete request");
         assert_request_has_no_inline_signing_fields(&secret_delete);
-
         let app = signed_app_infra_request(
             MutationMode::Deploy,
             SoraAppInfraManifestV1 {
@@ -20701,16 +19370,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("signed app infra request");
         assert_request_has_no_inline_signing_fields(&app);
-
         let heartbeat = signed_model_host_heartbeat_request(1, &authority, &key_pair)
             .expect("signed model host heartbeat request");
         assert_request_has_no_inline_signing_fields(&heartbeat);
-
         let withdraw = signed_model_host_withdraw_request(&authority, &key_pair)
             .expect("signed model host withdraw request");
         assert_request_has_no_inline_signing_fields(&withdraw);
     }
-
     #[test]
     fn signed_bundle_request_uses_verifiable_signature() {
         let container = fixture_container();
@@ -20744,7 +19410,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_inrou_bundle_request_uses_canonical_guest_images_signature() {
         let mut container = fixture_container();
@@ -20784,7 +19449,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             container,
             service,
         };
-
         let key_pair = soracloud_fixture_key_pair(0x23);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_bundle_request(
@@ -20807,7 +19471,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .verify(&request.provenance.signer, &payload)
             .expect("canonical signature should verify");
     }
-
     #[test]
     fn sorafs_cid_host_suffix_for_hostname_prefers_network_suffix() {
         assert_eq!(
@@ -20823,7 +19486,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "sorafs.sora"
         );
     }
-
     #[test]
     fn normalize_public_service_base_url_uses_route_prefix() {
         let container = fixture_container();
@@ -20837,11 +19499,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             container,
             service,
         };
-
         let base_url = normalize_public_service_base_url(&bundle).expect("public base url");
         assert_eq!(base_url.as_str(), "https://solswap-indexer.taira.sora.org/");
     }
-
     #[test]
     fn signed_rollback_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x24);
@@ -20856,7 +19516,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_rollout_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x25);
@@ -20879,7 +19538,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_deploy_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x26);
@@ -20896,7 +19554,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_lease_renew_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x27);
@@ -20912,7 +19569,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_hf_deploy_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x28);
@@ -20969,7 +19625,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(request.generated_apartment_provenance.is_some());
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_hf_lease_leave_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x29);
@@ -20994,7 +19649,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_hf_lease_renew_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2A);
@@ -21026,7 +19680,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(request.generated_apartment_provenance.is_some());
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_model_host_advertise_request_uses_supported_schema_version() {
         let key_pair = soracloud_fixture_key_pair(0x2B);
@@ -21075,7 +19728,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_restart_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2C);
@@ -21092,7 +19744,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2D);
@@ -21114,7 +19765,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2E);
@@ -21137,7 +19787,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2F);
@@ -21158,7 +19807,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_message_send_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x30);
@@ -21181,7 +19829,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_message_ack_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x31);
@@ -21202,7 +19849,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x32);
@@ -21224,7 +19870,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x33);
@@ -21253,7 +19898,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_training_job_start_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x34);
@@ -21282,7 +19926,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_training_job_checkpoint_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x35);
@@ -21306,7 +19949,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_training_job_retry_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x36);
@@ -21328,7 +19970,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_model_artifact_register_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x37);
@@ -21355,7 +19996,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_model_weight_register_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x38);
@@ -21384,7 +20024,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_model_weight_promote_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x39);
@@ -21408,7 +20047,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn signed_model_weight_rollback_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x3A);
@@ -21431,7 +20069,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn bundle_signature_payload_layout_is_canonical_layout() {
         let container = fixture_container();
@@ -21447,7 +20084,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn rollback_signature_payload_layout_is_canonical_tuple() {
         let payload = RollbackPayload {
@@ -21463,7 +20099,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn rollout_signature_payload_layout_is_canonical_tuple() {
         let governance_tx_hash = Hash::new(b"governance");
@@ -21485,7 +20120,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_deploy_signature_payload_layout_is_canonical_tuple() {
         let manifest = fixture_agent_apartment();
@@ -21500,7 +20134,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             norito::to_bytes(&(manifest, 120u64, Some(500u64))).expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_lease_renew_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentLeaseRenewPayload {
@@ -21513,7 +20146,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_restart_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentRestartPayload {
@@ -21527,7 +20159,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_policy_revoke_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentPolicyRevokePayload {
@@ -21545,7 +20176,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_wallet_spend_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentWalletSpendPayload {
@@ -21564,7 +20194,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
-
         let value = json::to_value(&payload).expect("serialize wallet spend payload");
         let object = value.as_object().expect("wallet spend payload object");
         assert_eq!(
@@ -21573,7 +20202,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert!(!object.contains_key("amount_nanos"));
     }
-
     #[test]
     fn agent_wallet_approve_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentWalletApprovePayload {
@@ -21587,7 +20215,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_message_send_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentMessageSendPayload {
@@ -21607,7 +20234,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_message_ack_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentMessageAckPayload {
@@ -21621,7 +20247,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_artifact_allow_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentArtifactAllowPayload {
@@ -21639,7 +20264,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn agent_autonomy_run_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentAutonomyRunPayload {
@@ -21663,7 +20287,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn canonicalize_agent_workflow_input_json_compacts_payload() {
         let canonical = canonicalize_agent_workflow_input_json(
@@ -21675,7 +20298,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}"
         );
     }
-
     #[test]
     fn default_hf_model_name_uses_repo_slug() {
         assert_eq!(
@@ -21683,7 +20305,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "gpt-oss"
         );
     }
-
     #[test]
     fn hf_deploy_signature_payload_layout_is_canonical_tuple() {
         let asset_definition = hf_shared_lease_asset_definition();
@@ -21713,7 +20334,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
-
         let value = json::to_value(&payload).expect("serialize HF deploy payload");
         let object = value.as_object().expect("HF deploy payload object");
         assert_eq!(
@@ -21722,7 +20342,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert!(!object.contains_key("base_fee_nanos"));
     }
-
     #[test]
     fn hf_lease_leave_signature_payload_layout_is_canonical_tuple() {
         let payload = HfLeaseLeavePayload {
@@ -21746,7 +20365,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn hf_lease_renew_signature_payload_layout_is_canonical_tuple() {
         let asset_definition = hf_shared_lease_asset_definition();
@@ -21779,7 +20397,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn training_job_start_signature_payload_layout_is_canonical_tuple() {
         let payload = TrainingJobStartPayload {
@@ -21811,7 +20428,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn training_job_checkpoint_signature_payload_layout_is_canonical_tuple() {
         let metrics_hash = Hash::new(b"metrics");
@@ -21834,7 +20450,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn training_job_retry_signature_payload_layout_is_canonical_tuple() {
         let payload = TrainingJobRetryPayload {
@@ -21852,7 +20467,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn model_artifact_register_signature_payload_layout_is_canonical_tuple() {
         let weight_artifact_hash = Hash::new(b"weight-artifact");
@@ -21884,7 +20498,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn model_weight_register_signature_payload_layout_is_canonical_tuple() {
         let weight_artifact_hash = Hash::new(b"weight-artifact");
@@ -21920,7 +20533,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn model_weight_promote_signature_payload_layout_is_canonical_tuple() {
         let gate_report_hash = Hash::new(b"gate-report");
@@ -21943,7 +20555,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn model_weight_rollback_signature_payload_layout_is_canonical_tuple() {
         let payload = ModelWeightRollbackPayload {
@@ -21963,7 +20574,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn signed_uploaded_model_register_request_uses_verifiable_signatures() {
         let key_pair = soracloud_fixture_key_pair(0x3B);
@@ -22003,7 +20613,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("finalize signature should verify");
         assert_request_has_no_inline_signing_fields(&request);
     }
-
     #[test]
     fn uploaded_model_register_service_name_override_updates_bundle_and_finalize() {
         let key_pair = soracloud_fixture_key_pair(0x3C);
@@ -22012,14 +20621,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let mut finalize = sample_uploaded_model_finalize_payload();
         bundle.service_name = "legacy_models".parse().expect("legacy service name");
         finalize.service_name = "legacy_models".to_owned();
-
         apply_uploaded_model_register_service_name_override(
             &mut bundle,
             &mut finalize,
             Some("resolved_models"),
         )
         .expect("apply service-name override");
-
         assert_eq!(bundle.service_name.as_ref(), "resolved_models");
         assert_eq!(finalize.service_name, "resolved_models");
         let request =
@@ -22030,59 +20637,48 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "resolved_models"
         );
     }
-
     #[test]
     fn signed_uploaded_model_register_request_rejects_mismatched_finalize_fields() {
         let bundle = sample_uploaded_model_bundle();
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.service_name = "other_models".to_owned();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
         assert!(error.contains("must match bundle service_name"));
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.model_id = "other-upload".to_owned();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
         assert!(error.contains("must match bundle model_id"));
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.weight_version = "2.0.0".to_owned();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
         assert!(error.contains("must match bundle weight_version"));
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.bundle_root = Hash::new(b"tampered-bundle-root");
         let error = uploaded_model_register_validation_error(bundle, finalize);
         assert!(error.contains("bundle_root must match"));
     }
-
     #[test]
     fn signed_uploaded_model_register_request_rejects_empty_finalize_fields() {
         let bundle = sample_uploaded_model_bundle();
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.model_name = " \t ".to_owned();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
         assert!(error.contains("model_name must not be empty"));
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.artifact_id.clear();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
         assert!(error.contains("artifact_id must not be empty"));
-
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.dataset_ref = "\n".to_owned();
         let error = uploaded_model_register_validation_error(bundle, finalize);
         assert!(error.contains("dataset_ref must not be empty"));
     }
-
     #[test]
     fn fetch_uploaded_model_recipient_rejects_invalid_url() {
         let err = fetch_torii_soracloud_uploaded_model_encryption_recipient("not-a-url", None, 5)
             .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_uploaded_model_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_uploaded_model_status(
@@ -22099,7 +20695,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     #[test]
     fn fetch_uploaded_model_status_requires_model_identifier_before_network() {
         let err = fetch_torii_soracloud_uploaded_model_status(
@@ -22119,7 +20714,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("--model-id or --model-name is required")
         );
     }
-
     #[test]
     fn post_torii_mutation_rejects_invalid_url() {
         let payload = norito::json!({ "noop": true });
@@ -22128,9 +20722,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }
-
     include!("soracloud/network_auth_tests.rs");
-
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
         let mut config = crate::fallback_config();
@@ -22145,10 +20737,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             nonce: "fixture-witness".to_owned(),
             canonical_request_hash: canonical_network_request_hash(
                 &config.network_id,
-                "POST",
+                &reqwest::Method::POST,
                 &endpoint,
                 body,
-            ),
+            )
+            .expect("bounded canonical witness request hash"),
             signatures: Vec::new(),
         };
         let dir = temp_dir("witness_account_mismatch");
@@ -22159,12 +20752,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("write witness file");
         config.soracloud_http_witness_file = Some(witness_path);
-
         let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
             .expect_err("mismatched witness account must fail");
         assert!(err.to_string().contains("subject_account"));
     }
-
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_hash_mismatch() {
         let mut config = crate::fallback_config();
@@ -22187,12 +20778,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("write witness file");
         config.soracloud_http_witness_file = Some(witness_path);
-
         let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
             .expect_err("mismatched witness hash must fail");
         assert!(err.to_string().contains("canonical_request_hash"));
     }
-
     #[test]
     fn deploy_requires_torii_url_after_local_simulator_removal() {
         let dir = temp_dir("deploy_requires_torii");
@@ -22203,7 +20792,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         service.container.manifest_hash = Hash::new(Encode::encode(&container));
         write_json(&container_path, &container).expect("write container manifest");
         write_json(&service_path, &service).expect("write service manifest");
-
         let key_pair = soracloud_fixture_key_pair(0x3E);
         let authority = AccountId::new(key_pair.public_key().clone());
         let err = DeployArgs {
@@ -22219,7 +20807,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect_err("deploy without torii should fail");
         assert!(err.to_string().contains("--torii-url is required"));
     }
-
     #[test]
     fn deploy_returns_manifest_backed_service_projection() {
         let dir = temp_dir("deploy_service_projection");
@@ -22232,7 +20819,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let deploy_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
@@ -22259,7 +20845,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x20);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -22274,7 +20859,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("deploy should succeed");
-
         assert_eq!(output.service_name, "echo_console");
         assert_eq!(output.mode, "Deploy");
         assert_eq!(output.execution_plane, "HttpService");
@@ -22318,7 +20902,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("live Torii status"))
         );
     }
-
     #[test]
     fn upgrade_returns_manifest_backed_service_projection() {
         let dir = temp_dir("upgrade_service_projection");
@@ -22331,7 +20914,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let upgrade_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = MockHttpServer::start(BTreeMap::from([
@@ -22358,7 +20940,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x3F);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -22373,7 +20954,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Upgrade, &authority, &key_pair)
         .expect("upgrade should succeed");
-
         assert_eq!(output.service_name, "echo_console");
         assert_eq!(output.mode, "Upgrade");
         assert_eq!(output.execution_plane, "HttpService");
@@ -22417,7 +20997,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("live Torii status"))
         );
     }
-
     #[test]
     fn init_http_service_template_scaffolds_inrou_service() {
         let dir = temp_dir("http_service_template");
@@ -22430,7 +21009,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         assert_eq!(output.template, "http-service");
         assert!(dir.join("http-service/app/server.mjs").exists());
         assert!(dir.join("http-service/build.sh").exists());
@@ -22444,7 +21022,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(dir.join("http-service/build.sh"))
                     .expect("http-service build.sh metadata")
@@ -22510,7 +21087,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 0o111
             );
         }
-
         let readme = fs::read_to_string(dir.join("http-service/README.md"))
             .expect("read http-service readme");
         assert!(readme.contains("runtime = Inrou"));
@@ -22621,20 +21197,17 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             run_bash_syntax_check(&dir.join("deploy.sh"));
             run_bash_syntax_check(&dir.join("upgrade.sh"));
         }
-
         let server = fs::read_to_string(dir.join("http-service/app/server.mjs"))
             .expect("read http-service server");
         assert!(server.contains("/echo"));
         assert!(server.contains("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR"));
         assert!(!server.contains("/search"));
         assert!(!server.contains("/airports/search"));
-
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
         assert_eq!(container.runtime, SoraContainerRuntimeV1::Inrou);
         assert_eq!(container.bundle_path, "/app/server.mjs");
         assert!(container.inrou.is_some());
-
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(
@@ -22657,7 +21230,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert_eq!(service.lease_volumes[1].volume_name.as_ref(), "app_data");
     }
-
     #[test]
     fn generated_http_service_scaffold_smoke_serves_health_and_echo() {
         let dir = temp_dir("http_service_smoke");
@@ -22670,7 +21242,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let server_path = dir.join("http-service/app/server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read http-service server");
@@ -22678,7 +21249,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(server.contains("SORACLOUD_LEASE_VOLUME_APP_DATA_DIR"));
             return;
         }
-
         let harness_path = dir.join("http_service_smoke.mjs");
         let app_data_dir = dir.join("app-data");
         let mut script = TEST_HARNESSES_V1[2].to_owned();
@@ -22687,7 +21257,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write http-service smoke harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn local_plan_http_service_reports_workspace_scripts_and_hosted_runtime() {
         let dir = temp_dir("http_service_local_plan");
@@ -22700,14 +21269,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let output = LocalPlanArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
         }
         .run()
         .expect("plan should succeed");
-
         assert_eq!(output.service_name, "echo_console");
         assert_eq!(output.execution_plane, "HttpService");
         assert_eq!(output.runtime, "Inrou");
@@ -22757,7 +21324,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("hosted HttpService + Inrou"))
         );
     }
-
     #[test]
     fn local_plan_single_api_service_reports_deterministic_handler_routes() {
         let dir = temp_dir("single_api_service_local_plan");
@@ -22773,14 +21339,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let output = LocalPlanArgs {
             container: dir.join("services/api/container_manifest.json"),
             service: dir.join("services/api/service_manifest.json"),
         }
         .run()
         .expect("plan should succeed");
-
         assert_eq!(output.service_name, "travel-ops_api");
         assert_eq!(output.execution_plane, "DeterministicService");
         assert_eq!(output.runtime, "Ivm");
@@ -22818,7 +21382,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("deterministic IVM"))
         );
     }
-
     #[test]
     fn local_dev_http_service_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("http_service_local_dev_dry_run");
@@ -22831,7 +21394,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let output = LocalDevArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -22839,7 +21401,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("dev dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.execution_plane, "HttpService");
         assert_eq!(output.runtime, "Inrou");
@@ -22873,13 +21434,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("hosted HttpService + Inrou"))
         );
     }
-
     #[test]
     fn local_dev_http_service_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("http_service_local_dev_run");
         InitArgs {
             output_dir: dir.clone(),
@@ -22890,11 +21449,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[0]).expect("write dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
-
         let output = LocalDevArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -22902,7 +21459,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("dev execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.execution_plane, "HttpService");
         assert_eq!(output.runtime, "Inrou");
@@ -22920,13 +21476,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "dev command should run the manifest-adjacent script"
         );
     }
-
     #[test]
     fn local_dev_http_service_treats_interrupt_exit_as_successful_session_end() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("http_service_local_dev_interrupt");
         InitArgs {
             output_dir: dir.clone(),
@@ -22937,11 +21491,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[1]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
-
         let output = LocalDevArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -22949,7 +21501,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("interrupt status 130 should be treated as a successful dev stop");
-
         assert_eq!(output.mode, "interrupted");
         assert_eq!(output.exit_status, Some(130));
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
@@ -22967,13 +21518,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("interactive interrupt"))
         );
     }
-
     #[test]
     fn build_and_sync_http_service_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("http_service_build_and_sync_run");
         InitArgs {
             output_dir: dir.clone(),
@@ -22984,13 +21533,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let build_and_sync_script = dir.join("build-and-sync.sh");
         fs::write(&build_and_sync_script, STATIC_ASSETS_V1[2])
             .expect("write build-and-sync script");
         mark_template_file_executable(&build_and_sync_script)
             .expect("mark build-and-sync executable");
-
         let output = BuildAndSyncArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -22998,7 +21545,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("build-and-sync execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.execution_plane, "HttpService");
         assert_eq!(output.runtime, "Inrou");
@@ -23023,7 +21569,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("build-and-sync completed"))
         );
     }
-
     #[test]
     fn deploy_workspace_http_service_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("http_service_deploy_workspace_dry_run");
@@ -23036,7 +21581,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -23049,7 +21593,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy)
         .expect("deploy dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.script_name, "deploy.sh");
         assert_eq!(output.execution_plane, "HttpService");
@@ -23082,13 +21625,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("exporting TORII_URL"))
         );
     }
-
     #[test]
     fn deploy_workspace_http_service_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("http_service_deploy_workspace_run");
         InitArgs {
             output_dir: dir.clone(),
@@ -23099,7 +21640,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let configs_path = dir.join("materials").join("configs.json");
         let secrets_path = dir.join("materials").join("secrets.json");
         fs::create_dir_all(configs_path.parent().expect("materials parent"))
@@ -23108,11 +21648,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&secrets_path, "{}").expect("write secrets");
         let resolved_configs = fs::canonicalize(&configs_path).expect("canonicalize configs");
         let resolved_secrets = fs::canonicalize(&secrets_path).expect("canonicalize secrets");
-
         let deploy_script = dir.join("deploy.sh");
         fs::write(&deploy_script, STATIC_ASSETS_V1[3]).expect("write deploy script");
         mark_template_file_executable(&deploy_script).expect("mark deploy executable");
-
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -23125,7 +21663,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy)
         .expect("deploy execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "deploy.sh");
@@ -23163,13 +21700,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("deploy completed"))
         );
     }
-
     #[test]
     fn upgrade_workspace_http_service_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("http_service_upgrade_workspace_run");
         InitArgs {
             output_dir: dir.clone(),
@@ -23180,11 +21715,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("http-service init should succeed");
-
         let upgrade_script = dir.join("upgrade.sh");
         fs::write(&upgrade_script, STATIC_ASSETS_V1[4]).expect("write upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark upgrade executable");
-
         let output = WorkspaceMutationArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
@@ -23197,7 +21730,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Upgrade)
         .expect("upgrade execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "upgrade.sh");
@@ -23223,7 +21755,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("upgrade completed"))
         );
     }
-
     #[test]
     fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
         let dir = temp_dir("site_template");
@@ -23236,16 +21767,13 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("site init should succeed");
-
         assert_eq!(output.template, "site");
         assert!(!dir.join("registry.json").exists());
         assert!(dir.join("site/package.json").exists());
         assert!(dir.join("site/src/App.vue").exists());
-
         let readme = fs::read_to_string(dir.join("site/README.md")).expect("read site readme");
         assert!(readme.contains("iroha app sorafs toolkit pack"));
         assert!(readme.contains("alias-namespace soradns"));
-
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
         assert_eq!(container.runtime, SoraContainerRuntimeV1::Ivm);
@@ -23268,7 +21796,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("assets")
         );
     }
-
     #[test]
     fn init_webapp_template_scaffolds_frontend_and_api() {
         let dir = temp_dir("webapp_template");
@@ -23281,11 +21808,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         assert_eq!(output.template, "webapp");
         assert!(dir.join("webapp/frontend/package.json").exists());
         assert!(dir.join("webapp/api/server.mjs").exists());
-
         let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
         assert!(api.contains("/api/auth/challenge"));
         assert!(api.contains("/api/auth/login"));
@@ -23300,7 +21825,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             !api.contains("TODO"),
             "placeholder TODO markers must be removed from webapp scaffold auth"
         );
-
         let readme = fs::read_to_string(dir.join("webapp/README.md")).expect("read webapp readme");
         assert!(readme.contains("SESSION_HMAC_KEY"));
         assert!(readme.contains("AUTH_SESSION_TTL_SECS"));
@@ -23308,7 +21832,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(readme.contains("AUTH_CAPABILITY_MAP_JSON"));
         assert!(readme.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
         assert!(readme.contains("PUBLIC_BASE_URL"));
-
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(
@@ -23347,7 +21870,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("update")
         );
     }
-
     #[test]
     fn init_pii_app_template_scaffolds_private_policy_workflows() {
         let dir = temp_dir("pii_app_template");
@@ -23360,7 +21882,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         assert_eq!(output.template, "pii-app");
         assert!(dir.join("pii-app/frontend/package.json").exists());
         assert!(dir.join("pii-app/api/server.mjs").exists());
@@ -23376,14 +21897,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             dir.join("pii-app/policy/deletion_workflow_template.json")
                 .exists()
         );
-
         let readme = fs::read_to_string(dir.join("pii-app/README.md")).expect("read pii readme");
         assert!(readme.contains("consent_policy_template.json"));
         assert!(readme.contains("retention_policy_template.json"));
         assert!(readme.contains("deletion_workflow_template.json"));
         assert!(readme.contains("AUTH_CAPABILITY_MAP_JSON"));
         assert!(readme.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-
         let api = fs::read_to_string(dir.join("pii-app/api/server.mjs")).expect("read api file");
         assert!(api.contains("/pii/api/auth/challenge"));
         assert!(api.contains("/pii/api/auth/login"));
@@ -23401,7 +21920,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             !api.contains("TODO"),
             "placeholder TODO markers must be removed from pii-app scaffold auth"
         );
-
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(
@@ -23465,7 +21983,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
         assert_eq!(service.artifacts[1].kind, SoraArtifactKindV1::Checkpoint);
     }
-
     #[test]
     fn app_init_single_api_template_scaffolds_admissible_root_binding_service() {
         let dir = temp_dir("single_api_template");
@@ -23481,7 +21998,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         assert_eq!(output.template, "single-api");
         assert!(dir.join("web/package.json").exists());
         assert!(dir.join("web/src/App.vue").exists());
@@ -23497,7 +22013,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(dir.join("services/api/dev.sh"))
                     .expect("single-api dev.sh metadata")
@@ -23561,7 +22076,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .iter()
                 .any(|path| path.ends_with("services/api/build.sh"))
         );
-
         let manifest: SoracloudAppManifestV1 =
             load_json(&dir.join("app_manifest.json")).expect("app manifest");
         assert_eq!(
@@ -23576,7 +22090,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             manifest.services[0].bundle_file.as_deref(),
             Some("services/api/build/api-service.to")
         );
-
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("services/api/container_manifest.json")).expect("container");
         let service: SoraServiceManifestV1 =
@@ -23601,7 +22114,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             service.handlers[0].certified_response,
             SoraCertifiedResponsePolicyV1::AuditReceipt
         );
-
         let frontend_app =
             fs::read_to_string(dir.join("web/src/App.vue")).expect("read single-api frontend");
         assert!(frontend_app.contains("fetch(\"/api/healthz\")"));
@@ -23609,7 +22121,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             fs::read_to_string(dir.join("web/vite.config.ts")).expect("read single-api vite");
         assert!(frontend_vite.contains("SORACLOUD_SINGLE_API_DEV_PROXY_TARGET"));
         assert!(frontend_vite.contains("\"/api\""));
-
         let contract = fs::read_to_string(dir.join("services/api/contract/api_service.ko"))
             .expect("read single-api contract");
         assert!(contract.contains("seiyaku travel_ops_api_service {"));
@@ -23618,13 +22129,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("read single-api dev server");
         assert!(dev_server.contains("/api/healthz"));
         assert!(dev_server.contains("local_dev_shim"));
-
         let api_readme = fs::read_to_string(dir.join("services/api/README.md"))
             .expect("read single-api api readme");
         assert!(api_readme.contains("./dev.sh"));
         assert!(api_readme.contains("./verify-build.sh"));
         assert!(api_readme.contains("koto build"));
-
         let readme = fs::read_to_string(dir.join("README.md")).expect("read single-api readme");
         assert!(readme.contains("./dev.sh"));
         assert!(readme.contains("./build-and-sync.sh"));
@@ -23684,7 +22193,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             run_bash_syntax_check(&dir.join("deploy.sh"));
             run_bash_syntax_check(&dir.join("upgrade.sh"));
         }
-
         let bundle = SoraDeploymentBundleV1 {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container,
@@ -23694,7 +22202,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .validate_for_admission()
             .expect("single-api scaffold should be admissible");
     }
-
     #[test]
     fn generated_single_api_dev_server_smoke_serves_healthz() {
         let dir = temp_dir("single_api_dev_smoke");
@@ -23710,7 +22217,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let server_path = dir.join("services/api/dev-server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read single-api dev server");
@@ -23718,14 +22224,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(server.contains("local_dev_shim"));
             return;
         }
-
         let harness_path = dir.join("single_api_dev_smoke.mjs");
         let mut script = TEST_HARNESSES_V1[3].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write single-api dev smoke harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn normalized_contract_identifier_rewrites_dns_labels_into_koto_safe_names() {
         assert_eq!(normalized_contract_identifier("travel-ops"), "travel_ops");
@@ -23736,7 +22240,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert_eq!(normalized_contract_identifier("---"), "sora_contract");
     }
-
     #[test]
     fn app_init_split_app_template_scaffolds_live_and_vault_services() {
         let dir = temp_dir("split_app_template");
@@ -23752,7 +22255,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         assert_eq!(output.template, "split-app");
         assert!(dir.join("frontend/src/App.vue").exists());
         assert!(dir.join("services/live/app/server.mjs").exists());
@@ -23771,7 +22273,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(dir.join("services/live/build.sh"))
                     .expect("live build.sh metadata")
@@ -23861,7 +22362,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 0o111
             );
         }
-
         let manifest: SoracloudAppManifestV1 =
             load_json(&dir.join("app_manifest.json")).expect("app manifest");
         assert_eq!(
@@ -23893,7 +22393,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|service| service.bundle_file.as_deref()
                     == Some("services/vault/build/vault-api.to"))
         );
-
         let live_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
         let live_service: SoraServiceManifestV1 =
@@ -23950,7 +22449,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             inrou.ssh_authorized_keys,
             vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()]
         );
-
         let live_server =
             fs::read_to_string(dir.join("services/live/app/server.mjs")).expect("read live server");
         assert!(live_server.contains("/airports/search"));
@@ -23973,7 +22471,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("read inrou readme");
         assert!(live_inrou_readme.contains("x86_64/vmlinux"));
         assert!(live_inrou_readme.contains("aarch64/vmlinux"));
-
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
                 .expect("vault container");
@@ -24020,7 +22517,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .iter()
                 .any(|handler| handler.route_path.as_deref() == Some("/auth/health"))
         );
-
         let vault_contract = fs::read_to_string(dir.join("services/vault/contract/vault_api.ko"))
             .expect("read vault contract");
         assert!(vault_contract.contains("seiyaku travel_ops_vault_api {"));
@@ -24029,7 +22525,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(vault_contract.contains("store_saved_search"));
         assert!(!vault_contract.contains("serve_auth_health"));
         assert!(!vault_contract.contains("saved_items"));
-
         let frontend_package =
             fs::read_to_string(dir.join("frontend/package.json")).expect("read frontend package");
         assert!(frontend_package.contains("validate-production-env.mjs"));
@@ -24054,13 +22549,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? \"/api\";")
         );
         assert!(!frontend_app.contains("destination: \"HND\""));
-
         let live_readme =
             fs::read_to_string(dir.join("services/live/README.md")).expect("read live readme");
         assert!(live_readme.contains("SORACLOUD_LEASE_VOLUME_*"));
         assert!(live_readme.contains("build/live-api.tgz"));
         assert!(live_readme.contains("./dev.sh"));
-
         let vault_readme =
             fs::read_to_string(dir.join("services/vault/README.md")).expect("read vault readme");
         assert!(vault_readme.contains("deterministic IVM plane"));
@@ -24069,7 +22562,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(vault_readme.contains("local HTTP shim"));
         assert!(vault_readme.contains("./verify-build.sh"));
         assert!(vault_readme.contains("koto build"));
-
         let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
         assert!(app_readme.contains("/sorafs/cid/"));
         assert!(app_readme.contains("share `/api` on the host origin"));
@@ -24160,7 +22652,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             run_bash_syntax_check(&dir.join("upgrade.sh"));
         }
     }
-
     #[test]
     fn app_init_split_app_existing_repo_template_omits_starter_sources() {
         let dir = temp_dir("split_app_existing_repo_template");
@@ -24176,7 +22667,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app existing-repo init should succeed");
-
         assert_eq!(output.template, "split-app");
         assert!(dir.join("app_manifest.json").exists());
         assert!(dir.join("services/live/container_manifest.json").exists());
@@ -24199,7 +22689,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(!dir.join("services/vault/dev.sh").exists());
         assert!(!dir.join("services/vault/build.sh").exists());
         assert!(!dir.join("services/vault/verify-build.sh").exists());
-
         let manifest: SoracloudAppManifestV1 =
             load_json(&dir.join("app_manifest.json")).expect("app manifest");
         assert_eq!(
@@ -24214,7 +22703,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             2,
             "existing-repo mode must still wire both services into the app manifest"
         );
-
         let build_and_sync_sh =
             fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
         assert!(build_and_sync_sh.contains("replace build-and-sync.sh with your real"));
@@ -24222,13 +22710,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(!build_and_sync_sh.contains("npm install"));
         assert!(!build_and_sync_sh.contains("services/live"));
         assert!(!build_and_sync_sh.contains("services/vault"));
-
         let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
         assert!(app_readme.contains("Existing-Repo Template"));
         assert!(app_readme.contains("does not generate starter source"));
         assert!(app_readme.contains("replace `build-and-sync.sh`"));
         assert!(!app_readme.contains("./dev.sh"));
-
         if bash_available() {
             run_bash_syntax_check(&dir.join("build-and-sync.sh"));
             run_bash_syntax_check(&dir.join("doctor.sh"));
@@ -24237,7 +22723,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             run_bash_syntax_check(&dir.join("upgrade.sh"));
         }
     }
-
     #[test]
     fn app_init_existing_repo_rejects_non_split_templates() {
         let dir = temp_dir("single_api_existing_repo_template");
@@ -24258,7 +22743,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("--existing-repo is only supported with --template split-app")
         );
     }
-
     #[test]
     fn app_init_split_app_template_accepts_public_host_and_dist_dir_overrides() {
         let dir = temp_dir("split_app_template_overrides");
@@ -24274,9 +22758,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init with overrides should succeed");
-
         assert_eq!(output.public_url, "https://taira.sora.org");
-
         let manifest: SoracloudAppManifestV1 =
             load_json(&dir.join("app_manifest.json")).expect("app manifest");
         assert_eq!(manifest.public_url, "https://taira.sora.org");
@@ -24287,14 +22769,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .map(|site| site.dist_dir.as_str()),
             Some("../../apps/web/dist")
         );
-
         let live_service: SoraServiceManifestV1 =
             load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
         assert_eq!(
             live_service.route.as_ref().map(|route| route.host.as_str()),
             Some("taira.sora.org")
         );
-
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
                 .expect("vault container");
@@ -24305,7 +22785,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .map(String::as_str),
             Some("https://taira.sora.org")
         );
-
         let vault_service: SoraServiceManifestV1 =
             load_json(&dir.join("services/vault/service_manifest.json")).expect("vault service");
         assert_eq!(
@@ -24316,7 +22795,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("taira.sora.org")
         );
     }
-
     #[test]
     fn app_local_plan_split_app_reports_mixed_routes_and_cid_gateway() {
         let dir = temp_dir("split_app_local_plan");
@@ -24332,13 +22810,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let output = AppLocalPlanArgs {
             manifest: dir.join("app_manifest.json"),
         }
         .run()
         .expect("plan should succeed");
-
         assert_eq!(output.app_name, "travel_ops");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert_eq!(output.hostname, "travel-ops.sora");
@@ -24462,7 +22938,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert!(output.notes.iter().any(|note| note.contains("CID-only")));
     }
-
     #[test]
     fn app_local_plan_single_api_reports_child_service_workspace() {
         let dir = temp_dir("single_api_app_local_plan");
@@ -24478,13 +22953,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let output = AppLocalPlanArgs {
             manifest: dir.join("app_manifest.json"),
         }
         .run()
         .expect("app plan should succeed");
-
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(!output.has_mixed_planes);
@@ -24529,7 +23002,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(service.runtime, "Ivm");
         assert_eq!(service.route_path_prefix.as_deref(), Some("/api"));
     }
-
     #[test]
     fn app_local_dev_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_local_dev_dry_run");
@@ -24545,14 +23017,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let output = AppLocalDevArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
         }
         .run()
         .expect("dev dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
@@ -24610,13 +23080,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             )
         );
     }
-
     #[test]
     fn app_local_dev_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("single_api_local_dev_run");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -24630,18 +23098,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[5]).expect("write test dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
-
         let output = AppLocalDevArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: false,
         }
         .run()
         .expect("dev execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.workspace_dir.contains("single_api_local_dev_run"));
@@ -24664,13 +23129,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "dev command should run the manifest-adjacent script"
         );
     }
-
     #[test]
     fn app_local_dev_treats_interrupt_exit_as_successful_session_end() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("single_api_local_dev_interrupt");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -24684,18 +23147,15 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let local_dev_script = dir.join("dev.sh");
         fs::write(&local_dev_script, STATIC_ASSETS_V1[6]).expect("write interrupting dev script");
         mark_template_file_executable(&local_dev_script).expect("mark dev executable");
-
         let output = AppLocalDevArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: false,
         }
         .run()
         .expect("interrupt status 130 should be treated as a successful dev stop");
-
         assert_eq!(output.mode, "interrupted");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(
@@ -24712,7 +23172,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("interactive interrupt"))
         );
     }
-
     #[test]
     fn app_build_and_sync_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_build_and_sync_dry_run");
@@ -24728,14 +23187,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let output = AppBuildAndSyncArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
         }
         .run()
         .expect("build-and-sync dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
@@ -24791,13 +23248,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                     && route.path == "/api/auth/challenge")
         );
     }
-
     #[test]
     fn app_build_and_sync_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("single_api_build_and_sync_run");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -24811,20 +23266,17 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let build_and_sync_script = dir.join("build-and-sync.sh");
         fs::write(&build_and_sync_script, STATIC_ASSETS_V1[7])
             .expect("write test build-and-sync script");
         mark_template_file_executable(&build_and_sync_script)
             .expect("mark build-and-sync executable");
-
         let output = AppBuildAndSyncArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: false,
         }
         .run()
         .expect("build-and-sync execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(
@@ -24853,7 +23305,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("build-and-sync completed"))
         );
     }
-
     #[test]
     fn app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_doctor_workspace_dry_run");
@@ -24869,14 +23320,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let output = AppDoctorWorkspaceArgs {
             manifest: dir.join("app_manifest.json"),
             dry_run: true,
         }
         .run()
         .expect("app doctor dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
@@ -24908,13 +23357,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(output.services.len(), 2);
         assert!(output.notes.iter().any(|note| note.contains("doctor")));
     }
-
     #[test]
     fn app_release_workspace_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("single_api_release_workspace_run");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -24928,11 +23375,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let release_script = dir.join("release.sh");
         fs::write(&release_script, STATIC_ASSETS_V1[8]).expect("write app release script");
         mark_template_file_executable(&release_script).expect("mark app release executable");
-
         let output = AppReleaseWorkspaceArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -24942,7 +23387,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app release execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(
@@ -24988,7 +23432,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("release completed"))
         );
     }
-
     #[test]
     fn app_deploy_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_deploy_workspace_dry_run");
@@ -25004,7 +23447,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let output = AppWorkspaceMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -25014,7 +23456,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy)
         .expect("app deploy dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
@@ -25067,13 +23508,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("exporting TORII_URL"))
         );
     }
-
     #[test]
     fn app_upgrade_workspace_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("single_api_upgrade_workspace_run");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -25087,11 +23526,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let upgrade_script = dir.join("upgrade.sh");
         fs::write(&upgrade_script, STATIC_ASSETS_V1[9]).expect("write app upgrade script");
         mark_template_file_executable(&upgrade_script).expect("mark app upgrade executable");
-
         let output = AppWorkspaceMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -25101,7 +23538,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Upgrade)
         .expect("app upgrade execution should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(
@@ -25151,7 +23587,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("upgrade completed"))
         );
     }
-
     #[test]
     fn app_doctor_validates_split_app_release_contract() {
         let dir = temp_dir("split_app_doctor");
@@ -25167,7 +23602,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -25186,13 +23620,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"doctor-vault-bundle",
         )
         .expect("write vault bundle");
-
         let output = AppDoctorArgs {
             manifest: dir.join("app_manifest.json"),
         }
         .run()
         .expect("doctor should succeed");
-
         assert!(
             output.ok,
             "doctor should pass on the scaffolded split-app contract"
@@ -25227,7 +23659,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                     && route.path == "/api/auth/challenge")
         );
     }
-
     #[test]
     fn app_doctor_rejects_any_hosted_live_route_outside_api_v1() {
         let dir = temp_dir("split_app_doctor_rejects_hosted_prefix");
@@ -25243,7 +23674,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -25262,7 +23692,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"doctor-vault-bundle",
         )
         .expect("write vault bundle");
-
         let admin_dir = dir.join("services/admin");
         fs::create_dir_all(&admin_dir).expect("create admin service dir");
         let admin_container_path = admin_dir.join("container_manifest.json");
@@ -25271,7 +23700,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         let admin_bundle_path = artifact_dir.join("admin-api.tgz");
         fs::create_dir_all(&artifact_dir).expect("create artifact dir");
         fs::write(&admin_bundle_path, b"doctor-admin-bundle").expect("write admin bundle");
-
         let admin_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
         let mut admin_service: SoraServiceManifestV1 =
@@ -25284,7 +23712,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .path_prefix = "/admin".to_owned();
         write_json(&admin_container_path, &admin_container).expect("write admin container");
         write_json(&admin_service_path, &admin_service).expect("write admin service");
-
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services.push(SoracloudAppServiceRefV1 {
@@ -25296,13 +23723,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             initial_secrets: None,
         });
         write_json(&manifest_path, &manifest).expect("write app manifest");
-
         let output = AppDoctorArgs {
             manifest: manifest_path,
         }
         .run()
         .expect("doctor should produce a report");
-
         assert!(
             !output.ok,
             "doctor must fail when any hosted Inrou route leaves /api/v1"
@@ -25323,7 +23748,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(live_route_prefix.detail.contains("travel-ops_live:/api/v1"));
         assert!(live_route_prefix.detail.contains("travel-ops_admin:/admin"));
     }
-
     #[test]
     fn app_release_dry_run_reports_build_and_upsert_plan() {
         let dir = temp_dir("split_app_release_dry_run");
@@ -25339,7 +23763,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let key_pair = soracloud_fixture_key_pair(0x40);
         let authority = AccountId::new(key_pair.public_key().clone());
         let output = AppReleaseArgs {
@@ -25352,7 +23775,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("release dry-run should succeed");
-
         assert_eq!(output.mode, "dry_run");
         assert_eq!(output.release_mode, "deploy_or_upgrade_on_conflict");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
@@ -25374,13 +23796,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|note| note.contains("deploy-then-upgrade-on-conflict"))
         );
     }
-
     #[test]
     fn app_release_runs_build_and_then_deploys_split_app() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("split_app_release_run");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -25394,11 +23814,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let build_script = dir.join("build-and-sync.sh");
         fs::write(&build_script, STATIC_ASSETS_V1[10]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
-
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
@@ -25426,7 +23844,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x41);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -25440,7 +23857,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("release should succeed");
-
         assert_eq!(output.mode, "completed");
         assert_eq!(output.release_mode, "Deploy");
         assert_eq!(output.plan.hostname, "travel-ops.sora");
@@ -25482,13 +23898,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .count();
         assert_eq!(deploy_requests, 2);
     }
-
     #[test]
     fn app_release_reuses_published_inrou_guest_image_artifacts() {
         if !bash_available() {
             return;
         }
-
         let dir = temp_dir("split_app_release_reuse_guest_images");
         AppInitArgs {
             output_dir: dir.clone(),
@@ -25502,11 +23916,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let build_script = dir.join("build-and-sync.sh");
         fs::write(&build_script, STATIC_ASSETS_V1[11]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
-
         let live_container_path = dir.join("services/live/container_manifest.json");
         let mut live_container: SoraContainerManifestV1 =
             load_json(&live_container_path).expect("live container");
@@ -25557,7 +23969,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .run()
         .expect("sync app manifests after injecting published refs");
         fs::remove_dir_all(dir.join("services/live/inrou")).expect("remove local inrou staging");
-
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
@@ -25585,7 +23996,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x42);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -25599,7 +24009,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(&authority, &key_pair)
         .expect("release should succeed with prepublished guest images");
-
         let release_response = output
             .release_response
             .as_ref()
@@ -25620,7 +24029,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                     .contains("reused a prepublished Inrou guest-image artifact"))
         );
     }
-
     #[test]
     fn app_local_plan_rejects_app_service_name_mismatch() {
         let dir = temp_dir("split_app_local_plan_service_name_mismatch");
@@ -25636,12 +24044,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services[0].service_name = "wrong_live_name".to_owned();
         write_json(&manifest_path, &manifest).expect("write mismatched app manifest");
-
         let error = AppLocalPlanArgs {
             manifest: manifest_path,
         }
@@ -25654,7 +24060,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("referenced service manifest declares")
         );
     }
-
     #[test]
     fn generated_split_app_live_server_smoke_serves_hayahi_routes() {
         let dir = temp_dir("split_app_live_smoke");
@@ -25670,7 +24075,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let server_path = dir.join("services/live/app/server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read split live server");
@@ -25681,7 +24085,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(server.contains("/links/resolve"));
             return;
         }
-
         let harness_path = dir.join("split_app_live_smoke.mjs");
         let shared_cache_dir = dir.join("lease/shared-cache");
         let search_sessions_dir = dir.join("lease/search-sessions");
@@ -25708,7 +24111,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write split live smoke harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_split_app_vault_dev_server_smoke_serves_auth_and_user_state() {
         let dir = temp_dir("split_app_vault_dev_smoke");
@@ -25724,7 +24126,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let server_path = dir.join("services/vault/dev-server.mjs");
         if !node_available() {
             let server = fs::read_to_string(&server_path).expect("read split vault dev server");
@@ -25734,7 +24135,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(server.contains("/v1/user/saved-searches"));
             return;
         }
-
         let harness_path = dir.join("split_app_vault_dev_smoke.mjs");
         let state_file = dir.join("services/vault/tmp/vault-dev-state.json");
         let mut script = TEST_HARNESSES_V1[5].to_owned();
@@ -25743,7 +24143,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write split vault dev smoke harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_split_app_frontend_build_guard_enforces_live_same_host_api() {
         let dir = temp_dir("split_app_frontend_guard");
@@ -25759,7 +24158,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let guard_path = dir.join("frontend/scripts/validate-production-env.mjs");
         if !node_available() {
             let guard = fs::read_to_string(&guard_path).expect("read build guard");
@@ -25767,7 +24165,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(guard.contains("VITE_DATA_MODE must be exactly 'live'"));
             return;
         }
-
         let success = Command::new("node")
             .arg(&guard_path)
             .env("VITE_PUBLIC_API_BASE", "/api")
@@ -25780,7 +24177,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&success.stdout),
             String::from_utf8_lossy(&success.stderr)
         );
-
         let missing_api = Command::new("node")
             .arg(&guard_path)
             .env_remove("VITE_PUBLIC_API_BASE")
@@ -25792,7 +24188,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&missing_api.stderr)
                 .contains("VITE_PUBLIC_API_BASE must be exactly '/api'")
         );
-
         let absolute_api = Command::new("node")
             .arg(&guard_path)
             .env("VITE_PUBLIC_API_BASE", "https://example.com/api")
@@ -25804,7 +24199,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&absolute_api.stderr)
                 .contains("VITE_PUBLIC_API_BASE must be exactly '/api'")
         );
-
         let missing_mode = Command::new("node")
             .arg(&guard_path)
             .env("VITE_PUBLIC_API_BASE", "/api")
@@ -25816,7 +24210,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             String::from_utf8_lossy(&missing_mode.stderr)
                 .contains("VITE_DATA_MODE must be exactly 'live'")
         );
-
         let demo_mode = Command::new("node")
             .arg(&guard_path)
             .env("VITE_PUBLIC_API_BASE", "/api")
@@ -25829,12 +24222,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .contains("VITE_DATA_MODE must be exactly 'live'")
         );
     }
-
     #[test]
     fn app_manifest_static_site_publish_mode_defaults_to_root_binding() {
         let manifest = json::from_str::<SoracloudAppManifestV1>(STATIC_ASSETS_V1[12])
             .expect("legacy manifest should parse");
-
         assert_eq!(
             manifest
                 .static_site
@@ -25843,7 +24234,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some(APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
         );
     }
-
     #[test]
     fn app_static_site_root_binding_plan_targets_public_host_for_root_binding() {
         let static_site = SoracloudAppStaticSiteV1 {
@@ -25861,7 +24251,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             manifest_digest_hex: "abcd".repeat(16),
             manifest_id_hex: None,
         };
-
         let plan = plan_app_static_site_root_binding(
             "travel_ops",
             "https://travel-ops.sora",
@@ -25870,10 +24259,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("root binding plan should build")
         .expect("root binding plan should exist");
-
         assert_eq!(plan.target_host, "travel-ops.sora");
     }
-
     #[test]
     fn app_static_site_root_binding_plan_skips_cid_only_sites() {
         let static_site = SoracloudAppStaticSiteV1 {
@@ -25891,7 +24278,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             manifest_digest_hex: "abcd".repeat(16),
             manifest_id_hex: None,
         };
-
         let plan = plan_app_static_site_root_binding(
             "travel_ops",
             "https://travel-ops.sora",
@@ -25899,13 +24285,11 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some(&publication),
         )
         .expect("cid-only plan should build");
-
         assert!(
             plan.is_none(),
             "cid-only apps must not create root binding plans"
         );
     }
-
     #[test]
     fn apply_app_static_site_root_binding_attaches_reserved_config_once() {
         let static_site = SoracloudAppStaticSiteV1 {
@@ -25931,7 +24315,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         )
         .expect("root binding plan should build")
         .expect("root binding plan should exist");
-
         let mut service = fixture_service();
         service.route = Some(SoraRouteTargetV1 {
             host: "travel-ops.sora".to_owned(),
@@ -25941,7 +24324,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             tls_mode: SoraTlsModeV1::Required,
         });
         let mut initial_configs = BTreeMap::new();
-
         let attached = apply_app_static_site_root_binding(
             "travel_ops_live",
             &service,
@@ -25955,7 +24337,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             "matching public route should receive root binding"
         );
         assert!(initial_configs.contains_key(APP_STATIC_SITE_CONFIG_NAME));
-
         let mut second_service_configs = BTreeMap::new();
         let second_attach = apply_app_static_site_root_binding(
             "travel_ops_live",
@@ -25967,21 +24348,18 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         .expect("second attachment should be skipped");
         assert!(!second_attach, "binding must only attach once");
     }
-
     #[test]
     fn ensure_app_static_site_root_binding_attached_errors_when_required_route_is_missing() {
         let plan = AppStaticSiteRootBindingPlan {
             target_host: "travel-ops.sora".to_owned(),
             binding_value: Json::from(norito::json!({ "schema_version": 1 })),
         };
-
         let err = ensure_app_static_site_root_binding_attached(Some(&plan), false)
             .expect_err("missing matching route must fail");
         assert!(err.to_string().contains(
             "app static site host `travel-ops.sora` has no matching public service route"
         ));
     }
-
     #[test]
     fn init_hayahi_app_template_scaffolds_real_ivm_api_project() {
         let dir = temp_dir("hayahi_app_template");
@@ -25994,12 +24372,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("hayahi-app init should succeed");
-
         assert_eq!(output.template, "hayahi-app");
         assert!(dir.join("hayahi-app/package.json").exists());
         assert!(dir.join("hayahi-app/build.sh").exists());
         assert!(dir.join("hayahi-app/contract/hayahi_api.ko").exists());
-
         let readme =
             fs::read_to_string(dir.join("hayahi-app/README.md")).expect("read hayahi readme");
         assert!(readme.contains("build/hayahi-app-api.to"));
@@ -26008,7 +24384,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(readme.contains("/api/v1/user/saved-searches"));
         assert!(readme.contains("/api/auth/challenge"));
         assert!(readme.contains("/api/v1/search"));
-
         let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
             .expect("read hayahi contract");
         assert!(contract.contains("view fn serve_health"));
@@ -26022,7 +24397,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             !contract.contains("TODO"),
             "placeholder TODO markers must be removed from hayahi-app scaffold"
         );
-
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(
@@ -26095,7 +24469,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
         assert_eq!(service.artifacts[1].kind, SoraArtifactKindV1::Checkpoint);
     }
-
     #[test]
     fn generated_webapp_auth_module_contains_replay_and_signature_guards() {
         let dir = temp_dir("webapp_auth_markers");
@@ -26108,7 +24481,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let api = fs::read_to_string(dir.join("webapp/api/server.mjs")).expect("read api file");
         assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED"));
@@ -26126,7 +24498,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(api.contains("sendInternalError"));
         assert!(api.contains("server.address()"));
     }
-
     #[test]
     fn generated_pii_app_auth_module_contains_replay_and_signature_guards() {
         let dir = temp_dir("pii_auth_markers");
@@ -26139,7 +24510,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let api =
             fs::read_to_string(dir.join("pii-app/api/server.mjs")).expect("read pii api file");
         assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
@@ -26158,7 +24528,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(api.contains("sendInternalError"));
         assert!(api.contains("server.address()"));
     }
-
     #[test]
     fn generated_hayahi_app_contract_contains_real_route_entrypoints() {
         let dir = temp_dir("hayahi_auth_markers");
@@ -26171,7 +24540,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("hayahi-app init should succeed");
-
         let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
             .expect("read hayahi contract");
         assert!(contract.contains("route: \"/api/v1/health\""));
@@ -26183,7 +24551,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         assert!(contract.contains("route: \"/api/v1/user/preferences\""));
         assert!(contract.contains("route: \"/api/v1/user/saved-searches\""));
     }
-
     #[test]
     fn sync_manifests_updates_bundle_and_container_hashes() {
         let dir = temp_dir("sync_manifests");
@@ -26200,7 +24567,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         write_json(&container_path, &container).expect("write container");
         write_json(&service_path, &service).expect("write service");
         fs::write(&bundle_path, b"hayahi-ivm-bundle").expect("write bundle");
-
         let output = SyncManifestsArgs {
             app_manifest: None,
             container: container_path.clone(),
@@ -26209,7 +24575,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("sync manifests should succeed");
-
         let synced_container: SoraContainerManifestV1 =
             load_json(&container_path).expect("synced container");
         let synced_service: SoraServiceManifestV1 =
@@ -26232,19 +24597,16 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some(Hash::new(Encode::encode(&synced_container)))
         );
     }
-
     #[test]
     fn sync_manifests_app_manifest_refreshes_every_service_pair() {
         let dir = temp_dir("sync_manifests_app");
         let manifest_path = dir.join("app_manifest.json");
-
         let live_bundle =
             build_split_app_live_service_bundle("travel_ops", "travel-ops.sora", "1.0.0")
                 .expect("build live bundle");
         let vault_bundle =
             build_split_app_vault_service_bundle("travel_ops", "travel-ops.sora", "1.0.0")
                 .expect("build vault bundle");
-
         let live_dir = dir.join("services/live");
         let vault_dir = dir.join("services/vault");
         fs::create_dir_all(live_dir.join("build")).expect("create live build dir");
@@ -26273,7 +24635,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("write live bundle");
         fs::write(vault_dir.join("build/vault-api.to"), b"vault-api-bundle")
             .expect("write vault bundle");
-
         let manifest = SoracloudAppManifestV1 {
             schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
             app_name: "travel_ops".to_owned(),
@@ -26306,7 +24667,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             ],
         };
         write_json(&manifest_path, &manifest).expect("write app manifest");
-
         let output = SyncManifestsArgs {
             app_manifest: Some(manifest_path.clone()),
             container: dir.join("unused-container.json"),
@@ -26315,7 +24675,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app sync should succeed");
-
         assert_eq!(
             output.app_manifest_path.as_deref(),
             Some(manifest_path.to_string_lossy().as_ref())
@@ -26334,7 +24693,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .any(|service| service.bundle_hash == Hash::new(b"vault-api-bundle"))
         );
     }
-
     #[test]
     fn sync_manifests_generated_split_app_scaffold_refreshes_service_refs() {
         let dir = temp_dir("sync_manifests_generated_split_app");
@@ -26350,7 +24708,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
         fs::write(
@@ -26363,7 +24720,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"scaffold-vault-bundle",
         )
         .expect("write vault bundle");
-
         let manifest_path = dir.join("app_manifest.json");
         let output = SyncManifestsArgs {
             app_manifest: Some(manifest_path.clone()),
@@ -26373,7 +24729,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app sync should succeed");
-
         assert_eq!(
             output.app_manifest_path.as_deref(),
             Some(manifest_path.to_string_lossy().as_ref())
@@ -26391,7 +24746,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .iter()
                 .any(|service| service.bundle_hash == Hash::new(b"scaffold-vault-bundle"))
         );
-
         let live_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
         let live_service: SoraServiceManifestV1 =
@@ -26404,7 +24758,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             live_service.container.manifest_hash,
             Hash::new(Encode::encode(&live_container))
         );
-
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
                 .expect("vault container");
@@ -26419,7 +24772,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Hash::new(Encode::encode(&vault_container))
         );
     }
-
     #[test]
     fn sync_manifests_generated_single_api_scaffold_refreshes_service_refs() {
         let dir = temp_dir("sync_manifests_generated_single_api");
@@ -26435,14 +24787,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         fs::create_dir_all(dir.join("services/api/build")).expect("create api build dir");
         fs::write(
             dir.join("services/api/build/api-service.to"),
             b"scaffold-api-bundle",
         )
         .expect("write api bundle");
-
         let manifest_path = dir.join("app_manifest.json");
         let output = SyncManifestsArgs {
             app_manifest: Some(manifest_path.clone()),
@@ -26452,7 +24802,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app sync should succeed");
-
         assert_eq!(
             output.app_manifest_path.as_deref(),
             Some(manifest_path.to_string_lossy().as_ref())
@@ -26462,7 +24811,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             output.services[0].bundle_hash,
             Hash::new(b"scaffold-api-bundle")
         );
-
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("services/api/container_manifest.json")).expect("container");
         let service: SoraServiceManifestV1 =
@@ -26473,7 +24821,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Hash::new(Encode::encode(&container))
         );
     }
-
     #[test]
     fn app_status_filters_control_plane_status_to_split_app_services() {
         let dir = temp_dir("split_app_status");
@@ -26489,7 +24836,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -26520,7 +24866,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&payload).expect("encode status payload"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
@@ -26529,7 +24875,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app status should succeed");
-
         assert_eq!(output.app_name, "travel_ops");
         assert_eq!(output.hostname, "travel-ops.sora");
         assert_eq!(output.public_url, "https://travel-ops.sora");
@@ -26644,7 +24989,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
-
         let vault = output
             .services
             .iter()
@@ -26695,7 +25039,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("1.0.0")
         );
     }
-
     #[test]
     fn app_status_keeps_missing_manifest_services_visible() {
         let dir = temp_dir("split_app_status_missing_service");
@@ -26711,7 +25054,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -26732,7 +25074,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&payload).expect("encode status payload"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
@@ -26741,7 +25083,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app status should succeed");
-
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(
@@ -26771,7 +25112,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("live service should remain present");
         assert!(live.present_in_control_plane);
         assert!(live.status.is_some());
-
         let vault = output
             .services
             .iter()
@@ -26796,7 +25136,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             })
         );
     }
-
     #[test]
     fn app_status_projects_single_api_frontend_root_binding_url() {
         let dir = temp_dir("single_api_status_root_binding");
@@ -26812,7 +25151,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let payload = norito::json!({
             "schema_version": 1,
             "control_plane": {
@@ -26833,7 +25171,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 body: json::to_vec(&payload).expect("encode status payload"),
             },
         )]));
-
+        install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
@@ -26842,7 +25180,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("app status should succeed");
-
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(
@@ -26893,7 +25230,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .iter()
             .any(|route| route.service_name == "travel-ops_api" && route.path == "/api/healthz"));
     }
-
     #[test]
     fn app_deploy_single_api_root_binding_injects_reserved_static_site_config() {
         let dir = temp_dir("single_api_root_binding_deploy");
@@ -26909,7 +25245,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         fs::create_dir_all(dir.join("web/dist")).expect("create web dist dir");
         fs::write(
             dir.join("web/dist/index.html"),
@@ -26922,7 +25257,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"deploy-single-api-bundle",
         )
         .expect("write api bundle");
-
         let status_payload = mock_control_plane_status_payload(&["travel-ops_api"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([
@@ -26949,7 +25283,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x43);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -26961,7 +25294,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("app deploy should succeed");
-
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(
@@ -27091,7 +25423,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("/api")
         );
     }
-
     #[test]
     fn app_deploy_rejects_app_service_name_mismatch_before_network_mutation() {
         let dir = temp_dir("app_deploy_service_name_mismatch");
@@ -27107,12 +25438,10 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.services[0].service_name = "wrong_live_name".to_owned();
         write_json(&manifest_path, &manifest).expect("write mismatched app manifest");
-
         let server = MockHttpServer::start(BTreeMap::new());
         let key_pair = soracloud_fixture_key_pair(0x44);
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -27125,14 +25454,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect_err("app deploy should fail on mismatched service name");
-
         assert!(error.to_string().contains("wrong_live_name"));
         assert!(
             server.requests().is_empty(),
             "preflight mismatch should fail before any Soracloud or Sorafs network mutation"
         );
     }
-
     #[test]
     fn app_deploy_uses_app_level_infra_endpoint_when_available() {
         let dir = temp_dir("app_deploy_app_infra_endpoint");
@@ -27148,7 +25475,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("single-api init should succeed");
-
         let manifest_path = dir.join("app_manifest.json");
         let mut manifest: SoracloudAppManifestV1 = load_json(&manifest_path).expect("app manifest");
         manifest.static_site = None;
@@ -27159,7 +25485,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"app-infra-deploy-bundle",
         )
         .expect("write api bundle");
-
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([
             (
@@ -27178,7 +25503,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x45);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -27190,7 +25514,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("app deploy should use app infra endpoint");
-
         assert!(output.app_infra_manifest_hash.is_some());
         assert!(output.app_infra_response.is_some());
         assert!(
@@ -27227,7 +25550,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some("1.0.0")
         );
     }
-
     #[test]
     fn app_deploy_split_app_cid_only_skips_reserved_static_site_config() {
         let dir = temp_dir("split_app_cid_only_deploy");
@@ -27243,7 +25565,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -27263,7 +25584,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"deploy-vault-bundle",
         )
         .expect("write vault bundle");
-
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
@@ -27291,7 +25611,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x46);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -27303,7 +25622,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("split-app deploy should succeed");
-
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_deploy"));
@@ -27424,7 +25742,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             publication.cid_gateway_url, publication.public_url,
             "cid-only apps must publish the frontend under the CID gateway path instead of the host root"
         );
-
         let deploy_requests = server
             .requests()
             .into_iter()
@@ -27444,7 +25761,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             );
         }
     }
-
     #[test]
     fn app_upgrade_split_app_cid_only_keeps_route_projection() {
         let dir = temp_dir("split_app_cid_only_upgrade");
@@ -27460,7 +25776,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("split-app init should succeed");
-
         fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
         fs::write(
             dir.join("frontend/dist/index.html"),
@@ -27480,7 +25795,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             b"upgrade-vault-bundle",
         )
         .expect("write vault bundle");
-
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
@@ -27508,7 +25822,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
                 },
             ),
         ]));
-
         let key_pair = soracloud_fixture_key_pair(0x47);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
@@ -27520,7 +25833,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run(MutationMode::Upgrade, &authority, &key_pair)
         .expect("split-app upgrade should succeed");
-
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_upgrade"));
@@ -27574,7 +25886,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             .expect("cid-only app should publish a static site");
         assert_eq!(publication.manifest_id_hex, None);
         assert!(publication.content_cid.starts_with('b'));
-
         let upgrade_requests = server
             .requests()
             .into_iter()
@@ -27594,7 +25905,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             );
         }
     }
-
     #[test]
     fn generated_webapp_auth_startup_fails_on_weak_session_key_in_strict_mode() {
         let dir = temp_dir("webapp_auth_strict_key");
@@ -27607,7 +25917,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27618,14 +25927,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("resolveSessionHmacKey"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_strict_key_fail.mjs");
         let mut script = TEST_HARNESSES_V1[6].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_startup_fails_on_invalid_auth_mode() {
         let dir = temp_dir("webapp_auth_invalid_mode");
@@ -27638,7 +25945,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!("node unavailable; validating static auth-mode guard markers in scaffold");
@@ -27647,14 +25953,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_MODE must be strict or dev"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_invalid_mode_fail.mjs");
         let mut script = TEST_HARNESSES_V1[7].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_weak_session_key_in_strict_mode() {
         assert_generated_pii_app_startup_import_fails(
@@ -27668,7 +25972,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             ],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_auth_mode() {
         assert_generated_pii_app_startup_import_fails(
@@ -27679,7 +25982,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
         );
     }
-
     #[test]
     fn generated_webapp_auth_startup_fails_when_external_state_is_required_without_adapter() {
         let dir = temp_dir("webapp_auth_missing_external_adapter");
@@ -27692,7 +25994,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27704,14 +26005,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_external_state_required_fail.mjs");
         let mut script = TEST_HARNESSES_V1[8].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_startup_fails_when_external_state_is_defaulted_without_adapter() {
         let dir = temp_dir("webapp_auth_default_external_adapter_required");
@@ -27724,7 +26023,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27735,14 +26033,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_external_state_default_required_fail.mjs");
         let mut script = TEST_HARNESSES_V1[9].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_startup_fails_when_production_disables_external_state_requirement() {
         let dir = temp_dir("webapp_auth_production_disables_external_state");
@@ -27755,7 +26051,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27765,14 +26060,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_external_state_production_disable_fail.mjs");
         let mut script = TEST_HARNESSES_V1[10].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_startup_fails_with_invalid_external_state_adapter_shape() {
         let dir = temp_dir("webapp_auth_invalid_external_adapter_shape");
@@ -27785,7 +26078,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27796,14 +26088,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("must be a function"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_invalid_external_adapter_shape_fail.mjs");
         let mut script = TEST_HARNESSES_V1[11].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_external_state_adapter_path_mints_sessions_without_file_fallback() {
         let dir = temp_dir("webapp_auth_external_adapter");
@@ -27816,7 +26106,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27830,14 +26119,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             );
             return;
         }
-
         let harness_path = dir.join("webapp_auth_external_adapter_smoke.mjs");
         let mut script = TEST_HARNESSES_V1[12].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_when_external_state_is_required_without_adapter() {
         let dir = temp_dir("pii_auth_missing_external_adapter");
@@ -27850,7 +26137,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27862,14 +26148,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
             return;
         }
-
         let harness_path = dir.join("pii_auth_external_state_required_fail.mjs");
         let mut script = TEST_HARNESSES_V1[13].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_when_external_state_is_defaulted_without_adapter() {
         let dir = temp_dir("pii_auth_default_external_adapter_required");
@@ -27882,7 +26166,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27893,14 +26176,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE is enabled"));
             return;
         }
-
         let harness_path = dir.join("pii_auth_external_state_default_required_fail.mjs");
         let mut script = TEST_HARNESSES_V1[14].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_when_production_disables_external_state_requirement() {
         let dir = temp_dir("pii_auth_production_disables_external_state");
@@ -27913,7 +26194,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27923,14 +26203,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE cannot be disabled"));
             return;
         }
-
         let harness_path = dir.join("pii_auth_external_state_production_disable_fail.mjs");
         let mut script = TEST_HARNESSES_V1[15].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_with_invalid_external_state_adapter_shape() {
         let dir = temp_dir("pii_auth_invalid_external_adapter_shape");
@@ -27943,7 +26221,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27954,14 +26231,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("must be a function"));
             return;
         }
-
         let harness_path = dir.join("pii_auth_invalid_external_adapter_shape_fail.mjs");
         let mut script = TEST_HARNESSES_V1[16].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_external_state_adapter_path_mints_sessions_without_file_fallback() {
         let dir = temp_dir("pii_auth_external_adapter");
@@ -27974,7 +26249,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -27988,14 +26262,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             );
             return;
         }
-
         let harness_path = dir.join("pii_auth_external_adapter_smoke.mjs");
         let mut script = TEST_HARNESSES_V1[17].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_without_capability_map() {
         assert_generated_pii_app_startup_import_fails(
@@ -28009,7 +26281,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             ],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_capability_map_json() {
         assert_generated_pii_app_startup_import_fails(
@@ -28020,7 +26291,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON is invalid JSON"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_empty_capability_map_object() {
         assert_generated_pii_app_startup_import_fails(
@@ -28031,7 +26301,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON must define at least one principal"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_non_object_capability_map() {
         assert_generated_pii_app_startup_import_fails(
@@ -28042,7 +26311,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON must be an object"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_capability_map_principal() {
         assert_generated_pii_app_startup_import_fails(
@@ -28056,7 +26324,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON principal"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_empty_capability_array() {
         assert_generated_pii_app_startup_import_fails(
@@ -28070,7 +26337,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_non_array_capability_value() {
         assert_generated_pii_app_startup_import_fails(
@@ -28084,7 +26350,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_non_string_capability() {
         assert_generated_pii_app_startup_import_fails(
@@ -28098,7 +26363,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON capability"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_blank_capability() {
         assert_generated_pii_app_startup_import_fails(
@@ -28112,7 +26376,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CAPABILITY_MAP_JSON capability"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_public_base_url() {
         assert_generated_pii_app_startup_import_fails(
@@ -28123,7 +26386,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["PUBLIC_BASE_URL is invalid"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_session_ttl() {
         assert_generated_pii_app_startup_import_fails(
@@ -28134,7 +26396,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_SESSION_TTL_SECS"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_non_numeric_session_ttl() {
         assert_generated_pii_app_startup_import_fails(
@@ -28145,7 +26406,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_SESSION_TTL_SECS"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_challenge_ttl() {
         assert_generated_pii_app_startup_import_fails(
@@ -28156,7 +26416,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CHALLENGE_TTL_SECS"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_challenge_ttl_above_max() {
         assert_generated_pii_app_startup_import_fails(
@@ -28167,7 +26426,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_CHALLENGE_TTL_SECS"],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_external_state_boolean() {
         assert_generated_pii_app_startup_import_fails(
@@ -28178,7 +26436,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "must be boolean"],
         );
     }
-
     #[test]
     fn generated_webapp_private_route_requires_non_empty_capability_map() {
         let dir = temp_dir("webapp_auth_capability_map_required");
@@ -28191,7 +26448,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -28202,14 +26458,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("capability map is required"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_capability_map_required.mjs");
         let mut script = TEST_HARNESSES_V1[18].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_smoke_rejects_replay_and_supports_shared_sessions() {
         let dir = temp_dir("webapp_auth_smoke");
@@ -28222,7 +26476,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -28238,7 +26491,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("/api/private/state"));
             return;
         }
-
         let state_file = dir.join(".shared_auth_state.json");
         let harness_path = dir.join("webapp_auth_smoke.mjs");
         let mut script = TEST_HARNESSES_V1[19].to_owned();
@@ -28247,7 +26499,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_replay_lock_contention_is_fail_closed() {
         let dir = temp_dir("webapp_auth_replay_lock_contention");
@@ -28260,7 +26511,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -28272,14 +26522,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_replay_lock_contention.mjs");
         let mut script = TEST_HARNESSES_V1[20].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_replay_lock_contention_is_fail_closed() {
         let dir = temp_dir("pii_auth_replay_lock_contention");
@@ -28292,7 +26540,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -28304,14 +26551,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
             return;
         }
-
         let harness_path = dir.join("pii_auth_replay_lock_contention.mjs");
         let mut script = TEST_HARNESSES_V1[21].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_webapp_auth_smoke_rejects_origin_mismatch() {
         let dir = temp_dir("webapp_auth_origin_mismatch");
@@ -28324,7 +26569,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("webapp init should succeed");
-
         let server_path = dir.join("webapp/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -28336,14 +26580,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("shouldUseSecureCookie"));
             return;
         }
-
         let harness_path = dir.join("webapp_auth_origin_mismatch.mjs");
         let mut script = TEST_HARNESSES_V1[22].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_smoke_rejects_origin_mismatch() {
         let dir = temp_dir("pii_auth_origin_mismatch");
@@ -28356,7 +26598,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!(
@@ -28368,14 +26609,12 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("shouldUseSecureCookie"));
             return;
         }
-
         let harness_path = dir.join("pii_auth_origin_mismatch.mjs");
         let mut script = TEST_HARNESSES_V1[23].to_owned();
         script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_smoke_enforces_capability_authorization() {
         let dir = temp_dir("pii_auth_smoke");
@@ -28388,7 +26627,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         }
         .run()
         .expect("pii-app init should succeed");
-
         let server_path = dir.join("pii-app/api/server.mjs");
         if !node_available() {
             eprintln!("node unavailable; validating static pii-app capability markers in scaffold");
@@ -28402,7 +26640,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert!(api.contains("pii.records.read"));
             return;
         }
-
         let state_file = dir.join(".shared_auth_state.json");
         let harness_path = dir.join("pii_auth_smoke.mjs");
         let mut script = TEST_HARNESSES_V1[24].to_owned();
@@ -28411,7 +26648,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
     }
-
     #[test]
     fn generated_pii_app_auth_core_normalizes_capabilities_and_parses_success_values() {
         run_generated_pii_app_auth_core_harness(
@@ -28433,7 +26669,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[13],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_persists_file_state_canonically() {
         run_generated_pii_app_auth_core_harness(
@@ -28449,7 +26684,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[14],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_uses_and_validates_shared_state_adapter() {
         run_generated_pii_app_auth_core_harness_with_setup(
@@ -28465,7 +26699,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[16],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_handles_session_tokens_cookies_and_origins() {
         run_generated_pii_app_auth_core_harness(
@@ -28481,7 +26714,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[17],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_cleans_expired_records_and_manages_consume_locks() {
         run_generated_pii_app_auth_core_harness(
@@ -28497,7 +26729,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[18],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_handlers_reject_login_auth_failures() {
         run_generated_pii_app_auth_core_harness(
@@ -28514,7 +26745,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[19],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_handlers_complete_login_me_and_logout() {
         run_generated_pii_app_auth_core_harness(
@@ -28530,7 +26760,6 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[20],
         );
     }
-
     #[test]
     fn generated_pii_app_auth_core_handlers_reject_bad_request_bodies() {
         run_generated_pii_app_auth_core_harness(
@@ -28541,11 +26770,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             STATIC_ASSETS_V1[21],
         );
     }
-
     #[test]
     fn static_asset_bytes_order_and_reconstruction_are_stable() {
         use sha2::Digest as _;
-
         let mut digest = Sha256::new();
         for asset in [WEBAPP_API_TAIL_V1, PII_API_TAIL_V1] {
             digest.update(Sha256::digest(asset.as_bytes()));
@@ -28568,6 +26795,5 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             Some(PII_API_TAIL_V1)
         );
     }
-
     include!("soracloud/generated_auth_tail_tests.rs");
 }

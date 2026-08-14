@@ -4,15 +4,12 @@
 //! using a domain-separated HKDF. They are intentionally lightweight so
 //! wallets and offline tooling can reuse the exact same derivations as the
 //! on-chain host.
-
 use hkdf::Hkdf;
 use rand_core::TryCryptoRng;
 use sha3::Sha3_512;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
-
 /// Salt applied to the HKDF used for the confidential key hierarchy.
 const KEY_SALT: &[u8] = b"iroha:confidential:key-derivation:v1";
-
 /// HKDF info label for the nullifier key.
 const INFO_NK: &[u8] = b"iroha:confidential:nk";
 /// HKDF info label for the incoming viewing key.
@@ -21,7 +18,6 @@ const INFO_IVK: &[u8] = b"iroha:confidential:ivk";
 const INFO_OVK: &[u8] = b"iroha:confidential:ovk";
 /// HKDF info label for the full viewing key.
 const INFO_FVK: &[u8] = b"iroha:confidential:fvk";
-
 /// Confidential key derivation errors.
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum ConfidentialKeyError {
@@ -41,10 +37,8 @@ pub enum ConfidentialKeyError {
         label: &'static str,
     },
 }
-
 /// Result type for confidential key derivations.
 pub type Result<T, E = ConfidentialKeyError> = core::result::Result<T, E>;
-
 /// Derived keys for confidential asset operations.
 #[allow(missing_copy_implementations)]
 #[derive(Clone)]
@@ -55,13 +49,11 @@ pub struct ConfidentialKeyset {
     outgoing_view: [u8; 32],
     full_view: [u8; 32],
 }
-
 impl core::fmt::Debug for ConfidentialKeyset {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("ConfidentialKeyset { .. }")
     }
 }
-
 impl Zeroize for ConfidentialKeyset {
     fn zeroize(&mut self) {
         self.spend.zeroize();
@@ -71,41 +63,34 @@ impl Zeroize for ConfidentialKeyset {
         self.full_view.zeroize();
     }
 }
-
 impl ZeroizeOnDrop for ConfidentialKeyset {}
-
 impl ConfidentialKeyset {
     /// Spend key used to authorise note creation.
     #[must_use]
     pub const fn spend_key(&self) -> &[u8; 32] {
         &self.spend
     }
-
     /// Nullifier key (`nk`) used for deriving per-note nullifiers.
     #[must_use]
     pub const fn nullifier_key(&self) -> &[u8; 32] {
         &self.nullifier
     }
-
     /// Incoming viewing key (`ivk`) used to decrypt received notes.
     #[must_use]
     pub const fn incoming_view_key(&self) -> &[u8; 32] {
         &self.incoming_view
     }
-
     /// Outgoing viewing key (`ovk`) used to decrypt sent notes.
     #[must_use]
     pub const fn outgoing_view_key(&self) -> &[u8; 32] {
         &self.outgoing_view
     }
-
     /// Full viewing key (`fvk`) allows reconstructing note commitments/nullifiers without spend capability.
     #[must_use]
     pub const fn full_view_key(&self) -> &[u8; 32] {
         &self.full_view
     }
 }
-
 fn expand_key(
     hkdf: &Hkdf<Sha3_512>,
     label: &'static str,
@@ -116,7 +101,6 @@ fn expand_key(
         .map_err(|_| ConfidentialKeyError::HkdfExpand { label })?;
     Ok(out)
 }
-
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 ///
 /// # Errors
@@ -128,12 +112,10 @@ pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
         return Err(ConfidentialKeyError::InertSpendKey);
     }
     let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &spend_key);
-
     let nk = expand_key(&hkdf, "nk", INFO_NK)?;
     let ivk = expand_key(&hkdf, "ivk", INFO_IVK)?;
     let ovk = expand_key(&hkdf, "ovk", INFO_OVK)?;
     let fvk = expand_key(&hkdf, "fvk", INFO_FVK)?;
-
     let keyset = ConfidentialKeyset {
         spend: spend_key,
         nullifier: *nk,
@@ -144,7 +126,6 @@ pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
     spend_key.zeroize();
     Ok(keyset)
 }
-
 /// Derive the confidential key hierarchy from an arbitrary slice.
 ///
 /// # Errors
@@ -159,7 +140,6 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
     seed.copy_from_slice(spend_key);
     derive_keyset(*seed)
 }
-
 /// Generate a fresh random spend key and derive the associated hierarchy.
 ///
 /// # Errors
@@ -175,13 +155,11 @@ pub fn generate_keyset<R: TryCryptoRng>(rng: &mut R) -> Result<ConfidentialKeyse
     }
     derive_keyset(*seed)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rand::SeedableRng as _;
     use rand_core::TryRngCore;
-
     #[test]
     fn derive_keyset_is_deterministic() {
         let seed = [0x11u8; 32];
@@ -192,7 +170,6 @@ mod tests {
         assert_eq!(first.outgoing_view_key(), second.outgoing_view_key());
         assert_eq!(first.full_view_key(), second.full_view_key());
     }
-
     #[test]
     fn derive_keyset_rejects_all_zero_spend_key() {
         assert!(matches!(
@@ -200,12 +177,10 @@ mod tests {
             Err(ConfidentialKeyError::InertSpendKey)
         ));
     }
-
     #[test]
     fn derive_keyset_from_slice_rejects_wrong_length() {
         assert!(derive_keyset_from_slice(&[0u8; 31]).is_err());
     }
-
     #[test]
     fn derive_keyset_from_slice_rejects_all_zero_spend_key() {
         assert!(matches!(
@@ -213,13 +188,11 @@ mod tests {
             Err(ConfidentialKeyError::InertSpendKey)
         ));
     }
-
     #[test]
     fn derive_keyset_from_slice_matches_array_derivation() {
         let seed = [0x24u8; 32];
         let from_slice = derive_keyset_from_slice(&seed).expect("derive from exact slice");
         let from_array = derive_keyset(seed).expect("derive from array");
-
         assert_eq!(from_slice.spend_key(), from_array.spend_key());
         assert_eq!(from_slice.nullifier_key(), from_array.nullifier_key());
         assert_eq!(
@@ -232,7 +205,6 @@ mod tests {
         );
         assert_eq!(from_slice.full_view_key(), from_array.full_view_key());
     }
-
     #[test]
     fn derive_keyset_matches_expected_vectors() {
         let seed = [0x42u8; 32];
@@ -254,7 +226,6 @@ mod tests {
             "9a0fe79f768aeb440e07751dbddfa17ac97cbf21f3e79c2e0206e56b3c2629af"
         );
     }
-
     #[test]
     fn generate_keyset_derives_from_rng_bytes() {
         let mut rng = rand::rngs::StdRng::from_seed([0xA5; 32]);
@@ -263,43 +234,33 @@ mod tests {
         expected_rng
             .try_fill_bytes(&mut expected_seed)
             .expect("test RNG should fill expected seed");
-
         let generated = generate_keyset(&mut rng).expect("generate keyset");
         let expected = derive_keyset(expected_seed).expect("derive expected keyset");
-
         assert_eq!(generated.spend_key(), &expected_seed);
         assert_eq!(generated.nullifier_key(), expected.nullifier_key());
         assert_eq!(generated.incoming_view_key(), expected.incoming_view_key());
         assert_eq!(generated.outgoing_view_key(), expected.outgoing_view_key());
         assert_eq!(generated.full_view_key(), expected.full_view_key());
     }
-
     #[test]
     fn generate_keyset_reports_rng_failure() {
         struct FailingRng;
-
         #[derive(Debug)]
         struct FailingRngError;
-
         impl core::fmt::Display for FailingRngError {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str("failing confidential rng")
             }
         }
-
         impl std::error::Error for FailingRngError {}
-
         impl TryRngCore for FailingRng {
             type Error = FailingRngError;
-
             fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
                 Err(FailingRngError)
             }
-
             fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
                 Err(FailingRngError)
             }
-
             fn try_fill_bytes(
                 &mut self,
                 _dest: &mut [u8],
@@ -307,48 +268,36 @@ mod tests {
                 Err(FailingRngError)
             }
         }
-
         impl TryCryptoRng for FailingRng {}
-
         let mut rng = FailingRng;
-
         assert!(matches!(
             generate_keyset(&mut rng),
             Err(ConfidentialKeyError::RandomBytes)
         ));
     }
-
     #[test]
     fn generate_keyset_rejects_all_zero_rng_bytes() {
         struct ZeroRng;
-
         impl TryRngCore for ZeroRng {
             type Error = core::convert::Infallible;
-
             fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
                 Ok(0)
             }
-
             fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
                 Ok(0)
             }
-
             fn try_fill_bytes(&mut self, dest: &mut [u8]) -> core::result::Result<(), Self::Error> {
                 dest.fill(0);
                 Ok(())
             }
         }
-
         impl TryCryptoRng for ZeroRng {}
-
         let mut rng = ZeroRng;
-
         assert!(matches!(
             generate_keyset(&mut rng),
             Err(ConfidentialKeyError::InertSpendKey)
         ));
     }
-
     #[test]
     #[ignore = "generates example vectors for manual inspection"]
     fn dump_confidential_vectors() {

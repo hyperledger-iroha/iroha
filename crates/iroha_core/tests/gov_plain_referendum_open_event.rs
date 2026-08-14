@@ -1,8 +1,6 @@
 //! Plain ballots opened in the same block should emit `ReferendumOpened` with the correct window.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use core::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -22,7 +20,6 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
-
 #[test]
 fn plain_ballot_emits_open_event_with_window() {
     let kura = Kura::blank_kura_for_testing();
@@ -38,12 +35,10 @@ fn plain_ballot_emits_open_event_with_window() {
     cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
-
     let rid = "plain-open-event".to_string();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let ballot_perm: Permission = CanSubmitGovernanceBallot {
         referendum_id: "any".into(),
     }
@@ -51,7 +46,6 @@ fn plain_ballot_emits_open_event_with_window() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
-
     stx.world.governance_referenda_mut().insert(
         rid.clone(),
         GovernanceReferendumRecord {
@@ -61,7 +55,6 @@ fn plain_ballot_emits_open_event_with_window() {
             mode: GovernanceReferendumMode::Plain,
         },
     );
-
     CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
@@ -72,7 +65,6 @@ fn plain_ballot_emits_open_event_with_window() {
     .execute(&ALICE_ID, &mut stx)
     .expect("ballot ok");
     stx.apply();
-
     let events = sblock.world.take_external_events();
     let opened = events.iter().find_map(|event| match event.as_data_event() {
         Some(DataEvent::Governance(GovernanceEvent::ReferendumOpened(opened))) => {

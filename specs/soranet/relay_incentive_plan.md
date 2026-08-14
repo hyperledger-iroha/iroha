@@ -50,6 +50,12 @@ the roadmap milestone.
 - The relay runtime now feeds blinded bandwidth proofs arriving over QUIC into
   `RelayPerformanceAccumulator` in real time, deduplicating measurements and exposing the live state
   via Prometheus for downstream treasury tooling.
+- Relay admission keeps the epoch vector and each sorted measurement-ID vector
+  inside configured first-release corridors (16 epochs and 4,096 IDs per epoch
+  by default, at most 256 epochs and 65,536 IDs in aggregate). The 4 KiB proof
+  frame is decoded under explicit Norito allocation/depth limits; capacity is
+  checked before retention, and snapshots move one requested epoch rather than
+  cloning every resident epoch. Encoded spool records are capped at 4 MiB.
 
 ## Epoch Scoring & Reward Calculation
 

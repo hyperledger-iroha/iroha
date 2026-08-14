@@ -1,3 +1,5 @@
+use norito::json;
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::{
     error::Error,
     fs,
@@ -5,11 +7,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
-use norito::json;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
 use time::OffsetDateTime;
-
 #[derive(Clone, Debug)]
 pub struct PoseidonBenchOptions {
     pub batch_size: usize,
@@ -18,7 +16,6 @@ pub struct PoseidonBenchOptions {
     pub markdown_out: Option<PathBuf>,
     pub allow_overwrite: bool,
 }
-
 pub struct PoseidonBenchReport {
     pub timestamp: String,
     pub environment: PoseidonBenchEnvironment,
@@ -26,7 +23,6 @@ pub struct PoseidonBenchReport {
     pub iterations: u32,
     pub widths: Vec<PoseidonWidthReport>,
 }
-
 pub struct PoseidonBenchEnvironment {
     pub target: String,
     pub arch: String,
@@ -40,19 +36,16 @@ pub struct PoseidonBenchEnvironment {
     pub metal_disabled: bool,
     pub metal_last_error: Option<String>,
 }
-
 pub struct PoseidonWidthReport {
     pub width: u8,
     pub scalar: PerfSample,
     pub cuda: CudaSample,
 }
-
 pub struct PerfSample {
     pub total_ops: usize,
     pub elapsed_ms: f64,
     pub ops_per_sec: f64,
 }
-
 pub struct CudaSample {
     pub available: bool,
     pub disabled: bool,
@@ -63,7 +56,6 @@ pub struct CudaSample {
     pub parity: ParityOutcome,
     pub note: Option<String>,
 }
-
 pub struct ParityOutcome {
     pub checked: bool,
     pub ok: bool,
@@ -71,7 +63,6 @@ pub struct ParityOutcome {
     pub expected: Option<u64>,
     pub actual: Option<u64>,
 }
-
 pub fn run_poseidon_bench(
     options: PoseidonBenchOptions,
 ) -> Result<PoseidonBenchReport, Box<dyn Error>> {
@@ -81,7 +72,6 @@ pub fn run_poseidon_bench(
     if options.iterations == 0 {
         return Err("poseidon-cuda-bench requires --iterations > 0".into());
     }
-
     let runtime_errors = ivm::acceleration_runtime_errors();
     let (metal_feature, metal_available, metal_disabled) = metal_runtime_status();
     let env = PoseidonBenchEnvironment {
@@ -100,13 +90,10 @@ pub fn run_poseidon_bench(
         metal_disabled,
         metal_last_error: runtime_errors.metal,
     };
-
     let timestamp =
         OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
-
     let inputs2 = poseidon2_inputs(options.batch_size);
     let inputs6 = poseidon6_inputs(options.batch_size);
-
     let expected2: Vec<u64> = inputs2
         .iter()
         .map(|&(a, b)| ivm::poseidon2_simd(a, b))
@@ -115,13 +102,10 @@ pub fn run_poseidon_bench(
         .iter()
         .map(|&inputs| ivm::poseidon6_simd(inputs))
         .collect();
-
     let scalar2 = measure_scalar_poseidon2(&inputs2, options.iterations);
     let scalar6 = measure_scalar_poseidon6(&inputs6, options.iterations);
-
     let cuda2 = measure_cuda_poseidon2(&inputs2, &expected2, &scalar2, options.iterations);
     let cuda6 = measure_cuda_poseidon6(&inputs6, &expected6, &scalar6, options.iterations);
-
     let report = PoseidonBenchReport {
         timestamp,
         environment: env,
@@ -140,15 +124,12 @@ pub fn run_poseidon_bench(
             },
         ],
     };
-
     write_json(&report, &options.json_out, options.allow_overwrite)?;
     if let Some(path) = options.markdown_out.as_ref() {
         write_markdown(&report, path, options.allow_overwrite)?;
     }
-
     Ok(report)
 }
-
 fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
     let mut root = json::Map::new();
     root.insert(
@@ -163,7 +144,6 @@ fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
         "iterations".into(),
         json::Value::from(report.iterations as u64),
     );
-
     let mut env = json::Map::new();
     env.insert(
         "target".into(),
@@ -220,7 +200,6 @@ fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
             .unwrap_or(json::Value::Null),
     );
     root.insert("environment".into(), json::Value::Object(env));
-
     let widths: Vec<json::Value> = report
         .widths
         .iter()
@@ -235,7 +214,6 @@ fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
                 "ops_per_sec".into(),
                 json::Value::from(w.scalar.ops_per_sec),
             );
-
             let parity = &w.cuda.parity;
             let mut parity_map = json::Map::new();
             parity_map.insert("checked".into(), json::Value::from(parity.checked));
@@ -261,7 +239,6 @@ fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
                     .map(json::Value::from)
                     .unwrap_or(json::Value::Null),
             );
-
             let mut cuda = json::Map::new();
             cuda.insert("available".into(), json::Value::from(w.cuda.available));
             cuda.insert("disabled".into(), json::Value::from(w.cuda.disabled));
@@ -299,7 +276,6 @@ fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
                     .map(|s| json::Value::from(s.clone()))
                     .unwrap_or(json::Value::Null),
             );
-
             let mut width_map = json::Map::new();
             width_map.insert("width".into(), json::Value::from(w.width as u64));
             width_map.insert("scalar".into(), json::Value::Object(scalar));
@@ -308,7 +284,6 @@ fn poseidon_report_to_json(report: &PoseidonBenchReport) -> json::Value {
         })
         .collect();
     root.insert("widths".into(), json::Value::Array(widths));
-
     json::Value::Object(root)
 }
 fn write_json(
@@ -327,7 +302,6 @@ fn write_json(
     fs::write(path, data)?;
     Ok(())
 }
-
 fn write_markdown(
     report: &PoseidonBenchReport,
     path: &Path,
@@ -339,7 +313,6 @@ fn write_markdown(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-
     let mut out = String::new();
     out.push_str("# Poseidon CUDA bench\n\n");
     out.push_str(&format!(
@@ -398,11 +371,9 @@ fn write_markdown(
             ));
         }
     }
-
     fs::write(path, out)?;
     Ok(())
 }
-
 fn metal_runtime_status() -> (bool, bool, bool) {
     #[cfg(target_os = "macos")]
     {
@@ -413,7 +384,6 @@ fn metal_runtime_status() -> (bool, bool, bool) {
         (false, false, true)
     }
 }
-
 fn measure_scalar_poseidon2(inputs: &[(u64, u64)], iterations: u32) -> PerfSample {
     let total_ops = inputs.len() * iterations as usize;
     let elapsed = time_backend(iterations, || {
@@ -427,7 +397,6 @@ fn measure_scalar_poseidon2(inputs: &[(u64, u64)], iterations: u32) -> PerfSampl
         ops_per_sec: ops_per_second(total_ops, elapsed),
     }
 }
-
 fn measure_scalar_poseidon6(inputs: &[[u64; 6]], iterations: u32) -> PerfSample {
     let total_ops = inputs.len() * iterations as usize;
     let elapsed = time_backend(iterations, || {
@@ -441,7 +410,6 @@ fn measure_scalar_poseidon6(inputs: &[[u64; 6]], iterations: u32) -> PerfSample 
         ops_per_sec: ops_per_second(total_ops, elapsed),
     }
 }
-
 fn measure_cuda_poseidon2(
     inputs: &[(u64, u64)],
     expected: &[u64],
@@ -457,7 +425,6 @@ fn measure_cuda_poseidon2(
         expected,
     )
 }
-
 fn measure_cuda_poseidon6(
     inputs: &[[u64; 6]],
     expected: &[u64],
@@ -473,7 +440,6 @@ fn measure_cuda_poseidon6(
         expected,
     )
 }
-
 fn measure_cuda_backend<F>(
     batch_len: usize,
     iterations: u32,
@@ -495,7 +461,6 @@ where
         actual: None,
     };
     let mut note = ivm::acceleration_runtime_errors().cuda;
-
     let Some(outputs) = first_call else {
         return CudaSample {
             available,
@@ -508,7 +473,6 @@ where
             note,
         };
     };
-
     parity = parity_check(expected, &outputs);
     if !parity.ok {
         note.get_or_insert_with(|| "CUDA parity mismatch".to_string());
@@ -523,7 +487,6 @@ where
             note,
         };
     }
-
     let total_ops = batch_len * iterations as usize;
     let elapsed = measure_iterations(iterations, call).unwrap_or_else(|| {
         note.get_or_insert_with(|| "CUDA backend disabled during timing run".to_string());
@@ -534,7 +497,6 @@ where
     } else {
         Some(ops_per_second(total_ops, elapsed))
     };
-
     CudaSample {
         available,
         disabled,
@@ -546,7 +508,6 @@ where
         note,
     }
 }
-
 fn parity_check(expected: &[u64], actual: &[u64]) -> ParityOutcome {
     let mut outcome = ParityOutcome {
         checked: true,
@@ -571,14 +532,12 @@ fn parity_check(expected: &[u64], actual: &[u64]) -> ParityOutcome {
     }
     outcome
 }
-
 fn poseidon2_inputs(batch_size: usize) -> Vec<(u64, u64)> {
     let mut rng = StdRng::seed_from_u64(0xFACE_C0DE);
     (0..batch_size)
         .map(|_| (rng.next_u64(), rng.next_u64()))
         .collect()
 }
-
 fn poseidon6_inputs(batch_size: usize) -> Vec<[u64; 6]> {
     let mut rng = StdRng::seed_from_u64(0xBADC_0FFE);
     let mut inputs = Vec::with_capacity(batch_size);
@@ -594,7 +553,6 @@ fn poseidon6_inputs(batch_size: usize) -> Vec<[u64; 6]> {
     }
     inputs
 }
-
 fn measure_iterations<F, T>(iterations: u32, mut f: F) -> Option<Duration>
 where
     F: FnMut() -> Option<T>,
@@ -606,7 +564,6 @@ where
     }
     Some(start.elapsed())
 }
-
 fn time_backend<F: FnMut()>(iterations: u32, mut f: F) -> Duration {
     let start = Instant::now();
     for _ in 0..iterations {
@@ -614,32 +571,26 @@ fn time_backend<F: FnMut()>(iterations: u32, mut f: F) -> Duration {
     }
     start.elapsed()
 }
-
 fn ops_per_second(total_ops: usize, elapsed: Duration) -> f64 {
     if elapsed.is_zero() {
         return 0.0;
     }
     (total_ops as f64) / elapsed.as_secs_f64()
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::json::Value;
     use tempfile::NamedTempFile;
-
-    use super::*;
-
     #[test]
     fn inputs_are_deterministic() {
         let a = poseidon2_inputs(4);
         let b = poseidon2_inputs(4);
         assert_eq!(a, b, "poseidon2 inputs must be deterministic");
-
         let inputs6 = poseidon6_inputs(2);
         assert_eq!(inputs6.len(), 2);
         assert_ne!(inputs6[0], inputs6[1]);
     }
-
     #[test]
     fn rejects_zero_arguments() {
         let opts = PoseidonBenchOptions {
@@ -650,7 +601,6 @@ mod tests {
             allow_overwrite: true,
         };
         assert!(run_poseidon_bench(opts).is_err());
-
         let opts = PoseidonBenchOptions {
             batch_size: 4,
             iterations: 0,
@@ -660,7 +610,6 @@ mod tests {
         };
         assert!(run_poseidon_bench(opts).is_err());
     }
-
     #[test]
     fn cuda_measure_fails_closed_on_tampered_first_call_output() {
         let scalar = PerfSample {
@@ -679,7 +628,6 @@ mod tests {
             },
             &expected,
         );
-
         assert_eq!(sample.total_ops, 0);
         assert_eq!(sample.elapsed_ms, None);
         assert_eq!(sample.ops_per_sec, None);
@@ -691,7 +639,6 @@ mod tests {
         assert_eq!(sample.parity.expected, Some(20));
         assert_eq!(sample.parity.actual, Some(99));
     }
-
     #[test]
     fn cuda_measure_fails_closed_on_short_first_call_output() {
         let scalar = PerfSample {
@@ -710,7 +657,6 @@ mod tests {
             },
             &expected,
         );
-
         assert_eq!(sample.total_ops, 0);
         assert_eq!(sample.elapsed_ms, None);
         assert_eq!(sample.note.as_deref(), Some("CUDA parity mismatch"));
@@ -720,7 +666,6 @@ mod tests {
         assert_eq!(sample.parity.expected, None);
         assert_eq!(sample.parity.actual, None);
     }
-
     #[test]
     fn cuda_measure_records_backend_disappearing_after_valid_probe() {
         let scalar = PerfSample {
@@ -737,7 +682,6 @@ mod tests {
             || None::<Vec<u64>>,
             &expected,
         );
-
         assert_eq!(sample.total_ops, expected.len() * 2);
         assert_eq!(sample.elapsed_ms, None);
         assert_eq!(sample.ops_per_sec, None);
@@ -749,7 +693,6 @@ mod tests {
         assert!(sample.parity.checked);
         assert!(sample.parity.ok);
     }
-
     #[test]
     fn writes_json_and_markdown() {
         let json_tmp = NamedTempFile::new().unwrap();

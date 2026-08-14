@@ -1,7 +1,5 @@
 //! Social incentive helpers (viral follow rewards and escrows).
-
 use std::{fs, path::Path};
-
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -10,9 +8,7 @@ use iroha::data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::json;
-
 use crate::{Run, RunContext};
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Claim a promotional reward for a verified Twitter follow binding.
@@ -25,7 +21,6 @@ pub enum Command {
     #[command(name = "cancel-twitter-escrow")]
     CancelTwitterEscrow(CancelArgs),
 }
-
 /// Claim a follow reward using a keyed binding hash JSON payload.
 #[derive(Args, Debug)]
 pub struct ClaimArgs {
@@ -35,7 +30,6 @@ pub struct ClaimArgs {
     #[arg(long, value_name = "PATH")]
     pub binding_hash_json: String,
 }
-
 /// Send funds to a Twitter handle using a keyed binding hash JSON payload.
 #[derive(Args, Debug)]
 pub struct SendArgs {
@@ -50,7 +44,6 @@ pub struct SendArgs {
     #[arg(long, value_name = "AMOUNT")]
     pub amount: String,
 }
-
 /// Cancel an existing Twitter escrow using a keyed binding hash JSON payload.
 #[derive(Args, Debug)]
 pub struct CancelArgs {
@@ -60,7 +53,6 @@ pub struct CancelArgs {
     #[arg(long, value_name = "PATH")]
     pub binding_hash_json: String,
 }
-
 fn load_binding_hash(path: &Path) -> Result<KeyedHash> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read binding-hash JSON from {}", path.display()))?;
@@ -72,13 +64,11 @@ fn load_binding_hash(path: &Path) -> Result<KeyedHash> {
     })?;
     Ok(value)
 }
-
 fn parse_quantity(value: &str, flag: &str) -> Result<Quantity> {
     value
         .parse::<Quantity>()
         .wrap_err_with(|| format!("{flag} must be a valid non-negative quantity"))
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -107,7 +97,6 @@ impl Run for Command {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,7 +104,6 @@ mod tests {
     use iroha_data_model::oracle::KeyedHash as ModelKeyedHash;
     use norito::json;
     use tempfile::tempdir;
-
     #[test]
     fn load_binding_hash_roundtrips_json() {
         let tmp = tempdir().expect("tempdir");
@@ -127,12 +115,10 @@ mod tests {
         let bytes =
             json::to_vec_pretty(&value).expect("serialize KeyedHash JSON for social helper test");
         fs::write(&path, bytes).expect("write binding.json");
-
         let loaded = load_binding_hash(&path).expect("load binding hash");
         assert_eq!(loaded.pepper_id, value.pepper_id);
         assert_eq!(loaded.digest, value.digest);
     }
-
     #[test]
     fn parse_quantity_rejects_invalid_and_negative_values() {
         let err = parse_quantity("not-a-number", "--amount").unwrap_err();

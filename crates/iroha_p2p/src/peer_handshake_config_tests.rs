@@ -1,7 +1,5 @@
 // SoraNet handshake configuration regressions included from `peer`.
-
 use std::{fmt, num::NonZeroU32};
-
 use rand::{
     RngCore, SeedableRng,
     rand_core::{TryCryptoRng, TryRngCore},
@@ -9,17 +7,13 @@ use rand::{
 };
 use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 use tempfile::tempdir;
-
 use super::*;
-
 fn test_admission_transcript() -> [u8; 32] {
     pow::derive_admission_transcript(b"soranet-test-client-hello")
 }
-
 fn substituted_admission_transcript() -> [u8; 32] {
     pow::derive_admission_transcript(b"soranet-test-client-hello-substituted")
 }
-
 fn minimal_puzzle_config(
     ticket_ttl: Duration,
     max_future_skew: Duration,
@@ -51,7 +45,6 @@ fn minimal_puzzle_config(
         None,
     ))
 }
-
 fn mint_test_admission_ticket(
     config: &SoranetHandshakeConfig,
     transcript_hash: &[u8; 32],
@@ -64,43 +57,33 @@ fn mint_test_admission_ticket(
         .ticket
         .expect("admission should produce a ticket")
 }
-
 struct FailingTryRng;
-
 #[derive(Debug)]
 struct FailingTryRngError;
-
 impl fmt::Display for FailingTryRngError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("failing p2p ticket RNG")
     }
 }
-
 impl TryRngCore for FailingTryRng {
     type Error = FailingTryRngError;
-
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         Err(FailingTryRngError)
     }
-
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         Err(FailingTryRngError)
     }
-
     fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
         Err(FailingTryRngError)
     }
 }
-
 impl TryCryptoRng for FailingTryRng {}
-
 #[test]
 fn soranet_handshake_rng_reads_os_entropy() {
     let mut rng = soranet_handshake_rng().expect("OS RNG should seed SoraNet handshake RNG");
     let mut bytes = [0u8; 32];
     rng.fill_bytes(&mut bytes);
 }
-
 #[test]
 fn soranet_transport_delegation_challenge_rng_failure_is_fail_closed() {
     let error = generate_soranet_transport_delegation_challenge(&mut FailingTryRng)
@@ -111,7 +94,6 @@ fn soranet_transport_delegation_challenge_rng_failure_is_fail_closed() {
             if message == "SoraNet delegation challenge RNG failed: failing p2p ticket RNG"
     ));
 }
-
 #[test]
 fn sanitises_invalid_kem_and_signature_ids() {
     let params = PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30));
@@ -135,7 +117,6 @@ fn sanitises_invalid_kem_and_signature_ids() {
     assert_eq!(runtime.kem_id, 1);
     assert_eq!(runtime.sig_id, 1);
 }
-
 #[test]
 fn admission_transcript_binds_resumption_presence_and_value() {
     let absent = RuntimeParams::soranet_defaults();
@@ -145,7 +126,6 @@ fn admission_transcript_binds_resumption_presence_and_value() {
     present_a.resume_hash = Some(&resume_a);
     let mut present_b = absent.clone();
     present_b.resume_hash = Some(&resume_b);
-
     let seed = [0x73; 32];
     let (hello_absent, _) =
         build_client_hello(&absent, &mut StdRng::from_seed(seed)).expect("client hello");
@@ -153,7 +133,6 @@ fn admission_transcript_binds_resumption_presence_and_value() {
         build_client_hello(&present_a, &mut StdRng::from_seed(seed)).expect("resumed hello a");
     let (hello_b, _) =
         build_client_hello(&present_b, &mut StdRng::from_seed(seed)).expect("resumed hello b");
-
     assert_ne!(hello_absent, hello_a);
     assert_ne!(hello_absent, hello_b);
     assert_ne!(hello_a, hello_b);
@@ -174,7 +153,6 @@ fn admission_transcript_binds_resumption_presence_and_value() {
     assert_ne!(transcript_absent, transcript_b);
     assert_ne!(transcript_a, transcript_b);
 }
-
 #[test]
 fn puzzle_ticket_mints_and_verifies() {
     let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
@@ -213,7 +191,6 @@ fn puzzle_ticket_mints_and_verifies() {
         .expect("admission summary present");
     assert_eq!(admission.pow.difficulty(), 5);
     assert_eq!(admission.ticket_ttl, Duration::from_secs(240));
-
     let mut rng = StdRng::from_seed([7u8; 32]);
     let transcript = test_admission_transcript();
     let minted = config
@@ -228,7 +205,6 @@ fn puzzle_ticket_mints_and_verifies() {
             .difficulty(),
         puzzle_params.difficulty()
     );
-
     let verification = config
         .verify_challenge_ticket(
             minted
@@ -243,7 +219,6 @@ fn puzzle_ticket_mints_and_verifies() {
         verification.expect("verification summary").pow.difficulty(),
         puzzle_params.difficulty()
     );
-
     let mut corrupted = minted.ticket.expect("ticket bytes present");
     // Corrupt the version byte to guarantee a parse/verify failure.
     // Flipping solution bytes is probabilistic for low difficulties (it may still satisfy
@@ -255,7 +230,6 @@ fn puzzle_ticket_mints_and_verifies() {
             .is_err()
     );
 }
-
 #[test]
 fn token_frame_emitted_when_configured() {
     let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
@@ -275,24 +249,20 @@ fn token_frame_emitted_when_configured() {
         None,
         None,
     );
-
     let mut encoded = b"SNTK\x01".to_vec();
     encoded.extend_from_slice(&[0xAA; 64]);
     config.set_admission_token(encoded.clone());
-
     let mut rng = StdRng::from_seed([0x99; 32]);
     let transcript = test_admission_transcript();
     let minted = config
         .mint_challenge_ticket(&transcript, &mut rng)
         .expect("mint token challenge")
         .expect("token frame present");
-
     assert!(minted.ticket.is_none());
     assert!(minted.admission.is_none());
     assert_eq!(minted.frames.len(), 1);
     assert_eq!(minted.frames[0], encoded);
 }
-
 #[test]
 fn mint_challenge_ticket_reports_rng_failure() {
     let pow_params = PowParameters::new(5, Duration::from_secs(900), Duration::from_secs(120));
@@ -314,11 +284,9 @@ fn mint_challenge_ticket_reports_rng_failure() {
     );
     let mut rng = FailingTryRng;
     let transcript = test_admission_transcript();
-
     let err = config
         .mint_challenge_ticket(&transcript, &mut rng)
         .expect_err("failing RNG must abort challenge minting");
-
     match err {
         ChallengeMintError::Pow(pow::MintError::RandomBytes { operation, message }) => {
             assert_eq!(operation, "minting PoW client nonce");
@@ -330,7 +298,6 @@ fn mint_challenge_ticket_reports_rng_failure() {
         other => panic!("expected PoW RNG failure, got {other:?}"),
     }
 }
-
 #[test]
 fn pow_ticket_replay_rejected_and_persisted() {
     let pow_params = PowParameters::new(1, Duration::from_secs(900), Duration::from_secs(120));
@@ -354,7 +321,6 @@ fn pow_ticket_replay_rejected_and_persisted() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let mut rng = StdRng::from_seed([0x21; 32]);
     let transcript = test_admission_transcript();
     let minted = config
@@ -362,7 +328,6 @@ fn pow_ticket_replay_rejected_and_persisted() {
         .expect("mint")
         .expect("ticket present");
     let ticket = minted.ticket.expect("ticket bytes");
-
     config
         .verify_challenge_ticket(&ticket, &transcript)
         .expect("first verify");
@@ -370,7 +335,6 @@ fn pow_ticket_replay_rejected_and_persisted() {
         .verify_challenge_ticket(&ticket, &transcript)
         .expect_err("replay must fail");
     assert!(matches!(err, ChallengeVerifyError::Replay));
-
     drop(config);
     let reloaded =
         TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("reload store");
@@ -395,7 +359,6 @@ fn pow_ticket_replay_rejected_and_persisted() {
         .expect_err("replay after reload must fail");
     assert!(matches!(err, ChallengeVerifyError::Replay));
 }
-
 #[test]
 fn signed_ticket_replay_persists_across_reload() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
@@ -404,7 +367,6 @@ fn signed_ticket_replay_persists_across_reload() {
     let limits = TicketRevocationStoreLimits::new(8, Duration::from_secs(900)).expect("limits");
     let store = TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("store");
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
-
     let config = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -421,7 +383,6 @@ fn signed_ticket_replay_persists_across_reload() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let mut rng = StdRng::from_seed([0x27; 32]);
     let transcript = test_admission_transcript();
     let ticket = pow::mint_ticket(
@@ -439,11 +400,9 @@ fn signed_ticket_replay_persists_across_reload() {
     )
     .expect("sign ticket");
     let signed_bytes = signed.encode();
-
     config
         .verify_challenge_ticket(&signed_bytes, &transcript)
         .expect("first verify signed ticket");
-
     drop(config);
     let reloaded =
         TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("reload store");
@@ -468,7 +427,6 @@ fn signed_ticket_replay_persists_across_reload() {
         .expect_err("signed ticket replay after reload must fail");
     assert!(matches!(err, ChallengeVerifyError::Replay));
 }
-
 #[test]
 fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
@@ -492,7 +450,6 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let mut rng = StdRng::from_seed([0x31; 32]);
     let transcript = test_admission_transcript();
     let first = config
@@ -503,12 +460,10 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         .mint_challenge_ticket(&transcript, &mut rng)
         .expect("mint second")
         .expect("ticket");
-
     config
         .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"), &transcript)
         .expect("first verify");
     assert_eq!(config.active_revocations(), 1);
-
     let capacity_err = config
         .verify_challenge_ticket(second.ticket.as_ref().expect("ticket bytes"), &transcript)
         .expect_err("full store must fail closed");
@@ -525,7 +480,6 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"), &transcript)
         .expect_err("first ticket must remain consumed");
     assert!(matches!(replay_err, ChallengeVerifyError::Replay));
-
     config.purge_expired_revocations().expect("purge succeeds");
     assert_eq!(
         config.active_revocations(),
@@ -533,7 +487,6 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         "purge should not drop non-expired entries"
     );
 }
-
 #[test]
 fn revocation_store_ttl_overflow_surfaces_store_error() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
@@ -557,7 +510,6 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let mut rng = StdRng::from_seed([0x41; 32]);
     let transcript = test_admission_transcript();
     let minted = config
@@ -569,14 +521,12 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
         .expect_err("revocation store ttl cap should reject ticket");
     assert!(matches!(err, ChallengeVerifyError::RevocationStore(_)));
 }
-
 #[test]
 fn signed_ticket_invalid_signature_rejected() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
     let limits = TicketRevocationStoreLimits::new(8, Duration::from_secs(600)).expect("limits");
     let store =
         TicketRevocationStore::in_memory(limits).expect("revocation store should be available");
-
     let config = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -593,7 +543,6 @@ fn signed_ticket_invalid_signature_rejected() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
     let expires_at = std::time::SystemTime::now()
         .checked_add(Duration::from_secs(120))
@@ -615,7 +564,6 @@ fn signed_ticket_invalid_signature_rejected() {
         signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
     };
     let signed_bytes = signed.encode();
-
     let err = config
         .verify_signed_ticket(
             &signed_bytes,
@@ -630,7 +578,6 @@ fn signed_ticket_invalid_signature_rejected() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn signed_ticket_with_config_key_accepts_once() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
@@ -638,7 +585,6 @@ fn signed_ticket_with_config_key_accepts_once() {
     let store =
         TicketRevocationStore::in_memory(limits).expect("revocation store should be available");
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
-
     let config = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -655,7 +601,6 @@ fn signed_ticket_with_config_key_accepts_once() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let mut rng = StdRng::from_seed([0x55; 32]);
     let transcript = test_admission_transcript();
     let ticket = pow::mint_ticket(
@@ -673,19 +618,16 @@ fn signed_ticket_with_config_key_accepts_once() {
     )
     .expect("sign ticket");
     let signed_bytes = signed.encode();
-
     let admission = config
         .verify_challenge_ticket(&signed_bytes, &transcript)
         .expect("verify signed ticket")
         .expect("admission");
     assert_eq!(admission.pow.difficulty(), pow_params.difficulty());
-
     let err = config
         .verify_challenge_ticket(&signed_bytes, &transcript)
         .expect_err("replay should be rejected");
     assert!(matches!(err, ChallengeVerifyError::Replay));
 }
-
 #[test]
 fn raw_ticket_rejected_with_signed_key_present() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
@@ -693,7 +635,6 @@ fn raw_ticket_rejected_with_signed_key_present() {
     let store =
         TicketRevocationStore::in_memory(limits).expect("revocation store should be available");
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
-
     let config = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
@@ -710,7 +651,6 @@ fn raw_ticket_rejected_with_signed_key_present() {
         Some(Arc::new(Mutex::new(store))),
         None,
     );
-
     let mut rng = StdRng::from_seed([0xA5; 32]);
     let transcript = test_admission_transcript();
     let ticket = pow::mint_ticket(
@@ -721,7 +661,6 @@ fn raw_ticket_rejected_with_signed_key_present() {
     )
     .expect("mint pow ticket");
     let ticket_bytes = ticket.to_vec();
-
     let err = config
         .verify_challenge_ticket(&ticket_bytes, &transcript)
         .expect_err("raw ticket must fail when signed-ticket key is configured");
@@ -730,7 +669,6 @@ fn raw_ticket_rejected_with_signed_key_present() {
         ChallengeVerifyError::Pow(pow::Error::Malformed(_))
     ));
 }
-
 #[test]
 fn signed_challenge_ticket_rejects_client_hello_substitution_before_signature_work() {
     let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
@@ -770,7 +708,6 @@ fn signed_challenge_ticket_rejects_client_hello_substitution_before_signature_wo
         transcript_hash: transcript,
         signature: vec![0x66; MlDsaSuite::MlDsa44.signature_len()],
     };
-
     let err = config
         .verify_challenge_ticket(&signed.encode(), &substituted)
         .expect_err("signed ticket must be bound to the exact client hello");
@@ -779,19 +716,16 @@ fn signed_challenge_ticket_rejects_client_hello_substitution_before_signature_wo
         ChallengeVerifyError::Pow(pow::Error::TranscriptMismatch)
     ));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellation() {
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         mpsc as std_mpsc,
     };
-
     let gate = Arc::new(Semaphore::new(1));
     let first_started = Arc::new(AtomicBool::new(false));
     let second_started = Arc::new(AtomicBool::new(false));
     let (release_first, wait_for_release) = std_mpsc::channel();
-
     let first_started_by_work = Arc::clone(&first_started);
     let first = tokio::spawn(run_serialized_soranet_puzzle_work(
         Arc::clone(&gate),
@@ -803,7 +737,6 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
             Ok(1_u8)
         },
     ));
-
     tokio::time::timeout(Duration::from_secs(1), async {
         while !first_started.load(Ordering::Acquire) {
             tokio::task::yield_now().await;
@@ -811,13 +744,11 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     })
     .await
     .expect("blocking puzzle work must not stall the current-thread async executor");
-
     // Dropping the handshake future cannot cancel spawn_blocking. The
     // blocking task must therefore retain the sole permit until it really
     // exits, or a reconnect would recreate the original puzzle storm.
     first.abort();
     let _ = first.await;
-
     let cancelled_waiter_started = Arc::new(AtomicBool::new(false));
     let cancelled_waiter_started_by_work = Arc::clone(&cancelled_waiter_started);
     let cancelled_waiter = tokio::spawn(run_serialized_soranet_puzzle_work(
@@ -834,7 +765,6 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     );
     cancelled_waiter.abort();
     let _ = cancelled_waiter.await;
-
     let second_started_by_work = Arc::clone(&second_started);
     let second = tokio::spawn(run_serialized_soranet_puzzle_work(
         Arc::clone(&gate),
@@ -848,7 +778,6 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
         !second_started.load(Ordering::Acquire),
         "a retry cannot overlap uncancellable blocking puzzle work"
     );
-
     release_first.send(()).expect("release first puzzle work");
     let result = tokio::time::timeout(Duration::from_secs(1), second)
         .await
@@ -862,17 +791,14 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
         "disconnecting while queued must remove work before it reaches Argon2"
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_responsive() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-
     const WORKERS: usize = 8;
     let gate = Arc::new(Semaphore::new(1));
     let active = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
     let mut workers = Vec::with_capacity(WORKERS);
-
     for value in 0..WORKERS {
         let active = Arc::clone(&active);
         let peak = Arc::clone(&peak);
@@ -887,7 +813,6 @@ async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_respons
             },
         )));
     }
-
     let heartbeat = tokio::spawn(async {
         for _ in 0..WORKERS {
             tokio::task::yield_now().await;
@@ -897,7 +822,6 @@ async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_respons
         .await
         .expect("blocking puzzle work must not starve the async executor")
         .expect("heartbeat task must not panic");
-
     let completed = tokio::time::timeout(Duration::from_secs(2), async {
         let mut values = Vec::with_capacity(WORKERS);
         for worker in workers {
@@ -912,17 +836,14 @@ async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_respons
     })
     .await
     .expect("backpressured workers should eventually complete");
-
     assert_eq!(completed.len(), WORKERS);
     assert_eq!(peak.load(Ordering::Acquire), 1);
     assert_eq!(active.load(Ordering::Acquire), 0);
     assert_eq!(gate.available_permits(), 1);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
     use std::sync::atomic::{AtomicBool, Ordering};
-
     let gate = Arc::new(Semaphore::new(1));
     gate.close();
     let started = Arc::new(AtomicBool::new(false));
@@ -933,7 +854,6 @@ async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
     })
     .await
     .expect_err("a closed puzzle gate must reject work");
-
     assert!(matches!(
         error,
         Error::HandshakeSoranet(message)
@@ -941,7 +861,6 @@ async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
     ));
     assert!(!started.load(Ordering::Acquire));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn ordinary_pow_verification_does_not_depend_on_the_puzzle_gate() {
     let config = Arc::new(SoranetHandshakeConfig::new(
@@ -964,7 +883,6 @@ async fn ordinary_pow_verification_does_not_depend_on_the_puzzle_gate() {
     let ticket = mint_test_admission_ticket(&config, &transcript_hash, [0x30; 32]);
     let closed_gate = Arc::new(Semaphore::new(1));
     closed_gate.close();
-
     let admission =
         verify_handshake_challenge_with_gate(config, ticket, transcript_hash, closed_gate)
             .await
@@ -973,7 +891,6 @@ async fn ordinary_pow_verification_does_not_depend_on_the_puzzle_gate() {
     assert_eq!(admission.pow.difficulty(), 1);
     assert!(admission.puzzle.is_none());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn signed_ticket_verification_does_not_depend_on_the_puzzle_gate() {
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
@@ -1020,7 +937,6 @@ async fn signed_ticket_verification_does_not_depend_on_the_puzzle_gate() {
     .encode();
     let closed_gate = Arc::new(Semaphore::new(1));
     closed_gate.close();
-
     let admission =
         verify_handshake_challenge_with_gate(config, signed, transcript_hash, closed_gate)
             .await
@@ -1028,7 +944,6 @@ async fn signed_ticket_verification_does_not_depend_on_the_puzzle_gate() {
             .expect("signed ticket should return admission policy");
     assert_eq!(admission.pow.difficulty(), 1);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn inbound_puzzle_verification_accepts_a_fresh_valid_ticket() {
     let config = minimal_puzzle_config(
@@ -1038,7 +953,6 @@ async fn inbound_puzzle_verification_accepts_a_fresh_valid_ticket() {
     );
     let transcript_hash = test_admission_transcript();
     let ticket = mint_test_admission_ticket(&config, &transcript_hash, [0x31; 32]);
-
     let admission = tokio::time::timeout(
         Duration::from_secs(2),
         verify_handshake_challenge_with_gate(
@@ -1052,11 +966,9 @@ async fn inbound_puzzle_verification_accepts_a_fresh_valid_ticket() {
     .expect("inbound verification should complete")
     .expect("fresh valid puzzle ticket should verify")
     .expect("puzzle verification should return admission policy");
-
     assert_eq!(admission.pow.difficulty(), 1);
     assert!(admission.puzzle.is_some());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn inbound_puzzle_verification_rejects_an_invalid_ticket() {
     let config = minimal_puzzle_config(
@@ -1067,7 +979,6 @@ async fn inbound_puzzle_verification_rejects_an_invalid_ticket() {
     let transcript_hash = test_admission_transcript();
     let mut ticket = mint_test_admission_ticket(&config, &transcript_hash, [0x32; 32]);
     ticket[0] ^= 0xFF;
-
     let error = verify_handshake_challenge_with_gate(
         config,
         ticket,
@@ -1076,14 +987,12 @@ async fn inbound_puzzle_verification_rejects_an_invalid_ticket() {
     )
     .await
     .expect_err("malformed inbound puzzle ticket must be rejected");
-
     assert!(matches!(
         error,
         Error::HandshakeSoranet(message)
             if message.contains("unsupported pow ticket version")
     ));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn inbound_puzzle_ticket_expiring_while_queued_is_rejected() {
     let config = minimal_puzzle_config(
@@ -1099,7 +1008,6 @@ async fn inbound_puzzle_ticket_expiring_while_queued_is_rejected() {
     let expires_at = PowTicket::parse(&ticket)
         .expect("minted ticket must parse")
         .expires_at;
-
     let gate = Arc::new(Semaphore::new(1));
     let occupied = Arc::clone(&gate)
         .acquire_owned()
@@ -1113,7 +1021,6 @@ async fn inbound_puzzle_ticket_expiring_while_queued_is_rejected() {
     ));
     tokio::task::yield_now().await;
     assert_eq!(gate.available_permits(), 0);
-
     let now_secs = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock must be after the Unix epoch")
@@ -1123,7 +1030,6 @@ async fn inbound_puzzle_ticket_expiring_while_queued_is_rejected() {
     ))
     .await;
     drop(occupied);
-
     let error = tokio::time::timeout(Duration::from_secs(1), queued)
         .await
         .expect("expired queued verification should finish promptly")

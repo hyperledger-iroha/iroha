@@ -1,18 +1,5 @@
 //! Criterion benchmarks for Torii hot paths.
 #![cfg(feature = "app_api")]
-
-use std::{
-    borrow::Cow,
-    net::SocketAddr,
-    num::{NonZeroU64, NonZeroUsize},
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -63,20 +50,28 @@ use iroha_torii::{
     verify_signed_query_request_for_bench,
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
+use std::{
+    borrow::Cow,
+    net::SocketAddr,
+    num::{NonZeroU64, NonZeroUsize},
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tower::ServiceExt as _;
-
 fn direct_metrics_telemetry() -> MaybeTelemetry {
     let metrics = Arc::new(Metrics::default());
     let telemetry = Telemetry::from(StateTelemetry::new(metrics, true));
     MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator)
 }
-
 fn benchmark_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xA5; Hash::LENGTH]),
     ))
 }
-
 fn benchmark_signed_query_admission() -> Arc<SignedQueryAdmission> {
     Arc::new(
         SignedQueryAdmission::new(
@@ -88,7 +83,6 @@ fn benchmark_signed_query_admission() -> Arc<SignedQueryAdmission> {
         .expect("valid benchmark signed-query admission"),
     )
 }
-
 fn authorize_benchmark_query(
     request: QueryRequest,
     authority: AccountId,
@@ -110,7 +104,6 @@ fn authorize_benchmark_query(
         nonce,
     )
 }
-
 fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
     let authority = AccountId::new(key_pair.public_key().clone());
     authorize_benchmark_query(
@@ -119,24 +112,19 @@ fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
     )
     .sign(key_pair)
 }
-
 fn deterministic_key_pair_with_algorithm(label: &str, algorithm: Algorithm) -> KeyPair {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
     KeyPair::try_from_seed(seed, algorithm).expect("derive Torii benchmark key")
 }
-
 fn deterministic_key_pair(label: &str) -> KeyPair {
     deterministic_key_pair_with_algorithm(label, Algorithm::Ed25519)
 }
-
 fn deterministic_bls_key_pair(label: &str) -> KeyPair {
     deterministic_key_pair_with_algorithm(label, Algorithm::BlsNormal)
 }
-
 fn query_load_domain_id() -> DomainId {
     DomainId::try_new("querybench", "universal").expect("query bench domain")
 }
-
 fn query_load_asset_definition_id(index: usize) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         query_load_domain_id(),
@@ -145,7 +133,6 @@ fn query_load_asset_definition_id(index: usize) -> AssetDefinitionId {
             .expect("query bench asset name"),
     )
 }
-
 fn query_load_account_alias(index: usize) -> AccountAlias {
     AccountAlias::new(
         Name::from_str(&format!("user{index}")).expect("alias label"),
@@ -155,26 +142,21 @@ fn query_load_account_alias(index: usize) -> AccountAlias {
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     )
 }
-
 fn query_load_account_id(index: usize) -> AccountId {
     let key_pair = deterministic_key_pair(&format!("query-load-account-{index}"));
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn query_load_contract_authority_key_pair(index: usize) -> KeyPair {
     deterministic_key_pair(&format!("query-load-contract-authority-{index}"))
 }
-
 fn query_load_contract_authority_id(index: usize) -> AccountId {
     let key_pair = query_load_contract_authority_key_pair(index);
     AccountId::new(key_pair.public_key().clone())
 }
-
 const CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS: u64 = 1_710_000_000_000;
 const CONTRACT_ACTIVITY_MATCH_ALIAS: &str = "dlmm_router";
 const CONTRACT_ACTIVITY_MATCH_ADDRESS: &str = "irohac1queryloadcontractdlmmrouter";
 const CONTRACT_ACTIVITY_MATCH_ENTRYPOINT: &str = "route_swap";
-
 struct QueryLoadFixture {
     state: Arc<State>,
     query_store: LiveQueryStoreHandle,
@@ -184,7 +166,6 @@ struct QueryLoadFixture {
     asset_definition_id: AssetDefinitionId,
     contract_activity_authority: AccountId,
 }
-
 fn contract_activity_metadata(index: usize) -> Metadata {
     let mut metadata = Metadata::default();
     let matching = index.is_multiple_of(4);
@@ -225,7 +206,6 @@ fn contract_activity_metadata(index: usize) -> Metadata {
     );
     metadata
 }
-
 fn contract_activity_accepted_transaction(
     network_id: NetworkId,
     index: usize,
@@ -257,7 +237,6 @@ fn contract_activity_accepted_transaction(
         .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(signed))
 }
-
 fn commit_contract_activity_transactions(state: &Arc<State>, profile: QueryLoadProfile) {
     if profile.committed_transactions == 0 {
         return;
@@ -278,7 +257,6 @@ fn commit_contract_activity_transactions(state: &Arc<State>, profile: QueryLoadP
     let committed = valid.commit_unchecked().unpack(|_| {});
     iroha_torii::test_utils::finalize_committed_block(state, state_block, committed);
 }
-
 fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
     profile.validate().expect("valid query load profile");
     let query_store = LiveQueryStore::start_test();
@@ -292,7 +270,6 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
         )),
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     );
-
     let mut domains = Vec::with_capacity(profile.dataset_accounts + 1);
     domains.push(Domain::new(domain_id.clone()).build(&authority));
     for index in 0..profile.dataset_accounts {
@@ -314,7 +291,6 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
                 .build(&authority),
         );
     }
-
     let mut definition_ids = Vec::with_capacity(profile.assets_per_account);
     let mut definitions = Vec::with_capacity(profile.assets_per_account);
     for index in 0..profile.assets_per_account {
@@ -330,7 +306,6 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
         );
         definition_ids.push(definition_id);
     }
-
     let mut assets = Vec::with_capacity(profile.dataset_accounts * profile.assets_per_account);
     for account_index in 0..profile.dataset_accounts {
         let account_id = query_load_account_id(account_index);
@@ -341,7 +316,6 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
             assets.push(Asset::new(asset_id, Quantity::from(quantity)));
         }
     }
-
     let world = World::with_assets(domains, accounts, definitions, assets, []);
     let state = Arc::new(State::new_for_testing(
         world,
@@ -349,7 +323,6 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
         query_store.clone(),
     ));
     commit_contract_activity_transactions(&state, profile);
-
     QueryLoadFixture {
         state,
         query_store,
@@ -363,7 +336,6 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
         contract_activity_authority: query_load_contract_authority_id(0),
     }
 }
-
 fn signed_find_domains_query(
     authority: &AccountId,
     key_pair: &KeyPair,
@@ -389,7 +361,6 @@ fn signed_find_domains_query(
     );
     authorize_benchmark_query(QueryRequest::Start(iter), authority.clone()).sign(key_pair)
 }
-
 #[derive(Clone)]
 struct HttpRequestTemplate {
     method: Method,
@@ -397,7 +368,6 @@ struct HttpRequestTemplate {
     content_type: Option<&'static str>,
     body: Arc<Vec<u8>>,
 }
-
 impl HttpRequestTemplate {
     fn get(uri: impl Into<String>) -> Self {
         Self {
@@ -407,7 +377,6 @@ impl HttpRequestTemplate {
             body: Arc::new(Vec::new()),
         }
     }
-
     fn json(uri: impl Into<String>, envelope: &QueryEnvelope) -> Self {
         Self {
             method: Method::POST,
@@ -416,7 +385,6 @@ impl HttpRequestTemplate {
             body: Arc::new(norito::json::to_vec(envelope).expect("encode query envelope")),
         }
     }
-
     fn norito(uri: impl Into<String>, body: Vec<u8>) -> Self {
         Self {
             method: Method::POST,
@@ -425,7 +393,6 @@ impl HttpRequestTemplate {
             body: Arc::new(body),
         }
     }
-
     fn request(&self) -> Request<Body> {
         let mut builder = Request::builder()
             .method(self.method.clone())
@@ -437,7 +404,6 @@ impl HttpRequestTemplate {
             .body(Body::from(self.body.as_ref().clone()))
             .expect("build benchmark request")
     }
-
     fn absolute_url(&self, base_url: &str) -> String {
         if self.uri.starts_with("http://") || self.uri.starts_with("https://") {
             return self.uri.clone();
@@ -445,13 +411,11 @@ impl HttpRequestTemplate {
         format!("{base_url}{}", self.uri)
     }
 }
-
 struct SocketBenchServer {
     base_url: String,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     handle: tokio::task::JoinHandle<()>,
 }
-
 impl SocketBenchServer {
     async fn spawn(router: Router) -> Self {
         let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
@@ -473,7 +437,6 @@ impl SocketBenchServer {
             handle,
         }
     }
-
     async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
@@ -481,7 +444,6 @@ impl SocketBenchServer {
         self.handle.await.expect("socket benchmark server joined");
     }
 }
-
 fn response_body_cursor(body: &[u8]) -> Option<ForwardCursor> {
     let response: QueryResponse = norito::decode_from_bytes(body).expect("decode query response");
     let QueryResponse::Iterable(iterable) = response else {
@@ -490,7 +452,6 @@ fn response_body_cursor(body: &[u8]) -> Option<ForwardCursor> {
     let (_batch, _remaining, cursor) = iterable.into_parts();
     cursor
 }
-
 async fn send_http_request(router: Router, template: &HttpRequestTemplate) -> Vec<u8> {
     let response = router
         .oneshot(template.request())
@@ -510,7 +471,6 @@ async fn send_http_request(router: Router, template: &HttpRequestTemplate) -> Ve
     );
     std::hint::black_box(body.clone())
 }
-
 async fn send_socket_request(
     client: &reqwest::Client,
     base_url: &str,
@@ -540,7 +500,6 @@ async fn send_socket_request(
     );
     std::hint::black_box(body.clone())
 }
-
 fn signed_query_router(fixture: &QueryLoadFixture) -> Router {
     let query_store = fixture.query_store.clone();
     let state = Arc::clone(&fixture.state);
@@ -585,7 +544,6 @@ fn signed_query_router(fixture: &QueryLoadFixture) -> Router {
         }),
     )
 }
-
 fn accounts_query_router(fixture: &QueryLoadFixture) -> Router {
     let state = Arc::clone(&fixture.state);
     let telemetry = direct_metrics_telemetry();
@@ -607,7 +565,6 @@ fn accounts_query_router(fixture: &QueryLoadFixture) -> Router {
         }),
     )
 }
-
 fn account_assets_query_router(fixture: &QueryLoadFixture) -> Router {
     let state = Arc::clone(&fixture.state);
     let telemetry = direct_metrics_telemetry();
@@ -637,7 +594,6 @@ fn account_assets_query_router(fixture: &QueryLoadFixture) -> Router {
         ),
     )
 }
-
 fn asset_holders_query_router(fixture: &QueryLoadFixture) -> Router {
     let state = Arc::clone(&fixture.state);
     let telemetry = direct_metrics_telemetry();
@@ -667,7 +623,6 @@ fn asset_holders_query_router(fixture: &QueryLoadFixture) -> Router {
         ),
     )
 }
-
 fn contracts_activity_router(fixture: &QueryLoadFixture) -> Router {
     let state = Arc::clone(&fixture.state);
     let telemetry = direct_metrics_telemetry();
@@ -695,7 +650,6 @@ fn contracts_activity_router(fixture: &QueryLoadFixture) -> Router {
         ),
     )
 }
-
 fn account_alias_projection_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
     QueryEnvelope {
         query: Some("accounts_alias_projection".to_owned()),
@@ -728,7 +682,6 @@ fn account_alias_projection_envelope(profile: QueryLoadProfile) -> QueryEnvelope
         count_mode: Some("bounded".to_owned()),
     }
 }
-
 fn asset_holders_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
     QueryEnvelope {
         query: Some("asset_holders".to_owned()),
@@ -750,7 +703,6 @@ fn asset_holders_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
         count_mode: Some("bounded".to_owned()),
     }
 }
-
 fn account_assets_predicate_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
     QueryEnvelope {
         query: Some("account_assets_predicate".to_owned()),
@@ -788,7 +740,6 @@ fn account_assets_predicate_envelope(profile: QueryLoadProfile) -> QueryEnvelope
         count_mode: Some("bounded".to_owned()),
     }
 }
-
 fn contracts_activity_uri(fixture: &QueryLoadFixture, profile: QueryLoadProfile) -> String {
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("limit", &profile.page_limit.to_string());
@@ -807,7 +758,6 @@ fn contracts_activity_uri(fixture: &QueryLoadFixture, profile: QueryLoadProfile)
     );
     format!("/v1/contracts/activity?{}", serializer.finish())
 }
-
 fn generic_aggregate_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
     QueryEnvelope {
         query: Some("accounts_generic_aggregate".to_owned()),
@@ -844,7 +794,6 @@ fn generic_aggregate_envelope(profile: QueryLoadProfile) -> QueryEnvelope {
         count_mode: Some("bounded".to_owned()),
     }
 }
-
 async fn run_app_http_profile(
     profile: QueryLoadProfile,
     router: Router,
@@ -854,7 +803,6 @@ async fn run_app_http_profile(
         let body = send_http_request(router.clone(), &template).await;
         std::hint::black_box(body.len());
     }
-
     let next = Arc::new(AtomicUsize::new(0));
     let started = Instant::now();
     let mut workers = Vec::with_capacity(profile.concurrency);
@@ -883,7 +831,6 @@ async fn run_app_http_profile(
     assert_eq!(completed, profile.measured_ops);
     started.elapsed()
 }
-
 async fn run_app_socket_profile(
     profile: QueryLoadProfile,
     client: reqwest::Client,
@@ -894,7 +841,6 @@ async fn run_app_socket_profile(
         let body = send_socket_request(&client, &base_url, &template).await;
         std::hint::black_box(body.len());
     }
-
     let next = Arc::new(AtomicUsize::new(0));
     let started = Instant::now();
     let mut workers = Vec::with_capacity(profile.concurrency);
@@ -924,7 +870,6 @@ async fn run_app_socket_profile(
     assert_eq!(completed, profile.measured_ops);
     started.elapsed()
 }
-
 async fn run_signed_http_operation(
     router: Router,
     query_store: LiveQueryStoreHandle,
@@ -949,7 +894,6 @@ async fn run_signed_http_operation(
     }
     query_store.drop_query(&cursor.query);
 }
-
 async fn run_signed_http_profile(
     profile: QueryLoadProfile,
     fixture: &QueryLoadFixture,
@@ -961,7 +905,6 @@ async fn run_signed_http_profile(
         profile.fetch_size,
     );
     let start_template = HttpRequestTemplate::norito("/query", start_query.encode_versioned());
-
     for _ in 0..profile.warmup_ops {
         run_signed_http_operation(
             router.clone(),
@@ -973,7 +916,6 @@ async fn run_signed_http_profile(
         )
         .await;
     }
-
     let next = Arc::new(AtomicUsize::new(0));
     let started = Instant::now();
     let mut workers = Vec::with_capacity(profile.concurrency);
@@ -1012,7 +954,6 @@ async fn run_signed_http_profile(
     assert_eq!(completed, profile.measured_ops);
     started.elapsed()
 }
-
 async fn run_signed_socket_operation(
     client: reqwest::Client,
     query_store: LiveQueryStoreHandle,
@@ -1038,7 +979,6 @@ async fn run_signed_socket_operation(
     }
     query_store.drop_query(&cursor.query);
 }
-
 async fn run_signed_socket_profile(
     profile: QueryLoadProfile,
     fixture: &QueryLoadFixture,
@@ -1051,7 +991,6 @@ async fn run_signed_socket_profile(
         profile.fetch_size,
     );
     let start_template = HttpRequestTemplate::norito("/query", start_query.encode_versioned());
-
     for _ in 0..profile.warmup_ops {
         run_signed_socket_operation(
             client.clone(),
@@ -1064,7 +1003,6 @@ async fn run_signed_socket_profile(
         )
         .await;
     }
-
     let next = Arc::new(AtomicUsize::new(0));
     let started = Instant::now();
     let mut workers = Vec::with_capacity(profile.concurrency);
@@ -1105,7 +1043,6 @@ async fn run_signed_socket_profile(
     assert_eq!(completed, profile.measured_ops);
     started.elapsed()
 }
-
 fn bench_signed_query_verify(c: &mut Criterion) {
     let key_pair = deterministic_key_pair("signed-query-verify");
     let admission = benchmark_signed_query_admission();
@@ -1122,7 +1059,6 @@ fn bench_signed_query_verify(c: &mut Criterion) {
         );
     });
 }
-
 fn bench_query_find_parameters(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let key_pair = deterministic_key_pair("query-find-parameters");
@@ -1134,7 +1070,6 @@ fn bench_query_find_parameters(c: &mut Criterion) {
     ));
     let telemetry = direct_metrics_telemetry();
     let admission = benchmark_signed_query_admission();
-
     c.bench_function("torii_query_find_parameters_norito", |b| {
         b.iter_batched(
             || signed_find_parameters(&key_pair),
@@ -1156,7 +1091,6 @@ fn bench_query_find_parameters(c: &mut Criterion) {
         );
     });
 }
-
 fn bench_transaction_admission(c: &mut Criterion) {
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
@@ -1168,7 +1102,6 @@ fn bench_transaction_admission(c: &mut Criterion) {
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
     let counter = AtomicUsize::new(0);
-
     c.bench_function("torii_transaction_admission_direct_metrics", |b| {
         b.iter_batched(
             || {
@@ -1192,7 +1125,6 @@ fn bench_transaction_admission(c: &mut Criterion) {
         );
     });
 }
-
 fn bench_transaction_handle_enqueue(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let tx_state = Arc::new(State::new_for_testing(
@@ -1212,7 +1144,6 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
         transaction_time_to_live: Duration::from_secs(60),
         ..Default::default()
     };
-
     c.bench_function("torii_transaction_handle_enqueue_direct_metrics", |b| {
         b.iter_batched(
             || {
@@ -1246,7 +1177,6 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
         );
     });
 }
-
 fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
@@ -1265,7 +1195,6 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
         transaction_time_to_live: Duration::from_secs(600),
         ..Default::default()
     };
-
     let make_tx = |index: usize| {
         let instruction = Log::new(
             Level::INFO,
@@ -1279,12 +1208,10 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
         .with_instructions([InstructionBox::from(instruction)])
         .sign(tx_key_pair.private_key())
     };
-
     let mut group = c.benchmark_group("torii_transaction_enqueue_sustained_pressure");
     for backlog in [1_000usize, 10_000, 20_000] {
         let (events, _) = tokio::sync::broadcast::channel(queue_capacity.get());
         let queue = Arc::new(Queue::from_config(queue_cfg, events));
-
         for _ in 0..backlog {
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let tx = make_tx(index);
@@ -1295,7 +1222,6 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                 .push(accepted, tx_state.view())
                 .expect("prefill enqueue succeeds");
         }
-
         group.bench_with_input(
             BenchmarkId::from_parameter(backlog),
             &backlog,
@@ -1315,14 +1241,12 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                         queue
                             .push(accepted, tx_state.view())
                             .expect("sustained enqueue succeeds");
-
                         let mut guards = Vec::new();
                         queue.get_transactions_for_block(
                             &tx_state.view(),
                             NonZeroUsize::new(1).expect("non-zero block limit"),
                             &mut guards,
                         );
-
                         std::hint::black_box(());
                         std::hint::black_box(queue.pressure_snapshot());
                         drop(guards);
@@ -1334,7 +1258,6 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[allow(clippy::too_many_lines)]
 fn bench_query_http_sustained(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1343,7 +1266,6 @@ fn bench_query_http_sustained(c: &mut Criterion) {
         .build()
         .expect("tokio runtime");
     let mut group = c.benchmark_group("torii_query_http_sustained");
-
     for profile in standard_query_load_profiles() {
         profile.validate().expect("valid built-in query profile");
         let fixture = build_query_load_fixture(profile);
@@ -1490,10 +1412,8 @@ fn bench_query_http_sustained(c: &mut Criterion) {
             }
         }
     }
-
     group.finish();
 }
-
 fn socket_profile_client(profile: QueryLoadProfile) -> reqwest::Client {
     reqwest::Client::builder()
         .pool_max_idle_per_host(profile.concurrency)
@@ -1501,7 +1421,6 @@ fn socket_profile_client(profile: QueryLoadProfile) -> reqwest::Client {
         .build()
         .expect("socket benchmark client")
 }
-
 #[allow(clippy::too_many_lines)]
 fn bench_query_http_socket_sustained(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1510,7 +1429,6 @@ fn bench_query_http_socket_sustained(c: &mut Criterion) {
         .build()
         .expect("tokio runtime");
     let mut group = c.benchmark_group("torii_query_http_socket_sustained");
-
     for profile in standard_query_load_profiles() {
         profile.validate().expect("valid built-in query profile");
         let fixture = build_query_load_fixture(profile);
@@ -1685,10 +1603,8 @@ fn bench_query_http_socket_sustained(c: &mut Criterion) {
             }
         }
     }
-
     group.finish();
 }
-
 fn bench_rate_limiter(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let distinct_limiter = BenchRateLimiter::new(Some(1_000_000), Some(1_000_000));
@@ -1706,7 +1622,6 @@ fn bench_rate_limiter(c: &mut Criterion) {
             BatchSize::SmallInput,
         );
     });
-
     let same_key_limiter = BenchRateLimiter::new(Some(1_000_000), Some(1_000_000));
     c.bench_function("torii_rate_limiter_same_key", |b| {
         b.iter(|| {
@@ -1714,7 +1629,6 @@ fn bench_rate_limiter(c: &mut Criterion) {
             std::hint::black_box(allowed);
         });
     });
-
     let same_key_batch_limiter = BenchRateLimiter::new(Some(1_000_000), Some(1_000_000));
     c.bench_function("torii_rate_limiter_same_key_batch_32", |b| {
         b.iter(|| {
@@ -1724,7 +1638,6 @@ fn bench_rate_limiter(c: &mut Criterion) {
         });
     });
 }
-
 fn smoke_profile_output() {
     let mut samples = Vec::with_capacity(8);
     for micros in 1..=8 {
@@ -1739,7 +1652,6 @@ fn smoke_profile_output() {
         Duration::from_millis(1),
     );
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     smoke_profile_output();

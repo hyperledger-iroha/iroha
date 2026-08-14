@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     ast::{Block, Expr, Item, Program, Statement},
@@ -7,7 +5,7 @@ use crate::{
         self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
     },
 };
-
+use std::collections::HashSet;
 /// Run static analysis on a parsed Kotodama program using the associated typed
 /// information produced by the semantic analyzer.
 pub fn run_static_analysis(program: &Program, typed: &TypedProgram) -> Vec<AnalysisFinding> {
@@ -18,7 +16,6 @@ pub fn run_static_analysis(program: &Program, typed: &TypedProgram) -> Vec<Analy
     detect_infinite_loops(program, &mut findings);
     findings
 }
-
 fn collect_state_names(program: &Program) -> HashSet<String> {
     program
         .items
@@ -29,7 +26,6 @@ fn collect_state_names(program: &Program) -> HashSet<String> {
         })
         .collect()
 }
-
 fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFinding>) {
     for item in &typed.items {
         let semantic::TypedItem::Function(func) = item;
@@ -50,7 +46,6 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
         });
     }
 }
-
 fn exact_numeric_literal_is_zero(expr: &TypedExpr) -> bool {
     match &expr.expr {
         ExprKind::IntLiteral(value) => value.is_zero(),
@@ -63,7 +58,6 @@ fn exact_numeric_literal_is_zero(expr: &TypedExpr) -> bool {
         _ => false,
     }
 }
-
 fn detect_reentrancy(
     program: &Program,
     state_names: &HashSet<String>,
@@ -75,7 +69,6 @@ fn detect_reentrancy(
         }
     }
 }
-
 fn analyze_block_reentrancy(
     block: &Block,
     state_names: &HashSet<String>,
@@ -92,7 +85,6 @@ fn analyze_block_reentrancy(
     }
     state_before
 }
-
 fn analyze_statement_reentrancy(
     stmt: &Statement,
     state_names: &HashSet<String>,
@@ -219,7 +211,6 @@ fn analyze_statement_reentrancy(
         }
     }
 }
-
 fn visit_expr_for_host_calls(
     expr: &Expr,
     state_before: bool,
@@ -371,7 +362,6 @@ fn visit_expr_for_host_calls(
         | Expr::Ident(_) => {}
     }
 }
-
 fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
     match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
@@ -424,7 +414,6 @@ fn expr_targets_state(expr: &Expr, state_names: &HashSet<String>) -> bool {
         | Expr::Bytes(_) => false,
     }
 }
-
 fn is_external_call(name: &str) -> bool {
     const HOST_PREFIXES: [&str; 2] = ["host::", "std::host::"];
     if HOST_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) {
@@ -436,7 +425,6 @@ fn is_external_call(name: &str) -> bool {
         "call" | "call_contract" | "call_async" | "invoke" | "invoke_contract" | "transfer"
     )
 }
-
 fn detect_infinite_loops(program: &Program, findings: &mut Vec<AnalysisFinding>) {
     for item in &program.items {
         if let Item::Function(function) = item {
@@ -444,7 +432,6 @@ fn detect_infinite_loops(program: &Program, findings: &mut Vec<AnalysisFinding>)
         }
     }
 }
-
 fn inspect_block_for_loop(block: &Block, func_name: &str, findings: &mut Vec<AnalysisFinding>) {
     for stmt in &block.statements {
         match stmt.kind() {
@@ -499,7 +486,6 @@ fn inspect_block_for_loop(block: &Block, func_name: &str, findings: &mut Vec<Ana
         }
     }
 }
-
 fn block_contains_escape(block: &Block) -> bool {
     for stmt in &block.statements {
         match stmt.kind() {
@@ -554,14 +540,12 @@ fn block_contains_escape(block: &Block) -> bool {
     }
     false
 }
-
 fn visit_exprs<F>(func: &TypedFunction, visitor: &mut F)
 where
     F: FnMut(&str, &TypedExpr),
 {
     visit_block_exprs(&func.body, &func.name, visitor);
 }
-
 fn visit_block_exprs<F>(block: &TypedBlock, func_name: &str, visitor: &mut F)
 where
     F: FnMut(&str, &TypedExpr),
@@ -574,7 +558,6 @@ where
         visit_expr_children(tail, func_name, visitor);
     }
 }
-
 fn visit_statement_exprs<F>(stmt: &TypedStatement, func_name: &str, visitor: &mut F)
 where
     F: FnMut(&str, &TypedExpr),
@@ -657,7 +640,6 @@ where
         }
     }
 }
-
 fn visit_expr_children<F>(expr: &TypedExpr, func_name: &str, visitor: &mut F)
 where
     F: FnMut(&str, &TypedExpr),
@@ -783,18 +765,15 @@ where
         | ExprKind::Ident(_) => {}
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
-
     fn analyze_static(source: &str) -> Vec<AnalysisFinding> {
         let program = parse(source).expect("parse");
         let typed = semantic::analyze(&program).expect("type check");
         run_static_analysis(&program, &typed)
     }
-
     #[test]
     fn values_above_i64_do_not_trigger_a_legacy_overflow_warning() {
         let findings = analyze_static(
@@ -811,7 +790,6 @@ mod tests {
             "valid signed-512 arithmetic received a legacy-width warning: {findings:?}"
         );
     }
-
     #[test]
     fn detects_division_by_zero_literal() {
         let findings = analyze_static(
@@ -827,7 +805,6 @@ mod tests {
             "expected div-zero finding, got {findings:?}"
         );
     }
-
     #[test]
     fn raw_contract_calls_are_rejected_before_static_analysis() {
         let program = parse(
@@ -849,14 +826,12 @@ mod tests {
             "unexpected raw-call diagnostic: {error:?}"
         );
     }
-
     #[test]
     fn rejects_unbounded_loop_source() {
         let err = parse("fn spin() { while true {} }")
             .expect_err("canonical source must reject unbounded loops");
         assert!(err.contains("`while` is not supported"));
     }
-
     #[test]
     fn unary_neg_on_i64_min_literal_does_not_panic() {
         let findings = analyze_static(
@@ -868,7 +843,6 @@ mod tests {
         );
         assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
-
     #[test]
     fn ordinary_state_writes_do_not_create_reentrancy_findings() {
         let findings = analyze_static(
@@ -885,7 +859,6 @@ mod tests {
             "state-only code must not be labeled reentrant: {findings:?}"
         );
     }
-
     #[test]
     fn namespaced_pure_calls_do_not_create_reentrancy_findings() {
         let findings = analyze_static("fn hash() { crypto::sha256(b\"payload\"); }");

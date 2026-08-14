@@ -1,16 +1,12 @@
 //! Dump reference I105 account addresses for documentation fixtures.
-
-use std::convert::TryFrom;
-
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::account::{AccountAddress, AccountId};
-
+use std::convert::TryFrom;
 fn ed25519_pk_with(byte: u8) -> Result<PublicKey, iroha_crypto::Error> {
     let seed = vec![byte; 32];
     let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)?.into_parts();
     Ok(public_key)
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let domains = [
         "default",
@@ -38,15 +34,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn ed25519_pk_with_uses_checked_seed_derivation() {
         let public_key = ed25519_pk_with(0x42).expect("checked Ed25519 fixture derivation");
-
         assert_eq!(
             public_key.try_algorithm().expect("public key algorithm"),
             Algorithm::Ed25519

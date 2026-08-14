@@ -1,5 +1,4 @@
 //! Visitor that visits every node in the Iroha syntax tree.
-
 use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
@@ -37,13 +36,10 @@ use crate::{
     prelude::*,
     query::{AnyQueryBox, QueryWithParams, SingularQueryBox},
 };
-
 mod visit_instruction;
 mod visit_query;
-
 pub use visit_instruction::*;
 pub use visit_query::*;
-
 /// Helper macro to forward visitor trait methods to standalone functions.
 macro_rules! visit_all {
     ( $( $visitor:ident($operation:ty) ),+ $(,)? ) => { $(
@@ -51,7 +47,6 @@ macro_rules! visit_all {
         fn $visitor(&mut self, operation: $operation) { $visitor(self, operation); }
     )+ };
 }
-
 /// Trait to validate Iroha entities.
 /// Default implementation of non-leaf visitors runs `visit_` functions for leafs.
 /// Default implementation for leaf visitors is blank.
@@ -93,7 +88,6 @@ pub trait Visit {
     fn visit_iter_query(&mut self, operation: &QueryWithParams) {
         visit_iter_query(self, operation);
     }
-
     /// Visit a burn instruction.
     fn visit_burn(&mut self, operation: &BurnBox) {
         visit_burn(self, operation);
@@ -130,7 +124,6 @@ pub trait Visit {
     fn visit_unregister(&mut self, operation: &UnregisterBox) {
         visit_unregister(self, operation);
     }
-
     crate::query_visitors!(visit_all);
     crate::instruction_visitors!(visit_all);
     /// Visit a grouped RWA instruction.
@@ -142,7 +135,6 @@ pub trait Visit {
         visit_defi_instruction_box(self, operation);
     }
 }
-
 /// Walk a transaction and delegate to the provided visitor.
 pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &SignedTransaction) {
     match transaction.instructions() {
@@ -170,6 +162,5 @@ pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &Signe
         }
     }
 }
-
 /// Visit IVM bytecode. Override this method to inspect raw Kotodama programs.
 pub fn visit_ivm<V: Visit + ?Sized>(_visitor: &mut V, _bytecode: &IvmBytecode) {}

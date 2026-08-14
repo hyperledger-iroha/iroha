@@ -16,7 +16,6 @@ fn provider_policy_drift_is_checked_before_and_after_external_operations() {
         idempotency_key,
         now_unix_ms: BASE_UNIX_MS,
     };
-
     fixture.webauthn.qualification.set_policy_digest([0xB1; 32]);
     assert_eq!(
         service
@@ -29,7 +28,6 @@ fn provider_policy_drift_is_checked_before_and_after_external_operations() {
         0,
         "provider operation must not run after failed preflight"
     );
-
     fixture.webauthn.qualification.set_policy_digest([0xA1; 32]);
     fixture
         .webauthn
@@ -50,7 +48,6 @@ fn provider_policy_drift_is_checked_before_and_after_external_operations() {
         0
     );
 }
-
 #[test]
 fn evidence_bytes_assertions_tokens_and_provider_diagnostics_are_debug_redacted() {
     let fixture = EvidenceViewerFixture::new();
@@ -80,7 +77,6 @@ fn evidence_bytes_assertions_tokens_and_provider_diagnostics_are_debug_redacted(
     assert!(!request_debug.contains("WEBAUTHN-ASSERTION-SECRET-MUST-NOT-LEAK"));
     assert!(request_debug.contains("<redacted>"));
     drop(debug_request);
-
     let issued = fixture
         .create_session(
             &service,
@@ -121,7 +117,6 @@ fn evidence_bytes_assertions_tokens_and_provider_diagnostics_are_debug_redacted(
         assert!(!rendered.contains(std::str::from_utf8(EVIDENCE_PAYLOAD).expect("ASCII")));
     }
 }
-
 #[test]
 fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
     let key = SigningKey::from_bytes(&[0x43; 32]);
@@ -129,7 +124,6 @@ fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
     let checkpoint = EvidenceViewerCheckpointV1::default();
     let envelope = signed_checkpoint_envelope(&key, &config, checkpoint);
     verify_checkpoint_envelope(&config, envelope.clone()).expect("signed checkpoint");
-
     let mut tampered_checkpoint = envelope.clone();
     tampered_checkpoint.checkpoint.version =
         EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1.saturating_add(1);
@@ -137,14 +131,12 @@ fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
         verify_checkpoint_envelope(&config, tampered_checkpoint),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let mut tampered_count = envelope.clone();
     tampered_count.checkpoint_anchor.receipt_count = 1;
     assert_eq!(
         verify_checkpoint_envelope(&config, tampered_count),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let mut tampered_head = envelope.clone();
     tampered_head.checkpoint_anchor.chain_head = Some(EvidenceViewerReceiptCursorV1 {
         sequence: 1,
@@ -154,21 +146,18 @@ fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
         verify_checkpoint_envelope(&config, tampered_head),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let mut tampered_digest = envelope.clone();
     tampered_digest.checkpoint_anchor.checkpoint_digest[0] ^= 1;
     assert_eq!(
         verify_checkpoint_envelope(&config, tampered_digest),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let mut tampered_signature = envelope;
     tampered_signature.checkpoint_anchor.signature[0] ^= 1;
     assert_eq!(
         verify_checkpoint_envelope(&config, tampered_signature),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let mut substituted_handle =
         signed_checkpoint_envelope(&key, &config, EvidenceViewerCheckpointV1::default())
             .checkpoint_anchor;
@@ -182,7 +171,6 @@ fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
         "the signature must bind the embedded signer handle, not only the expected identity"
     );
 }
-
 #[test]
 fn checkpoint_rejects_substituted_erasure_intent_operation_binding() {
     let key = SigningKey::from_bytes(&[0x44; 32]);
@@ -215,14 +203,12 @@ fn checkpoint_rejects_substituted_erasure_intent_operation_binding() {
         ..EvidenceViewerCheckpointV1::default()
     };
     validate_checkpoint(&config, &checkpoint).expect("exact erasure intent");
-
     checkpoint.erasure_intents[0].operation_id[0] ^= 1;
     assert_eq!(
         validate_checkpoint(&config, &checkpoint),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
 }
-
 #[test]
 fn signed_receipt_rejects_body_signature_and_chain_tampering() {
     let key = SigningKey::from_bytes(&[0x42; 32]);
@@ -233,7 +219,6 @@ fn signed_receipt_rejects_body_signature_and_chain_tampering() {
             key.verifying_key().to_bytes(),
         )
         .expect("valid signed receipt");
-
     let mut tampered_body = receipt.clone();
     tampered_body.body.range_end = Some(2048);
     assert_eq!(
@@ -243,7 +228,6 @@ fn signed_receipt_rejects_body_signature_and_chain_tampering() {
         ),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let mut tampered_signature = receipt.clone();
     tampered_signature.signature[0] ^= 1;
     assert_eq!(
@@ -253,7 +237,6 @@ fn signed_receipt_rejects_body_signature_and_chain_tampering() {
         ),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     let config = valid_config(key.verifying_key().to_bytes());
     let mut second = signed_receipt(&key);
     second.body.sequence = 2;

@@ -1,3 +1,9 @@
+use crate::{JsonTarget, workspace_root, write_json_output};
+use blake3::hash as blake3_hash;
+use eyre::{Context as _, Result, ensure, eyre};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use norito::{derive::JsonSerialize, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -5,15 +11,6 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use blake3::hash as blake3_hash;
-use eyre::{Context as _, Result, ensure, eyre};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-use norito::{derive::JsonSerialize, json};
-use sha2::{Digest, Sha256};
-
-use crate::{JsonTarget, workspace_root, write_json_output};
-
 const ANCHOR_REQUEST_PREFIX: &str = "taikai-anchor-request-";
 const ANCHOR_REQUEST_SUFFIX: &str = ".json";
 const SENTINEL_PREFIX: &str = "taikai-anchor-";
@@ -30,7 +27,6 @@ const TRM_STATE_PREFIX: &str = "taikai-trm-state-";
 const TRM_STATE_SUFFIX: &str = ".json";
 const LINEAGE_PREFIX: &str = "taikai-lineage-";
 const LINEAGE_SUFFIX: &str = ".json";
-
 #[derive(Debug)]
 pub struct AnchorBundleOptions {
     pub spool_dir: PathBuf,
@@ -38,13 +34,11 @@ pub struct AnchorBundleOptions {
     pub signing_key: Option<PathBuf>,
     pub output: JsonTarget,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AnchorStatus {
     Pending,
     Delivered,
 }
-
 impl AnchorStatus {
     fn label(&self) -> &'static str {
         match self {
@@ -53,7 +47,6 @@ impl AnchorStatus {
         }
     }
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct ArtifactDigest {
     path: String,
@@ -63,7 +56,6 @@ struct ArtifactDigest {
     #[norito(skip_serializing_if = "Option::is_none")]
     copied_path: Option<String>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct SentinelInfo {
     path: String,
@@ -75,7 +67,6 @@ struct SentinelInfo {
     #[norito(skip_serializing_if = "Option::is_none")]
     copied_path: Option<String>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct AnchorEntry {
     base_id: String,
@@ -97,7 +88,6 @@ struct AnchorEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     sentinel: Option<SentinelInfo>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct AnchorBundleSummary {
     generated_unix_ms: u64,
@@ -109,7 +99,6 @@ struct AnchorBundleSummary {
     #[norito(skip_serializing_if = "Option::is_none")]
     signing: Option<SignatureEnvelope>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct SignatureEnvelope {
     algorithm: String,
@@ -118,7 +107,6 @@ struct SignatureEnvelope {
     payload_sha256: String,
     payload_blake3: String,
 }
-
 #[derive(Default)]
 struct AnchorPaths {
     envelope: Option<PathBuf>,
@@ -130,11 +118,9 @@ struct AnchorPaths {
     anchor_request: Option<PathBuf>,
     sentinel: Option<PathBuf>,
 }
-
 pub fn run_anchor_bundle(options: AnchorBundleOptions) -> Result<()> {
     let (entries, delivered, pending) =
         collect_anchor_entries(&options.spool_dir, options.copy_dir.as_deref())?;
-
     let mut summary = AnchorBundleSummary {
         generated_unix_ms: unix_ms_now(),
         spool_dir: display_path(&options.spool_dir),
@@ -144,24 +130,20 @@ pub fn run_anchor_bundle(options: AnchorBundleOptions) -> Result<()> {
         entries,
         signing: None,
     };
-
     let unsigned = json::to_value(&summary)?;
     if let Some(signing_key) = options.signing_key.as_ref() {
         let payload = json::to_vec(&unsigned)?;
         let signature = sign_payload(&payload, signing_key)?;
         summary.signing = Some(signature);
     }
-
     let value = json::to_value(&summary)?;
     write_json_output(&value, options.output).map_err(|err| eyre!(err.to_string()))
 }
-
 fn collect_anchor_entries(
     spool_dir: &Path,
     copy_dir: Option<&Path>,
 ) -> Result<(Vec<AnchorEntry>, usize, usize)> {
     let mut entries: BTreeMap<String, AnchorPaths> = BTreeMap::new();
-
     let dir_iter = match fs::read_dir(spool_dir) {
         Ok(iter) => iter,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), 0, 0)),
@@ -172,7 +154,6 @@ fn collect_anchor_entries(
             ));
         }
     };
-
     for entry in dir_iter {
         let entry = entry?;
         let name = match entry.file_name().into_string() {
@@ -236,7 +217,6 @@ fn collect_anchor_entries(
             continue;
         }
     }
-
     let mut summaries = Vec::with_capacity(entries.len());
     for (base_id, paths) in entries {
         let anchor_request = digest_optional_file(&paths.anchor_request, copy_dir, &base_id)?;
@@ -247,13 +227,11 @@ fn collect_anchor_entries(
         let trm = digest_optional_file(&paths.trm, copy_dir, &base_id)?;
         let trm_state = digest_optional_file(&paths.trm_state, copy_dir, &base_id)?;
         let lineage = digest_optional_file(&paths.lineage, copy_dir, &base_id)?;
-
         let status = if sentinel.is_some() {
             AnchorStatus::Delivered
         } else {
             AnchorStatus::Pending
         };
-
         summaries.push(AnchorEntry {
             base_id,
             status: status.label().to_string(),
@@ -267,7 +245,6 @@ fn collect_anchor_entries(
             sentinel,
         });
     }
-
     let delivered = summaries
         .iter()
         .filter(|entry| entry.status == AnchorStatus::Delivered.label())
@@ -275,7 +252,6 @@ fn collect_anchor_entries(
     let pending = summaries.len().saturating_sub(delivered);
     Ok((summaries, delivered, pending))
 }
-
 fn digest_optional_file(
     path: &Option<PathBuf>,
     copy_dir: Option<&Path>,
@@ -294,7 +270,6 @@ fn digest_optional_file(
         copied_path: copied,
     }))
 }
-
 fn digest_sentinel(
     path: &Option<PathBuf>,
     copy_dir: Option<&Path>,
@@ -319,13 +294,11 @@ fn digest_sentinel(
         copied_path: copied,
     }))
 }
-
 fn hash_file(path: &Path) -> Result<HashedBytes> {
     let bytes =
         fs::read(path).with_context(|| format!("failed to read artefact {}", path.display()))?;
     Ok(hash_bytes(&bytes))
 }
-
 fn hash_bytes(bytes: &[u8]) -> HashedBytes {
     let mut sha = Sha256::new();
     sha.update(bytes);
@@ -337,7 +310,6 @@ fn hash_bytes(bytes: &[u8]) -> HashedBytes {
         blake3: blake3.to_hex().to_string(),
     }
 }
-
 fn copy_if_requested(
     path: &Path,
     copy_dir: Option<&Path>,
@@ -358,7 +330,6 @@ fn copy_if_requested(
         .with_context(|| format!("failed to copy {} to {}", path.display(), dest.display()))?;
     Ok(Some(display_path(&dest)))
 }
-
 fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope> {
     let key_text = fs::read_to_string(signing_key)
         .with_context(|| format!("failed to read signing key {}", signing_key.display()))?;
@@ -383,7 +354,6 @@ fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope>
         algorithm == Algorithm::Ed25519,
         "only Ed25519 signing keys are supported"
     );
-
     let payload_hashes = hash_bytes(payload);
     Ok(SignatureEnvelope {
         algorithm: "ed25519".to_string(),
@@ -393,7 +363,6 @@ fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope>
         payload_blake3: payload_hashes.blake3,
     })
 }
-
 fn unix_ms_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -402,7 +371,6 @@ fn unix_ms_now() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
-
 fn display_path(path: &Path) -> String {
     if let Ok(relative) = path.strip_prefix(workspace_root()) {
         relative.display().to_string()
@@ -410,27 +378,22 @@ fn display_path(path: &Path) -> String {
         path.display().to_string()
     }
 }
-
 struct HashedBytes {
     bytes: u64,
     sha256: String,
     blake3: String,
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::Algorithm;
     use norito::json::Value;
     use tempfile::tempdir;
-
-    use super::*;
-
     #[test]
     fn collects_pending_and_delivered_entries() -> Result<()> {
         let dir = tempdir()?;
         let spool = dir.path().join("taikai");
         fs::create_dir_all(&spool)?;
-
         let delivered = "0001-0002-deadbeef";
         fs::write(
             spool.join(format!(
@@ -466,7 +429,6 @@ mod tests {
             spool.join(format!("{LINEAGE_PREFIX}{delivered}{LINEAGE_SUFFIX}")),
             b"{\"version\":1}",
         )?;
-
         let pending = "0001-0003-baadf00d";
         fs::write(
             spool.join(format!(
@@ -474,15 +436,12 @@ mod tests {
             )),
             b"{\"payload\":\"pending\"}",
         )?;
-
         let copy_dir = dir.path().join("bundle");
         let (entries, delivered_count, pending_count) =
             collect_anchor_entries(&spool, Some(copy_dir.as_path()))?;
-
         assert_eq!(entries.len(), 2);
         assert_eq!(delivered_count, 1);
         assert_eq!(pending_count, 1);
-
         let delivered_entry = entries
             .iter()
             .find(|entry| entry.base_id == delivered)
@@ -504,7 +463,6 @@ mod tests {
                 .is_some(),
             "expected TRM state copy to be recorded"
         );
-
         let pending_entry = entries
             .iter()
             .find(|entry| entry.base_id == pending)
@@ -518,10 +476,8 @@ mod tests {
                 .and_then(|digest| digest.copied_path.as_ref())
                 .is_some()
         );
-
         Ok(())
     }
-
     #[test]
     fn bundle_signs_summary_when_key_provided() -> Result<()> {
         let dir = tempdir()?;
@@ -534,12 +490,10 @@ mod tests {
             )),
             b"{\"payload\":\"x\"}",
         )?;
-
         let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let private_hex = hex::encode(key.private_key().to_bytes().1);
         let key_path = dir.path().join("signing.key");
         fs::write(&key_path, &private_hex)?;
-
         let out_path = dir.path().join("anchor_bundle.json");
         run_anchor_bundle(AnchorBundleOptions {
             spool_dir: spool,
@@ -547,7 +501,6 @@ mod tests {
             signing_key: Some(key_path.clone()),
             output: JsonTarget::File(out_path.clone()),
         })?;
-
         let value: Value = norito::json::from_reader(
             std::fs::File::open(&out_path).expect("bundle output readable"),
         )?;

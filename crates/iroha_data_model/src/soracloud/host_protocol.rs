@@ -27,7 +27,6 @@ pub enum SoracloudHostOperationV1 {
     /// Perform a bounded, policy-checked egress fetch.
     EgressFetch,
 }
-
 /// Request envelope decoded from the Soracloud request pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -42,7 +41,6 @@ pub struct SoracloudHostRequestEnvelopeV1 {
     /// Operation-specific payload.
     pub payload: SoracloudHostRequestPayloadV1,
 }
-
 impl SoracloudHostRequestEnvelopeV1 {
     /// Validate the request envelope schema version.
     ///
@@ -65,7 +63,6 @@ impl SoracloudHostRequestEnvelopeV1 {
         Ok(())
     }
 }
-
 /// Operation-specific Soracloud host request payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -95,7 +92,6 @@ pub enum SoracloudHostRequestPayloadV1 {
     /// Request to perform a bounded egress fetch.
     EgressFetch(SoracloudEgressFetchRequestV1),
 }
-
 impl SoracloudHostRequestPayloadV1 {
     /// Return the operation represented by this request payload.
     #[must_use]
@@ -113,7 +109,6 @@ impl SoracloudHostRequestPayloadV1 {
             Self::EgressFetch(_) => SoracloudHostOperationV1::EgressFetch,
         }
     }
-
     /// Validate operation-specific host request payload constraints.
     ///
     /// # Errors
@@ -134,7 +129,6 @@ impl SoracloudHostRequestPayloadV1 {
         }
     }
 }
-
 /// Response envelope encoded into the Soracloud response pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -149,7 +143,6 @@ pub struct SoracloudHostResponseEnvelopeV1 {
     /// Operation-specific payload.
     pub payload: SoracloudHostResponsePayloadV1,
 }
-
 impl SoracloudHostResponseEnvelopeV1 {
     /// Validate the response envelope schema version.
     ///
@@ -172,7 +165,6 @@ impl SoracloudHostResponseEnvelopeV1 {
         Ok(())
     }
 }
-
 /// Operation-specific Soracloud host response payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -202,7 +194,6 @@ pub enum SoracloudHostResponsePayloadV1 {
     /// Response to bounded egress fetches.
     EgressFetch(SoracloudEgressFetchResponseV1),
 }
-
 impl SoracloudHostResponsePayloadV1 {
     /// Return the operation represented by this response payload.
     #[must_use]
@@ -220,7 +211,6 @@ impl SoracloudHostResponsePayloadV1 {
             Self::EgressFetch(_) => SoracloudHostOperationV1::EgressFetch,
         }
     }
-
     /// Validate operation-specific host response payload constraints.
     ///
     /// # Errors
@@ -241,7 +231,6 @@ impl SoracloudHostResponsePayloadV1 {
         }
     }
 }
-
 /// Read committed service-state metadata for one binding/key pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -254,7 +243,6 @@ pub struct SoracloudReadCommittedStateRequestV1 {
     /// Canonical state key scoped under the binding prefix.
     pub state_key: String,
 }
-
 impl SoracloudReadCommittedStateRequestV1 {
     /// Validate committed-state request fields.
     ///
@@ -264,7 +252,6 @@ impl SoracloudReadCommittedStateRequestV1 {
         validate_soracloud_host_state_key("soracloud read committed state request", &self.state_key)
     }
 }
-
 /// Response to a committed service-state metadata lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -276,7 +263,6 @@ pub struct SoracloudReadCommittedStateResponseV1 {
     #[norito(default)]
     pub entry: Option<SoraServiceStateEntryV1>,
 }
-
 impl SoracloudReadCommittedStateResponseV1 {
     /// Validate committed-state response fields.
     ///
@@ -289,7 +275,6 @@ impl SoracloudReadCommittedStateResponseV1 {
         Ok(())
     }
 }
-
 /// Stage a deterministic service-state mutation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -315,7 +300,6 @@ pub struct SoracloudEmitStateMutationRequestV1 {
     #[norito(default)]
     pub payload_commitment: Option<Hash>,
 }
-
 impl SoracloudEmitStateMutationRequestV1 {
     /// Validate state mutation request fields.
     ///
@@ -368,7 +352,6 @@ impl SoracloudEmitStateMutationRequestV1 {
         Ok(())
     }
 }
-
 /// Response to a staged service-state mutation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -379,7 +362,6 @@ pub struct SoracloudEmitStateMutationResponseV1 {
     /// Stable mutation digest returned by the host after staging the write-back.
     pub mutation_commitment: Hash,
 }
-
 impl SoracloudEmitStateMutationResponseV1 {
     /// Validate state mutation response fields.
     ///
@@ -393,7 +375,6 @@ impl SoracloudEmitStateMutationResponseV1 {
         )
     }
 }
-
 /// Stage an outbound Soracloud mailbox message.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -414,7 +395,6 @@ pub struct SoracloudEmitMailboxMessageRequestV1 {
     #[norito(default)]
     pub expires_at_sequence: Option<u64>,
 }
-
 impl SoracloudEmitMailboxMessageRequestV1 {
     /// Validate outbound mailbox request fields.
     ///
@@ -441,7 +421,6 @@ impl SoracloudEmitMailboxMessageRequestV1 {
         Ok(())
     }
 }
-
 /// Response to a staged outbound mailbox message.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -454,7 +433,6 @@ pub struct SoracloudEmitMailboxMessageResponseV1 {
     /// Commitment over the emitted mailbox payload.
     pub payload_commitment: Hash,
 }
-
 impl SoracloudEmitMailboxMessageResponseV1 {
     /// Validate outbound mailbox response fields.
     ///
@@ -474,7 +452,6 @@ impl SoracloudEmitMailboxMessageResponseV1 {
         )
     }
 }
-
 /// Append deterministic journal material for the active handler execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -488,7 +465,6 @@ pub struct SoracloudAppendJournalRequestV1 {
     #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
-
 impl SoracloudAppendJournalRequestV1 {
     /// Validate append-journal request fields.
     ///
@@ -501,7 +477,6 @@ impl SoracloudAppendJournalRequestV1 {
         )
     }
 }
-
 /// Response to appended journal material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -512,7 +487,6 @@ pub struct SoracloudAppendJournalResponseV1 {
     /// Content-addressed digest of the materialized journal payload.
     pub artifact_hash: Hash,
 }
-
 impl SoracloudAppendJournalResponseV1 {
     /// Validate append-journal response fields.
     ///
@@ -526,7 +500,6 @@ impl SoracloudAppendJournalResponseV1 {
         )
     }
 }
-
 /// Publish deterministic checkpoint material for the active handler execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -540,7 +513,6 @@ pub struct SoracloudPublishCheckpointRequestV1 {
     #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
-
 impl SoracloudPublishCheckpointRequestV1 {
     /// Validate publish-checkpoint request fields.
     ///
@@ -553,7 +525,6 @@ impl SoracloudPublishCheckpointRequestV1 {
         )
     }
 }
-
 /// Response to published checkpoint material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -564,7 +535,6 @@ pub struct SoracloudPublishCheckpointResponseV1 {
     /// Content-addressed digest of the materialized checkpoint payload.
     pub artifact_hash: Hash,
 }
-
 impl SoracloudPublishCheckpointResponseV1 {
     /// Validate publish-checkpoint response fields.
     ///
@@ -578,7 +548,6 @@ impl SoracloudPublishCheckpointResponseV1 {
         )
     }
 }
-
 /// Read authoritative service config material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -589,7 +558,6 @@ pub struct SoracloudReadConfigRequestV1 {
     /// Stable config identifier relative to the authoritative service-config set.
     pub config_name: String,
 }
-
 impl SoracloudReadConfigRequestV1 {
     /// Validate config request fields.
     ///
@@ -603,7 +571,6 @@ impl SoracloudReadConfigRequestV1 {
         )
     }
 }
-
 /// Response to an authoritative service config lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -617,7 +584,6 @@ pub struct SoracloudReadConfigResponseV1 {
     #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
-
 impl SoracloudReadConfigResponseV1 {
     /// Validate config response fields.
     ///
@@ -631,7 +597,6 @@ impl SoracloudReadConfigResponseV1 {
         )
     }
 }
-
 /// Read an authoritative service secret envelope for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -642,7 +607,6 @@ pub struct SoracloudReadSecretEnvelopeRequestV1 {
     /// Stable secret identifier relative to the authoritative service-secret set.
     pub secret_name: String,
 }
-
 impl SoracloudReadSecretEnvelopeRequestV1 {
     /// Validate secret-envelope request fields.
     ///
@@ -656,7 +620,6 @@ impl SoracloudReadSecretEnvelopeRequestV1 {
         )
     }
 }
-
 /// Response to an authoritative service secret-envelope lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -668,7 +631,6 @@ pub struct SoracloudReadSecretEnvelopeResponseV1 {
     #[norito(default)]
     pub envelope: Option<SecretEnvelopeV1>,
 }
-
 impl SoracloudReadSecretEnvelopeResponseV1 {
     /// Validate secret-envelope response fields.
     ///
@@ -681,7 +643,6 @@ impl SoracloudReadSecretEnvelopeResponseV1 {
         Ok(())
     }
 }
-
 /// Read node-local secret material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -692,7 +653,6 @@ pub struct SoracloudReadSecretRequestV1 {
     /// Stable secret identifier relative to the node-local secret root.
     pub secret_name: String,
 }
-
 impl SoracloudReadSecretRequestV1 {
     /// Validate node-local secret request fields.
     ///
@@ -706,7 +666,6 @@ impl SoracloudReadSecretRequestV1 {
         )
     }
 }
-
 /// Response to a node-local secret lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -720,7 +679,6 @@ pub struct SoracloudReadSecretResponseV1 {
     #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
-
 impl SoracloudReadSecretResponseV1 {
     /// Validate node-local secret response fields.
     ///
@@ -734,7 +692,6 @@ impl SoracloudReadSecretResponseV1 {
         )
     }
 }
-
 /// Read node-local credential material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -745,7 +702,6 @@ pub struct SoracloudReadCredentialRequestV1 {
     /// Stable credential identifier relative to the node-local credential root.
     pub credential_name: String,
 }
-
 impl SoracloudReadCredentialRequestV1 {
     /// Validate node-local credential request fields.
     ///
@@ -759,7 +715,6 @@ impl SoracloudReadCredentialRequestV1 {
         )
     }
 }
-
 /// Response to a node-local credential lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -773,7 +728,6 @@ pub struct SoracloudReadCredentialResponseV1 {
     #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
-
 impl SoracloudReadCredentialResponseV1 {
     /// Validate node-local credential response fields.
     ///
@@ -787,7 +741,6 @@ impl SoracloudReadCredentialResponseV1 {
         )
     }
 }
-
 /// Perform a bounded, policy-checked egress fetch from an allowlisted host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -803,7 +756,6 @@ pub struct SoracloudEgressFetchRequestV1 {
     #[norito(default)]
     pub expected_hash: Option<Hash>,
 }
-
 impl SoracloudEgressFetchRequestV1 {
     /// Validate egress fetch request fields.
     ///
@@ -829,7 +781,6 @@ impl SoracloudEgressFetchRequestV1 {
         Ok(())
     }
 }
-
 /// Response to a bounded egress fetch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -848,7 +799,6 @@ pub struct SoracloudEgressFetchResponseV1 {
     /// Content-addressed hash of `body`.
     pub body_hash: Hash,
 }
-
 impl SoracloudEgressFetchResponseV1 {
     /// Validate egress fetch response fields.
     ///
@@ -882,7 +832,6 @@ impl SoracloudEgressFetchResponseV1 {
         Ok(())
     }
 }
-
 fn validate_soracloud_host_state_key(
     manifest: &'static str,
     state_key: &str,
@@ -893,7 +842,6 @@ fn validate_soracloud_host_state_key(
     }
     Ok(())
 }
-
 fn validate_soracloud_host_artifact_path(
     manifest: &'static str,
     artifact_path: &str,
@@ -908,7 +856,6 @@ fn validate_soracloud_host_artifact_path(
     }
     Ok(())
 }
-
 fn validate_soracloud_host_found_payload(
     manifest: &'static str,
     found: bool,
@@ -929,7 +876,6 @@ fn validate_soracloud_host_found_payload(
     }
     Ok(())
 }
-
 /// Purpose bound into a V1 Soracloud runtime provenance signature.
 ///
 /// The discriminants are immutable wire identifiers used by external signing
@@ -942,14 +888,12 @@ pub enum SoracloudRuntimeProvenancePurposeV1 {
     /// Sign a canonical Inrou host advertisement.
     InrouHostAdvert = 2,
 }
-
 impl SoracloudRuntimeProvenancePurposeV1 {
     /// Return the immutable V1 wire identifier.
     #[must_use]
     pub const fn wire_id(self) -> u8 {
         self as u8
     }
-
     /// Decode one immutable V1 wire identifier.
     ///
     /// # Errors
@@ -966,12 +910,10 @@ impl SoracloudRuntimeProvenancePurposeV1 {
         }
     }
 }
-
 /// An unknown Soracloud runtime provenance-purpose identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 #[error("unknown Soracloud runtime provenance purpose V1")]
 pub struct SoracloudRuntimeProvenancePurposeErrorV1;
-
 /// Encode one versioned, domain- and purpose-separated runtime provenance preimage.
 ///
 /// The returned bytes are the canonical Norito encoding of this exact tuple:
@@ -994,7 +936,6 @@ pub fn encode_soracloud_runtime_provenance_preimage_v1(
         canonical_payload.to_vec(),
     ))
 }
-
 /// Invalid canonical Soracloud runtime provenance preimage.
 ///
 /// Variants intentionally carry no input bytes or decoded values so callers
@@ -1014,7 +955,6 @@ pub enum SoracloudRuntimeProvenancePreimageErrorV1 {
     #[error("Soracloud runtime provenance purpose mismatch")]
     PurposeMismatch,
 }
-
 /// Validate one canonical runtime provenance preimage against an expected purpose.
 ///
 /// Decoding uses Norito's canonical decode limits derived from `preimage.len()`;
@@ -1044,7 +984,6 @@ pub fn validate_soracloud_runtime_provenance_preimage_v1(
     }
     Ok(())
 }
-
 /// Encode the canonical provenance signature payload for deployment bundles.
 ///
 /// The payload layout is the canonical Norito encoding of
@@ -1057,7 +996,6 @@ pub fn encode_bundle_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(bundle)
 }
-
 /// Encode the canonical provenance signature payload for app-level infrastructure manifests.
 ///
 /// The payload layout is the canonical Norito encoding of
@@ -1070,7 +1008,6 @@ pub fn encode_app_infra_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(manifest)
 }
-
 /// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1089,7 +1026,6 @@ pub fn encode_bundle_with_materials_provenance_payload(
         initial_service_secrets.clone(),
     ))
 }
-
 /// Encode the canonical provenance signature payload for service rollback.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1103,7 +1039,6 @@ pub fn encode_rollback_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, target_version))
 }
-
 /// Encode the canonical provenance signature payload for service config upserts.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1118,7 +1053,6 @@ pub fn encode_set_service_config_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, config_name, value_json.clone()))
 }
-
 /// Encode the canonical provenance signature payload for service config deletions.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1132,7 +1066,6 @@ pub fn encode_delete_service_config_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, config_name))
 }
-
 /// Encode the canonical provenance signature payload for service secret upserts.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1147,7 +1080,6 @@ pub fn encode_set_service_secret_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, secret_name, secret.clone()))
 }
-
 /// Encode the canonical provenance signature payload for service secret deletions.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1161,7 +1093,6 @@ pub fn encode_delete_service_secret_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, secret_name))
 }
-
 /// Encode the canonical provenance signature payload for state mutations.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1198,31 +1129,26 @@ pub fn encode_state_mutation_provenance_payload(
         fhe_input_admission_proof,
     ))
 }
-
 /// Return the Soracloud FHE input-admission public-input schema hash.
 #[must_use]
 pub fn soracloud_fhe_input_admission_public_inputs_schema_hash_v1() -> [u8; 32] {
     Hash::new(SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1).into()
 }
-
 /// Return the Soracloud FHE public-key proof public-input schema hash.
 #[must_use]
 pub fn soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
     Hash::new(SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1).into()
 }
-
 /// Return the Soracloud FHE bootstrap-key proof public-input schema hash.
 #[must_use]
 pub fn soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
     Hash::new(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1).into()
 }
-
 /// Return the Soracloud FHE full-bootstrap execution proof public-input schema hash.
 #[must_use]
 pub fn soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
     Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1).into()
 }
-
 /// Derive the canonical statement hash for Soracloud FHE input admission.
 ///
 /// The statement layout is a nested Norito tuple in this exact field order:
@@ -1271,7 +1197,6 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash(
         BfvCiphertextBoundModeV1::ExactResidualMultiple,
     )
 }
-
 /// Derive a canonical statement hash for Soracloud FHE input admission with bound mode.
 ///
 /// The statement layout is a nested Norito tuple in this exact field order:
@@ -1323,7 +1248,6 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
     ))?;
     Ok(Hash::new(&payload))
 }
-
 /// Encode the canonical provenance signature payload for rollout advancement.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1346,7 +1270,6 @@ pub fn encode_rollout_provenance_payload(
         governance_tx_hash,
     ))
 }
-
 /// Encode the canonical provenance signature payload for apartment deployment.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1361,7 +1284,6 @@ pub fn encode_agent_deploy_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(manifest, lease_ticks, autonomy_budget_units))
 }
-
 /// Encode the canonical provenance signature payload for apartment lease renewal.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1375,7 +1297,6 @@ pub fn encode_agent_lease_renew_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, lease_ticks))
 }
-
 /// Encode the canonical provenance signature payload for apartment restart requests.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1389,7 +1310,6 @@ pub fn encode_agent_restart_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, reason))
 }
-
 /// Encode the canonical provenance signature payload for apartment policy revocation.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1404,7 +1324,6 @@ pub fn encode_agent_policy_revoke_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, capability, reason))
 }
-
 /// Encode the canonical provenance signature payload for apartment wallet spend requests.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1419,7 +1338,6 @@ pub fn encode_agent_wallet_spend_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, asset_definition, amount.clone()))
 }
-
 /// Encode the canonical provenance signature payload for apartment wallet approvals.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1433,7 +1351,6 @@ pub fn encode_agent_wallet_approve_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, request_id))
 }
-
 /// Encode the canonical provenance signature payload for apartment mailbox send requests.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1449,7 +1366,6 @@ pub fn encode_agent_message_send_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(from_apartment, to_apartment, channel, payload))
 }
-
 /// Encode the canonical provenance signature payload for apartment mailbox acknowledgements.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1463,7 +1379,6 @@ pub fn encode_agent_message_ack_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, message_id))
 }
-
 /// Encode the canonical provenance signature payload for apartment artifact allowlists.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1478,7 +1393,6 @@ pub fn encode_agent_artifact_allow_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(apartment_name, artifact_hash, provenance_hash))
 }
-
 /// Encode the canonical provenance signature payload for apartment autonomy runs.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1507,7 +1421,6 @@ pub fn encode_agent_autonomy_run_provenance_payload(
         canonical_workflow_input_json.as_deref(),
     ))
 }
-
 fn canonical_agent_workflow_input_json_for_payload(
     workflow_input_json: Option<&str>,
 ) -> Option<String> {
@@ -1523,7 +1436,6 @@ fn canonical_agent_workflow_input_json_for_payload(
     }
     Some(trimmed.to_owned())
 }
-
 /// Derive the deterministic runtime request commitment for an approved Soracloud agent autonomy run.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -1548,7 +1460,6 @@ pub fn derive_agent_autonomy_request_commitment(
         process_generation,
     )))
 }
-
 /// Encode the canonical provenance signature payload for training-job start.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1582,7 +1493,6 @@ pub fn encode_training_job_start_provenance_payload(
         storage_budget_bytes,
     ))
 }
-
 /// Encode the canonical provenance signature payload for training checkpoint updates.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1605,7 +1515,6 @@ pub fn encode_training_job_checkpoint_provenance_payload(
         metrics_hash,
     ))
 }
-
 /// Encode the canonical provenance signature payload for training retry requests.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1620,7 +1529,6 @@ pub fn encode_training_job_retry_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, job_id, reason))
 }
-
 /// Encode the canonical provenance signature payload for model-artifact registration.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1650,7 +1558,6 @@ pub fn encode_model_artifact_register_provenance_payload(
         provenance_attestation_hash,
     ))
 }
-
 /// Encode the canonical provenance signature payload for model-weight registration.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1684,7 +1591,6 @@ pub fn encode_model_weight_register_provenance_payload(
         provenance_attestation_hash,
     ))
 }
-
 /// Encode the canonical provenance signature payload for model-weight promotion.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1707,7 +1613,6 @@ pub fn encode_model_weight_promote_provenance_payload(
         gate_report_hash,
     ))
 }
-
 /// Encode the canonical provenance signature payload for model-weight rollback.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1723,7 +1628,6 @@ pub fn encode_model_weight_rollback_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, model_name, target_version, reason))
 }
-
 /// Encode the canonical provenance signature payload for uploaded-model bundle registration.
 ///
 /// The payload layout is the Norito encoding of `bundle`.
@@ -1736,7 +1640,6 @@ pub fn encode_uploaded_model_bundle_register_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&bundle)
 }
-
 /// Encode the canonical provenance signature payload for uploaded-model bundle finalization.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1772,7 +1675,6 @@ pub fn encode_uploaded_model_finalize_provenance_payload(
         provenance_attestation_hash,
     ))
 }
-
 /// Encode the canonical provenance signature payload for HF shared-lease joins.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1804,7 +1706,6 @@ pub fn encode_hf_shared_lease_join_provenance_payload(
         base_fee.clone(),
     ))
 }
-
 /// Encode the canonical provenance signature payload for HF shared-lease leaves.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1829,7 +1730,6 @@ pub fn encode_hf_shared_lease_leave_provenance_payload(
         apartment_name,
     ))
 }
-
 /// Encode the canonical provenance signature payload for HF shared-lease renewals.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -1861,7 +1761,6 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
         base_fee.clone(),
     ))
 }
-
 /// Encode the canonical provenance signature payload for model-host adverts.
 ///
 /// The payload layout is the canonical Norito encoding of
@@ -1874,7 +1773,6 @@ pub fn encode_model_host_advertise_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(capability)
 }
-
 /// Encode the canonical provenance signature payload for model-host heartbeats.
 ///
 /// The semantic payload is the canonical Norito tuple
@@ -1896,7 +1794,6 @@ pub fn encode_model_host_heartbeat_provenance_payload(
         &canonical_payload,
     )
 }
-
 /// Encode the canonical provenance signature payload for model-host withdrawals.
 ///
 /// The payload layout is the canonical Norito encoding of `validator_account_id`.
@@ -1908,7 +1805,6 @@ pub fn encode_model_host_withdraw_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(validator_account_id)
 }
-
 /// Encode the canonical provenance signature payload for Inrou host adverts.
 ///
 /// The semantic payload is the canonical Norito encoding of
@@ -1927,7 +1823,6 @@ pub fn encode_inrou_host_advertise_provenance_payload(
         &canonical_payload,
     )
 }
-
 /// Encode the canonical provenance signature payload for Inrou host withdrawals.
 ///
 /// The payload layout is the canonical Norito encoding of `validator_account_id`.
@@ -1939,7 +1834,6 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(validator_account_id)
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct FheJobRunProvenancePayloadV1<'a> {
     service_name: &'a str,
@@ -1950,7 +1844,6 @@ struct FheJobRunProvenancePayloadV1<'a> {
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
 }
-
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is the canonical Norito encoding of
@@ -1980,7 +1873,6 @@ pub fn encode_fhe_job_run_provenance_payload(
         full_bootstrap_execution_proofs,
     })
 }
-
 /// Encode the canonical provenance payload for first FHE policy registration.
 ///
 /// # Errors
@@ -1991,7 +1883,6 @@ pub fn encode_fhe_policy_register_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name.to_owned(), material.clone()))
 }
-
 /// Encode the canonical provenance payload for monotonic FHE policy rotation.
 ///
 /// # Errors
@@ -2007,7 +1898,6 @@ pub fn encode_fhe_policy_rotate_provenance_payload(
         material.clone(),
     ))
 }
-
 /// Encode the canonical provenance payload for permanent FHE policy revocation.
 ///
 /// # Errors
@@ -2018,7 +1908,6 @@ pub fn encode_fhe_policy_revoke_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name.to_owned(), expected_active.clone()))
 }
-
 /// Encode the canonical provenance signature payload for decryption requests.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -2033,7 +1922,6 @@ pub fn encode_decryption_request_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, policy, request))
 }
-
 /// Encode the canonical provenance signature payload for ciphertext queries.
 ///
 /// The payload layout is the canonical Norito encoding of `CiphertextQuerySpecV1`.

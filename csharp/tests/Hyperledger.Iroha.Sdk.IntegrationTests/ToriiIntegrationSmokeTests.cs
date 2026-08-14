@@ -133,7 +133,9 @@ public sealed class ToriiIntegrationSmokeTests
         }
 
         var faucetPuzzle = await client.GetAccountFaucetPuzzleAsync(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("scrypt-leading-zero-bits-v1", faucetPuzzle.Algorithm);
+        Assert.Equal("scrypt-leading-zero-bits-v2", faucetPuzzle.Algorithm);
+        Assert.NotNull(faucetPuzzle.NetworkId);
+        Assert.True(faucetPuzzle.DifficultyBits > 0);
         Assert.True(faucetPuzzle.AnchorHeight > 0);
         Assert.True(faucetPuzzle.MaxAnchorAgeBlocks > 0);
 

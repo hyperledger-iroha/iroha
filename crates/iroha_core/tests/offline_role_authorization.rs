@@ -1,7 +1,4 @@
 //! Public-boundary tests for Offline role-derived authorization.
-
-use std::{collections::BTreeSet, num::NonZeroU64};
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,20 +15,17 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
-
+use std::{collections::BTreeSet, num::NonZeroU64};
 const POLICY_PERMISSION: &str = "CanManageOfflineDeviceAttestationPolicy";
 const ESCROW_PERMISSION: &str = "CanManageOfflineEscrow";
 const POLICY_STATE_KEY: &str = "offline_device_attestation_policy";
 const TEST_TIME_MS: u64 = 1_800_000_000_000;
-
 fn exact_permission(name: &str) -> Permission {
     Permission::new(name.to_owned(), Json::new(()))
 }
-
 fn permission_with_payload(name: &str, payload: Json) -> Permission {
     Permission::new(name.to_owned(), payload)
 }
-
 fn role_with_permission(name: &str, permission: Permission) -> (RoleId, Role) {
     let id: RoleId = name.parse().expect("valid test role id");
     let role = Role::new(id.clone(), ALICE_ID.clone())
@@ -39,7 +33,6 @@ fn role_with_permission(name: &str, permission: Permission) -> (RoleId, Role) {
         .build(&ALICE_ID);
     (id, role)
 }
-
 fn base_world(roles: impl IntoIterator<Item = Role>) -> World {
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&BOB_ID);
@@ -52,7 +45,6 @@ fn base_world(roles: impl IntoIterator<Item = Role>) -> World {
         roles,
     )
 }
-
 fn world_with_direct(permission: Permission) -> World {
     let mut world = base_world([]);
     world
@@ -60,7 +52,6 @@ fn world_with_direct(permission: Permission) -> World {
         .insert(ALICE_ID.clone(), BTreeSet::from([permission]));
     world
 }
-
 fn world_with_role(
     permission: Permission,
     assigned_to: Option<AccountId>,
@@ -77,7 +68,6 @@ fn world_with_role(
     }
     world
 }
-
 fn state(world: World) -> State {
     State::new_for_testing(
         world,
@@ -85,7 +75,6 @@ fn state(world: World) -> State {
         LiveQueryStore::start_test(),
     )
 }
-
 fn header() -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero block height"),
@@ -96,7 +85,6 @@ fn header() -> BlockHeader {
         0,
     )
 }
-
 fn valid_policy() -> OfflineDeviceAttestationPolicy {
     OfflineDeviceAttestationPolicy {
         version: 1,
@@ -113,7 +101,6 @@ fn valid_policy() -> OfflineDeviceAttestationPolicy {
         require_android_app_policy: false,
     }
 }
-
 fn assert_rejection_contains(
     result: Result<(), iroha_data_model::isi::error::InstructionExecutionError>,
     expected_reason: &str,
@@ -125,7 +112,6 @@ fn assert_rejection_contains(
         "{context}: expected {expected_reason}, got {error}"
     );
 }
-
 #[test]
 fn exact_direct_and_assigned_role_grants_update_policy() {
     let worlds = [
@@ -136,7 +122,6 @@ fn exact_direct_and_assigned_role_grants_update_policy() {
             true,
         ),
     ];
-
     for world in worlds {
         let expected = valid_policy();
         let state = state(world);
@@ -145,7 +130,6 @@ fn exact_direct_and_assigned_role_grants_update_policy() {
         SetOfflineDeviceAttestationPolicy::new(expected.clone())
             .execute(&ALICE_ID, &mut transaction)
             .expect("an exact direct or assigned-role grant must authorize policy updates");
-
         let key: StatePath = POLICY_STATE_KEY.parse().expect("valid policy state key");
         let stored = transaction
             .world()
@@ -157,7 +141,6 @@ fn exact_direct_and_assigned_role_grants_update_policy() {
         assert_eq!(actual, expected);
     }
 }
-
 #[test]
 fn stale_unassigned_and_same_name_payload_grants_fail_closed() {
     let cases = [
@@ -206,7 +189,6 @@ fn stale_unassigned_and_same_name_payload_grants_fail_closed() {
             ),
         ),
     ];
-
     for (context, world) in cases {
         let state = state(world);
         let mut block = state.block(header());
@@ -217,7 +199,6 @@ fn stale_unassigned_and_same_name_payload_grants_fail_closed() {
             "offline_reason::unauthorized_controller",
             context,
         );
-
         let key: StatePath = POLICY_STATE_KEY.parse().expect("valid policy state key");
         assert!(
             transaction
@@ -229,7 +210,6 @@ fn stale_unassigned_and_same_name_payload_grants_fail_closed() {
         );
     }
 }
-
 fn invalid_registration(account_id: AccountId) -> OfflineDeviceAttestationRegistration {
     let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&[
         0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
@@ -241,7 +221,6 @@ fn invalid_registration(account_id: AccountId) -> OfflineDeviceAttestationRegist
     .expect("canonical P-256 generator point");
     let report = b"deliberately-invalid-report".to_vec();
     let evidence = b"deliberately-invalid-evidence".to_vec();
-
     OfflineDeviceAttestationRegistration {
         version: 0,
         platform: "ios-appattest".to_owned(),
@@ -270,7 +249,6 @@ fn invalid_registration(account_id: AccountId) -> OfflineDeviceAttestationRegist
         expires_at_ms: TEST_TIME_MS + 1,
     }
 }
-
 #[test]
 fn delegated_registration_honors_only_exact_assigned_escrow_grants() {
     let authorized_worlds = [
@@ -292,7 +270,6 @@ fn delegated_registration_honors_only_exact_assigned_escrow_grants() {
             "exact delegated escrow grant",
         );
     }
-
     let rejected_worlds = [
         world_with_role(exact_permission(ESCROW_PERMISSION), None, true),
         world_with_role(
@@ -317,7 +294,6 @@ fn delegated_registration_honors_only_exact_assigned_escrow_grants() {
             "inexact or unassigned delegated escrow grant",
         );
     }
-
     let state = state(base_world([]));
     let mut block = state.block(header());
     let mut transaction = block.transaction();

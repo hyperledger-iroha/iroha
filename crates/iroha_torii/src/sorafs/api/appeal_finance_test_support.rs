@@ -1,29 +1,24 @@
 // Appeal-finance and authenticated publisher endpoint test support.
-
 struct OrderbookAccountFixture {
     account: AccountId,
     keypair: KeyPair,
 }
-
 struct OrderbookAuthFixture {
     provider: OrderbookAccountFixture,
     buyer: OrderbookAccountFixture,
 }
-
 fn orderbook_account(seed: u8) -> OrderbookAccountFixture {
     let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("derive orderbook auth fixture keypair");
     let account = AccountId::of(keypair.public_key().clone());
     OrderbookAccountFixture { account, keypair }
 }
-
 fn orderbook_auth_fixture() -> OrderbookAuthFixture {
     OrderbookAuthFixture {
         provider: orderbook_account(0xA1),
         buyer: orderbook_account(0xB1),
     }
 }
-
 fn orderbook_world(auth: &OrderbookAuthFixture) -> World {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&auth.provider.account);
@@ -31,7 +26,6 @@ fn orderbook_world(auth: &OrderbookAuthFixture) -> World {
     let buyer = Account::new(auth.buyer.account.clone()).build(&auth.buyer.account);
     World::with([domain], [provider, buyer], [])
 }
-
 fn orderbook_world_with_appeal_finance_asset(auth: &OrderbookAuthFixture) -> World {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&auth.provider.account);
@@ -59,7 +53,6 @@ fn orderbook_world_with_appeal_finance_asset(auth: &OrderbookAuthFixture) -> Wor
         [],
     )
 }
-
 fn orderbook_world_with_moderation_operator(auth: &OrderbookAuthFixture) -> World {
     let mut world = orderbook_world_with_appeal_finance_asset(auth);
     world.grant_role_for_tests(
@@ -68,7 +61,6 @@ fn orderbook_world_with_moderation_operator(auth: &OrderbookAuthFixture) -> Worl
     );
     world
 }
-
 fn grant_governance_publication_roles(world: &mut World, auth: &OrderbookAuthFixture) {
     for role in [
         sorafs_transparency_source_publisher_role_id(),
@@ -78,19 +70,16 @@ fn grant_governance_publication_roles(world: &mut World, auth: &OrderbookAuthFix
         world.grant_role_for_tests(auth.provider.account.clone(), role.clone());
     }
 }
-
 fn orderbook_world_with_governance_publishers(auth: &OrderbookAuthFixture) -> World {
     let mut world = orderbook_world(auth);
     grant_governance_publication_roles(&mut world, auth);
     world
 }
-
 fn orderbook_world_with_appeal_finance_publisher(auth: &OrderbookAuthFixture) -> World {
     let mut world = orderbook_world_with_appeal_finance_asset(auth);
     grant_governance_publication_roles(&mut world, auth);
     world
 }
-
 fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, OrderbookAuthFixture) {
     let auth = orderbook_auth_fixture();
     let mut app =
@@ -104,7 +93,6 @@ fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, Orderbook
     }
     (app, temp_dir, auth)
 }
-
 fn sorafs_app_state_with_orderbook_auth_without_screening_authority()
 -> (SharedAppState, TempDir, OrderbookAuthFixture) {
     let auth = orderbook_auth_fixture();
@@ -132,7 +120,6 @@ fn sorafs_app_state_with_orderbook_auth_without_screening_authority()
     }
     (app, temp_dir, auth)
 }
-
 fn sorafs_app_state_with_moderation_operator_auth()
 -> (SharedAppState, TempDir, OrderbookAuthFixture) {
     let auth = orderbook_auth_fixture();
@@ -147,7 +134,6 @@ fn sorafs_app_state_with_moderation_operator_auth()
     }
     (app, temp_dir, auth)
 }
-
 fn sorafs_app_state_with_appeal_finance_governance_publisher()
 -> (SharedAppState, TempDir, OrderbookAuthFixture) {
     let auth = orderbook_auth_fixture();
@@ -176,14 +162,40 @@ fn sorafs_app_state_with_appeal_finance_governance_publisher()
     }
     (app, temp_dir, auth)
 }
-
 fn sorafs_app_state_with_privacy_aggregate_schedule()
 -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+    struct TestPrivacyCyclePrfProvider;
+
+    impl sorafs_node::PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
+        fn derive_cycle_output(
+            &self,
+            request: &sorafs_node::PrivacyCyclePrfRequestV1,
+        ) -> Result<sorafs_node::PrivacyCyclePrfOutputV1, sorafs_node::PrivacyCyclePrfProviderErrorV1>
+        {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"sorafs.torii.test-privacy-cycle-prf.v1");
+            hasher.update(&request.binding_digest());
+            sorafs_node::PrivacyCyclePrfOutputV1::new(*hasher.finalize().as_bytes())
+                .map_err(|_| sorafs_node::PrivacyCyclePrfProviderErrorV1::Internal)
+        }
+    }
+
+    impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyCyclePrfProvider {
+        fn handle(&self) -> &str {
+            "threshold-prf:transparency:primary"
+        }
+
+        fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+            Ok(TransparencyRuntimeProviderQualificationV1::new(
+                1, [0xC7; 32],
+            ))
+        }
+    }
+
     #[derive(Default)]
     struct TestPrivacyReleaseAnchor {
         heads: Mutex<BTreeMap<[u8; 32], PrivacyReleaseAnchorHeadV1>>,
     }
-
     impl PrivacyReleaseAnchorV1 for TestPrivacyReleaseAnchor {
         fn finalized_head(
             &self,
@@ -197,7 +209,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
                 .copied()
                 .unwrap_or_else(|| PrivacyReleaseAnchorHeadV1::genesis(query_id)))
         }
-
         fn compare_and_set_finalized_head(
             &self,
             expected: PrivacyReleaseAnchorHeadV1,
@@ -224,37 +235,31 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             Ok(())
         }
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyReleaseAnchor {
         fn handle(&self) -> &str {
             "governance-dag:transparency:primary"
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             Ok(TransparencyRuntimeProviderQualificationV1::new(
                 1, [0xD7; 32],
             ))
         }
     }
-
     #[derive(Default)]
     struct TestTransparencyLeaderLeaseProvider {
         active: Mutex<Option<sorafs_node::TransparencyLeaderLeaseGrantV1>>,
         fencing_token: AtomicU64,
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for TestTransparencyLeaderLeaseProvider {
         fn handle(&self) -> &str {
             "sealed-cas:transparency:leader-primary"
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             Ok(TransparencyRuntimeProviderQualificationV1::new(
                 1, [0xE7; 32],
             ))
         }
     }
-
     impl sorafs_node::TransparencyLeaderLeaseProviderV1 for TestTransparencyLeaderLeaseProvider {
         fn acquire(
             &self,
@@ -299,7 +304,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             *active = Some(grant.clone());
             Ok(grant)
         }
-
         fn renew(
             &self,
             _request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
@@ -309,7 +313,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
         > {
             Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
         }
-
         fn release(
             &self,
             request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
@@ -342,7 +345,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
         }
     }
-
     let auth = orderbook_auth_fixture();
     let mut app =
         mk_app_state_for_tests_with_world(orderbook_world_with_governance_publishers(&auth));
@@ -367,6 +369,14 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
                 publish_delay_seconds: 10,
             }))
             .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
+            .privacy_cycle_prf_provider_binding(Some(
+                TransparencyRuntimeProviderBindingV1::try_new(
+                    "threshold-prf:transparency:primary",
+                    1,
+                    [0xC7; 32],
+                )
+                .expect("valid test threshold-PRF provider binding"),
+            ))
             .privacy_release_anchor_provider_binding(Some(
                 TransparencyRuntimeProviderBindingV1::try_new(
                     "governance-dag:transparency:primary",
@@ -393,6 +403,7 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
             )),
         with_test_fenced_privacy_runtime(
             NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
                 .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default()))
                 .with_transparency_leader_lease_provider(Arc::new(
                     TestTransparencyLeaderLeaseProvider::default(),
@@ -408,7 +419,6 @@ fn sorafs_app_state_with_privacy_aggregate_schedule()
     }
     (app, temp_dir, auth)
 }
-
 fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
     SoraFsAppealFinanceReportV1 {
         version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -453,7 +463,6 @@ fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
         no_show_juror_ids: vec!["juror-c".to_string()],
     }
 }
-
 fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
     let report = appeal_finance_report_fixture();
     SoraFsAppealFinanceWeeklyRollupV1::from_reports(
@@ -466,11 +475,9 @@ fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
     )
     .expect("appeal finance weekly rollup fixture")
 }
-
 fn appeal_finance_report_body(report: SoraFsAppealFinanceReportV1) -> Bytes {
     Bytes::from(norito::json::to_vec(&report).expect("encode appeal finance report"))
 }
-
 fn assert_governance_publish_provenance(
     app: &SharedAppState,
     payload_kind: &str,
@@ -500,7 +507,6 @@ fn assert_governance_publish_provenance(
         Some(origin)
     );
 }
-
 async fn assert_forbidden_role(response: Response, required_role: &str) {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let value = api_test_response_json(response).await;
@@ -511,13 +517,11 @@ async fn assert_forbidden_role(response: Response, required_role: &str) {
         "forbidden response must name the exact required role"
     );
 }
-
 fn privacy_aggregate_source_event_request(
     event_id: &str,
 ) -> TransparencyPrivacyAggregateSourceEventRequestDto {
     privacy_aggregate_source_event_request_at(event_id, 1_800_000_010)
 }
-
 fn privacy_aggregate_source_event_request_at(
     event_id: &str,
     occurred_at_unix: u64,
@@ -543,7 +547,6 @@ fn privacy_aggregate_source_event_request_at(
         policy_digest_hex: hex::encode([0xC0; 32]),
     }
 }
-
 fn privacy_aggregate_source_event_body(
     request: TransparencyPrivacyAggregateSourceEventRequestDto,
 ) -> Bytes {
@@ -551,7 +554,6 @@ fn privacy_aggregate_source_event_body(
         norito::json::to_vec(&request).expect("encode privacy aggregate source event request"),
     )
 }
-
 fn privacy_aggregate_publish_due_request(
     _now_unix: u64,
 ) -> TransparencyPrivacyAggregatePublishDueRequestDto {
@@ -562,7 +564,6 @@ fn privacy_aggregate_publish_due_request(
         idempotency_key: "privacy-publish-cycle-1".to_string(),
     }
 }
-
 fn privacy_aggregate_publish_due_body(
     request: TransparencyPrivacyAggregatePublishDueRequestDto,
 ) -> Bytes {
@@ -570,7 +571,6 @@ fn privacy_aggregate_publish_due_body(
         norito::json::to_vec(&request).expect("encode privacy aggregate publish due request"),
     )
 }
-
 fn privacy_aggregate_api_cycle_config() -> sorafs_node::PrivacyAggregateCycleConfig {
     sorafs_node::PrivacyAggregateCycleConfig {
         query_id: [0xB0; 32],
@@ -605,7 +605,6 @@ fn privacy_aggregate_api_cycle_config() -> sorafs_node::PrivacyAggregateCycleCon
         metadata: Vec::new(),
     }
 }
-
 fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregatePolicyConfig {
     let cycle = privacy_aggregate_api_cycle_config();
     sorafs_node::config::PrivacyAggregatePolicyConfig::new(
@@ -619,11 +618,9 @@ fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregat
     )
     .expect("privacy API test policy")
 }
-
 fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
     Bytes::from(norito::json::to_vec(&rollup).expect("encode appeal finance weekly rollup"))
 }
-
 fn appeal_finance_deposit_request(
     payer_account: &AccountId,
     destination_account: &AccountId,
@@ -644,11 +641,9 @@ fn appeal_finance_deposit_request(
         evidence_hashes_hex: Some(vec![Hash::prehashed([0xD1; Hash::LENGTH]).to_string()]),
     }
 }
-
 fn appeal_finance_deposit_body(req: AppealFinanceDepositRequestDto) -> Bytes {
     Bytes::from(norito::json::to_vec(&req).expect("encode appeal finance deposit request"))
 }
-
 fn appeal_finance_deposit_confirm_request(
     req: &AppealFinanceDepositRequestDto,
     escrow_id_hex: String,
@@ -667,13 +662,11 @@ fn appeal_finance_deposit_confirm_request(
         evidence_hashes_hex: req.evidence_hashes_hex.clone(),
     }
 }
-
 fn appeal_finance_deposit_confirm_body(req: AppealFinanceDepositConfirmRequestDto) -> Bytes {
     Bytes::from(
         norito::json::to_vec(&req).expect("encode appeal finance deposit confirmation request"),
     )
 }
-
 fn appeal_finance_deposit_settle_body(
     deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
     outcome: &str,
@@ -687,7 +680,6 @@ fn appeal_finance_deposit_settle_body(
         norito::json::to_vec(&req).expect("encode appeal finance deposit settlement request"),
     )
 }
-
 fn assert_appeal_finance_reconciliation_digest_hex(value: &Value) -> &str {
     let digest = value
         .json_str(&["reconciliation_digest_hex"])
@@ -696,26 +688,21 @@ fn assert_appeal_finance_reconciliation_digest_hex(value: &Value) -> &str {
     assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     digest
 }
-
 fn assert_hex_32(value: &str) {
     assert_eq!(value.len(), 64);
     assert!(value.bytes().all(|byte| byte.is_ascii_hexdigit()));
 }
-
 struct TestAppealFinanceRuntimeSigner {
     handle: String,
     keypair: KeyPair,
 }
-
 impl crate::SoraFsAppealFinanceTransactionSigner for TestAppealFinanceRuntimeSigner {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn public_key(&self) -> Result<PublicKey, crate::SoraFsAppealFinanceSigningError> {
         Ok(self.keypair.public_key().clone())
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -728,7 +715,6 @@ impl crate::SoraFsAppealFinanceTransactionSigner for TestAppealFinanceRuntimeSig
             ),
         )
     }
-
     fn sign(
         &self,
         payload: iroha_data_model::transaction::TransactionPayload,
@@ -738,14 +724,12 @@ impl crate::SoraFsAppealFinanceTransactionSigner for TestAppealFinanceRuntimeSig
             .map_err(|_| crate::SoraFsAppealFinanceSigningError::Refused)
     }
 }
-
 #[derive(Debug)]
 struct TestAppealFinanceCheckpointRuntime {
     identity: AppealFinanceCheckpointRuntimeIdentityV1,
     signing_key: SigningKey,
     latest: Mutex<Option<AppealFinanceSealedCheckpointRecordV1>>,
 }
-
 impl TestAppealFinanceCheckpointRuntime {
     fn new(seed: u8) -> Self {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);
@@ -759,7 +743,6 @@ impl TestAppealFinanceCheckpointRuntime {
             latest: Mutex::new(None),
         }
     }
-
     fn authentication_policy(&self) -> AppealFinanceCheckpointAuthenticationPolicyV1 {
         AppealFinanceCheckpointAuthenticationPolicyV1 {
             version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
@@ -770,7 +753,6 @@ impl TestAppealFinanceCheckpointRuntime {
         }
     }
 }
-
 impl AppealFinanceCheckpointRuntime for TestAppealFinanceCheckpointRuntime {
     fn identity(
         &self,
@@ -778,14 +760,12 @@ impl AppealFinanceCheckpointRuntime for TestAppealFinanceCheckpointRuntime {
     {
         Ok(self.identity.clone())
     }
-
     fn sign_digest(
         &self,
         digest: [u8; 32],
     ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
         Ok(self.signing_key.sign(&digest).to_bytes())
     }
-
     fn load_latest(
         &self,
     ) -> Result<Option<AppealFinanceSealedCheckpointRecordV1>, AppealFinanceCheckpointExternalError>
@@ -795,7 +775,6 @@ impl AppealFinanceCheckpointRuntime for TestAppealFinanceCheckpointRuntime {
             .map(|latest| latest.clone())
             .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)
     }
-
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -817,7 +796,6 @@ impl AppealFinanceCheckpointRuntime for TestAppealFinanceCheckpointRuntime {
         Ok(())
     }
 }
-
 fn configure_appeal_finance_settlement_submitter(
     app: &mut SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -865,7 +843,6 @@ fn configure_appeal_finance_settlement_submitter(
         worker_scan_interval: Duration::from_millis(30_000),
     });
 }
-
 fn appeal_finance_deposit_status_record(
     seller: AccountId,
     buyer: Option<AccountId>,
@@ -895,14 +872,12 @@ fn appeal_finance_deposit_status_record(
         resolution: None,
     }
 }
-
 fn appeal_finance_asset_lock_world(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
 ) -> World {
     appeal_finance_asset_lock_world_with_scale(auth, asset_definition_id, 9)
 }
-
 fn appeal_finance_asset_lock_world_with_scale(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
@@ -929,7 +904,6 @@ fn appeal_finance_asset_lock_world_with_scale(
         [],
     )
 }
-
 fn sorafs_app_state_with_appeal_finance_asset_lock_world(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
@@ -947,7 +921,6 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world(
     }
     (app, temp_dir)
 }
-
 fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_moderation_operator(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
@@ -967,7 +940,6 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_moderation_operator
     }
     (app, temp_dir)
 }
-
 fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
     auth: &OrderbookAuthFixture,
     asset_definition_id: &AssetDefinitionId,
@@ -998,7 +970,6 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
     }
     (app, temp_dir)
 }
-
 fn seed_appeal_finance_asset_lock(
     app: &SharedAppState,
     expected: &AppealFinanceDepositExpectation,
@@ -1032,7 +1003,6 @@ fn seed_appeal_finance_asset_lock(
     block_hashes.push_for_tests(block_hash);
     block_hashes.commit_for_tests();
 }
-
 fn seed_empty_appeal_finance_finalized_block(app: &SharedAppState) {
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero block height"),
@@ -1051,7 +1021,6 @@ fn seed_empty_appeal_finance_finalized_block(app: &SharedAppState) {
     block_hashes.push_for_tests(block_hash);
     block_hashes.commit_for_tests();
 }
-
 fn drawdown_appeal_finance_asset_lock(
     app: &SharedAppState,
     expected: &AppealFinanceDepositExpectation,
@@ -1091,7 +1060,6 @@ fn drawdown_appeal_finance_asset_lock(
     block_hashes.push_for_tests(block_hash);
     block_hashes.commit_for_tests();
 }
-
 fn cancel_appeal_finance_asset_lock(
     app: &SharedAppState,
     expected: &AppealFinanceDepositExpectation,
@@ -1130,7 +1098,6 @@ fn cancel_appeal_finance_asset_lock(
     block_hashes.push_for_tests(block_hash);
     block_hashes.commit_for_tests();
 }
-
 fn sorafs_app_state_with_confirmed_appeal_deposit(
     case_id: &str,
     round_id: &str,

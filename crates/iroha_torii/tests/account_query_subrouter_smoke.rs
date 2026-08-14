@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Torii exposes account query routes via the merged sub-router.
 #![cfg(feature = "app_api")]
-
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -12,10 +11,8 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
 };
 use iroha_test_samples::ALICE_ID;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn account_query_subrouter_exposes_endpoints() {
@@ -29,7 +26,6 @@ async fn account_query_subrouter_exposes_endpoints() {
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
     let app = torii.router();
     let account_segment = fixtures::TX_QUERY_ACCOUNT.canonical.clone();
-
     // GET assets
     let resp = fixtures::request(
         &app,
@@ -45,7 +41,6 @@ async fn account_query_subrouter_exposes_endpoints() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     // POST assets/query
     let resp = fixtures::request(
         &app,
@@ -63,7 +58,6 @@ async fn account_query_subrouter_exposes_endpoints() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     // POST transactions/query
     let resp = fixtures::request(
         &app,
@@ -81,7 +75,6 @@ async fn account_query_subrouter_exposes_endpoints() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     // GET permissions
     let resp = fixtures::request(
         &app,

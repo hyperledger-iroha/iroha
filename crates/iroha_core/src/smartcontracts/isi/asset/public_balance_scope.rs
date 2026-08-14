@@ -7,7 +7,6 @@ fn dataspace_id_for_alias_segment(
     }
     catalog.by_alias(dataspace_alias).map(|entry| entry.id)
 }
-
 fn asset_definition_home_dataspace_id(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
@@ -23,7 +22,6 @@ fn asset_definition_home_dataspace_id(
                 .as_ref()
                 .map(|domain| domain.dataspace().as_ref().to_owned())
         });
-
     match dataspace_alias {
         Some(alias) => {
             dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
@@ -34,7 +32,6 @@ fn asset_definition_home_dataspace_id(
         None => None,
     }
 }
-
 fn coherent_execution_dataspace(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<Option<DataSpaceId>, Error> {
@@ -45,7 +42,6 @@ fn coherent_execution_dataspace(
     }
     Ok(state_transaction.current_dataspace_id)
 }
-
 /// Validate a proof- or governance-committed transparent balance partition.
 ///
 /// This path never consults account bindings or mutable asset aliases. A
@@ -110,7 +106,6 @@ pub(crate) fn validate_committed_public_balance_scope(
     }
     Ok(())
 }
-
 fn bare_restricted_asset_home_dataspace_hint(
     state_transaction: &StateTransaction<'_, '_>,
     asset_id: &AssetId,
@@ -121,7 +116,6 @@ fn bare_restricted_asset_home_dataspace_hint(
     ) {
         return Ok(None);
     }
-
     let definition = state_transaction
         .world
         .asset_definition(asset_id.definition())
@@ -129,13 +123,11 @@ fn bare_restricted_asset_home_dataspace_hint(
     if definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted {
         return Ok(None);
     }
-
     Ok(
         asset_definition_home_dataspace_id(state_transaction, &definition)
             .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL),
     )
 }
-
 fn ensure_global_asset_write_on_authoritative_route(
     state_transaction: &StateTransaction<'_, '_>,
     definition_id: &AssetDefinitionId,
@@ -148,13 +140,11 @@ fn ensure_global_asset_write_on_authoritative_route(
     if definition.balance_scope_policy() != AssetBalancePolicy::Global {
         return Ok(());
     }
-
     let home_dataspace = asset_definition_home_dataspace_id(state_transaction, &definition)
         .unwrap_or(DataSpaceId::UNIVERSAL);
     let route_dataspace = state_transaction
         .current_dataspace_id
         .or(state_transaction.world.current_dataspace_id);
-
     if let Some(route_dataspace) = route_dataspace
         && route_dataspace != home_dataspace
         && route_dataspace != DataSpaceId::UNIVERSAL
@@ -168,6 +158,5 @@ fn ensure_global_asset_write_on_authoritative_route(
             .into(),
         ));
     }
-
     Ok(())
 }

@@ -1,6 +1,3 @@
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -10,7 +7,8 @@ use crate::{
     },
     nexus::LaneId,
 };
-
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Role for a chunk within an erasure-coded stripe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -26,7 +24,6 @@ pub enum ChunkRole {
     /// Parity across rows/stripes (2D column parity).
     StripeParity,
 }
-
 /// Chunk commitment record produced during manifest generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -54,7 +51,6 @@ pub struct ChunkCommitment {
     /// Zero-based group identifier for the chunk (stripe index for row/column parity).
     pub group_id: u32,
 }
-
 impl ChunkCommitment {
     /// Convenience constructor.
     #[must_use]
@@ -78,7 +74,6 @@ impl ChunkCommitment {
             0,
         )
     }
-
     /// Constructor that accepts an explicit role and group identifier.
     #[must_use]
     pub fn new_with_role(
@@ -103,7 +98,6 @@ impl ChunkCommitment {
         }
     }
 }
-
 /// Canonical Norito manifest emitted after chunking a DA blob.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -162,7 +156,6 @@ pub struct DaManifestV1 {
     /// Unix timestamp (seconds) when the manifest was generated.
     pub issued_at_unix: u64,
 }
-
 impl DaManifestV1 {
     /// Current manifest version number.
     pub const VERSION: u16 = 1;

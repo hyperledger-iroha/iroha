@@ -6,11 +6,9 @@
 //! Implementations can use these helpers to negotiate capabilities,
 //! announce manifests, and move ciphertext payloads while delegating
 //! cryptographic verification to `iroha_crypto::streaming`.
-
 #[cfg(feature = "quic")]
 /// QUIC transport runtime for Norito Streaming.
 pub mod quic;
-
 #[cfg(feature = "quic")]
 pub use quic::{
     CapabilityNegotiation, CertificateFingerprint, ControlStreamDirection, EndpointRole,

@@ -1,6 +1,4 @@
 use blake3::Hasher as Blake3Hasher;
-use iroha_data_model::proof::VerifyingKeyBox;
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use halo2_proofs::{
     halo2curves::{
@@ -11,6 +9,7 @@ use halo2_proofs::{
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_crypto::Hash as CryptoHash;
+use iroha_data_model::proof::VerifyingKeyBox;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_data_model::{
     NetworkId,
@@ -65,7 +64,6 @@ pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2
 /// the current commitment count. A full tree has no populated lower frontier
 /// slots; its separately persisted current root retains the completed root.
 pub type ConfidentialTreeFrontierV2 = [Option<[u8; 32]>; CONFIDENTIAL_TREE_DEPTH_V2];
-
 /// Unsigned range families shared by the public schema, standalone circuits,
 /// and Kagemusha recursive adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +75,6 @@ pub(crate) enum ConfidentialUnsignedRangeV1 {
     /// Commitment-tree leaf position.
     LeafIndex,
 }
-
 impl ConfidentialUnsignedRangeV1 {
     /// Exact bit width enforced by every circuit projection.
     pub(crate) const fn bits(self) -> usize {
@@ -88,7 +85,6 @@ impl ConfidentialUnsignedRangeV1 {
         }
     }
 }
-
 macro_rules! define_confidential_public_input_spec {
     (
         $(#[$struct_meta:meta])*
@@ -115,30 +111,25 @@ macro_rules! define_confidential_public_input_spec {
                 pub $member: T,
             )+
         }
-
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         $field_visibility enum $field {
             $first_variant,
             $($variant,)+
         }
-
         impl $field {
             $field_visibility const ALL: [Self; $count] = [
                 Self::$first_variant,
                 $(Self::$variant,)+
             ];
-
             $field_visibility const fn index(self) -> usize {
                 self as usize
             }
-
             $field_visibility const fn name(self) -> &'static str {
                 match self {
                     Self::$first_variant => $first_name,
                     $(Self::$variant => $name,)+
                 }
             }
-
             $field_visibility const fn range(self) -> Option<ConfidentialUnsignedRangeV1> {
                 match self {
                     Self::$first_variant => $first_range,
@@ -146,12 +137,10 @@ macro_rules! define_confidential_public_input_spec {
                 }
             }
         }
-
         impl<T> $values<T> {
             $field_visibility fn into_array(self) -> [T; $count] {
                 [self.$first_member, $(self.$member,)+]
             }
-
             $field_visibility fn from_array(values: [T; $count]) -> Self {
                 let [$first_member, $($member,)+] = values;
                 Self {
@@ -159,7 +148,6 @@ macro_rules! define_confidential_public_input_spec {
                     $($member,)+
                 }
             }
-
             $field_visibility fn try_map<U, E>(
                 self,
                 mut map: impl FnMut($field, T) -> Result<U, E>,
@@ -170,7 +158,6 @@ macro_rules! define_confidential_public_input_spec {
                 })
             }
         }
-
         #[doc = concat!("Public-column order generated from `", stringify!($values), "`.")]
         $constant_visibility const $order: &[&str] = &[$first_name, $($name,)+];
         #[doc = concat!("Canonical schema generated from `", stringify!($values), "`.")]
@@ -219,7 +206,6 @@ define_confidential_public_input_spec! {
         OperationTag => operation_tag,
             "operation_tag", "Top-up operation tag.", None;
 }
-
 define_confidential_public_input_spec! {
     /// Typed full-unshield public-input contract.
     pub(crate) struct ConfidentialUnshieldFullPublicInputsV1;
@@ -248,7 +234,6 @@ define_confidential_public_input_spec! {
         NetworkTag => network_tag,
             "network_tag", "Exact-network domain tag.", None;
 }
-
 define_confidential_public_input_spec! {
     /// Typed change-unshield public-input contract.
     pub(crate) struct ConfidentialUnshieldChangePublicInputsV1;
@@ -317,7 +302,6 @@ pub const CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3: u64 = u64::from_le_bytes(*b"c
 pub const CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfpayr03");
 /// Domain word for Kagemusha operation tags.
 pub const CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfoper03");
-
 /// Canonical Merkle authentication path used by confidential circuits.
 #[derive(Debug, Clone)]
 pub struct ConfidentialMerklePathV2 {
@@ -330,7 +314,6 @@ pub struct ConfidentialMerklePathV2 {
     /// Root authenticated by the complete path.
     pub root: [u8; 32],
 }
-
 impl ConfidentialMerklePathV2 {
     /// Consume the path without bypassing its zeroizing `Drop` implementation.
     ///
@@ -348,7 +331,6 @@ impl ConfidentialMerklePathV2 {
         )
     }
 }
-
 /// Secret opening and tree position for one transfer input.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -362,7 +344,6 @@ pub struct ConfidentialTransferInputV2 {
     /// Commitment-tree leaf index.
     pub leaf_index: usize,
 }
-
 /// Secret opening and owner binding for one transfer output.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -374,7 +355,6 @@ pub struct ConfidentialTransferOutputV2 {
     /// Recipient owner tag.
     pub owner_tag: [u8; 32],
 }
-
 /// Generated confidential transfer evidence and its public outputs.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -388,7 +368,6 @@ pub struct ConfidentialTransferProofV2 {
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
 }
-
 /// Generated Kagemusha top-up shield evidence and public state.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -406,7 +385,6 @@ pub struct KagemushaTopUpShieldProofV2 {
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
 }
-
 /// Secret opening and tree position for one unshield input.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -420,7 +398,6 @@ pub struct ConfidentialUnshieldInputV2 {
     /// Commitment-tree leaf index.
     pub leaf_index: usize,
 }
-
 /// Generated full-unshield evidence and public state.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -432,7 +409,6 @@ pub struct ConfidentialUnshieldProofV2 {
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
 }
-
 /// Secret opening for the optional unshield-change output.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -442,7 +418,6 @@ pub struct ConfidentialUnshieldOutputV3 {
     /// Secret change-note nonce.
     pub rho: [u8; 32],
 }
-
 /// Generated V3 full-or-change unshield evidence and public state.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -456,7 +431,6 @@ pub struct ConfidentialUnshieldProofV3 {
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialMerklePathV2 {
     fn zeroize(&mut self) {
@@ -466,14 +440,12 @@ impl Zeroize for ConfidentialMerklePathV2 {
         self.root.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialMerklePathV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialTransferInputV2 {
     fn zeroize(&mut self) {
@@ -483,14 +455,12 @@ impl Zeroize for ConfidentialTransferInputV2 {
         self.leaf_index.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialTransferInputV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialTransferOutputV2 {
     fn zeroize(&mut self) {
@@ -499,14 +469,12 @@ impl Zeroize for ConfidentialTransferOutputV2 {
         self.owner_tag.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialTransferOutputV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialUnshieldInputV2 {
     fn zeroize(&mut self) {
@@ -516,14 +484,12 @@ impl Zeroize for ConfidentialUnshieldInputV2 {
         self.leaf_index.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialUnshieldInputV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialUnshieldOutputV3 {
     fn zeroize(&mut self) {
@@ -531,35 +497,28 @@ impl Zeroize for ConfidentialUnshieldOutputV3 {
         self.rho.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialUnshieldOutputV3 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Return whether an identifier exactly selects the production confidential-transfer circuit.
 pub fn is_confidential_transfer_v2_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
 }
-
 /// Return whether an identifier exactly selects the production Kagemusha top-up circuit.
 pub fn is_kagemusha_topup_shield_v2_circuit_id(raw: &str) -> bool {
     raw == KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
 }
-
 /// Return whether an identifier exactly selects the production full-unshield circuit.
 pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 type ConfidentialV2ProvingKey = super::halo2_backend::ProvingKey;
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 type ConfidentialV2VerifyingKey = super::halo2_backend::VerifyingKey;
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn build_confidential_v2_vk_box<C>(
     k: u32,
@@ -581,7 +540,6 @@ where
         bytes,
     ))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn ensure_confidential_v2_vk_box_shape(
     vk_box: &VerifyingKeyBox,
@@ -608,12 +566,10 @@ fn ensure_confidential_v2_vk_box_shape(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the process-cached canonical confidential-transfer verifying key.
 pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
-
     CACHE
         .get_or_init(|| {
             build_confidential_v2_vk_box(
@@ -626,12 +582,10 @@ pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
         })
         .clone()
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the process-cached canonical Kagemusha top-up verifying key.
 pub fn kagemusha_topup_shield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
-
     CACHE
         .get_or_init(|| {
             build_confidential_v2_vk_box(
@@ -644,7 +598,6 @@ pub fn kagemusha_topup_shield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
         })
         .clone()
 }
-
 /// Require an exact canonical Kagemusha top-up verifying key.
 pub fn ensure_kagemusha_topup_shield_v2_canonical_vk_box(
     vk_box: &VerifyingKeyBox,
@@ -692,7 +645,6 @@ pub fn ensure_kagemusha_topup_shield_v2_canonical_vk_box(
         )
     }
 }
-
 /// Require an exact canonical confidential-transfer verifying key.
 pub fn ensure_confidential_transfer_v2_canonical_vk_box(
     vk_box: &VerifyingKeyBox,
@@ -732,12 +684,10 @@ pub fn ensure_confidential_transfer_v2_canonical_vk_box(
         )
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the process-cached canonical full-unshield verifying key.
 pub fn confidential_unshield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
-
     CACHE
         .get_or_init(|| {
             build_confidential_v2_vk_box(
@@ -750,7 +700,6 @@ pub fn confidential_unshield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
         })
         .clone()
 }
-
 /// Require an exact canonical full-unshield verifying key.
 pub fn ensure_confidential_unshield_v2_canonical_vk_box(
     vk_box: &VerifyingKeyBox,
@@ -798,12 +747,10 @@ pub fn ensure_confidential_unshield_v2_canonical_vk_box(
         )
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the process-cached canonical change-unshield verifying key.
 pub fn confidential_unshield_v3_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
-
     CACHE
         .get_or_init(|| {
             build_confidential_v2_vk_box(
@@ -816,7 +763,6 @@ pub fn confidential_unshield_v3_vk_box() -> Result<VerifyingKeyBox, String> {
         })
         .clone()
 }
-
 /// Require an exact canonical change-unshield verifying key.
 pub fn ensure_confidential_unshield_v3_canonical_vk_box(
     vk_box: &VerifyingKeyBox,
@@ -864,7 +810,6 @@ pub fn ensure_confidential_unshield_v3_canonical_vk_box(
         )
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_v2_vk_record(
     name: &str,
@@ -890,7 +835,6 @@ fn confidential_v2_vk_record(
     record.namespace = name.to_owned();
     Ok(record)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Build an active verifier record for confidential transfer V2.
 pub fn confidential_transfer_v2_vk_record(
@@ -905,7 +849,6 @@ pub fn confidential_transfer_v2_vk_record(
         confidential_transfer_v2_vk_box()?,
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Build an active verifier record for Kagemusha top-up shielding V2.
 pub fn kagemusha_topup_shield_v2_vk_record(
@@ -920,7 +863,6 @@ pub fn kagemusha_topup_shield_v2_vk_record(
         kagemusha_topup_shield_v2_vk_box()?,
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Build an active verifier record for confidential unshield V2.
 pub fn confidential_unshield_v2_vk_record(
@@ -935,7 +877,6 @@ pub fn confidential_unshield_v2_vk_record(
         confidential_unshield_v2_vk_box()?,
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Build an active verifier record for confidential unshield V3.
 pub fn confidential_unshield_v3_vk_record(
@@ -950,12 +891,10 @@ pub fn confidential_unshield_v3_vk_record(
         confidential_unshield_v3_vk_box()?,
     )
 }
-
 /// Return whether an identifier exactly selects the production change-unshield circuit.
 pub fn is_confidential_unshield_v3_circuit_id(raw: &str) -> bool {
     raw == CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID
 }
-
 /// Parse the exact public columns from a confidential-transfer proof envelope.
 pub fn parse_transfer_public_inputs(
     proof_bytes: &[u8],
@@ -984,7 +923,6 @@ pub fn parse_transfer_public_inputs(
         columns[8][0],
     ))
 }
-
 /// Parse the exact public columns from a Kagemusha top-up proof envelope.
 pub fn parse_kagemusha_topup_shield_public_inputs_v2(
     proof_bytes: &[u8],
@@ -996,7 +934,6 @@ pub fn parse_kagemusha_topup_shield_public_inputs_v2(
     )
     .map(KagemushaTopUpShieldPublicInputsV2::from_array)
 }
-
 /// Parse the exact public columns from a full-unshield proof envelope.
 pub fn parse_unshield_public_inputs(
     proof_bytes: &[u8],
@@ -1026,7 +963,6 @@ pub fn parse_unshield_public_inputs(
         public.network_tag,
     ))
 }
-
 /// Parse the exact public columns from a change-unshield proof envelope.
 pub fn parse_unshield_public_inputs_v3(
     proof_bytes: &[u8],
@@ -1059,7 +995,6 @@ pub fn parse_unshield_public_inputs_v3(
         public.network_tag,
     ))
 }
-
 fn exact_confidential_public_columns<const N: usize>(
     proof_bytes: &[u8],
     label: &str,
@@ -1084,7 +1019,6 @@ fn exact_confidential_public_columns<const N: usize>(
     }
     Ok(values)
 }
-
 fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
     let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).ok()?;
     envelope.validate_for_admission().ok()?;
@@ -1097,21 +1031,18 @@ fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8
             .map(|proof| proof.public_inputs),
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) fn scalar_from_repr(bytes: [u8; 32]) -> Option<Scalar> {
     let mut repr = <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
     repr.as_mut().copy_from_slice(&bytes);
     Option::from(Scalar::from_repr(repr))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn scalar_to_repr_bytes(value: Scalar) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(value.to_repr().as_ref());
     out
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn hash_to_scalar(label: &[u8], parts: &[&[u8]]) -> Scalar {
     let mut counter = 0u64;
@@ -1132,14 +1063,12 @@ fn hash_to_scalar(label: &[u8], parts: &[&[u8]]) -> Scalar {
         counter = counter.wrapping_add(1);
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn scalar_from_u128(amount: u128) -> Scalar {
     let mut repr = <Scalar as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
     repr.as_mut()[..16].copy_from_slice(&amount.to_le_bytes());
     Scalar::from_repr(repr).expect("u128 always fits inside Pasta Fp")
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) type ConfidentialPoseidonSpecV3<F> =
     halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec<
@@ -1147,7 +1076,6 @@ pub(in crate::zk) type ConfidentialPoseidonSpecV3<F> =
         CONFIDENTIAL_POSEIDON_T_V3,
         CONFIDENTIAL_POSEIDON_RATE_V3,
     >;
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) type ConfidentialNativePoseidonV3<F> = snark_verifier::util::hash::Poseidon<
     F,
@@ -1155,18 +1083,15 @@ pub(in crate::zk) type ConfidentialNativePoseidonV3<F> = snark_verifier::util::h
     CONFIDENTIAL_POSEIDON_T_V3,
     CONFIDENTIAL_POSEIDON_RATE_V3,
 >;
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) trait ConfidentialPoseidonFieldV3:
     snark_verifier::util::arithmetic::FieldExt + Sized + 'static
 {
     fn confidential_poseidon_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Self>;
-
     fn with_confidential_poseidon_v3<R>(
         callback: impl FnOnce(&mut ConfidentialNativePoseidonV3<Self>) -> R,
     ) -> R;
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_poseidon_fp_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Scalar> {
     static SPEC: std::sync::OnceLock<ConfidentialPoseidonSpecV3<Scalar>> =
@@ -1179,7 +1104,6 @@ fn confidential_poseidon_fp_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Sca
         >()
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 std::thread_local! {
     static CONFIDENTIAL_POSEIDON_FP_V3: std::cell::RefCell<ConfidentialNativePoseidonV3<Scalar>> =
@@ -1188,20 +1112,17 @@ std::thread_local! {
             confidential_poseidon_fp_spec_v3().clone(),
         ));
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl ConfidentialPoseidonFieldV3 for Scalar {
     fn confidential_poseidon_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Self> {
         confidential_poseidon_fp_spec_v3()
     }
-
     fn with_confidential_poseidon_v3<R>(
         callback: impl FnOnce(&mut ConfidentialNativePoseidonV3<Self>) -> R,
     ) -> R {
         CONFIDENTIAL_POSEIDON_FP_V3.with(|hasher| callback(&mut hasher.borrow_mut()))
     }
 }
-
 #[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
 fn confidential_poseidon_fq_spec_v3()
 -> &'static ConfidentialPoseidonSpecV3<halo2_proofs::halo2curves::pasta::Fq> {
@@ -1216,7 +1137,6 @@ fn confidential_poseidon_fq_spec_v3()
         >()
     })
 }
-
 #[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
 std::thread_local! {
     static CONFIDENTIAL_POSEIDON_FQ_V3: std::cell::RefCell<
@@ -1226,20 +1146,17 @@ std::thread_local! {
         confidential_poseidon_fq_spec_v3().clone(),
     ));
 }
-
 #[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
 impl ConfidentialPoseidonFieldV3 for halo2_proofs::halo2curves::pasta::Fq {
     fn confidential_poseidon_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Self> {
         confidential_poseidon_fq_spec_v3()
     }
-
     fn with_confidential_poseidon_v3<R>(
         callback: impl FnOnce(&mut ConfidentialNativePoseidonV3<Self>) -> R,
     ) -> R {
         CONFIDENTIAL_POSEIDON_FQ_V3.with(|hasher| callback(&mut hasher.borrow_mut()))
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) fn confidential_poseidon_hash_v3<F>(domain: u64, inputs: &[F]) -> F
 where
@@ -1255,7 +1172,6 @@ where
         hasher.squeeze()
     })
 }
-
 /// Shared confidential relation expressions used by standalone proofs and
 /// Kagemusha's recursive Eq step. Keeping this module as the single source of
 /// the note, nullifier, and Merkle formulas prevents the recursive circuit from
@@ -1268,7 +1184,6 @@ pub(super) mod confidential_relation_gadget {
         poseidon::hasher::PoseidonHasher,
         utils::BigPrimeField,
     };
-
     /// Shared secure Poseidon gadget for confidential and recursive relations.
     pub(in crate::zk) struct ConfidentialPoseidonChipV3<F: BigPrimeField> {
         hasher: PoseidonHasher<
@@ -1277,7 +1192,6 @@ pub(super) mod confidential_relation_gadget {
             { super::CONFIDENTIAL_POSEIDON_RATE_V3 },
         >,
     }
-
     impl<F> ConfidentialPoseidonChipV3<F>
     where
         F: BigPrimeField + super::ConfidentialPoseidonFieldV3,
@@ -1289,7 +1203,6 @@ pub(super) mod confidential_relation_gadget {
             hasher.initialize_consts(ctx, range.gate());
             Self { hasher }
         }
-
         /// Hash a fixed-arity list with an explicit use-domain and arity word.
         pub(in crate::zk) fn hash(
             &self,
@@ -1306,7 +1219,6 @@ pub(super) mod confidential_relation_gadget {
         }
     }
 }
-
 /// Secure-permutation confidential relations built entirely in one constrained
 /// `halo2-base` execution trace.
 ///
@@ -1316,6 +1228,17 @@ pub(super) mod confidential_relation_gadget {
 /// bridges between advice cells and virtual-region hashes.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) mod secure_relation_v3 {
+    use super::{
+        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
+        CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
+        CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, ConfidentialMerklePathV2,
+        ConfidentialTransferWitnessV2, ConfidentialUnshieldChangePublicInputV1,
+        ConfidentialUnshieldChangePublicInputsV1, ConfidentialUnshieldFullPublicInputV1,
+        ConfidentialUnshieldFullPublicInputsV1, ConfidentialUnshieldWitnessV2,
+        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, KagemushaTopUpPublicInputV1,
+        KagemushaTopUpShieldPublicInputsV2, KagemushaTopUpShieldWitnessV2, Scalar,
+        confidential_relation_gadget, scalar_from_repr, scalar_from_u128,
+    };
     use halo2_base::{
         AssignedValue, Context, QuantumCell,
         gates::{
@@ -1330,25 +1253,10 @@ pub(in crate::zk) mod secure_relation_v3 {
         plonk::{Circuit, ConstraintSystem, Error as PlonkError},
     };
     use zeroize::Zeroize as _;
-
-    use super::{
-        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-        CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-        CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, ConfidentialMerklePathV2,
-        ConfidentialTransferWitnessV2, ConfidentialUnshieldChangePublicInputV1,
-        ConfidentialUnshieldChangePublicInputsV1, ConfidentialUnshieldFullPublicInputV1,
-        ConfidentialUnshieldFullPublicInputsV1, ConfidentialUnshieldWitnessV2,
-        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, KagemushaTopUpPublicInputV1,
-        KagemushaTopUpShieldPublicInputsV2, KagemushaTopUpShieldWitnessV2, Scalar,
-        confidential_relation_gadget, scalar_from_repr, scalar_from_u128,
-    };
-
     const MINIMUM_UNUSABLE_ROWS: usize = 9;
-
     fn canonical_scalar(bytes: [u8; 32], label: &str) -> Result<Scalar, String> {
         scalar_from_repr(bytes).ok_or_else(|| format!("{label} must be a canonical Pasta scalar"))
     }
-
     fn canonical_nonzero_scalar(bytes: [u8; 32], label: &str) -> Result<Scalar, String> {
         canonical_scalar(bytes, label).and_then(|value| {
             if value == Scalar::ZERO {
@@ -1358,7 +1266,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             }
         })
     }
-
     fn validate_path<const DEPTH: usize>(
         path: &ConfidentialMerklePathV2,
         label: &str,
@@ -1385,7 +1292,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         canonical_scalar(path.root, &format!("{label} root"))?;
         Ok(())
     }
-
     pub(super) fn validate_transfer_witness<const DEPTH: usize>(
         witness: &ConfidentialTransferWitnessV2,
     ) -> Result<(), String> {
@@ -1402,7 +1308,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         canonical_nonzero_scalar(witness.network_tag, "transfer network tag")?;
         validate_path::<DEPTH>(&witness.input_0_path, "transfer input 0 path")?;
         validate_path::<DEPTH>(&witness.input_1_path, "transfer input 1 path")?;
-
         if witness.include_input_1 {
             if witness.input_1_amount == 0 || witness.input_1_rho == [0; 32] {
                 return Err("present transfer input 1 must have non-zero amount and rho".to_owned());
@@ -1416,7 +1321,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 "absent transfer input 1 opening must use the canonical all-zero form".to_owned(),
             );
         }
-
         if witness.include_output_1 {
             if witness.output_1_amount == 0 || witness.output_1_rho == [0; 32] {
                 return Err(
@@ -1434,7 +1338,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         Ok(())
     }
-
     pub(super) fn validate_topup_witness<const DEPTH: usize>(
         witness: &KagemushaTopUpShieldWitnessV2,
     ) -> Result<(), String> {
@@ -1470,7 +1373,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         Ok(())
     }
-
     fn validate_unshield_inputs<const DEPTH: usize>(
         include_input_1: bool,
         input_amounts: [u128; 2],
@@ -1502,7 +1404,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         Ok(())
     }
-
     fn validate_unshield_v2_witness<const DEPTH: usize>(
         witness: &ConfidentialUnshieldWitnessV2,
     ) -> Result<(), String> {
@@ -1517,7 +1418,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             [&witness.input_0_path, &witness.input_1_path],
         )
     }
-
     pub(super) fn validate_unshield_v3_witness<const DEPTH: usize>(
         witness: &ConfidentialUnshieldWitnessV3,
     ) -> Result<(), String> {
@@ -1542,7 +1442,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         Ok(())
     }
-
     fn assert_equal(
         ctx: &mut halo2_base::Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -1554,7 +1453,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             .gate()
             .assert_is_const(ctx, &difference, &Scalar::ZERO);
     }
-
     fn assert_nonzero(
         ctx: &mut halo2_base::Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -1563,7 +1461,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         let is_zero = range.gate().is_zero(ctx, value);
         range.gate().assert_is_const(ctx, &is_zero, &Scalar::ZERO);
     }
-
     fn constrain_optional_nonzero(
         ctx: &mut halo2_base::Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -1574,7 +1471,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         let absent = range.gate().not(ctx, present);
         assert_equal(ctx, range, is_zero, absent);
     }
-
     fn note_hash(
         ctx: &mut halo2_base::Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -1591,7 +1487,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             &[amount, rho, owner, asset],
         )
     }
-
     fn nullifier_hash(
         ctx: &mut halo2_base::Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -1608,7 +1503,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             &[spend, rho, asset, network],
         )
     }
-
     fn merkle_root<const DEPTH: usize>(
         ctx: &mut halo2_base::Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -1658,7 +1552,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         assert_equal(ctx, range, node, carried_root);
         node
     }
-
     fn wipe_builder(builder: &mut BaseCircuitBuilder<Scalar>) {
         for phase in &mut builder.core_mut().phase_manager {
             for context in &mut phase.threads {
@@ -1674,7 +1567,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         builder.clear();
     }
-
     /// Already-constrained transfer cells needed by recursive StepEq.
     #[derive(Clone, Debug)]
     pub(crate) struct AssignedConfidentialTransferStepV4 {
@@ -1691,7 +1583,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         /// Constrained change-output presence bit.
         pub(crate) has_change: AssignedValue<Scalar>,
     }
-
     /// Assign the complete secure transfer relation into an existing Eq/Fp
     /// builder and retain the exact amount cells needed by StepEq.
     ///
@@ -1706,7 +1597,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             validate_transfer_witness::<DEPTH>(witness)?;
         }
         let gate = range.gate();
-
         let present_input_1 =
             ctx.load_witness(if witness.is_some_and(|value| value.include_input_1) {
                 Scalar::ONE
@@ -1721,7 +1611,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             });
         gate.assert_bit(ctx, present_input_1);
         gate.assert_bit(ctx, present_output_1);
-
         let amounts = [
             witness.map_or(0, |value| value.input_0_amount),
             witness.map_or(0, |value| value.input_1_amount),
@@ -1739,7 +1628,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         let input_sum = gate.add(ctx, amounts[0], amounts[1]);
         let output_sum = gate.add(ctx, amounts[2], amounts[3]);
         assert_equal(ctx, &range, input_sum, output_sum);
-
         let rho_bytes = [
             witness.map_or([0; 32], |value| value.input_0_rho),
             witness.map_or([0; 32], |value| value.input_1_rho),
@@ -1807,7 +1695,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         constrain_optional_nonzero(ctx, &range, diversifiers[1], present_input_1);
         constrain_optional_nonzero(ctx, &range, output_owners[1], present_output_1);
-
         let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
         let input_owners = diversifiers.map(|diversifier| {
             poseidon.hash(
@@ -1862,14 +1749,12 @@ pub(in crate::zk) mod secure_relation_v3 {
         for value in [commitments[0], commitments[2], nullifiers[0]] {
             assert_nonzero(ctx, &range, value);
         }
-
         let duplicate_nullifier = gate.is_equal(ctx, nullifiers[0], nullifiers[1]);
         let selected_duplicate = gate.mul(ctx, present_input_1, duplicate_nullifier);
         gate.assert_is_const(ctx, &selected_duplicate, &Scalar::ZERO);
         let duplicate_output = gate.is_equal(ctx, commitments[2], commitments[3]);
         let selected_duplicate = gate.mul(ctx, present_output_1, duplicate_output);
         gate.assert_is_const(ctx, &selected_duplicate, &Scalar::ZERO);
-
         let public_input_1 = gate.mul(ctx, present_input_1, commitments[1]);
         let root_0 = merkle_root::<DEPTH>(
             ctx,
@@ -1886,7 +1771,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.map(|value| &value.input_1_path),
         );
         assert_equal(ctx, &range, root_0, root_1);
-
         let public_nullifier_1 = gate.mul(ctx, present_input_1, nullifiers[1]);
         let public_output_1 = gate.mul(ctx, present_output_1, commitments[3]);
         Ok(AssignedConfidentialTransferStepV4 {
@@ -1908,7 +1792,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             has_change: present_output_1,
         })
     }
-
     /// Existing standalone transfer assignment wrapper.
     pub(crate) fn assign_confidential_transfer_v3<const DEPTH: usize>(
         ctx: &mut Context<Scalar>,
@@ -1917,7 +1800,6 @@ pub(in crate::zk) mod secure_relation_v3 {
     ) -> Result<[AssignedValue<Scalar>; 9], String> {
         Ok(assign_confidential_transfer_step_v4::<DEPTH>(ctx, range, witness)?.public)
     }
-
     fn transfer_builder<const DEPTH: usize>(
         witness: Option<&ConfidentialTransferWitnessV2>,
         k: usize,
@@ -1932,7 +1814,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
         Ok(builder)
     }
-
     /// Assign the complete secure Kagemusha top-up relation into an existing
     /// Eq/Fp builder and return named public cells.
     pub(crate) fn assign_kagemusha_topup_shield_v3<const DEPTH: usize>(
@@ -1944,7 +1825,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             validate_topup_witness::<DEPTH>(witness)?;
         }
         let gate = range.gate();
-
         let amount = ctx.load_witness(scalar_from_u128(witness.map_or(0, |value| value.amount)));
         range.range_check(
             ctx,
@@ -1980,7 +1860,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         range.range_check(ctx, leaf_index, leaf_index_bits);
         let index_bits = gate.num_to_bits(ctx, leaf_index, leaf_index_bits);
-
         let rho = ctx.load_witness(if let Some(witness) = witness {
             super::hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&witness.rho])
         } else {
@@ -2017,7 +1896,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         for value in [rho, spend, diversifier, asset, network, payer, operation] {
             assert_nonzero(ctx, &range, value);
         }
-
         let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
         let owner = poseidon.hash(
             ctx,
@@ -2032,7 +1910,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         let note_nullifier_equal = gate.is_equal(ctx, output_commitment, spend_nullifier);
         gate.assert_is_const(ctx, &note_nullifier_equal, &Scalar::ZERO);
-
         let zero = ctx.load_zero();
         let mut initial_node = poseidon.hash(
             ctx,
@@ -2062,7 +1939,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             )));
             gate.assert_bit(ctx, direction);
             assert_equal(ctx, &range, direction, expected_direction);
-
             let initial_left = gate.select(ctx, sibling, initial_node, direction);
             let initial_right = gate.select(ctx, initial_node, sibling, direction);
             initial_node = poseidon.hash(
@@ -2080,7 +1956,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     }),
             );
             assert_equal(ctx, &range, initial_node, carried_initial);
-
             let final_left = gate.select(ctx, sibling, final_node, direction);
             let final_right = gate.select(ctx, final_node, sibling, direction);
             final_node = poseidon.hash(
@@ -2112,7 +1987,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         let roots_equal = gate.is_equal(ctx, initial_node, final_node);
         gate.assert_is_const(ctx, &roots_equal, &Scalar::ZERO);
-
         Ok(KagemushaTopUpShieldPublicInputsV2 {
             output_commitment,
             spend_nullifier,
@@ -2127,7 +2001,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             operation_tag: operation,
         })
     }
-
     fn topup_builder<const DEPTH: usize>(
         witness: Option<&KagemushaTopUpShieldWitnessV2>,
         k: usize,
@@ -2155,13 +2028,11 @@ pub(in crate::zk) mod secure_relation_v3 {
             .expect("top-up advice-column packing margin must fit usize");
         Ok(builder)
     }
-
     #[derive(Clone, Copy)]
     enum UnshieldWitnessRef<'a> {
         Full(Option<&'a ConfidentialUnshieldWitnessV2>),
         Change(Option<&'a ConfidentialUnshieldWitnessV3>),
     }
-
     #[derive(Clone, Debug)]
     struct AssignedUnshieldRelationV4 {
         input_commitment_0: AssignedValue<Scalar>,
@@ -2177,7 +2048,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         change_amount: Option<AssignedValue<Scalar>>,
         has_second_input: AssignedValue<Scalar>,
     }
-
     impl AssignedUnshieldRelationV4 {
         fn full_public_inputs(
             &self,
@@ -2198,7 +2068,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 network_tag: self.network_tag,
             })
         }
-
         fn change_public_inputs(
             &self,
         ) -> Result<ConfidentialUnshieldChangePublicInputsV1<AssignedValue<Scalar>>, String>
@@ -2219,7 +2088,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             })
         }
     }
-
     fn assign_unshield_relation<const DEPTH: usize>(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -2235,7 +2103,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             UnshieldWitnessRef::Full(None) | UnshieldWitnessRef::Change(None) => {}
         }
         let gate = range.gate();
-
         let include_input_1 = match witness {
             UnshieldWitnessRef::Full(Some(value)) => value.include_input_1,
             UnshieldWitnessRef::Change(Some(value)) => value.include_input_1,
@@ -2259,7 +2126,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         assert_nonzero(ctx, &range, input_amounts[0]);
         constrain_optional_nonzero(ctx, &range, input_amounts[1], present_input_1);
-
         let input_rho_bytes = match witness {
             UnshieldWitnessRef::Full(Some(value)) => [value.input_0_rho, value.input_1_rho],
             UnshieldWitnessRef::Change(Some(value)) => [value.input_0_rho, value.input_1_rho],
@@ -2277,7 +2143,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         });
         assert_nonzero(ctx, &range, input_rho[0]);
         constrain_optional_nonzero(ctx, &range, input_rho[1], present_input_1);
-
         let (spend_bytes, diversifier_bytes, asset_bytes, network_bytes) = match witness {
             UnshieldWitnessRef::Full(Some(value)) => (
                 value.spend_scalar,
@@ -2314,7 +2179,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             assert_nonzero(ctx, &range, value);
         }
         constrain_optional_nonzero(ctx, &range, diversifiers[1], present_input_1);
-
         let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
         let input_owners = diversifiers.map(|diversifier| {
             poseidon.hash(
@@ -2354,7 +2218,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         let duplicate_nullifier = gate.is_equal(ctx, nullifiers[0], nullifiers[1]);
         let selected_duplicate = gate.mul(ctx, present_input_1, duplicate_nullifier);
         gate.assert_is_const(ctx, &selected_duplicate, &Scalar::ZERO);
-
         let public_input_1 = gate.mul(ctx, present_input_1, input_commitments[1]);
         let paths = match witness {
             UnshieldWitnessRef::Full(Some(value)) => {
@@ -2370,7 +2233,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         assert_equal(ctx, &range, root_0, root_1);
         let public_nullifier_1 = gate.mul(ctx, present_input_1, nullifiers[1]);
         let input_sum = gate.add(ctx, input_amounts[0], input_amounts[1]);
-
         let mut change_commitment_0 = None;
         let mut change_amount = None;
         let public_amount = if let UnshieldWitnessRef::Change(change_witness) = witness {
@@ -2462,7 +2324,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             has_second_input: present_input_1,
         })
     }
-
     /// Already-constrained change-unshield cells needed by recursive StepEq.
     #[derive(Clone, Debug)]
     pub(crate) struct AssignedConfidentialUnshieldChangeStepV4 {
@@ -2475,7 +2336,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         /// Constrained optional-input presence bit.
         pub(crate) has_second_input: AssignedValue<Scalar>,
     }
-
     /// Assign the secure change-unshield relation into an existing Eq/Fp
     /// builder and retain its constrained amount cells for StepEq copy-binding.
     pub(crate) fn assign_confidential_unshield_change_step_v4<const DEPTH: usize>(
@@ -2496,7 +2356,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             has_second_input: relation.has_second_input,
         })
     }
-
     fn unshield_builder<const DEPTH: usize>(
         witness: UnshieldWitnessRef<'_>,
         k: usize,
@@ -2521,13 +2380,11 @@ pub(in crate::zk) mod secure_relation_v3 {
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
         Ok(builder)
     }
-
     /// Fixed-shape transfer relation using the full secure permutation.
     #[derive(Clone, Default)]
     pub(in crate::zk) struct ConfidentialTransferCircuitV3<const DEPTH: usize> {
         pub(super) witness: Option<ConfidentialTransferWitnessV2>,
     }
-
     impl<const DEPTH: usize> zeroize::Zeroize for ConfidentialTransferCircuitV3<DEPTH> {
         fn zeroize(&mut self) {
             if let Some(witness) = &mut self.witness {
@@ -2536,22 +2393,18 @@ pub(in crate::zk) mod secure_relation_v3 {
             self.witness = None;
         }
     }
-
     impl<const DEPTH: usize> Drop for ConfidentialTransferCircuitV3<DEPTH> {
         fn drop(&mut self) {
             self.zeroize();
         }
     }
-
     impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV3<DEPTH> {
         type Config = BaseConfig<Scalar>;
         type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self::default()
         }
-
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let params: BaseCircuitParams =
                 transfer_builder::<DEPTH>(None, super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize)
@@ -2559,7 +2412,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     .config_params;
             BaseConfig::configure(meta, params)
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -2579,13 +2431,11 @@ pub(in crate::zk) mod secure_relation_v3 {
             result
         }
     }
-
     /// Fixed-shape Kagemusha top-up relation using the full secure permutation.
     #[derive(Clone, Default)]
     pub(in crate::zk) struct KagemushaTopUpShieldCircuitV3<const DEPTH: usize> {
         pub(super) witness: Option<KagemushaTopUpShieldWitnessV2>,
     }
-
     impl<const DEPTH: usize> zeroize::Zeroize for KagemushaTopUpShieldCircuitV3<DEPTH> {
         fn zeroize(&mut self) {
             if let Some(witness) = &mut self.witness {
@@ -2594,22 +2444,18 @@ pub(in crate::zk) mod secure_relation_v3 {
             self.witness = None;
         }
     }
-
     impl<const DEPTH: usize> Drop for KagemushaTopUpShieldCircuitV3<DEPTH> {
         fn drop(&mut self) {
             self.zeroize();
         }
     }
-
     impl<const DEPTH: usize> Circuit<Scalar> for KagemushaTopUpShieldCircuitV3<DEPTH> {
         type Config = BaseConfig<Scalar>;
         type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self::default()
         }
-
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let params =
                 topup_builder::<DEPTH>(None, super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize)
@@ -2617,7 +2463,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     .config_params;
             BaseConfig::configure(meta, params)
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -2637,13 +2482,11 @@ pub(in crate::zk) mod secure_relation_v3 {
             result
         }
     }
-
     /// Fixed-shape complete-unshield relation using the full secure permutation.
     #[derive(Clone, Default)]
     pub(in crate::zk) struct ConfidentialUnshieldFullCircuitV3<const DEPTH: usize> {
         pub(super) witness: Option<ConfidentialUnshieldWitnessV2>,
     }
-
     impl<const DEPTH: usize> zeroize::Zeroize for ConfidentialUnshieldFullCircuitV3<DEPTH> {
         fn zeroize(&mut self) {
             if let Some(witness) = &mut self.witness {
@@ -2652,22 +2495,18 @@ pub(in crate::zk) mod secure_relation_v3 {
             self.witness = None;
         }
     }
-
     impl<const DEPTH: usize> Drop for ConfidentialUnshieldFullCircuitV3<DEPTH> {
         fn drop(&mut self) {
             self.zeroize();
         }
     }
-
     impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldFullCircuitV3<DEPTH> {
         type Config = BaseConfig<Scalar>;
         type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self::default()
         }
-
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let params = unshield_builder::<DEPTH>(
                 UnshieldWitnessRef::Full(None),
@@ -2677,7 +2516,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             .config_params;
             BaseConfig::configure(meta, params)
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -2697,13 +2535,11 @@ pub(in crate::zk) mod secure_relation_v3 {
             result
         }
     }
-
     /// Fixed-shape change-unshield relation using the full secure permutation.
     #[derive(Clone, Default)]
     pub(in crate::zk) struct ConfidentialUnshieldChangeCircuitV4<const DEPTH: usize> {
         pub(super) witness: Option<ConfidentialUnshieldWitnessV3>,
     }
-
     impl<const DEPTH: usize> zeroize::Zeroize for ConfidentialUnshieldChangeCircuitV4<DEPTH> {
         fn zeroize(&mut self) {
             if let Some(witness) = &mut self.witness {
@@ -2712,22 +2548,18 @@ pub(in crate::zk) mod secure_relation_v3 {
             self.witness = None;
         }
     }
-
     impl<const DEPTH: usize> Drop for ConfidentialUnshieldChangeCircuitV4<DEPTH> {
         fn drop(&mut self) {
             self.zeroize();
         }
     }
-
     impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldChangeCircuitV4<DEPTH> {
         type Config = BaseConfig<Scalar>;
         type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self::default()
         }
-
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let params = unshield_builder::<DEPTH>(
                 UnshieldWitnessRef::Change(None),
@@ -2737,7 +2569,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             .config_params;
             BaseConfig::configure(meta, params)
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -2757,18 +2588,14 @@ pub(in crate::zk) mod secure_relation_v3 {
             result
         }
     }
-
     #[cfg(test)]
     mod tests {
-        use halo2_proofs::dev::MockProver;
-
         use super::*;
         use crate::zk::confidential_v2::{confidential_poseidon_hash_v3, scalar_to_repr_bytes};
-
+        use halo2_proofs::dev::MockProver;
         fn native_hash(domain: u64, inputs: &[Scalar]) -> Scalar {
             confidential_poseidon_hash_v3(domain, inputs)
         }
-
         fn sample_witness_shape(
             include_input_1: bool,
             include_output_1: bool,
@@ -2893,11 +2720,9 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_1_path: path_1,
             }
         }
-
         fn sample_witness() -> ConfidentialTransferWitnessV2 {
             sample_witness_shape(true, false)
         }
-
         fn instances(builder: &BaseCircuitBuilder<Scalar>) -> Vec<Vec<Scalar>> {
             builder
                 .assigned_instances
@@ -2905,7 +2730,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 .map(|column| column.iter().map(|value| *value.value()).collect())
                 .collect()
         }
-
         fn expected_instances(witness: &ConfidentialTransferWitnessV2) -> Vec<Vec<Scalar>> {
             let spend = scalar_from_repr(witness.spend_scalar).expect("canonical spend scalar");
             let asset = scalar_from_repr(witness.asset_tag).expect("canonical asset tag");
@@ -2988,7 +2812,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 vec![network],
             ]
         }
-
         #[test]
         fn secure_transfer_relation_accepts_valid_witness_and_rejects_public_mutation() {
             const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
@@ -2999,7 +2822,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             MockProver::run(K as u32, &builder, public.clone())
                 .expect("secure transfer relation")
                 .assert_satisfied();
-
             for column in 0..public.len() {
                 let mut mutated = public.clone();
                 mutated[column][0] += Scalar::ONE;
@@ -3012,11 +2834,9 @@ pub(in crate::zk) mod secure_relation_v3 {
                 );
             }
         }
-
         #[test]
         fn secure_transfer_relation_rejects_bad_path_direction_and_unbalanced_amounts() {
             const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
-
             let mut bad_direction = sample_witness();
             bad_direction.input_0_path.directions[0] = 1;
             let builder =
@@ -3027,7 +2847,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     .verify()
                     .is_err()
             );
-
             let mut unbalanced = sample_witness();
             unbalanced.output_0_amount += 1;
             let builder = transfer_builder::<2>(Some(&unbalanced), K).expect("canonical witness");
@@ -3038,7 +2857,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     .is_err()
             );
         }
-
         #[test]
         fn secure_transfer_relation_accepts_all_supported_presence_shapes() {
             const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
@@ -3055,35 +2873,28 @@ pub(in crate::zk) mod secure_relation_v3 {
                 }
             }
         }
-
         #[test]
         fn secure_transfer_builder_rejects_noncanonical_and_nonexact_witnesses() {
             const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
             let mut witness = sample_witness();
             witness.spend_scalar = [0xff; 32];
             assert!(transfer_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_witness();
             witness.input_0_path.siblings.push([0; 32]);
             assert!(transfer_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_witness();
             witness.input_0_path.witness_nodes.pop();
             assert!(transfer_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_witness();
             witness.input_0_path.directions[0] = 2;
             assert!(transfer_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_witness_shape(false, false);
             witness.input_1_rho = [9; 32];
             assert!(transfer_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_witness_shape(false, false);
             witness.output_1_owner_tag = scalar_to_repr_bytes(Scalar::ONE);
             assert!(transfer_builder::<2>(Some(&witness), K).is_err());
         }
-
         #[test]
         fn secure_transfer_relation_rejects_each_private_witness_and_path_substitution() {
             const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
@@ -3108,7 +2919,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                         "private substitution `{label}` must fail"
                     ),
                 };
-
             let mut witness = original.clone();
             witness.input_0_amount += 1;
             witness.output_0_amount += 1;
@@ -3165,7 +2975,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     };
                     path.siblings[level] = bump(path.siblings[level]);
                     rejects("path_sibling", sibling);
-
                     let mut direction = original.clone();
                     let path = if path_index == 0 {
                         &mut direction.input_0_path
@@ -3174,7 +2983,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     };
                     path.directions[level] ^= 1;
                     rejects("path_direction", direction);
-
                     let mut node = original.clone();
                     let path = if path_index == 0 {
                         &mut node.input_0_path
@@ -3193,7 +3001,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 path.root = bump(path.root);
                 rejects("path_root", root);
             }
-
             let mut presence = original.clone();
             presence.include_input_1 = false;
             rejects("input_presence", presence);
@@ -3201,7 +3008,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             presence.include_output_1 = false;
             rejects("output_presence", presence);
         }
-
         fn sample_topup_witness() -> KagemushaTopUpShieldWitnessV2 {
             let amount = 10u128;
             let rho_bytes = [0x71; 32];
@@ -3258,7 +3064,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 output_nodes: [output_pair, final_root].map(scalar_to_repr_bytes).to_vec(),
             }
         }
-
         fn expected_topup_instances(witness: &KagemushaTopUpShieldWitnessV2) -> Vec<Vec<Scalar>> {
             let amount = scalar_from_u128(witness.amount);
             let rho =
@@ -3293,7 +3098,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 vec![scalar_from_repr(witness.operation_tag).expect("canonical operation")],
             ]
         }
-
         #[test]
         fn secure_topup_relation_binds_every_public_column() {
             const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
@@ -3316,7 +3120,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 );
             }
         }
-
         #[test]
         fn shared_amount_range_accepts_bit_127_and_rejects_bit_128() {
             const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
@@ -3334,7 +3137,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 super::super::ConfidentialUnshieldChangePublicInputV1::PublicAmount.range(),
                 Some(super::super::ConfidentialUnsignedRangeV1::Amount),
             );
-
             let verify = |value: Scalar| {
                 let mut builder = BaseCircuitBuilder::new(false)
                     .use_k(K)
@@ -3347,7 +3149,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     .expect("shared confidential amount-range mock prover")
                     .verify()
             };
-
             let high_valid = super::super::scalar_from_u128(1_u128 << 127);
             assert!(
                 verify(high_valid).is_ok(),
@@ -3358,18 +3159,15 @@ pub(in crate::zk) mod secure_relation_v3 {
                 "the field value 2^128 must fail the shared amount gadget",
             );
         }
-
         #[test]
         fn secure_topup_rejects_malformed_or_contradictory_paths() {
             const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
             let mut witness = sample_topup_witness();
             witness.output_nodes.push([0; 32]);
             assert!(topup_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_topup_witness();
             witness.zero_path.siblings[0] = [0xff; 32];
             assert!(topup_builder::<2>(Some(&witness), K).is_err());
-
             let mut witness = sample_topup_witness();
             witness.leaf_index = 0;
             let builder = topup_builder::<2>(Some(&witness), K).expect("canonical fields");
@@ -3380,7 +3178,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     .is_err()
             );
         }
-
         #[test]
         fn secure_topup_rejects_each_private_witness_and_path_substitution() {
             const K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
@@ -3405,7 +3202,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                         "top-up private substitution `{label}` must fail"
                     ),
                 };
-
             let mut witness = original.clone();
             witness.amount += 1;
             rejects("amount", witness);
@@ -3457,7 +3253,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.zero_path.root = bump(witness.zero_path.root);
             rejects("initial_root", witness);
         }
-
         fn sample_full_unshield_witness() -> ConfidentialUnshieldWitnessV2 {
             let transfer = sample_witness_shape(true, false);
             ConfidentialUnshieldWitnessV2 {
@@ -3475,7 +3270,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_1_path: transfer.input_1_path.clone(),
             }
         }
-
         fn sample_change_unshield_witness() -> ConfidentialUnshieldWitnessV3 {
             let full = sample_full_unshield_witness();
             ConfidentialUnshieldWitnessV3 {
@@ -3496,7 +3290,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_1_path: full.input_1_path.clone(),
             }
         }
-
         fn expected_full_unshield_instances(
             witness: &ConfidentialUnshieldWitnessV2,
         ) -> Vec<Vec<Scalar>> {
@@ -3535,7 +3328,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 transfer_public[8].clone(),
             ]
         }
-
         fn expected_change_unshield_instances(
             witness: &ConfidentialUnshieldWitnessV3,
         ) -> Vec<Vec<Scalar>> {
@@ -3594,7 +3386,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 full_public[7].clone(),
             ]
         }
-
         #[test]
         fn secure_relation_layouts_are_witness_independent() {
             fn assert_same_shape(
@@ -3630,7 +3421,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     "{label} instance column shape"
                 );
             }
-
             const TRANSFER_K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
             let transfer_empty = transfer_builder::<2>(None, TRANSFER_K).expect("empty transfer");
             for include_input_1 in [false, true] {
@@ -3641,14 +3431,12 @@ pub(in crate::zk) mod secure_relation_v3 {
                     assert_same_shape("transfer", &transfer_empty, &populated);
                 }
             }
-
             const TOPUP_K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
             let topup_empty = topup_builder::<2>(None, TOPUP_K).expect("empty top-up");
             let topup_witness = sample_topup_witness();
             let topup_populated =
                 topup_builder::<2>(Some(&topup_witness), TOPUP_K).expect("populated top-up");
             assert_same_shape("top-up", &topup_empty, &topup_populated);
-
             const FULL_UNSHIELD_K: usize = super::super::CONFIDENTIAL_UNSHIELD_V2_IPA_K as usize;
             let full_empty = unshield_builder::<2>(UnshieldWitnessRef::Full(None), FULL_UNSHIELD_K)
                 .expect("empty full unshield");
@@ -3659,7 +3447,6 @@ pub(in crate::zk) mod secure_relation_v3 {
             )
             .expect("populated full unshield");
             assert_same_shape("full unshield", &full_empty, &full_populated);
-
             const CHANGE_UNSHIELD_K: usize = super::super::CONFIDENTIAL_UNSHIELD_V3_IPA_K as usize;
             let change_empty =
                 unshield_builder::<2>(UnshieldWitnessRef::Change(None), CHANGE_UNSHIELD_K)
@@ -3685,7 +3472,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 &terminal_populated,
             );
         }
-
         #[test]
         fn secure_full_unshield_relation_binds_every_public_column() {
             const K: usize = super::super::CONFIDENTIAL_UNSHIELD_V2_IPA_K as usize;
@@ -3709,7 +3495,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                 );
             }
         }
-
         #[test]
         fn secure_change_unshield_relation_binds_change_and_public_amount() {
             const K: usize = super::super::CONFIDENTIAL_UNSHIELD_V3_IPA_K as usize;
@@ -3732,7 +3517,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     "substitution in change-unshield public column {column} must fail"
                 );
             }
-
             let mut terminal = sample_change_unshield_witness();
             terminal.include_output_0 = false;
             terminal.output_0_amount = 0;
@@ -3745,14 +3529,12 @@ pub(in crate::zk) mod secure_relation_v3 {
             MockProver::run(K as u32, &terminal_builder, terminal_public)
                 .expect("secure terminal V3 unshield relation")
                 .assert_satisfied();
-
             let mut malformed = terminal;
             malformed.output_0_amount = 1;
             assert!(
                 unshield_builder::<2>(UnshieldWitnessRef::Change(Some(&malformed)), K).is_err()
             );
         }
-
         #[test]
         #[ignore = "explicit production-depth release resource measurement"]
         fn report_production_depth_secure_relation_shapes() {
@@ -3769,7 +3551,6 @@ pub(in crate::zk) mod secure_relation_v3 {
                     builder.config_params.num_instance_columns,
                 );
             }
-
             report(
                 "transfer",
                 &transfer_builder::<{ super::super::CONFIDENTIAL_TREE_DEPTH_V2 }>(
@@ -3805,7 +3586,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the default-diversifier owner tag for a confidential spend key.
 pub fn derive_confidential_owner_tag_v2(spend_key: &[u8]) -> Result<[u8; 32], String> {
@@ -3814,13 +3594,11 @@ pub fn derive_confidential_owner_tag_v2(spend_key: &[u8]) -> Result<[u8; 32], St
         default_confidential_diversifier_v2(),
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the canonical default owner diversifier.
 pub fn default_confidential_diversifier_v2() -> [u8; 32] {
     scalar_to_repr_bytes(Scalar::ONE)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a canonical owner diversifier from arbitrary seed bytes.
 pub fn derive_confidential_diversifier_v2(seed: &[u8]) -> [u8; 32] {
@@ -3829,7 +3607,6 @@ pub fn derive_confidential_diversifier_v2(seed: &[u8]) -> [u8; 32] {
         &[seed],
     ))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive an owner tag for a spend key and explicit diversifier.
 pub fn derive_confidential_owner_tag_v2_with_diversifier(
@@ -3838,41 +3615,35 @@ pub fn derive_confidential_owner_tag_v2_with_diversifier(
 ) -> Result<[u8; 32], String> {
     derive_confidential_owner_tag_v3_with_diversifier(spend_key, diversifier)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the field tag for an asset-definition identifier.
 pub fn derive_confidential_asset_tag_v2(asset_definition_id: &str) -> [u8; 32] {
     derive_confidential_asset_tag_v3(asset_definition_id)
         .expect("validated asset identifiers derive non-zero V3 tags")
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the field tag for an exact genesis-derived network identity.
 pub fn derive_confidential_network_tag_v2(network_id: &NetworkId) -> [u8; 32] {
     derive_confidential_network_tag_v3(network_id)
         .expect("exact network identities derive non-zero V3 tags")
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the field tag for a Kagemusha top-up payer.
 pub fn derive_kagemusha_topup_payer_tag_v2(payer: &str) -> [u8; 32] {
     derive_kagemusha_topup_payer_tag_v3(payer)
         .expect("validated payer identifiers derive non-zero V3 tags")
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the field tag for a Kagemusha top-up operation.
 pub fn derive_kagemusha_topup_operation_tag_v2(operation_id: &[u8; 32]) -> [u8; 32] {
     derive_kagemusha_topup_operation_tag_v3(operation_id)
         .expect("validated non-zero operation IDs derive non-zero V3 tags")
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Encode a `u32` as one canonical Pasta scalar.
 pub fn encode_kagemusha_topup_u32_v2(value: u32) -> [u8; 32] {
     scalar_to_repr_bytes(Scalar::from(u64::from(value)))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a confidential note commitment from its opening and context.
 pub fn derive_confidential_note_v2(
@@ -3888,7 +3659,6 @@ pub fn derive_confidential_note_v2(
         owner_tag,
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a confidential spend nullifier from its opening and context.
 pub fn derive_confidential_nullifier_v2(
@@ -3905,19 +3675,16 @@ pub fn derive_confidential_nullifier_v2(
     )
     .expect("validated confidential nullifier inputs")
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Encode an exact `u128` amount as one canonical Pasta scalar.
 pub fn encode_confidential_amount_v2(amount: u128) -> [u8; 32] {
     scalar_to_repr_bytes(scalar_from_u128(amount))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the canonical empty root of the fixed confidential tree.
 pub fn poseidon_empty_root_v2() -> [u8; 32] {
     iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return whether a persisted confidential-tree node is one canonical Pasta scalar.
 ///
@@ -3926,13 +3693,11 @@ pub fn poseidon_empty_root_v2() -> [u8; 32] {
 pub fn confidential_tree_node_is_canonical_v2(node: [u8; 32]) -> bool {
     scalar_from_repr(node).is_some()
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the fixed-tree root for canonical commitment leaves.
 pub fn compute_confidential_root_v2(commitments: &[[u8; 32]]) -> Result<[u8; 32], String> {
     compute_confidential_root_v3(commitments)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the canonical root after every non-empty commitment prefix.
 pub fn compute_confidential_prefix_roots_v2(
@@ -3940,7 +3705,6 @@ pub fn compute_confidential_prefix_roots_v2(
 ) -> Result<Vec<[u8; 32]>, String> {
     compute_confidential_prefix_roots_v3(commitments)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute a canonical fixed-tree authentication path for one leaf index.
 pub fn compute_confidential_merkle_path_v2(
@@ -3949,7 +3713,6 @@ pub fn compute_confidential_merkle_path_v2(
 ) -> Result<ConfidentialMerklePathV2, String> {
     compute_confidential_merkle_path_v3(commitments, leaf_index)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn poseidon_tag_v3(domain: u64, label: &[u8], bytes: &[u8]) -> Result<Scalar, String> {
     let preimage = hash_to_scalar(label, &[bytes]);
@@ -3960,7 +3723,6 @@ fn poseidon_tag_v3(domain: u64, label: &[u8], bytes: &[u8]) -> Result<Scalar, St
         Ok(tag)
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn strict_v3_identifier<'a>(value: &'a str, label: &str) -> Result<&'a str, String> {
     if value.is_empty() || value.trim() != value {
@@ -3971,7 +3733,6 @@ fn strict_v3_identifier<'a>(value: &'a str, label: &str) -> Result<&'a str, Stri
         Ok(value)
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a domain-separated V3 owner tag from a spend key and diversifier.
 pub fn derive_confidential_owner_tag_v3_with_diversifier(
@@ -3992,7 +3753,6 @@ pub fn derive_confidential_owner_tag_v3_with_diversifier(
     }
     Ok(scalar_to_repr_bytes(owner))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the domain-separated V3 asset tag.
 pub fn derive_confidential_asset_tag_v3(asset_definition_id: &str) -> Result<[u8; 32], String> {
@@ -4003,7 +3763,6 @@ pub fn derive_confidential_asset_tag_v3(asset_definition_id: &str) -> Result<[u8
         canonical.as_bytes(),
     )?))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the domain-separated V3 tag for an exact genesis-derived network.
 pub fn derive_confidential_network_tag_v3(network_id: &NetworkId) -> Result<[u8; 32], String> {
@@ -4013,7 +3772,6 @@ pub fn derive_confidential_network_tag_v3(network_id: &NetworkId) -> Result<[u8;
         network_id.as_bytes(),
     )?))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the domain-separated V3 Kagemusha payer tag.
 pub fn derive_kagemusha_topup_payer_tag_v3(payer: &str) -> Result<[u8; 32], String> {
@@ -4024,7 +3782,6 @@ pub fn derive_kagemusha_topup_payer_tag_v3(payer: &str) -> Result<[u8; 32], Stri
         canonical.as_bytes(),
     )?))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the domain-separated V3 Kagemusha operation tag.
 pub fn derive_kagemusha_topup_operation_tag_v3(
@@ -4039,7 +3796,6 @@ pub fn derive_kagemusha_topup_operation_tag_v3(
         operation_id,
     )?))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a V3 note commitment with the full secure permutation.
 pub fn derive_confidential_note_v3(
@@ -4067,7 +3823,6 @@ pub fn derive_confidential_note_v3(
     }
     Ok(scalar_to_repr_bytes(commitment))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a V3 spend nullifier with the full secure permutation.
 pub fn derive_confidential_nullifier_v3(
@@ -4096,7 +3851,6 @@ pub fn derive_confidential_nullifier_v3(
     }
     Ok(scalar_to_repr_bytes(nullifier))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn validate_confidential_tree_len_v3(commitments: &[[u8; 32]]) -> Result<(), String> {
     if commitments.len() > CONFIDENTIAL_TREE_CAPACITY_V2 {
@@ -4107,12 +3861,10 @@ fn validate_confidential_tree_len_v3(commitments: &[[u8; 32]]) -> Result<(), Str
     }
     Ok(())
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn merkle_parent_v3(left: Scalar, right: Scalar) -> Scalar {
     confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3, &[left, right])
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_empty_subtree_roots_v3() -> [Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1] {
     static ROOTS: std::sync::OnceLock<[Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1]> =
@@ -4129,7 +3881,6 @@ fn confidential_empty_subtree_roots_v3() -> [Scalar; CONFIDENTIAL_TREE_DEPTH_V2 
         roots
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_commitment_leaf_v3(commitment: [u8; 32], index: usize) -> Result<Scalar, String> {
     let commitment = scalar_from_repr(commitment)
@@ -4146,39 +3897,32 @@ fn confidential_commitment_leaf_v3(commitment: [u8; 32], index: usize) -> Result
         &[commitment],
     ))
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 std::thread_local! {
     static CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn reset_confidential_commitment_leaf_hash_calls_v3() {
     CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3.with(|calls| calls.set(0));
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn confidential_commitment_leaf_hash_calls_v3() -> usize {
     CONFIDENTIAL_COMMITMENT_LEAF_HASH_CALLS_V3.with(std::cell::Cell::get)
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 std::thread_local! {
     static CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn reset_confidential_frontier_append_parent_hash_calls_v2() {
     CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(|calls| calls.set(0));
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn confidential_frontier_append_parent_hash_calls_v2() -> usize {
     CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(std::cell::Cell::get)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_subtree_root_v3(
     commitments: &[[u8; 32]],
@@ -4198,14 +3942,12 @@ fn confidential_subtree_root_v3(
         confidential_subtree_root_v3(commitments, start + half_width, height - 1, empty_roots)?;
     Ok(merkle_parent_v3(left, right))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute the fixed-tree root using V3 leaf and internal-node domains.
 pub fn compute_confidential_root_v3(commitments: &[[u8; 32]]) -> Result<[u8; 32], String> {
     let roots = compute_confidential_prefix_roots_v3(commitments)?;
     Ok(roots.last().copied().unwrap_or_else(poseidon_empty_root_v2))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn append_confidential_tree_leaf_v3(
     mut position: usize,
@@ -4235,7 +3977,6 @@ fn append_confidential_tree_leaf_v3(
     }
     Ok(node)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn compute_confidential_prefix_roots_v3(commitments: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, String> {
     validate_confidential_tree_len_v3(commitments)?;
@@ -4249,7 +3990,6 @@ fn compute_confidential_prefix_roots_v3(commitments: &[[u8; 32]]) -> Result<Vec<
     }
     Ok(roots)
 }
-
 /// One authenticated compact projection of the fixed confidential tree.
 ///
 /// The projection stores only nodes whose subtrees intersect the persisted
@@ -4263,7 +4003,6 @@ pub struct ConfidentialTreeProjectionV2 {
     commitment_count: usize,
     root: [u8; 32],
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl ConfidentialTreeProjectionV2 {
     /// Build one compact authenticated projection for an ordered commitment prefix.
@@ -4298,13 +4037,11 @@ impl ConfidentialTreeProjectionV2 {
             root: scalar_to_repr_bytes(root),
         })
     }
-
     /// Return the root authenticated by this projection.
     #[must_use]
     pub const fn root(&self) -> [u8; 32] {
         self.root
     }
-
     /// Reconstruct the fixed-size incremental frontier authenticated by this projection.
     pub fn frontier(&self) -> Result<ConfidentialTreeFrontierV2, String> {
         let mut frontier = [None; CONFIDENTIAL_TREE_DEPTH_V2];
@@ -4320,7 +4057,6 @@ impl ConfidentialTreeProjectionV2 {
         }
         Ok(frontier)
     }
-
     /// Compute one membership or zero-leaf path without rescanning commitments.
     pub fn compute_path(&self, leaf_index: usize) -> Result<ConfidentialMerklePathV2, String> {
         if leaf_index >= CONFIDENTIAL_TREE_CAPACITY_V2 {
@@ -4329,7 +4065,6 @@ impl ConfidentialTreeProjectionV2 {
                 CONFIDENTIAL_TREE_CAPACITY_V2
             ));
         }
-
         let mut node = self.layers[0]
             .get(leaf_index)
             .copied()
@@ -4365,7 +4100,6 @@ impl ConfidentialTreeProjectionV2 {
         })
     }
 }
-
 /// Result of simulating one atomic append against a persisted tree frontier.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub struct ConfidentialTreeAppendV2 {
@@ -4376,7 +4110,6 @@ pub struct ConfidentialTreeAppendV2 {
     /// Root after each appended commitment, in request order.
     pub appended_roots: Vec<[u8; 32]>,
 }
-
 /// Validate the fixed-size frontier and its separately persisted current root.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn validate_confidential_tree_frontier_v2(
@@ -4432,7 +4165,6 @@ pub fn validate_confidential_tree_frontier_v2(
     }
     Ok(())
 }
-
 /// Simulate an ordered append in `O(batch * depth)` without mutating persisted state.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn append_confidential_tree_frontier_v2(
@@ -4488,7 +4220,6 @@ pub fn append_confidential_tree_frontier_v2(
         appended_roots,
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Compute an exact V3 authentication path, including redundant checked nodes.
 pub fn compute_confidential_merkle_path_v3(
@@ -4538,7 +4269,6 @@ pub fn compute_confidential_merkle_path_v3(
         root: scalar_to_repr_bytes(node),
     })
 }
-
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 fn confidential_sparse_fixture_subtree_root_v3(
     commitments: &[Option<[u8; 32]>],
@@ -4565,7 +4295,6 @@ fn confidential_sparse_fixture_subtree_root_v3(
     )?;
     Ok(merkle_parent_v3(left, right))
 }
-
 /// Build a test-only V3 authentication path for an explicitly sparse tree.
 ///
 /// Production trees are append-only dense prefixes, so their public helpers
@@ -4590,7 +4319,6 @@ pub(in crate::zk) fn compute_confidential_sparse_fixture_path_v3(
             CONFIDENTIAL_TREE_CAPACITY_V2
         ));
     }
-
     let empty_roots = confidential_empty_subtree_roots_v3();
     let mut node = commitments
         .get(leaf_index)
@@ -4633,7 +4361,6 @@ pub(in crate::zk) fn compute_confidential_sparse_fixture_path_v3(
         root: scalar_to_repr_bytes(node),
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the next empty-leaf path from a supplied current root and path.
 pub fn derive_confidential_next_zero_path_v2(
@@ -4669,7 +4396,6 @@ pub fn derive_confidential_next_zero_path_v2(
     let mut siblings = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
     let mut directions = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
     let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
-
     for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
         let previous_subtree_index = previous_leaf_index >> level;
         let next_subtree_index = next_leaf_index >> level;
@@ -4714,7 +4440,6 @@ pub fn derive_confidential_next_zero_path_v2(
         root: computed_root,
     })
 }
-
 /// One exact append-only output path derived from an authenticated next-zero frontier.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -4726,7 +4451,6 @@ pub struct ConfidentialSequentialAppendLeafPathsV3 {
     /// Output membership path against the root after every requested output is inserted.
     pub membership_path: ConfidentialMerklePathV2,
 }
-
 /// Canonical result of advancing one authenticated confidential-tree frontier.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
@@ -4742,7 +4466,6 @@ pub struct ConfidentialSequentialAppendPathsV3 {
     /// Empty-leaf path against `final_root` at `next_zero_leaf_index`.
     pub next_zero_path: ConfidentialMerklePathV2,
 }
-
 /// Recompute and validate one canonical empty-leaf frontier against its supplied root.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn validate_confidential_next_zero_path_v3(
@@ -4757,7 +4480,6 @@ pub fn validate_confidential_next_zero_path_v3(
         "confidential next-zero frontier",
     )
 }
-
 /// Recompute and validate one non-empty commitment membership path against its supplied root.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn validate_confidential_membership_path_v3(
@@ -4776,7 +4498,6 @@ pub fn validate_confidential_membership_path_v3(
         "confidential membership path",
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn replace_confidential_path_leaf_v3(
     commitment: [u8; 32],
@@ -4828,7 +4549,6 @@ fn replace_confidential_path_leaf_v3(
         root: scalar_to_repr_bytes(node),
     })
 }
-
 /// Advance an authenticated append-only frontier by exactly one or two output commitments.
 ///
 /// The supplied path must prove the canonical empty leaf at `next_zero_leaf_index`. Outputs are
@@ -4879,7 +4599,6 @@ pub fn derive_confidential_sequential_append_paths_v3(
             .ok_or_else(|| "sequential confidential append index overflowed".to_owned())?;
         frontier = next_frontier;
     }
-
     let final_root = frontier.root;
     if leaves.len() == 2 {
         let first_index = leaves[0].leaf_index;
@@ -4925,7 +4644,6 @@ pub fn derive_confidential_sequential_append_paths_v3(
         next_zero_path: frontier,
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(super) fn normalize_supplied_confidential_merkle_path_v2(
     leaf_commitment: [u8; 32],
@@ -4959,7 +4677,6 @@ pub(super) fn normalize_supplied_confidential_merkle_path_v2(
     if path.root != root_hint {
         return Err(format!("{context} root does not match root_hint"));
     }
-
     let mut current_index = leaf_index;
     let commitment = scalar_from_repr(leaf_commitment)
         .ok_or_else(|| format!("{context} leaf commitment must be a canonical Pasta scalar"))?;
@@ -5006,7 +4723,6 @@ pub(super) fn normalize_supplied_confidential_merkle_path_v2(
         root: computed_root,
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
 /// Secret openings and authenticated paths consumed by the secure transfer
@@ -5032,7 +4748,6 @@ pub(crate) struct ConfidentialTransferWitnessV2 {
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialTransferWitnessV2 {
     fn zeroize(&mut self) {
@@ -5057,14 +4772,12 @@ impl Zeroize for ConfidentialTransferWitnessV2 {
         self.input_1_path.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialTransferWitnessV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
 /// Secret opening and empty-leaf path consumed by the secure top-up gadget
@@ -5083,7 +4796,6 @@ pub(crate) struct KagemushaTopUpShieldWitnessV2 {
     zero_path: ConfidentialMerklePathV2,
     output_nodes: Vec<[u8; 32]>,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for KagemushaTopUpShieldWitnessV2 {
     fn zeroize(&mut self) {
@@ -5101,14 +4813,12 @@ impl Zeroize for KagemushaTopUpShieldWitnessV2 {
         self.output_nodes.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for KagemushaTopUpShieldWitnessV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
 struct ConfidentialUnshieldWitnessV2 {
@@ -5125,7 +4835,6 @@ struct ConfidentialUnshieldWitnessV2 {
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialUnshieldWitnessV2 {
     fn zeroize(&mut self) {
@@ -5143,14 +4852,12 @@ impl Zeroize for ConfidentialUnshieldWitnessV2 {
         self.input_1_path.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialUnshieldWitnessV2 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
 /// Secret input openings, paths, and private change opening consumed by the
@@ -5172,7 +4879,6 @@ pub(crate) struct ConfidentialUnshieldWitnessV3 {
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialUnshieldWitnessV3 {
     fn zeroize(&mut self) {
@@ -5193,14 +4899,12 @@ impl Zeroize for ConfidentialUnshieldWitnessV3 {
         self.input_1_path.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for ConfidentialUnshieldWitnessV3 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Fixed-shape confidential witness carried by the recursive Eq/Fp Step.
 ///
 /// A single authenticated Step verifier key covers initialization, append,
@@ -5216,7 +4920,6 @@ pub(crate) struct KagemushaStepSecureWitnessV3 {
     pub(crate) transfer: ConfidentialTransferWitnessV2,
     pub(crate) unshield_change: ConfidentialUnshieldWitnessV3,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for KagemushaStepSecureWitnessV3 {
     fn zeroize(&mut self) {
@@ -5225,14 +4928,12 @@ impl Zeroize for KagemushaStepSecureWitnessV3 {
         self.unshield_change.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Drop for KagemushaStepSecureWitnessV3 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn kagemusha_step_padding_input_paths_v3(
     commitment: [u8; 32],
@@ -5245,7 +4946,6 @@ fn kagemusha_step_padding_input_paths_v3(
     let empty_roots = confidential_empty_subtree_roots_v3();
     let empty_leaf = empty_roots[0];
     let first_parent = merkle_parent_v3(input_leaf, empty_leaf);
-
     let mut input_siblings = vec![scalar_to_repr_bytes(empty_leaf)];
     let mut empty_siblings = vec![scalar_to_repr_bytes(input_leaf)];
     let mut input_directions = vec![0];
@@ -5279,7 +4979,6 @@ fn kagemusha_step_padding_input_paths_v3(
         },
     ))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn kagemusha_step_padding_zero_path_v3() -> ConfidentialMerklePathV2 {
     let empty_roots = confidential_empty_subtree_roots_v3();
@@ -5301,7 +5000,6 @@ fn kagemusha_step_padding_zero_path_v3() -> ConfidentialMerklePathV2 {
         root: scalar_to_repr_bytes(empty_roots[CONFIDENTIAL_TREE_DEPTH_V2]),
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl KagemushaStepSecureWitnessV3 {
     /// Construct the fixed witness with a real initialization relation.
@@ -5311,7 +5009,6 @@ impl KagemushaStepSecureWitnessV3 {
         witness.topup = topup;
         Ok(witness)
     }
-
     /// Construct the fixed witness with a real append relation.
     pub(crate) fn for_transfer(transfer: ConfidentialTransferWitnessV2) -> Result<Self, String> {
         secure_relation_v3::validate_transfer_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&transfer)?;
@@ -5319,7 +5016,6 @@ impl KagemushaStepSecureWitnessV3 {
         witness.transfer = transfer;
         Ok(witness)
     }
-
     /// Construct the fixed witness with a real change-redemption relation.
     pub(crate) fn for_unshield_change(
         unshield_change: ConfidentialUnshieldWitnessV3,
@@ -5331,7 +5027,6 @@ impl KagemushaStepSecureWitnessV3 {
         witness.unshield_change = unshield_change;
         Ok(witness)
     }
-
     /// Return satisfying, non-secret padding for the fixed inactive gadgets.
     ///
     /// These values are deliberately unrelated to any public Step value.  A
@@ -5346,7 +5041,6 @@ impl KagemushaStepSecureWitnessV3 {
         ));
         let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
         let network_tag = derive_confidential_network_tag_v3(&network_id)?;
-
         let spend_key = [0x41_u8; 32];
         let spend_scalar = scalar_to_repr_bytes(hash_to_scalar(
             b"iroha.confidential.v3.spend_scalar",
@@ -5359,7 +5053,6 @@ impl KagemushaStepSecureWitnessV3 {
         let input_commitment = derive_confidential_note_v3(asset_tag, 2, input_rho, input_owner)?;
         let (input_path, empty_input_path) =
             kagemusha_step_padding_input_paths_v3(input_commitment)?;
-
         let recipient_key = [0x43_u8; 32];
         let recipient_owner = derive_confidential_owner_tag_v3_with_diversifier(
             &recipient_key,
@@ -5386,7 +5079,6 @@ impl KagemushaStepSecureWitnessV3 {
             input_0_path: input_path.clone(),
             input_1_path: empty_input_path.clone(),
         };
-
         let unshield_change = ConfidentialUnshieldWitnessV3 {
             include_input_1: false,
             include_output_0: true,
@@ -5404,7 +5096,6 @@ impl KagemushaStepSecureWitnessV3 {
             input_0_path: input_path,
             input_1_path: empty_input_path,
         };
-
         let topup_spend_key = [0x46_u8; 32];
         let topup_spend =
             hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[&topup_spend_key]);
@@ -5429,7 +5120,6 @@ impl KagemushaStepSecureWitnessV3 {
             zero_path,
             output_nodes,
         };
-
         secure_relation_v3::validate_topup_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&topup)?;
         secure_relation_v3::validate_transfer_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(&transfer)?;
         secure_relation_v3::validate_unshield_v3_witness::<CONFIDENTIAL_TREE_DEPTH_V2>(
@@ -5442,7 +5132,6 @@ impl KagemushaStepSecureWitnessV3 {
         })
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn parse_vk_for_transfer(
     circuit_id: &str,
@@ -5469,7 +5158,6 @@ fn parse_vk_for_transfer(
     })?;
     Ok((params, parsed))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn parse_vk_for_kagemusha_topup_shield_v2(
     circuit_id: &str,
@@ -5497,7 +5185,6 @@ fn parse_vk_for_kagemusha_topup_shield_v2(
     })?;
     Ok((params, parsed))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn parse_vk_for_unshield_v2(
     circuit_id: &str,
@@ -5524,7 +5211,6 @@ fn parse_vk_for_unshield_v2(
     })?;
     Ok((params, parsed))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn parse_vk_for_unshield_v3(
     circuit_id: &str,
@@ -5551,7 +5237,6 @@ fn parse_vk_for_unshield_v3(
     })?;
     Ok((params, parsed))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn derive_confidential_v2_proving_key<C>(
     params: &super::PastaParams,
@@ -5565,13 +5250,11 @@ where
     super::halo2_backend::keygen_pk(params, parsed_vk, empty_circuit)
         .map_err(|err| format!("failed to derive confidential {context} proving key: {err}"))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn cached_confidential_transfer_v2_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
 {
     static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
         std::sync::OnceLock::new();
-
     match CACHE.get_or_init(|| {
         let vk_box = confidential_transfer_v2_vk_box()?;
         let (params, parsed_vk) =
@@ -5589,13 +5272,11 @@ fn cached_confidential_transfer_v2_proving_key() -> Result<&'static Confidential
         Err(err) => Err(err.clone()),
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn cached_kagemusha_topup_shield_v2_proving_key()
 -> Result<&'static ConfidentialV2ProvingKey, String> {
     static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
         std::sync::OnceLock::new();
-
     match CACHE.get_or_init(|| {
         let vk_box = kagemusha_topup_shield_v2_vk_box()?;
         let (params, parsed_vk) =
@@ -5613,13 +5294,11 @@ fn cached_kagemusha_topup_shield_v2_proving_key()
         Err(err) => Err(err.clone()),
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn cached_confidential_unshield_v2_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
 {
     static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
         std::sync::OnceLock::new();
-
     match CACHE.get_or_init(|| {
         let vk_box = confidential_unshield_v2_vk_box()?;
         let (params, parsed_vk) =
@@ -5637,13 +5316,11 @@ fn cached_confidential_unshield_v2_proving_key() -> Result<&'static Confidential
         Err(err) => Err(err.clone()),
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn cached_confidential_unshield_v3_proving_key() -> Result<&'static ConfidentialV2ProvingKey, String>
 {
     static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
         std::sync::OnceLock::new();
-
     match CACHE.get_or_init(|| {
         let vk_box = confidential_unshield_v3_vk_box()?;
         let (params, parsed_vk) =
@@ -5661,7 +5338,6 @@ fn cached_confidential_unshield_v3_proving_key() -> Result<&'static Confidential
         Err(err) => Err(err.clone()),
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn create_confidential_v2_proof<C>(
     params: &super::PastaParams,
@@ -5678,7 +5354,6 @@ where
             .map_err(|err| format!("failed to create confidential {context} proof: {err}"))?;
     Ok(proof_raw)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn encode_halo2_envelope(
     circuit_id: &str,
@@ -5706,7 +5381,6 @@ fn encode_halo2_envelope(
         encoded,
     ))
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn kagemusha_topup_output_path_nodes_v2(
     output_commitment: [u8; 32],
@@ -5734,7 +5408,6 @@ fn kagemusha_topup_output_path_nodes_v2(
     }
     Ok(nodes)
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn validate_kagemusha_topup_shield_statement_v2(
     output_commitment: [u8; 32],
@@ -5764,13 +5437,11 @@ fn validate_kagemusha_topup_shield_statement_v2(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 struct PreparedKagemushaTopUpShieldV3 {
     witness: KagemushaTopUpShieldWitnessV2,
     public: KagemushaTopUpShieldPublicInputsV2,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl PreparedKagemushaTopUpShieldV3 {
     fn instance_columns(&self) -> Result<Vec<Vec<Scalar>>, String> {
@@ -5789,7 +5460,6 @@ impl PreparedKagemushaTopUpShieldV3 {
             .map(|public| public.into_array().to_vec())
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn prepare_kagemusha_topup_shield_v3(
@@ -5836,7 +5506,6 @@ fn prepare_kagemusha_topup_shield_v3(
             "Kagemusha top-up leaf_index must be < {CONFIDENTIAL_TREE_CAPACITY_V2}"
         ));
     }
-
     let initial_root = zero_path.root;
     let normalized_zero_path = normalize_supplied_confidential_merkle_path_v2(
         [0; 32],
@@ -5914,7 +5583,6 @@ fn prepare_kagemusha_topup_shield_v3(
         },
     })
 }
-
 /// Prepare the exact secure initialization witness embedded by recursive StepEq.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
@@ -5946,7 +5614,6 @@ pub(crate) fn prepare_kagemusha_step_topup_witness_v3(
     )?;
     KagemushaStepSecureWitnessV3::for_topup(prepared.witness)
 }
-
 /// Build a Kagemusha top-up shield proof from one exact note opening.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
@@ -6027,7 +5694,6 @@ pub fn build_kagemusha_topup_shield_proof_v2(
         proof,
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 struct PreparedConfidentialTransferV3 {
     witness: ConfidentialTransferWitnessV2,
@@ -6040,7 +5706,6 @@ struct PreparedConfidentialTransferV3 {
     input_count: usize,
     output_count: usize,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl PreparedConfidentialTransferV3 {
     fn instance_columns(&self) -> Result<Vec<Vec<Scalar>>, String> {
@@ -6071,7 +5736,6 @@ impl PreparedConfidentialTransferV3 {
             .collect()
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn prepare_confidential_transfer_v3_resolved_paths(
@@ -6195,7 +5859,6 @@ fn prepare_confidential_transfer_v3_resolved_paths(
         output_count: outputs.len(),
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_transfer_proof_v2_resolved_paths(
@@ -6276,7 +5939,6 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
         proof,
     })
 }
-
 /// Build a confidential transfer proof, deriving input paths from the tree.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_transfer_proof_v2(
@@ -6340,7 +6002,6 @@ pub fn build_confidential_transfer_proof_v2(
         },
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn normalize_confidential_transfer_paths_v3(
     input_paths: &[ConfidentialMerklePathV2],
@@ -6382,7 +6043,6 @@ fn normalize_confidential_transfer_paths_v3(
     };
     Ok((input_0_path, input_1_path))
 }
-
 /// Prepare the exact secure append witness embedded by recursive StepEq.
 ///
 /// This is the same normalization and witness construction used by the
@@ -6418,7 +6078,6 @@ pub(crate) fn prepare_kagemusha_step_transfer_witness_v3_with_paths(
     )?;
     KagemushaStepSecureWitnessV3::for_transfer(prepared.witness)
 }
-
 /// Build a confidential transfer proof using explicitly supplied input paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_transfer_proof_v2_with_paths(
@@ -6453,7 +6112,6 @@ pub fn build_confidential_transfer_proof_v2_with_paths(
         },
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v2_resolved_paths(
@@ -6595,7 +6253,6 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         proof,
     })
 }
-
 /// Build a full confidential unshield proof from an in-memory tree.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v2(
@@ -6659,7 +6316,6 @@ pub fn build_confidential_unshield_proof_v2(
         },
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn normalize_confidential_unshield_full_paths_v3(
     input_paths: &[ConfidentialMerklePathV2],
@@ -6700,7 +6356,6 @@ fn normalize_confidential_unshield_full_paths_v3(
     };
     Ok((input_0_path, input_1_path))
 }
-
 /// Build a terminal full-redemption proof from two caller-supplied,
 /// canonically normalized membership paths. No private change output is
 /// invented and no change-preserving circuit is selected.
@@ -6738,7 +6393,6 @@ pub fn build_confidential_unshield_proof_v2_with_paths(
         },
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 struct PreparedConfidentialUnshieldChangeV4 {
     witness: ConfidentialUnshieldWitnessV3,
@@ -6748,7 +6402,6 @@ struct PreparedConfidentialUnshieldChangeV4 {
     root: [u8; 32],
     input_count: usize,
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl PreparedConfidentialUnshieldChangeV4 {
     fn instance_columns(&self) -> Result<Vec<Vec<Scalar>>, String> {
@@ -6768,7 +6421,6 @@ impl PreparedConfidentialUnshieldChangeV4 {
             .map(|public| public.into_array().to_vec())
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn prepare_confidential_unshield_change_v4_resolved_paths(
@@ -6902,7 +6554,6 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
         input_count: inputs.len(),
     })
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v3_resolved_paths(
@@ -6976,7 +6627,6 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
         proof,
     })
 }
-
 /// Build a terminal-full or change-preserving V3 unshield proof, deriving input paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v3(
@@ -7042,7 +6692,6 @@ pub fn build_confidential_unshield_proof_v3(
         },
     )
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn normalize_confidential_unshield_change_paths_v4(
     input_paths: &[ConfidentialMerklePathV2],
@@ -7084,7 +6733,6 @@ fn normalize_confidential_unshield_change_paths_v4(
     };
     Ok((input_0_path, input_1_path))
 }
-
 /// Prepare the exact secure change-redemption witness embedded by StepEq.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(crate) fn prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
@@ -7124,7 +6772,6 @@ pub(crate) fn prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
     )?;
     KagemushaStepSecureWitnessV3::for_unshield_change(prepared.witness)
 }
-
 /// Build a terminal-full or change-preserving V3 unshield using explicit paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v3_with_paths(
@@ -7161,5 +6808,4 @@ pub fn build_confidential_unshield_proof_v3_with_paths(
         },
     )
 }
-
 include!("confidential_v2_tests.rs");

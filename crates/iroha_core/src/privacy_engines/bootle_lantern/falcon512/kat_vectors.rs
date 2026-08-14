@@ -3,17 +3,12 @@
 //! The arrays below are copied verbatim from `fn-dsa-sign` 0.3.0 at
 //! workspace commit `daf14859b5aa3f8d75c42966ba7de83e6eb59997`
 //! (`src/lib.rs::KAT_512`, Unlicense). They are compiled only for tests.
-
 #![allow(non_upper_case_globals)]
-
-use sha2::{Digest as _, Sha256};
-use zeroize::Zeroizing;
-
 use super::table_assets::read_u16_le;
 use super::*;
-
+use sha2::{Digest as _, Sha256};
+use zeroize::Zeroizing;
 const KAT_512_BYTES: &[u8; 3_168] = include_bytes!("assets/kat512_v1.bin");
-
 struct Kat512 {
     f: [i8; 512],
     g: [i8; 512],
@@ -22,7 +17,6 @@ struct Kat512 {
     rnd: [u8; 96],
     sig_raw: [i16; 512],
 }
-
 const fn decode_kat_512(bytes: &[u8; 3_168]) -> Kat512 {
     let mut kat = Kat512 {
         f: [0; 512],
@@ -48,7 +42,6 @@ const fn decode_kat_512(bytes: &[u8; 3_168]) -> Kat512 {
     }
     kat
 }
-
 const KAT_512: Kat512 = decode_kat_512(KAT_512_BYTES);
 const KAT_512_f: [i8; 512] = KAT_512.f;
 const KAT_512_g: [i8; 512] = KAT_512.g;
@@ -56,7 +49,6 @@ const KAT_512_F: [i8; 512] = KAT_512.capital_f;
 const KAT_512_G: [i8; 512] = KAT_512.capital_g;
 const KAT_512_RND: [u8; 40 + 56] = KAT_512.rnd;
 const KAT_512_sig_raw: [i16; 512] = KAT_512.sig_raw;
-
 // Keep the original Falcon hash-to-point routine test-only. Production Bootle
 // targets are scoped by scope.rs; this only proves byte-for-byte compatibility
 // with the pinned upstream signing KAT.
@@ -65,7 +57,6 @@ fn pinned_target() -> [u16; DEGREE] {
     shake.inject(&KAT_512_RND[..40]);
     shake.inject(b"data1");
     shake.flip();
-
     let mut target = [0_u16; DEGREE];
     let mut index = 0;
     while index < DEGREE {
@@ -82,7 +73,6 @@ fn pinned_target() -> [u16; DEGREE] {
     }
     target
 }
-
 fn pinned_trapdoor() -> Trapdoor {
     let mut public_key = vec![0_u16; DEGREE].into_boxed_slice();
     let mut temporary = Zeroizing::new(vec![0_u16; DEGREE].into_boxed_slice());
@@ -101,7 +91,6 @@ fn pinned_trapdoor() -> Trapdoor {
         h: Zeroizing::new(public_key),
     }
 }
-
 fn digest_u16_le(values: &[u16]) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(2 * values.len());
     for value in values {
@@ -109,7 +98,6 @@ fn digest_u16_le(values: &[u16]) -> Vec<u8> {
     }
     Sha256::digest(encoded).to_vec()
 }
-
 fn digest_i16_le(parts: &[&[i16]]) -> Vec<u8> {
     let capacity = parts.iter().map(|part| part.len()).sum::<usize>() * 2;
     let mut encoded = Zeroizing::new(Vec::with_capacity(capacity));
@@ -120,7 +108,6 @@ fn digest_i16_le(parts: &[&[i16]]) -> Vec<u8> {
     }
     Sha256::digest(encoded.as_slice()).to_vec()
 }
-
 #[test]
 fn pinned_upstream_signer_target_preimage_equation_and_norm_kat() {
     let target = pinned_target();
@@ -129,7 +116,6 @@ fn pinned_upstream_signer_target_preimage_equation_and_norm_kat() {
         hex::decode("25684a1e6b737b3bacc7e28d31d7b284fa765943aa192ada07a3ff1ceee92eed")
             .expect("hex")
     );
-
     let trapdoor = pinned_trapdoor();
     let seed: &[u8; 56] = KAT_512_RND[40..].try_into().expect("56-byte seed");
     let preimage =
@@ -166,13 +152,11 @@ fn pinned_upstream_signer_target_preimage_equation_and_norm_kat() {
         preimage.second.as_ref(),
     ));
 }
-
 #[test]
 fn signer_rejects_noncanonical_target_and_zero_proposal_budget() {
     let trapdoor = pinned_trapdoor();
     let seed: &[u8; 56] = KAT_512_RND[40..].try_into().expect("56-byte seed");
     let target = pinned_target();
-
     let mut noncanonical = target;
     noncanonical[0] = MODULUS;
     assert!(sample_preimage_from_seed(&trapdoor, &noncanonical, seed).is_none());
@@ -180,28 +164,22 @@ fn signer_rejects_noncanonical_target_and_zero_proposal_budget() {
         &trapdoor, &target, seed,
     ));
 }
-
 #[test]
 fn signer_self_check_rejects_each_mutated_trapdoor_component() {
     let target = pinned_target();
     let seed: &[u8; 56] = KAT_512_RND[40..].try_into().expect("56-byte seed");
-
     let mut trapdoor = pinned_trapdoor();
     trapdoor.h[0] = (trapdoor.h[0] + 1) % MODULUS;
     assert!(sample_preimage_from_seed(&trapdoor, &target, seed).is_none());
-
     let mut trapdoor = pinned_trapdoor();
     trapdoor.f[0] += 1;
     assert!(sample_preimage_from_seed(&trapdoor, &target, seed).is_none());
-
     let mut trapdoor = pinned_trapdoor();
     trapdoor.g[0] += 1;
     assert!(sample_preimage_from_seed(&trapdoor, &target, seed).is_none());
-
     let mut trapdoor = pinned_trapdoor();
     trapdoor.capital_f[0] += 1;
     assert!(sample_preimage_from_seed(&trapdoor, &target, seed).is_none());
-
     let mut trapdoor = pinned_trapdoor();
     trapdoor.capital_g[0] += 1;
     assert!(sample_preimage_from_seed(&trapdoor, &target, seed).is_none());

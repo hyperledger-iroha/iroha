@@ -1,15 +1,12 @@
 //! Tokenizer for the Kotodama language.
 //!
 //! The lexer converts a source string into a sequence of [`Token`]s.
-
+pub use crate::source::{MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS};
 use crate::{
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
     source::{FrontendBudget, SourceFile, SourceId, TextRange},
     syntax::SyntaxKind,
 };
-
-pub use crate::source::{MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS};
-
 macro_rules! define_v1_keywords {
     ($($spelling:literal => $variant:ident),+ $(,)?) => {
         /// Canonical V1 keyword table consumed by the lexer, formatter,
@@ -17,22 +14,18 @@ macro_rules! define_v1_keywords {
         ///
         /// Rejected compatibility and policy spellings are intentionally excluded.
         pub const V1_KEYWORDS: &[&str] = &[$($spelling),+];
-
         pub(crate) fn v1_keyword_kind(spelling: &str) -> Option<TokenKind> {
             Some(match spelling {
                 $($spelling => TokenKind::$variant,)+
                 _ => return None,
             })
         }
-
         #[cfg(test)]
         const V1_KEYWORD_TOKEN_KINDS: &[TokenKind] = &[$(TokenKind::$variant),+];
     };
 }
-
 /// Normative machine-readable lexical grammar used to generate V1 tables.
 pub const V1_LEXICAL_GRAMMAR: &str = include_str!("../grammar/v1.lex");
-
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum TokenKind {
@@ -118,9 +111,7 @@ pub enum TokenKind {
     Hash,
     EOF,
 }
-
 include!(concat!(env!("OUT_DIR"), "/kotodama_v1_lexical.rs"));
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
@@ -129,7 +120,6 @@ pub struct Token {
     /// Exact half-open UTF-8 byte range in the source file.
     pub range: TextRange,
 }
-
 /// Lex an entire source string into a vector of [`Token`]s.
 pub fn lex(src: &str) -> Result<Vec<Token>, String> {
     if src.len() > MAX_SOURCE_BYTES {
@@ -141,7 +131,6 @@ pub fn lex(src: &str) -> Result<Vec<Token>, String> {
     let source = SourceFile::new(SourceId(0), "<source>", src);
     lex_source(&source, FrontendBudget::v1()).map_err(|bundle| bundle.render_human())
 }
-
 /// Lex one source file into the significant, value-carrying token stream used
 /// by the AST parser.
 ///
@@ -155,7 +144,6 @@ pub(crate) fn lex_source(
     let lexed = crate::syntax::lexer::lex(source, budget);
     lower_lexed(source, budget, lexed)
 }
-
 /// Lower one already-scanned lossless token stream for the AST parser.
 pub(crate) fn lower_lexed(
     source: &SourceFile,
@@ -169,7 +157,6 @@ pub(crate) fn lower_lexed(
         Err(DiagnosticBundle::new(diagnostics))
     }
 }
-
 /// Lower every valid token from one lossless scan while retaining lexical
 /// diagnostics for CST recovery.
 ///
@@ -195,7 +182,6 @@ pub(crate) fn lower_lexed_recovering(
         omitted_diagnostics,
     )
 }
-
 fn lower_green_tokens<'token>(
     source: &SourceFile,
     budget: FrontendBudget,
@@ -208,7 +194,6 @@ fn lower_green_tokens<'token>(
         omitted_diagnostics.saturating_add(diagnostics.len().saturating_sub(retained));
     diagnostics.truncate(retained);
     let mut tokens = Vec::new();
-
     for token in green_tokens {
         if token.kind.is_trivia() || token.kind == SyntaxKind::ErrorToken {
             continue;
@@ -235,7 +220,6 @@ fn lower_green_tokens<'token>(
             }
         }
     }
-
     if omitted != 0 {
         diagnostics.push(Diagnostic::error(
             "K0004",
@@ -246,7 +230,6 @@ fn lower_green_tokens<'token>(
     }
     (tokens, diagnostics)
 }
-
 fn lexical_diagnostic(
     source: &SourceFile,
     message: impl Into<String>,
@@ -273,7 +256,6 @@ fn lexical_diagnostic(
         }),
     )
 }
-
 fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, String> {
     let lowered = match kind {
         SyntaxKind::Whitespace | SyntaxKind::LineComment | SyntaxKind::BlockComment => {
@@ -398,7 +380,6 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
     };
     Ok(Some(lowered))
 }
-
 fn validate_integer_literal(text: &str) -> Result<(), String> {
     let (digits, radix) =
         if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
@@ -414,7 +395,6 @@ fn validate_integer_literal(text: &str) -> Result<(), String> {
     validate_digit_component(digits, radix, "integer")?;
     Ok(())
 }
-
 fn validate_decimal_literal(text: &str) -> Result<(), String> {
     let (coefficient, exponent) = text
         .split_once(['e', 'E'])
@@ -445,7 +425,6 @@ fn validate_decimal_literal(text: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_digit_component(text: &str, radix: u32, context: &str) -> Result<(), String> {
     if text.is_empty()
         || text.starts_with('_')
@@ -461,7 +440,6 @@ fn validate_digit_component(text: &str, radix: u32, context: &str) -> Result<(),
     }
     Ok(())
 }
-
 fn raw_literal_contents(text: &str) -> Option<&str> {
     let quote = text.find('"')?;
     let prefix = &text[..quote];
@@ -476,7 +454,6 @@ fn raw_literal_contents(text: &str) -> Option<&str> {
     let content_end = text.len().checked_sub(closing_len)?;
     (content_end > quote).then(|| &text[quote + 1..content_end])
 }
-
 fn decode_string_literal(text: &str) -> Result<String, String> {
     if let Some(contents) = raw_literal_contents(text) {
         return Ok(contents.to_owned());
@@ -487,7 +464,6 @@ fn decode_string_literal(text: &str) -> Result<String, String> {
         .ok_or_else(|| "invalid string literal delimiters".to_owned())?;
     decode_escaped_string(contents)
 }
-
 fn decode_byte_literal(text: &str) -> Result<Vec<u8>, String> {
     if let Some(contents) = raw_literal_contents(text) {
         return Ok(contents.as_bytes().to_vec());
@@ -498,7 +474,6 @@ fn decode_byte_literal(text: &str) -> Result<Vec<u8>, String> {
         .ok_or_else(|| "invalid byte-string delimiters".to_owned())?;
     decode_escaped_bytes(contents)
 }
-
 fn decode_escaped_string(contents: &str) -> Result<String, String> {
     let mut output = String::new();
     let mut characters = contents.chars();
@@ -524,7 +499,6 @@ fn decode_escaped_string(contents: &str) -> Result<String, String> {
     }
     Ok(output)
 }
-
 fn decode_escaped_bytes(contents: &str) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     let mut characters = contents.chars();
@@ -555,7 +529,6 @@ fn decode_escaped_bytes(contents: &str) -> Result<Vec<u8>, String> {
     }
     Ok(output)
 }
-
 fn read_hex_escape(
     characters: &mut impl Iterator<Item = char>,
     digits: usize,
@@ -576,7 +549,6 @@ fn read_hex_escape(
     }
     Ok(value)
 }
-
 fn read_unicode_escape(characters: &mut impl Iterator<Item = char>) -> Result<char, String> {
     if characters.next() != Some('{') {
         return Err("Unicode escape must start with `{`".to_owned());
@@ -601,7 +573,6 @@ fn read_unicode_escape(characters: &mut impl Iterator<Item = char>) -> Result<ch
     }
     Err("unterminated Unicode escape".to_owned())
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -612,7 +583,6 @@ mod tests {
         source::{FrontendBudget, SourceFile, SourceId},
         syntax::SyntaxKind,
     };
-
     #[test]
     fn canonical_keyword_table_drives_lexer_tokens_without_drift() {
         assert_eq!(V1_KEYWORDS.len(), V1_KEYWORD_TOKEN_KINDS.len());
@@ -641,7 +611,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retired_operators_are_rejected_without_semantic_tokens() {
         for spelling in ["++", "&", "|"] {
@@ -652,26 +621,22 @@ mod tests {
                 "unexpected diagnostic for `{spelling}`: {error}"
             );
         }
-
         for spelling in ["&&", "||"] {
             lex(spelling).expect("canonical short-circuit operator must remain supported");
         }
     }
-
     #[test]
     fn source_size_limit_is_enforced_before_lexing() {
         let source = " ".repeat(MAX_SOURCE_BYTES + 1);
         let err = lex(&source).expect_err("oversized source must fail");
         assert!(err.contains("K0001"));
     }
-
     #[test]
     fn token_limit_is_enforced() {
         let source = "a ".repeat(MAX_TOKENS);
         let err = lex(&source).expect_err("excess token count must fail");
         assert!(err.contains("K0002"));
     }
-
     #[test]
     fn nesting_limit_is_enforced() {
         let source = format!(
@@ -682,14 +647,12 @@ mod tests {
         let err = lex(&source).expect_err("excess nesting must fail");
         assert!(err.contains("K0003"));
     }
-
     #[test]
     fn large_integer_spelling_is_preserved_for_the_parser_domain_check() {
         let spelling = "340282366920938463463374607431768211456";
         let tokens = lex(spelling).expect("lex adaptive-width int");
         assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling));
     }
-
     #[test]
     fn former_u128_endpoint_is_an_ordinary_unsuffixed_int() {
         let spelling = "340282366920938463463374607431768211455";
@@ -700,7 +663,6 @@ mod tests {
             tokens[0].kind
         );
     }
-
     #[test]
     fn exact_decimal_literals_retain_their_source_spelling() {
         let tokens = lex("1_234.50_0 1e6 1.5e-3").expect("lex exact decimals");
@@ -713,7 +675,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(spellings, ["1_234.50_0", "1e6", "1.5e-3"]);
     }
-
     #[test]
     fn every_retired_numeric_suffix_has_a_stable_diagnostic() {
         for spelling in [
@@ -733,20 +694,17 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn separated_type_name_is_not_a_literal_suffix() {
         let tokens = lex("10 int").expect("lex separate literal and type identifier");
         assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == "10"));
         assert!(matches!(&tokens[1].kind, TokenKind::Ident(name) if name == "int"));
     }
-
     #[test]
     fn var_is_a_dedicated_keyword() {
         let tokens = lex("var value = 1;").expect("lex var binding");
         assert!(matches!(tokens[0].kind, TokenKind::Var));
     }
-
     #[test]
     fn branded_declaration_keywords_are_reserved_in_both_scripts() {
         for (spelling, expected) in [
@@ -763,7 +721,6 @@ mod tests {
             assert_eq!(tokens[0].kind, expected, "keyword `{spelling}`");
         }
     }
-
     #[test]
     fn non_ascii_identifiers_are_rejected() {
         for spelling in ["café", "誓約名", "利用者", "言挙げrun"] {
@@ -774,39 +731,33 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn wide_hex_literal_is_preserved_for_the_parser_domain_check() {
         let spelling = "0x1_0000_0000_0000_0000_0000_0000_0000_0000";
         let tokens = lex(spelling).expect("lex wide hexadecimal int");
         assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling));
     }
-
     #[test]
     fn wide_binary_literal_is_preserved_for_the_parser_domain_check() {
         let spelling = format!("0b1{}", "0".repeat(128));
         let tokens = lex(&spelling).expect("lex wide binary int");
         assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == &spelling));
     }
-
     #[test]
     fn unterminated_block_comment_errors() {
         let err = lex("/* never ends").unwrap_err();
         assert!(err.contains("unterminated block comment"));
     }
-
     #[test]
     fn unterminated_string_detected() {
         let err = lex("\"hello").unwrap_err();
         assert!(err.contains("unterminated string literal"));
     }
-
     #[test]
     fn newline_in_string_is_rejected() {
         let err = lex("\"hello\nworld\"").unwrap_err();
         assert!(err.contains("unterminated string literal"));
     }
-
     #[test]
     fn string_hex_and_unicode_escapes_are_parsed() {
         let tokens = lex("\"A\\x42\\u{43}\"").expect("lex");
@@ -816,7 +767,6 @@ mod tests {
             tokens[0].kind
         );
     }
-
     #[test]
     fn raw_string_preserves_backslashes() {
         let tokens = lex(r#"r"hello\n""#).expect("lex");
@@ -826,7 +776,6 @@ mod tests {
             tokens[0].kind
         );
     }
-
     #[test]
     fn raw_string_with_hashes_allows_quotes() {
         let tokens = lex(r##"r#"a "quote""#"##).expect("lex");
@@ -836,7 +785,6 @@ mod tests {
             tokens[0].kind
         );
     }
-
     #[test]
     fn byte_string_parses_escapes() {
         let tokens = lex("b\"ab\\x41\"").expect("lex");
@@ -846,7 +794,6 @@ mod tests {
             tokens[0].kind
         );
     }
-
     #[test]
     fn raw_byte_string_ignores_escapes() {
         let tokens = lex(r#"br"ab\n""#).expect("lex");
@@ -856,19 +803,16 @@ mod tests {
             tokens[0].kind
         );
     }
-
     #[test]
     fn invalid_hex_escape_reports_error() {
         let err = lex("\"\\xG1\"").unwrap_err();
         assert!(err.contains("invalid hex digit"));
     }
-
     #[test]
     fn invalid_unicode_escape_reports_error() {
         let err = lex("\"\\u{}\"").unwrap_err();
         assert!(err.contains("empty Unicode escape"));
     }
-
     #[test]
     fn semantic_tokens_reuse_lossless_token_boundaries() {
         let text = r##"seiyaku Demo { // trivia
@@ -892,13 +836,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn recovering_lowering_retains_valid_tokens_without_admitting_bad_source() {
         let text = "seiyaku Broken { fn run() { let int value = @; } }";
         let source = SourceFile::new(SourceId(43), "recovering.ko", text);
         let lossless = crate::syntax::lexer::lex(&source, FrontendBudget::v1());
-
         let (tokens, diagnostics) =
             lower_lexed_recovering(&source, FrontendBudget::v1(), lossless.clone());
         assert!(
@@ -915,7 +857,6 @@ mod tests {
             "compiler-facing lowering must still fail closed"
         );
     }
-
     #[test]
     fn typed_constructor_path_is_one_spanned_token_stream() {
         let text = r#"module Typed {
@@ -932,7 +873,6 @@ mod tests {
         let end = source.line_column(separator.range.end);
         assert_eq!(start.line, 2);
         assert_eq!(end.column, start.column + 2);
-
         let program = crate::parser::parse_source(&source, FrontendBudget::v1())
             .expect("parse uppercase typed constructor");
         let crate::ast::Item::Function(function) = &program.items[0] else {

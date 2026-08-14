@@ -1,5 +1,4 @@
 use ivm::{IVM, ProgramMetadata, cost_of_with_params, encoding, instruction};
-
 fn header_with_mode(mode: u8) -> Vec<u8> {
     let meta = ProgramMetadata {
         mode,
@@ -7,7 +6,6 @@ fn header_with_mode(mode: u8) -> Vec<u8> {
     };
     meta.encode()
 }
-
 #[test]
 fn gas_scales_with_setvl_for_vector_op() {
     // SETVL=8; VADD32; HALT under VECTOR mode.
@@ -17,11 +15,9 @@ fn gas_scales_with_setvl_for_vector_op() {
     code.extend_from_slice(&setvl.to_le_bytes());
     code.extend_from_slice(&vadd.to_le_bytes());
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
     let mut vm = IVM::new(10_000);
     vm.load_program(&code).unwrap();
     vm.run().unwrap();
-
     // Sum expected with vector_len equal to the accepted SETVL value for VADD32.
     let vl = vm.vector_length();
     let used = 10_000 - vm.remaining_gas();
@@ -32,7 +28,6 @@ fn gas_scales_with_setvl_for_vector_op() {
     assert_eq!(vl, vm.vector_length());
     assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
 }
-
 #[test]
 fn branch_executed_set_gas_matches() {
     // addi x1, x0, 1; addi x2, x0, 2; beq x1,x2, +8; jal 0, +4; halt
@@ -57,7 +52,6 @@ fn branch_executed_set_gas_matches() {
         .sum();
     assert_eq!(10_000 - vm.remaining_gas(), expected);
 }
-
 #[test]
 fn vector_op_gas_table_matches_under_various_setvl() {
     // Build small programs that set VL and execute a single vector op; compare gas used.
@@ -83,7 +77,6 @@ fn vector_op_gas_table_matches_under_various_setvl() {
             code.extend_from_slice(&setvl.to_le_bytes());
             code.extend_from_slice(&word.to_le_bytes());
             code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
             let mut vm = IVM::new(100_000);
             vm.load_program(&code).unwrap();
             vm.run().unwrap();
@@ -98,7 +91,6 @@ fn vector_op_gas_table_matches_under_various_setvl() {
             assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
         }
     }
-
     for &vl in &[2i32, 4, 8, 16, 64] {
         let mut code = header_with_mode(ivm::ivm_mode::VECTOR);
         let setvl = encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, vl as u8);
@@ -106,7 +98,6 @@ fn vector_op_gas_table_matches_under_various_setvl() {
         code.extend_from_slice(&setvl.to_le_bytes());
         code.extend_from_slice(&word.to_le_bytes());
         code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
         let mut vm = IVM::new(100_000);
         vm.load_program(&code).unwrap();
         vm.run().unwrap();

@@ -1,19 +1,16 @@
+use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
+use eyre::Result;
+use norito::json;
+use norito_derive::{JsonDeserialize, JsonSerialize, NoritoSerialize};
 use std::{
     fs::OpenOptions,
     io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-
-use eyre::Result;
-use norito::json;
-use norito_derive::{JsonDeserialize, JsonSerialize, NoritoSerialize};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
-
-use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
-
 /// Resolver event payload emitted via logs and streaming interfaces.
 #[derive(Clone, Debug, NoritoSerialize, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "event", content = "value")]
@@ -56,14 +53,12 @@ pub enum ResolverEvent {
         resolver_id: String,
     },
 }
-
 #[derive(Clone, Debug, NoritoSerialize, JsonSerialize, JsonDeserialize)]
 pub struct ResolverEventLog {
     pub timestamp: i64,
     pub resolver_id: String,
     pub event: ResolverEvent,
 }
-
 /// Event emitter backed by a broadcast channel and optional durable log.
 #[derive(Clone)]
 pub struct EventEmitter {
@@ -71,9 +66,7 @@ pub struct EventEmitter {
     log: Option<ArcLog>,
     resolver_id: String,
 }
-
 type ArcLog = Arc<Mutex<std::fs::File>>;
-
 impl EventEmitter {
     pub fn new(resolver_id: impl Into<String>, log_path: Option<PathBuf>) -> Result<Self> {
         let resolver_id = resolver_id.into();
@@ -90,12 +83,10 @@ impl EventEmitter {
             resolver_id,
         })
     }
-
     /// Subscribe to resolver events.
     pub fn subscribe(&self) -> broadcast::Receiver<ResolverEvent> {
         self.tx.subscribe()
     }
-
     /// Emit events for bundle changes, logging alongside the broadcast.
     pub fn emit_bundle_diff(&self, diff: &BundleDiff) {
         for (namehash, snapshot) in &diff.added {
@@ -129,7 +120,6 @@ impl EventEmitter {
             self.emit(event, "bundle removed", namehash);
         }
     }
-
     /// Emit events for resolver advert changes, logging the transition.
     pub fn emit_resolver_diff(&self, diff: &ResolverDiff) {
         for resolver in &diff.added {
@@ -151,7 +141,6 @@ impl EventEmitter {
             self.emit(event, "resolver advert removed", resolver);
         }
     }
-
     /// Emit invalidation events for expired bundles and resolver attestations.
     pub fn emit_expirations(&self, diff: &ExpiryDiff) {
         for (namehash, snapshot) in &diff.expired_bundles {
@@ -177,19 +166,16 @@ impl EventEmitter {
             );
         }
     }
-
     fn emit(&self, event: ResolverEvent, log_message: &str, label: &str) {
         info!(event = %log_message, subject = %label);
         let _ = self.tx.send(event.clone());
         self.persist(&event);
     }
-
     fn emit_warn(&self, event: ResolverEvent, log_message: &str, label: &str) {
         warn!(event = %log_message, subject = %label);
         let _ = self.tx.send(event.clone());
         self.persist(&event);
     }
-
     fn persist(&self, event: &ResolverEvent) {
         let Some(log) = &self.log else {
             return;
@@ -211,25 +197,20 @@ impl EventEmitter {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use tempfile::NamedTempFile;
-
     use super::*;
     use crate::state::{
         BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation,
     };
-
+    use std::fs;
+    use tempfile::NamedTempFile;
     #[test]
     fn logs_bundle_events_when_path_configured() {
         let file = NamedTempFile::new().expect("create temp log file");
         let path = file.path().to_path_buf();
         let emitter =
             EventEmitter::new("resolver.test", Some(path.clone())).expect("construct emitter");
-
         let mut diff = BundleDiff::default();
         diff.added.push((
             "abcd".to_string(),
@@ -245,7 +226,6 @@ mod tests {
             },
         ));
         emitter.emit_bundle_diff(&diff);
-
         let contents = fs::read_to_string(path).expect("read log contents");
         assert!(
             contents.contains("\"event\":\"BundleAdded\""),
@@ -264,18 +244,15 @@ mod tests {
             "log lines should include the resolver identifier"
         );
     }
-
     #[test]
     fn logs_resolver_events_when_path_configured() {
         let file = NamedTempFile::new().expect("create temp log file");
         let path = file.path().to_path_buf();
         let emitter =
             EventEmitter::new("resolver.test", Some(path.clone())).expect("construct emitter");
-
         let mut diff = ResolverDiff::default();
         diff.updated.push("resolver.test".to_string());
         emitter.emit_resolver_diff(&diff);
-
         let contents = fs::read_to_string(path).expect("read log contents");
         assert!(
             contents.contains("\"event\":\"ResolverUpdated\""),
@@ -290,14 +267,12 @@ mod tests {
             "log lines should include the serialized timestamp"
         );
     }
-
     #[test]
     fn logs_expired_entries() {
         let file = NamedTempFile::new().expect("create temp log file");
         let path = file.path().to_path_buf();
         let emitter =
             EventEmitter::new("resolver.test", Some(path.clone())).expect("construct emitter");
-
         let mut diff = ExpiryDiff::default();
         diff.expired_bundles.push((
             "abcd".to_string(),
@@ -316,9 +291,7 @@ mod tests {
             resolver_id: "deadbeef".into(),
             reason: "expired".into(),
         });
-
         emitter.emit_expirations(&diff);
-
         let contents = fs::read_to_string(path).expect("read log contents");
         assert!(
             contents.contains("bundle.expired"),
@@ -329,7 +302,6 @@ mod tests {
             "expected resolver.invalidate event in log"
         );
     }
-
     #[tokio::test]
     async fn subscriber_receives_bundle_event_and_log_matches() {
         let file = NamedTempFile::new().expect("create temp log file");
@@ -337,7 +309,6 @@ mod tests {
         let emitter =
             EventEmitter::new("resolver.test", Some(path.clone())).expect("construct emitter");
         let mut subscriber = emitter.subscribe();
-
         let mut diff = BundleDiff::default();
         diff.added.push((
             "zzzz".to_string(),
@@ -353,7 +324,6 @@ mod tests {
             },
         ));
         emitter.emit_bundle_diff(&diff);
-
         match subscriber.recv().await.expect("receive bundle event") {
             ResolverEvent::BundleAdded { namehash, snapshot } => {
                 assert_eq!(namehash, "zzzz");
@@ -362,7 +332,6 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
-
         let contents = fs::read_to_string(path).expect("read log contents");
         assert!(
             contents.contains("\"event\":\"BundleAdded\""),

@@ -1,6 +1,5 @@
 //! Parliament body derivation should emit rosters for every governance body.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_config::parameters::actual::Governance;
 use iroha_core::governance::{draw::derive_parliament_bodies, state::ParliamentTerm};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -8,20 +7,17 @@ use iroha_data_model::{
     NetworkId, account::AccountId, block::BlockHeader, governance::types::ParliamentBody,
     isi::governance::CouncilDerivationKind,
 };
-
 fn account(tag: u8) -> AccountId {
     let (public_key, _) = KeyPair::try_from_seed(vec![tag; 32], Algorithm::Ed25519)
         .expect("seeded parliament body account keypair should be valid")
         .into_parts();
     AccountId::new(public_key)
 }
-
 fn network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         label,
     )))
 }
-
 #[test]
 fn derive_bodies_populates_all_rosters() {
     let network_id = network_id(b"demo-chain");
@@ -37,7 +33,6 @@ fn derive_bodies_populates_all_rosters() {
         parliament_alternate_size: Some(1),
         ..Governance::default()
     };
-
     let council = ParliamentTerm {
         epoch: 4,
         members: vec![account(b'A'), account(b'B'), account(b'C'), account(b'D')],
@@ -45,10 +40,8 @@ fn derive_bodies_populates_all_rosters() {
         candidate_count: 5,
         derived_by: CouncilDerivationKind::Sortition,
     };
-
     let bodies = derive_parliament_bodies(&cfg, &network_id, council.epoch, &beacon, &council);
     assert_eq!(bodies.selection_epoch, council.epoch);
-
     for body in [
         ParliamentBody::RulesCommittee,
         ParliamentBody::AgendaCouncil,
@@ -65,7 +58,6 @@ fn derive_bodies_populates_all_rosters() {
         assert_eq!(roster.epoch, council.epoch);
         assert!(!roster.members.is_empty(), "expected members for {body:?}");
     }
-
     let rules = bodies
         .rosters
         .get(&ParliamentBody::RulesCommittee)

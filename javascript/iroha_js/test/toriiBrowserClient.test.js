@@ -26,6 +26,16 @@ import {
 } from "./sumeragiBrowserFixtures.js";
 
 const BASE_URL = "https://localhost:8080/v1/explorer";
+const QUERY_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const FOREIGN_QUERY_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa7));
+const BROWSER_OPERATOR_CONTEXT = new browserSdk.OperatorSigningContext(
+  QUERY_NETWORK_ID,
+  {
+    publicKey:
+      "ed012066BE7E332C7A453332BD9D0A7F7DB055F5C5EF1A06ADA66D98B39FB6810C473A",
+    sign: async () => Buffer.alloc(64, 0x22),
+  },
+);
 const FIXTURE_ALICE_ID = AccountAddress.fromAccount({
   publicKey: Buffer.from(
     "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
@@ -886,9 +896,11 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
   const client = new ToriiBrowserClient("https://torii.example/v1", {
     fetchImpl,
     defaultHeaders: { Authorization: "Bearer jwt" },
+    networkId: QUERY_NETWORK_ID,
   });
 
   const payload = await client.queryVisibleTransactions({
+    ...canonicalReadOptions(),
     assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
     select: [" entrypoint_hash ", { authority: true }],
     sort: "newest",
@@ -900,7 +912,12 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
 
   assert.equal(capturedUrl, "https://torii.example/v1/transactions/visible/query");
   assert.equal(capturedInit.method, "POST");
+  assert.equal(capturedInit.redirect, "error");
   assert.equal(capturedInit.headers.Authorization, "Bearer jwt");
+  assert.equal(
+    capturedInit.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(FIXTURE_ALICE_ID).address.canonicalHex(),
+  );
   assert.deepEqual(JSON.parse(capturedInit.body), {
     pagination: { limit: 25 },
     sort: [
@@ -917,6 +934,69 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
     count_mode: "bounded",
   });
   assert.deepEqual(payload, { items: [], total: 0 });
+});
+
+test("ToriiBrowserClient transaction queries bind exact genesis, path, and body", async () => {
+  const messages = [];
+  const fetchImpl = async () => jsonResponse({ items: [], total: 0 });
+  const sign = async ({ message }) => {
+    messages.push(Buffer.from(message));
+    return Buffer.alloc(64, messages.length);
+  };
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl,
+    networkId: QUERY_NETWORK_ID,
+  });
+  const foreign = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl,
+    networkId: FOREIGN_QUERY_NETWORK_ID,
+  });
+  const auth = { authAccountId: FIXTURE_ALICE_ID, sign, timestampMs: 1_700_000_000_000, nonce: "query-binding" };
+
+  await client.queryAccountTransactions(FIXTURE_ALICE_ID, { ...auth, limit: 1 });
+  await client.queryAccountTransactions(FIXTURE_BOB_ID, { ...auth, limit: 1 });
+  await client.queryTransactions({ ...auth, limit: 2 });
+  await foreign.queryTransactions({ ...auth, limit: 2 });
+
+  assert.notDeepEqual(messages[0], messages[1], "the substituted account path must be signed");
+  assert.notDeepEqual(messages[1], messages[2], "the final query body must be signed");
+  assert.notDeepEqual(messages[2], messages[3], "a foreign genesis must change the signature message");
+});
+
+test("ToriiBrowserClient transaction queries are one-shot and reject legacy auth shapes", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    networkId: QUERY_NETWORK_ID,
+    fetchImpl: async (_url, init) => {
+      fetchCalls += 1;
+      assert.equal(init.redirect, "error");
+      return jsonResponse({ error: "unavailable" }, { status: 503 });
+    },
+  });
+  await assert.rejects(
+    client.queryTransactions({ ...canonicalReadOptions(), limit: 1 }),
+    (error) => error instanceof ToriiBrowserHttpError && error.status === 503,
+  );
+  assert.equal(fetchCalls, 1);
+
+  const noFetch = new ToriiBrowserClient("https://torii.example", {
+    networkId: QUERY_NETWORK_ID,
+    fetchImpl: async () => {
+      throw new Error("invalid authentication must fail before fetch");
+    },
+  });
+  assert.throws(() => noFetch.queryTransactions({ limit: 1 }), /authAccountId/);
+  assert.throws(
+    () => noFetch.queryTransactions({ ...canonicalReadOptions(), privateKey: "inline" }),
+    /unsupported option privateKey/,
+  );
+  assert.throws(
+    () => noFetch.queryTransactions({
+      ...canonicalReadOptions(),
+      headers: { "X-Iroha-Signature": "precomputed" },
+    }),
+    /cannot be precomputed/,
+  );
 });
 
 test("ToriiBrowserClient rejects adversarial query options before fetch", async () => {
@@ -1101,7 +1181,10 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
           },
     );
   };
-  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl,
+    networkId: QUERY_NETWORK_ID,
+  });
 
   await client.queryMultisigProposals(
     {
@@ -1532,6 +1615,7 @@ test("ToriiBrowserClient typed Sumeragi methods use fixed JSON routes and preser
         );
       const requests = [];
       const client = new Client("https://torii.example", {
+        operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
         fetchImpl: async (url, init) => {
           requests.push([String(url), init]);
           if (String(url).endsWith("/v1/sumeragi/status")) {
@@ -1592,6 +1676,7 @@ test("ToriiBrowserClient typed Sumeragi methods reject ambiguous JSON and non-JS
         }),
       ];
       const client = new Client("https://torii.example", {
+        operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
         fetchImpl: async () => responses.shift(),
       });
 
@@ -1624,6 +1709,7 @@ test("ToriiBrowserClient typed Sumeragi methods enforce endpoint-specific byte b
     await t.test(label, async () => {
       const declaredLengths = [1024 * 1024 + 1, 16 * 1024 * 1024 + 1];
       const client = new Client("https://torii.example", {
+        operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
         fetchImpl: async () => new Response("{}", {
           headers: {
             "content-length": String(declaredLengths.shift()),
@@ -1647,6 +1733,7 @@ test("ToriiBrowserClient typed Sumeragi methods enforce endpoint-specific byte b
 test("ToriiBrowserClient keeps raw and typed Sumeragi methods distinct", async () => {
   const payload = { operational_note: "raw payload" };
   const client = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
     fetchImpl: async () => jsonResponse(payload),
   });
 
@@ -1654,4 +1741,48 @@ test("ToriiBrowserClient keeps raw and typed Sumeragi methods distinct", async (
   assert.deepEqual(await client.getSumeragiDiagnostics(), payload);
   await assert.rejects(client.getSumeragiStatusTyped(), /unknown field/u);
   await assert.rejects(client.getSumeragiDiagnosticsTyped(), /unknown field/u);
+});
+
+test("ToriiBrowserClient Sumeragi reads require fresh operator auth before dispatch", async () => {
+  let calls = 0;
+  const missing = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({});
+    },
+  });
+  assert.throws(
+    () => missing.getSumeragiStatus(),
+    /requires an immutable OperatorSigningContext/u,
+  );
+  assert.equal(calls, 0);
+
+  const signedCalls = [];
+  const signed = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
+    fetchImpl: async (url, init) => {
+      signedCalls.push([String(url), init]);
+      return jsonResponse({});
+    },
+  });
+  await signed.getSumeragiTelemetry();
+  assert.equal(signedCalls.length, 1);
+  assert.equal(signedCalls[0][0], "https://torii.example/v1/sumeragi/telemetry");
+  assert.equal(signedCalls[0][1].redirect, "error");
+  assert.equal(signedCalls[0][1].body, undefined);
+  assert.ok(signedCalls[0][1].headers["X-Iroha-Operator-Signature"]);
+
+  const fallback = new ToriiBrowserClient("https://torii.example", {
+    operatorSigningContext: BROWSER_OPERATOR_CONTEXT,
+    defaultHeaders: { Authorization: "Bearer retired" },
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({});
+    },
+  });
+  await assert.rejects(
+    fallback.getSumeragiStatus(),
+    /generated signing/u,
+  );
+  assert.equal(calls, 0);
 });

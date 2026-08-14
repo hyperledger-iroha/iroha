@@ -3,7 +3,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
 fn main() {
     // Teach rustc about our custom cfg so check-cfg doesn't flag it.
     println!("cargo::rustc-check-cfg=cfg(crc64_cuda_available)");
@@ -13,27 +12,22 @@ fn main() {
     println!("cargo:rerun-if-env-changed=JSONSTAGE1_CUDA_ARCH");
     println!("cargo:rerun-if-env-changed=JSONSTAGE1_CUDA_SKIP_BUILD");
     println!("cargo:rerun-if-changed=src/cuda_crc64.cu");
-
     let feature_enabled = env::var_os("CARGO_FEATURE_CUDA_KERNEL").is_some();
     if !feature_enabled {
         // Feature not requested; keep the Rust fallback only.
         return;
     }
-
     if env::var_os("JSONSTAGE1_CUDA_SKIP_BUILD").is_some() {
         println!("cargo:warning=JSONSTAGE1_CUDA_SKIP_BUILD set; skipping CUDA kernel compilation.");
         return;
     }
-
     let Some(nvcc) = find_nvcc() else {
         println!("cargo:warning=nvcc not found; building jsonstage1_cuda without GPU kernels.");
         return;
     };
-
     if let Some(dir) = locate_cuda_lib_dir() {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
-
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let mut build = cc::Build::new();
     build.cuda(true);
@@ -48,7 +42,6 @@ fn main() {
     if target_os != "windows" {
         build.flag("-Xcompiler=-fPIC");
     }
-
     if let Some(arch_flag) = env::var_os("JSONSTAGE1_CUDA_ARCH") {
         build.flag(
             arch_flag
@@ -56,7 +49,6 @@ fn main() {
                 .expect("JSONSTAGE1_CUDA_ARCH must be valid UTF-8"),
         );
     }
-
     if let Some(host_compiler) = select_cuda_host_compiler(&target_os) {
         println!(
             "cargo:warning=using CUDA host compiler {}",
@@ -70,7 +62,6 @@ fn main() {
         );
         build.ccbin(false);
     }
-
     build.compile("jsonstage1_cuda_kernels");
     println!("cargo:rustc-link-lib=cudart");
     match target_os.as_str() {
@@ -81,7 +72,6 @@ fn main() {
     println!("cargo:rustc-cfg=crc64_cuda_available");
     println!("cargo:rustc-cfg=jsonstage1_cuda_available");
 }
-
 fn find_nvcc() -> Option<PathBuf> {
     for var in ["NVCC", "CUDACXX"] {
         if let Some(path) = env::var_os(var).map(PathBuf::from)
@@ -90,12 +80,10 @@ fn find_nvcc() -> Option<PathBuf> {
             return Some(path);
         }
     }
-
     let path_nvcc = PathBuf::from("nvcc");
     if nvcc_works(&path_nvcc) {
         return Some(path_nvcc);
     }
-
     let exe = if cfg!(windows) { "nvcc.exe" } else { "nvcc" };
     for root in env::var_os("CUDA_HOME")
         .into_iter()
@@ -106,10 +94,8 @@ fn find_nvcc() -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-
     None
 }
-
 fn nvcc_works(path: &Path) -> bool {
     Command::new(path)
         .arg("--version")
@@ -117,7 +103,6 @@ fn nvcc_works(path: &Path) -> bool {
         .map(|out| out.status.success())
         .unwrap_or(false)
 }
-
 fn locate_cuda_lib_dir() -> Option<PathBuf> {
     let root = env::var_os("CUDA_HOME")
         .or_else(|| env::var_os("CUDA_PATH"))
@@ -134,12 +119,10 @@ fn locate_cuda_lib_dir() -> Option<PathBuf> {
     }
     None
 }
-
 fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     if target_os != "linux" || explicit_cxx_configured() {
         return None;
     }
-
     for candidate in [
         Path::new("/usr/bin/g++-12"),
         Path::new("/usr/local/bin/g++-12"),
@@ -149,10 +132,8 @@ fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
             return Some(candidate.to_path_buf());
         }
     }
-
     None
 }
-
 fn explicit_cxx_configured() -> bool {
     env::var_os("CXX").is_some()
         || env::var_os("HOST_CXX").is_some()

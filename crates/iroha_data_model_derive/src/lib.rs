@@ -9,16 +9,13 @@ mod id;
 mod model;
 mod registrable_builder;
 mod utils;
-
+use crate::utils::darling_error;
 use darling::{FromMeta, ast::NestedMeta};
 use emitter_ext::EmitterExt;
 use manyhow::{Emitter, Result, emit, manyhow};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Item;
-
-use crate::utils::darling_error;
-
 /// Construct a matching enum with references in place of enum variant fields
 ///
 /// # Example
@@ -66,7 +63,6 @@ pub fn enum_ref(input: TokenStream) -> Result<TokenStream> {
     let input = syn::parse2(input)?;
     enum_ref::impl_enum_ref(&input)
 }
-
 /// Macro which controls how to export item's API. The behaviour is controlled with `transparent_api`
 /// feature flag. If the flag is active, item's public fields will be exposed as public, however, if
 /// it's not active, item will be exposed as opaque, i.e. no fields will be visible. This enables
@@ -141,20 +137,15 @@ pub fn enum_ref(input: TokenStream) -> Result<TokenStream> {
 #[proc_macro_attribute]
 pub fn model(attr: TokenStream, input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     if !attr.is_empty() {
         emit!(emitter, attr, "This attribute does not take any arguments");
     }
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = model::impl_model(&mut emitter, &input);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Same as [`model()`] macro, but only processes a single item.
 ///
 /// You should prefer using [`model()`] macro over this one.
@@ -162,14 +153,11 @@ pub fn model(attr: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn model_single(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     emitter.finish_token_stream_with(model::process_item(input))
 }
-
 /// Attribute macro to attach a stable wire identifier to an instruction type.
 ///
 /// Usage: `#[instruction(id = "iroha.log")]` applied to a struct/enum.
@@ -187,7 +175,6 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
     }
     let metas = NestedMeta::parse_meta_list(attr.clone())?;
     let args = Args::from_list(&metas).map_err(darling_error)?;
-
     let item: Item = syn::parse2(input.clone())?;
     let (ident, generics) = match &item {
         Item::Struct(s) => (s.ident.clone(), s.generics.clone()),
@@ -196,7 +183,6 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
     };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let wire_id_lit = syn::LitStr::new(&args.id, proc_macro2::Span::call_site());
-
     let expanded = quote! {
         #item
         impl #impl_generics #ident #ty_generics #where_clause {
@@ -206,7 +192,6 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
     };
     Ok(expanded)
 }
-
 /// Derive macro for `Identifiable` trait which also automatically implements [`Ord`], [`Eq`],
 /// and [`Hash`] for the annotated struct by delegating to it's identifier field. Identifier
 /// field for the struct can be selected by annotating the desired field with `#[id]` or
@@ -334,15 +319,12 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
 #[proc_macro_derive(IdEqOrdHash, attributes(id, opaque))]
 pub fn id_eq_ord_hash(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = id::impl_id_eq_ord_hash(&mut emitter, &input);
     emitter.finish_token_stream_with(result)
 }
-
 /// Derive macro for `HasOrigin`.
 ///
 /// Works only with enums containing single unnamed fields.
@@ -441,16 +423,12 @@ pub fn id_eq_ord_hash(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(HasOrigin, attributes(has_origin))]
 pub fn has_origin_derive(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = has_origin::impl_has_origin(&mut emitter, &input);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Create an event set structure from an event enum.
 ///
 /// Event set is a set of multiple event types, allowing to efficiently test whether an event is in a set.
@@ -521,16 +499,12 @@ pub fn has_origin_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(EventSet)]
 pub fn event_set_derive(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = event_set::impl_event_set_derive(&mut emitter, &input);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Derive macro generating registration builders for data model structs.
 #[manyhow]
 #[proc_macro_derive(RegistrableBuilder, attributes(registrable_builder))]

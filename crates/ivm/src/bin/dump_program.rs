@@ -1,8 +1,6 @@
 //! Compile, disassemble, and execute a small Kotodama V1 program.
-
 use iroha_primitives::numeric_abi::IntValueV1;
 use ivm::{IVM, PointerType, ProgramMetadata};
-
 fn returned_int(vm: &IVM, register: usize) -> i64 {
     let tlv = vm
         .validate_tlv(vm.register(register))
@@ -14,7 +12,6 @@ fn returned_int(vm: &IVM, register: usize) -> i64 {
         .try_to_i64()
         .expect("dump program result fits i64")
 }
-
 fn main() {
     let src = r#"
         seiyaku DumpProgram {
@@ -53,7 +50,6 @@ fn main() {
         .expect("main entrypoint descriptor");
     let entrypoint_pc =
         u64::try_from(parsed.prefix_len()).expect("program prefix fits u64") + entrypoint.entry_pc;
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
     vm.set_program_counter(entrypoint_pc)

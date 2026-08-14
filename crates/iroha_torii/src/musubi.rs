@@ -4,7 +4,7 @@
 //! return the corresponding typed finalized result. Instruction endpoints are
 //! pre-signing helpers: they return deterministic Norito-framed instructions
 //! and never accept or load signing material.
-
+use crate::{Error, JsonBody, NoritoJson, Result, SharedAppState};
 use axum::extract::State;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::{
@@ -40,14 +40,10 @@ use iroha_data_model::{
     query::{SingularQuery, error::QueryExecutionFail, musubi::prelude::*},
 };
 use norito::json::{self, JsonSerialize, Map, Value};
-
-use crate::{Error, JsonBody, NoritoJson, Result, SharedAppState};
-
 /// Schema name for deterministic unsigned Musubi instruction envelopes.
 pub const MUSUBI_INSTRUCTION_ENVELOPE_SCHEMA_V1: &str = "musubi-instruction-envelope";
 /// First and only supported instruction-envelope version.
 pub const MUSUBI_INSTRUCTION_ENVELOPE_VERSION_V1: u8 = 1;
-
 /// Deterministic unsigned instruction payload returned for local signing.
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 pub struct MusubiInstructionEnvelopeV1 {
@@ -64,7 +60,6 @@ pub struct MusubiInstructionEnvelopeV1 {
     /// Human-readable JSON preview containing the wire id and exact payload.
     pub instruction_json: Value,
 }
-
 /// Execute an exact structural package query.
 pub async fn handler_find_exact_package(
     State(app): State<SharedAppState>,
@@ -76,7 +71,6 @@ pub async fn handler_find_exact_package(
         FindMusubiExactPackageV1::new(request),
     )?))
 }
-
 /// Execute an exact structural release query.
 pub async fn handler_find_exact_release(
     State(app): State<SharedAppState>,
@@ -88,7 +82,6 @@ pub async fn handler_find_exact_release(
         FindMusubiExactReleaseV1::new(request),
     )?))
 }
-
 /// Execute an exact immutable provider bundle-attestation audit query.
 pub async fn handler_find_provider_bundle_attestation(
     State(app): State<SharedAppState>,
@@ -100,7 +93,6 @@ pub async fn handler_find_provider_bundle_attestation(
         FindMusubiProviderBundleAttestationV1::new(key),
     )?))
 }
-
 /// Execute a finalized universal resolver-index query.
 pub async fn handler_find_resolver_index(
     State(app): State<SharedAppState>,
@@ -116,7 +108,6 @@ pub async fn handler_find_resolver_index(
         FindMusubiResolverIndexV1::new(request),
     )?))
 }
-
 /// Execute a finalized structured-version page query.
 pub async fn handler_find_versions(
     State(app): State<SharedAppState>,
@@ -128,7 +119,6 @@ pub async fn handler_find_versions(
         FindMusubiVersionsV1::new(request),
     )?))
 }
-
 /// Execute a finalized accepted-member and pending-invitation page query.
 pub async fn handler_find_maintainers(
     State(app): State<SharedAppState>,
@@ -140,7 +130,6 @@ pub async fn handler_find_maintainers(
         FindMusubiMaintainersV1::new(request),
     )?))
 }
-
 /// Execute a finalized archive-location page query.
 pub async fn handler_find_archive_locations(
     State(app): State<SharedAppState>,
@@ -157,7 +146,6 @@ pub async fn handler_find_archive_locations(
         FindMusubiArchiveLocationsV1::new(request),
     )?))
 }
-
 /// Execute a bounded exact finalized archive cache-retention query.
 pub async fn handler_find_archive_retention(
     State(app): State<SharedAppState>,
@@ -169,7 +157,6 @@ pub async fn handler_find_archive_retention(
         FindMusubiArchiveRetentionV1::new(request),
     )?))
 }
-
 /// Execute an exact permanent-alias query.
 pub async fn handler_find_alias(
     State(app): State<SharedAppState>,
@@ -181,7 +168,6 @@ pub async fn handler_find_alias(
         FindMusubiAliasV1::new(request),
     )?))
 }
-
 /// Execute a finalized permanent-alias history query.
 pub async fn handler_find_alias_history(
     State(app): State<SharedAppState>,
@@ -193,7 +179,6 @@ pub async fn handler_find_alias_history(
         FindMusubiAliasHistoryV1::new(request),
     )?))
 }
-
 /// Execute a finalized byte-ordered package-prefix query.
 pub async fn handler_find_ordered_prefix(
     State(app): State<SharedAppState>,
@@ -206,7 +191,6 @@ pub async fn handler_find_ordered_prefix(
         FindMusubiOrderedPrefixV1::new(request),
     )?))
 }
-
 /// Execute an exact-token query against the rebuildable finalized-event search projection.
 pub async fn handler_search_packages(
     State(app): State<SharedAppState>,
@@ -246,7 +230,6 @@ pub async fn handler_search_packages(
         }
     }
 }
-
 macro_rules! instruction_handler {
     ($handler:ident, $instruction:ty, $doc:literal) => {
         #[doc = $doc]
@@ -260,7 +243,6 @@ macro_rules! instruction_handler {
         }
     };
 }
-
 instruction_handler!(
     handler_build_namespace_binding_register,
     RegisterMusubiNamespaceBindingV1,
@@ -356,7 +338,6 @@ instruction_handler!(
     AssertMusubiReleaseDigestV1,
     "Build an unsigned exact release-digest assertion."
 );
-
 fn validate_package_page_request(
     app: &SharedAppState,
     request: &MusubiPackagePageQueryV1,
@@ -364,12 +345,10 @@ fn validate_package_page_request(
     request.package.validate().map_err(invalid_query_request)?;
     validate_cursor_page(app, &request.page)
 }
-
 fn validate_alias_query_request(app: &SharedAppState, request: &MusubiAliasQueryV1) -> Result<()> {
     request.alias.validate().map_err(invalid_query_request)?;
     validate_cursor_page(app, &request.page)
 }
-
 fn validate_cursor_page(app: &SharedAppState, page: &MusubiPageRequestV1) -> Result<()> {
     page.validate().map_err(|error| {
         if page_validation_failure_is_invalid_cursor(page) {
@@ -378,7 +357,6 @@ fn validate_cursor_page(app: &SharedAppState, page: &MusubiPageRequestV1) -> Res
         invalid_query_request(error)
     })
 }
-
 fn page_validation_failure_is_invalid_cursor(page: &MusubiPageRequestV1) -> bool {
     let Some(cursor) = &page.cursor else {
         return false;
@@ -391,14 +369,11 @@ fn page_validation_failure_is_invalid_cursor(page: &MusubiPageRequestV1) -> bool
     };
     limit_only.validate().is_ok() && cursor.validate().is_err()
 }
-
 const INVALID_CURSOR_FAILURE_REASON: MusubiCursorFailureReasonV1 =
     MusubiCursorFailureReasonV1::Invalid;
-
 fn invalid_query_request(error: impl core::fmt::Display) -> Error {
     crate::routing::conversion_error(format!("invalid Musubi V1 query request: {error}"))
 }
-
 fn execute_query<Q>(app: &SharedAppState, query: Q) -> Result<Q::Output>
 where
     Q: ValidSingularQuery + SingularQuery,
@@ -410,7 +385,6 @@ where
         Error::Query(ValidationFail::QueryFailed(error))
     })
 }
-
 fn execute_musubi_query<Q>(app: &SharedAppState, query: Q) -> Result<Q::Output>
 where
     Q: ValidMusubiSingularQuery + SingularQuery,
@@ -422,7 +396,6 @@ where
         Error::Query(ValidationFail::QueryFailed(error.into_query_error()))
     })
 }
-
 const fn cursor_metric_reason(reason: MusubiCursorFailureV1) -> MusubiCursorFailureReasonV1 {
     match reason {
         MusubiCursorFailureV1::FinalizedAnchorMismatch => MusubiCursorFailureReasonV1::StaleAnchor,
@@ -432,7 +405,6 @@ const fn cursor_metric_reason(reason: MusubiCursorFailureV1) -> MusubiCursorFail
         MusubiCursorFailureV1::LastKeyStale => MusubiCursorFailureReasonV1::Boundary,
     }
 }
-
 const fn core_cursor_failure_reason(
     error: &QueryExecutionFail,
 ) -> Option<MusubiCursorFailureReasonV1> {
@@ -445,20 +417,17 @@ const fn core_cursor_failure_reason(
         None
     }
 }
-
 fn record_cursor_failure(app: &SharedAppState, reason: MusubiCursorFailureReasonV1) {
     app.telemetry_handle().with_metrics(|telemetry| {
         telemetry.record_musubi_cursor_failure(reason);
     });
 }
-
 fn to_json_value<T: JsonSerialize>(value: &T, context: &'static str) -> Result<Value> {
     json::to_value(value).map_err(|source| Error::SerializationFailure {
         context,
         source: Box::new(source),
     })
 }
-
 fn build_instruction_envelope<T>(
     wire_id: &'static str,
     instruction: T,
@@ -474,7 +443,6 @@ where
     let mut instruction_json = Map::new();
     instruction_json.insert("wire_id".to_owned(), Value::String(wire_id.to_owned()));
     instruction_json.insert("payload".to_owned(), payload);
-
     Ok(MusubiInstructionEnvelopeV1 {
         schema: MUSUBI_INSTRUCTION_ENVELOPE_SCHEMA_V1.to_owned(),
         version: MUSUBI_INSTRUCTION_ENVELOPE_VERSION_V1,
@@ -484,9 +452,9 @@ where
         instruction_json: Value::Object(instruction_json),
     })
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         isi::musubi::SetMusubiReleaseYankV1,
         musubi::{
@@ -495,9 +463,6 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
-
-    use super::*;
-
     fn release() -> MusubiReleaseIdV1 {
         MusubiReleaseIdV1::new(
             MusubiPackageIdV1::new(
@@ -508,14 +473,12 @@ mod tests {
             "1.2.3".parse().expect("version"),
         )
     }
-
     #[test]
     fn v1_yank_envelope_carries_framed_instruction_bytes() {
         let instruction =
             SetMusubiReleaseYankV1::new(release(), true, "withdrawn".parse().expect("reason"), 3);
         let envelope = build_instruction_envelope(SetMusubiReleaseYankV1::WIRE_ID, instruction)
             .expect("instruction envelope");
-
         assert_eq!(envelope.schema, MUSUBI_INSTRUCTION_ENVELOPE_SCHEMA_V1);
         assert_eq!(envelope.version, MUSUBI_INSTRUCTION_ENVELOPE_VERSION_V1);
         assert_eq!(envelope.wire_id, SetMusubiReleaseYankV1::WIRE_ID);
@@ -533,7 +496,6 @@ mod tests {
             Some(true)
         );
     }
-
     #[test]
     fn v1_instruction_envelope_ignores_ambient_layout_flags() {
         let expected = build_instruction_envelope(
@@ -549,11 +511,9 @@ mod tests {
             SetMusubiReleaseYankV1::new(release(), true, "withdrawn".parse().expect("reason"), 3),
         )
         .expect("instruction envelope under alternate ambient flags");
-
         assert_eq!(actual.instruction_base64, expected.instruction_base64);
         assert_eq!(actual.instruction_hex, expected.instruction_hex);
     }
-
     #[test]
     fn envelope_json_is_exactly_one_v1_document() {
         let instruction =
@@ -562,7 +522,6 @@ mod tests {
             .expect("instruction envelope");
         let document = json::to_string(&envelope).expect("serialize envelope");
         let value: Value = json::from_str(&document).expect("one JSON document");
-
         assert_eq!(
             value.get("schema").and_then(Value::as_str),
             Some(MUSUBI_INSTRUCTION_ENVELOPE_SCHEMA_V1)
@@ -571,7 +530,6 @@ mod tests {
         assert!(document.trim_start().starts_with('{'));
         assert!(document.trim_end().ends_with('}'));
     }
-
     #[test]
     fn only_core_expired_is_classified_as_a_cursor_failure() {
         assert_eq!(
@@ -583,7 +541,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn page_validation_classifies_only_structurally_invalid_supplied_cursors() {
         let valid_cursor = MusubiFinalizedCursorV1 {
@@ -600,7 +557,6 @@ mod tests {
         invalid_cursor.query_hash = MusubiQueryHashV1::new([0; 32]);
         let oversized_limit =
             u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1 + 1).expect("page maximum fits u32");
-
         assert!(!page_validation_failure_is_invalid_cursor(
             &MusubiPageRequestV1 {
                 limit: oversized_limit,
@@ -632,7 +588,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn exact_musubi_cursor_failures_map_to_closed_metric_reasons() {
         for (failure, expected) in [

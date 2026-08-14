@@ -6,7 +6,6 @@ fn privacy_release_anchor_binding_is_exact_and_drift_checked() {
         validate_observation(&binding, &observation(&binding)),
         Ok(())
     );
-
     let backends = RuntimeProviderBrokerBackendsV1::new()
         .with_privacy_release_anchor(Arc::new(ServerTestPrivacyReleaseAnchor::exact()));
     assert_eq!(
@@ -26,35 +25,27 @@ fn privacy_release_anchor_binding_is_exact_and_drift_checked() {
         ),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     );
-
     let mut confused = binding.clone();
-    confused.governance_request_ingress_binding =
-        Some(governance_request_ingress_binding_to_wire(
-            server_test_request_ingress_binding(TEST_SIGNER_KEY),
-        ));
+    confused.governance_request_ingress_binding = Some(governance_request_ingress_binding_to_wire(
+        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+    ));
     assert_eq!(
         validate_wire_binding(&confused),
         Err(BrokerError::BindingMismatch)
     );
-
     let substituted = RuntimeProviderBrokerBackendsV1::new()
-        .with_privacy_release_anchor(Arc::new(
-            ServerTestPrivacyReleaseAnchor::substituted(),
-        ));
+        .with_privacy_release_anchor(Arc::new(ServerTestPrivacyReleaseAnchor::substituted()));
     assert_eq!(
         make_server_observation(&binding, &substituted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
-
-    let drifted = RuntimeProviderBrokerBackendsV1::new().with_privacy_release_anchor(
-        Arc::new(ServerTestPrivacyReleaseAnchor::drifting()),
-    );
+    let drifted = RuntimeProviderBrokerBackendsV1::new()
+        .with_privacy_release_anchor(Arc::new(ServerTestPrivacyReleaseAnchor::drifting()));
     assert_eq!(
         make_server_observation(&binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }
-
 #[test]
 fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
     assert!(operation_is_known(
@@ -71,11 +62,10 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         operation_frame_limit(OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1),
         MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1
     );
-
     let binding = privacy_release_anchor_runtime_binding();
     let provider = Arc::new(ServerTestPrivacyReleaseAnchor::exact());
-    let backends = RuntimeProviderBrokerBackendsV1::new()
-        .with_privacy_release_anchor(provider.clone());
+    let backends =
+        RuntimeProviderBrokerBackendsV1::new().with_privacy_release_anchor(provider.clone());
     let observed = make_server_observation(&binding, &backends)
         .expect("qualify stable finalized release anchor");
     let state = BrokerServerStateV1 {
@@ -91,10 +81,8 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         cycle_end_unix: 2_000,
         due_at_unix: 2_000,
     };
-    let scope = sorafs_node::TransparencyLeaderLeaseScopeV1::try_new(
-        query_id, window, [0x29; 32],
-    )
-    .expect("canonical release-anchor lease scope");
+    let scope = sorafs_node::TransparencyLeaderLeaseScopeV1::try_new(query_id, window, [0x29; 32])
+        .expect("canonical release-anchor lease scope");
     let genesis = sorafs_node::PrivacyReleaseAnchorHeadV1::genesis(query_id);
     let next = sorafs_node::PrivacyReleaseAnchorHeadV1::try_from_parts(
         query_id,
@@ -119,7 +107,6 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         lease_binding,
     )
     .expect("canonical leader-lease grant");
-
     let finalized_request = make_operation_request(
         [0xB1; 32],
         1,
@@ -144,7 +131,6 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
     .and_then(PrivacyReleaseAnchorHeadWireV1::to_head)
     .expect("decode canonical finalized head");
     assert_eq!(decoded, genesis);
-
     let compare = PrivacyReleaseAnchorCompareAndSetRequestWireV1 {
         expected: PrivacyReleaseAnchorHeadWireV1::from_head(genesis),
         next: PrivacyReleaseAnchorHeadWireV1::from_head(next),
@@ -168,14 +154,10 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         .expect("decode payload-free compare-and-set result");
     assert_eq!(provider.compare_and_set_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        sorafs_node::PrivacyReleaseAnchorV1::finalized_head(
-            provider.as_ref(),
-            query_id,
-        )
-        .expect("read back committed finalized head"),
+        sorafs_node::PrivacyReleaseAnchorV1::finalized_head(provider.as_ref(), query_id,)
+            .expect("read back committed finalized head"),
         next
     );
-
     let mut noncanonical = compare.clone();
     noncanonical.next.sequence = 3;
     let invalid_request = make_operation_request(
@@ -197,10 +179,9 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         1,
         "noncanonical requests fail before provider evaluation"
     );
-
     let no_readback = Arc::new(ServerTestPrivacyReleaseAnchor::without_readback());
-    let no_readback_backends = RuntimeProviderBrokerBackendsV1::new()
-        .with_privacy_release_anchor(no_readback.clone());
+    let no_readback_backends =
+        RuntimeProviderBrokerBackendsV1::new().with_privacy_release_anchor(no_readback.clone());
     let no_readback_observed = make_server_observation(&binding, &no_readback_backends)
         .expect("qualify non-persisting test release anchor");
     let no_readback_state = BrokerServerStateV1 {
@@ -215,7 +196,6 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         Err(BrokerError::Ambiguous)
     );
     assert_eq!(no_readback.compare_and_set_calls.load(Ordering::SeqCst), 1);
-
     let unit = encode_canonical(&(), MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1)
         .expect("encode payload-free failure");
     assert!(
@@ -245,15 +225,12 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
         ),
         Err(BrokerError::Protocol)
     );
-
-    let zero_query =
-        PrivacyReleaseAnchorFinalizedHeadRequestWireV1 { query_id: [0; 32] };
+    let zero_query = PrivacyReleaseAnchorFinalizedHeadRequestWireV1 { query_id: [0; 32] };
     assert_eq!(
         validate_privacy_release_anchor_query(zero_query),
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
     let binding = transparency_leader_lease_runtime_binding();
@@ -262,11 +239,9 @@ fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
         validate_observation(&binding, &observation(&binding)),
         Ok(())
     );
-
-    let backends = RuntimeProviderBrokerBackendsV1::new()
-        .with_transparency_leader_lease_provider(Arc::new(
-            ServerTestTransparencyLeaderLeaseProvider::exact(),
-        ));
+    let backends = RuntimeProviderBrokerBackendsV1::new().with_transparency_leader_lease_provider(
+        Arc::new(ServerTestTransparencyLeaderLeaseProvider::exact()),
+    );
     assert_eq!(
         validate_exact_backend_set(std::slice::from_ref(&binding), &backends),
         Ok(())
@@ -284,17 +259,14 @@ fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
         ),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     );
-
     let mut confused = binding.clone();
-    confused.governance_request_ingress_binding =
-        Some(governance_request_ingress_binding_to_wire(
-            server_test_request_ingress_binding(TEST_SIGNER_KEY),
-        ));
+    confused.governance_request_ingress_binding = Some(governance_request_ingress_binding_to_wire(
+        server_test_request_ingress_binding(TEST_SIGNER_KEY),
+    ));
     assert_eq!(
         validate_wire_binding(&confused),
         Err(BrokerError::BindingMismatch)
     );
-
     let substituted = RuntimeProviderBrokerBackendsV1::new()
         .with_transparency_leader_lease_provider(Arc::new(
             ServerTestTransparencyLeaderLeaseProvider::substituted(),
@@ -303,11 +275,9 @@ fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
         make_server_observation(&binding, &substituted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
-
-    let drifted = RuntimeProviderBrokerBackendsV1::new()
-        .with_transparency_leader_lease_provider(Arc::new(
-            ServerTestTransparencyLeaderLeaseProvider::drifting(),
-        ));
+    let drifted = RuntimeProviderBrokerBackendsV1::new().with_transparency_leader_lease_provider(
+        Arc::new(ServerTestTransparencyLeaderLeaseProvider::drifting()),
+    );
     assert_eq!(
         make_server_observation(&binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)

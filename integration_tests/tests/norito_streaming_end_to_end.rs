@@ -1,11 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end Norito Streaming harness covering manifest + chunk delivery.
-
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
-    time::Duration,
-};
-
 use crate::streaming::{
     self, StreamingTestVector, baseline_test_vector, make_peer, manifest_announce_for_viewer,
     streaming_handle, test_keypairs,
@@ -20,14 +14,15 @@ use iroha_p2p::streaming::{
 use norito::streaming::{
     CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame, TransportCapabilities,
 };
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
+    time::Duration,
+};
 use tokio::time::{sleep, timeout};
-
 const ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(15);
-
 #[tokio::test(flavor = "multi_thread")]
 async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     let vector = baseline_test_vector();
-
     let snapshot = vector
         .snapshot_json()
         .map_err(|err| eyre!("snapshot encode failed: {err}"))?;
@@ -38,7 +33,6 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
         expected_snapshot.trim_end(),
         "baseline streaming vector must match golden fixture"
     );
-
     let settings = TransportConfigSettings::default();
     let server_addr = StdSocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
     let server = match StreamingServer::bind(server_addr, settings).await {
@@ -51,14 +45,11 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     };
     let listen_addr = server.local_addr().map_err(|err| eyre!(err))?;
     let server_certificate_fingerprint = server.certificate_fingerprint();
-
     let (publisher_keys, viewer_keys) = test_keypairs();
     let publisher_peer = make_peer(&publisher_keys, 26_100);
     let viewer_peer = make_peer(&viewer_keys, 26_101);
-
     let publisher_handle = streaming_handle();
     let viewer_handle = streaming_handle();
-
     let server_task = run_publisher(
         server.clone(),
         publisher_handle.clone(),
@@ -73,12 +64,10 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
         viewer_handle.clone(),
         vector.clone(),
     );
-
     let join_outcome = Box::pin(timeout(ROUNDTRIP_TIMEOUT, async {
         tokio::try_join!(server_task, viewer_task)
     }))
     .await;
-
     let (manifest_wire_bytes, (received_manifest, received_chunks)) = match join_outcome {
         Err(_) => {
             server.shutdown().await;
@@ -91,7 +80,6 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
         }
         Ok(Ok(result)) => result,
     };
-
     // Ensure the manifest observed by the viewer matches the publisher output.
     let expected_manifest_bytes = StreamingTestVector::manifest_wire_bytes(&received_manifest)
         .map_err(|err| eyre!("encode manifest: {err}"))?;
@@ -99,7 +87,6 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
         manifest_wire_bytes, expected_manifest_bytes,
         "publisher and viewer must agree on manifest bytes"
     );
-
     // Verify chunk payload integrity.
     assert_eq!(
         received_chunks.len(),
@@ -112,11 +99,9 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
             "chunk {idx} payload matches fixture"
         );
     }
-
     server.shutdown().await;
     Ok(())
 }
-
 async fn run_publisher(
     server: StreamingServer,
     handle: iroha_core::streaming::StreamingHandle,
@@ -124,19 +109,16 @@ async fn run_publisher(
     vector: StreamingTestVector,
 ) -> EyreResult<Vec<u8>> {
     let mut conn = server.accept().await.map_err(|err| eyre!(err))?;
-
     let max_chunk = vector.max_chunk_len();
     let max_size =
         u16::try_from(max_chunk).map_err(|_| eyre!("chunk length {max_chunk} exceeds u16::MAX"))?;
     let mut publisher_caps = TransportCapabilities::kyber768_default();
     publisher_caps.max_segment_datagram_size = max_size;
-
     let StreamingTestVector {
         manifest,
         chunk_payloads,
         ..
     } = vector;
-
     let segment_number = manifest.segment_number;
     let expected_chunk_ids: Vec<u16> = manifest
         .chunk_descriptors
@@ -148,24 +130,19 @@ async fn run_publisher(
         chunk_payloads.len(),
         "chunk descriptors and payloads must align"
     );
-
     let (_ack, _resolution) = handle
         .negotiate_publisher_transport(&viewer_peer, &mut conn, publisher_caps)
         .await
         .map_err(|err| eyre!(err))?;
-
     let manifest_frame =
         manifest_announce_for_viewer(&handle, &viewer_peer, manifest).map_err(eyre_manifest)?;
     let manifest_wire = manifest_frame.manifest.clone();
-
     conn.send_control_frame(&ControlFrame::ManifestAnnounce(Box::new(manifest_frame)))
         .await
         .map_err(|err| eyre!(err))?;
-
     for chunk in &chunk_payloads {
         conn.send_datagram(chunk).await.map_err(|err| eyre!(err))?;
     }
-
     for expected_chunk_id in &expected_chunk_ids {
         let frame = timeout(ROUNDTRIP_TIMEOUT, conn.next_control_frame())
             .await
@@ -193,15 +170,12 @@ async fn run_publisher(
             ));
         }
     }
-
     // Allow the viewer to drain frames prior to shutdown.
     sleep(Duration::from_millis(25)).await;
     conn.close();
-
     StreamingTestVector::manifest_wire_bytes(&manifest_wire)
         .map_err(|err| eyre!("encode manifest: {err}"))
 }
-
 async fn run_viewer(
     port: u16,
     server_certificate_fingerprint: iroha_p2p::streaming::quic::CertificateFingerprint,
@@ -214,11 +188,9 @@ async fn run_viewer(
     let mut client = StreamingClient::connect(&endpoint, server_certificate_fingerprint, settings)
         .await
         .map_err(|err| eyre!(err))?;
-
     let max_chunk = vector.max_chunk_len();
     let max_size =
         u16::try_from(max_chunk).map_err(|_| eyre!("chunk length {max_chunk} exceeds u16::MAX"))?;
-
     let report = CapabilityReport {
         stream_id: vector.manifest.stream_id,
         endpoint_role: CapabilityRole::Viewer,
@@ -236,15 +208,12 @@ async fn run_viewer(
         max_datagram_size: max_size,
         dplpmtud: true,
     };
-
     let mut viewer_caps = TransportCapabilities::kyber768_default();
     viewer_caps.max_segment_datagram_size = max_size;
-
     let (_ack, _resolution) = handle
         .negotiate_viewer_transport(&publisher_peer, client.connection(), viewer_caps, report)
         .await
         .map_err(|err| eyre!(err))?;
-
     let manifest = loop {
         let frame = {
             let conn = client.connection();
@@ -257,7 +226,6 @@ async fn run_viewer(
             break frame.manifest;
         }
     };
-
     let mut chunks = Vec::with_capacity(vector.chunk_payloads.len());
     for (idx, descriptor) in manifest.chunk_descriptors.iter().enumerate() {
         let datagram = {
@@ -268,7 +236,6 @@ async fn run_viewer(
                 .map_err(|err| eyre!(err))?
         };
         chunks.push(datagram.to_vec());
-
         let acknowledgement = ControlFrame::ChunkAcknowledge(ChunkAcknowledgeFrame {
             segment: manifest.segment_number,
             chunk_id: descriptor.chunk_id,
@@ -279,14 +246,12 @@ async fn run_viewer(
             .await
             .map_err(|err| eyre!(err))?;
     }
-
     // Keep the viewer endpoint alive until the publisher closes so all chunk
     // acknowledgements are delivered before connection teardown.
     let _ = client.connection().quic_connection().closed().await;
     client.close().await;
     Ok((manifest, chunks))
 }
-
 fn eyre_manifest(err: StreamingProcessError) -> eyre::Report {
     eyre::Report::new(err)
 }

@@ -33,7 +33,6 @@ pub enum SoraServiceLifecycleActionV1 {
     /// Reversion to an already admitted baseline revision.
     Rollback,
 }
-
 /// Mutation mode recorded for authoritative Soracloud state updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -47,7 +46,6 @@ pub enum SoraStateMutationOperationV1 {
     /// Remove an existing state entry.
     Delete,
 }
-
 /// Rollout stage tracked for a candidate service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -64,7 +62,6 @@ pub enum SoraRolloutStageV1 {
     /// Candidate revision has been rolled back.
     RolledBack,
 }
-
 /// Authoritative rollout state tracked for a service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -98,7 +95,6 @@ pub struct SoraServiceRolloutStateV1 {
     /// Audit sequence that last updated the rollout.
     pub updated_sequence: u64,
 }
-
 impl SoraServiceRolloutStateV1 {
     /// Validate rollout sequencing and percentage constraints.
     ///
@@ -111,19 +107,16 @@ impl SoraServiceRolloutStateV1 {
             self.schema_version,
             SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
         )?;
-
         validate_nonblank_field(
             "sora service rollout state",
             "rollout_handle",
             &self.rollout_handle,
         )?;
-
         validate_nonblank_field(
             "sora service rollout state",
             "candidate_version",
             &self.candidate_version,
         )?;
-
         if self
             .baseline_version
             .as_ref()
@@ -135,7 +128,6 @@ impl SoraServiceRolloutStateV1 {
                 "must not be empty when provided",
             ));
         }
-
         if self.canary_percent > 100 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -143,7 +135,6 @@ impl SoraServiceRolloutStateV1 {
                 "must be within 0..=100",
             ));
         }
-
         if self.traffic_percent > 100 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -151,7 +142,6 @@ impl SoraServiceRolloutStateV1 {
                 "must be within 0..=100",
             ));
         }
-
         match self.stage {
             SoraRolloutStageV1::Canary => {
                 if self.traffic_percent < self.canary_percent {
@@ -181,7 +171,6 @@ impl SoraServiceRolloutStateV1 {
                 }
             }
         }
-
         if self.max_health_failures == 0 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -189,7 +178,6 @@ impl SoraServiceRolloutStateV1 {
                 "must be greater than zero",
             ));
         }
-
         if self.health_window_secs == 0 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -197,7 +185,6 @@ impl SoraServiceRolloutStateV1 {
                 "must be greater than zero",
             ));
         }
-
         if self.updated_sequence < self.created_sequence {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -205,11 +192,9 @@ impl SoraServiceRolloutStateV1 {
                 "must be greater than or equal to created_sequence",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Authoritative deployment state for the currently active Soracloud service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -261,7 +246,6 @@ pub struct SoraServiceDeploymentStateV1 {
     #[norito(default)]
     pub lease_volume_states: Vec<SoraServiceLeaseVolumeStateV1>,
 }
-
 impl SoraServiceDeploymentStateV1 {
     /// Validate active deployment state.
     ///
@@ -278,7 +262,6 @@ impl SoraServiceDeploymentStateV1 {
             self.schema_version,
             SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
         )?;
-
         validate_nonblank_field(
             "sora service deployment state",
             "current_service_version",
@@ -294,7 +277,6 @@ impl SoraServiceDeploymentStateV1 {
             "current_container_manifest_hash",
             self.current_container_manifest_hash,
         )?;
-
         for (field, value) in [
             ("revision_count", u64::from(self.revision_count)),
             ("process_generation", self.process_generation),
@@ -308,7 +290,6 @@ impl SoraServiceDeploymentStateV1 {
                 ));
             }
         }
-
         for (config_name, entry) in &self.service_configs {
             entry.validate()?;
             if entry.config_name != *config_name {
@@ -322,7 +303,6 @@ impl SoraServiceDeploymentStateV1 {
                 });
             }
         }
-
         for (secret_name, entry) in &self.service_secrets {
             entry.validate()?;
             if entry.secret_name != *secret_name {
@@ -336,7 +316,6 @@ impl SoraServiceDeploymentStateV1 {
                 });
             }
         }
-
         for (policy_name, record) in &self.fhe_policy_records {
             record.validate()?;
             if record.service_name != self.service_name || record.policy_name != *policy_name {
@@ -350,7 +329,6 @@ impl SoraServiceDeploymentStateV1 {
                 });
             }
         }
-
         if let Some(active_rollout) = self.active_rollout.as_ref() {
             active_rollout.validate()?;
             if active_rollout.stage != SoraRolloutStageV1::Canary {
@@ -361,11 +339,9 @@ impl SoraServiceDeploymentStateV1 {
                 ));
             }
         }
-
         if let Some(last_rollout) = self.last_rollout.as_ref() {
             last_rollout.validate()?;
         }
-
         if let Some(lease) = self.service_lease.as_ref() {
             lease.validate()?;
         }
@@ -385,10 +361,8 @@ impl SoraServiceDeploymentStateV1 {
                 "lease-backed volume state requires an active hosted-service lease",
             ));
         }
-
         Ok(())
     }
-
     /// Maximum authoritative leased-storage bytes retained by the deployment.
     #[must_use]
     pub fn accounted_storage_bytes(&self) -> u64 {
@@ -396,7 +370,6 @@ impl SoraServiceDeploymentStateV1 {
             acc.saturating_add(volume.max_total_bytes)
         })
     }
-
     /// Effective hosted-service lease status at the observed sequence.
     ///
     /// # Errors
@@ -411,7 +384,6 @@ impl SoraServiceDeploymentStateV1 {
                 .map(Some)
         })
     }
-
     /// Effective remaining prepaid runtime balance at the observed sequence.
     ///
     /// # Errors
@@ -426,7 +398,6 @@ impl SoraServiceDeploymentStateV1 {
                 .map(Some)
         })
     }
-
     /// Returns `true` when the hosted-service plane may still be routed and
     /// materialized at the observed sequence.
     ///
@@ -441,7 +412,6 @@ impl SoraServiceDeploymentStateV1 {
         })
     }
 }
-
 fn validate_service_material_name(
     manifest: &'static str,
     field: &'static str,
@@ -478,11 +448,9 @@ fn validate_service_material_name(
     }
     Ok(())
 }
-
 const fn default_true() -> bool {
     true
 }
-
 fn validate_nonempty_no_control(
     manifest: &'static str,
     field: &'static str,
@@ -505,7 +473,6 @@ fn validate_nonempty_no_control(
     }
     Ok(())
 }
-
 fn validate_distribution_geography_tag(
     manifest: &'static str,
     field: &'static str,
@@ -528,7 +495,6 @@ fn validate_distribution_geography_tag(
     }
     Ok(())
 }
-
 fn validate_environment_variable_name(
     field: &'static str,
     value: &str,
@@ -566,7 +532,6 @@ fn validate_environment_variable_name(
     }
     Ok(())
 }
-
 fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudManifestError> {
     let manifest = "sora container manifest";
     let field = "config_exports";
@@ -622,7 +587,6 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudMani
     }
     Ok(())
 }
-
 fn validate_canonical_lower_hex_32(
     manifest: &'static str,
     field: &'static str,
@@ -661,7 +625,6 @@ fn validate_canonical_lower_hex_32(
             reason: format!("must decode to exactly 32 bytes (found {})", bytes.len()),
         })
 }
-
 fn validate_canonical_sorafs_content_cid(
     manifest: &'static str,
     field: &'static str,
@@ -700,10 +663,8 @@ fn validate_canonical_sorafs_content_cid(
     }
     Ok(())
 }
-
 fn encode_lowercase_multibase_base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-
     let mut accumulator = 0_u32;
     let mut bits = 0_u32;
     let mut encoded = Vec::with_capacity(1 + (bytes.len() * 8).div_ceil(5));
@@ -725,7 +686,6 @@ fn encode_lowercase_multibase_base32(bytes: &[u8]) -> String {
     }
     String::from_utf8(encoded).expect("lowercase base32 alphabet is UTF-8")
 }
-
 fn decode_lowercase_multibase_base32(value: &str) -> Option<Vec<u8>> {
     let encoded = value.strip_prefix('b')?;
     if encoded.is_empty() {
@@ -755,7 +715,6 @@ fn decode_lowercase_multibase_base32(value: &str) -> Option<Vec<u8>> {
     }
     Some(decoded)
 }
-
 fn validate_inrou_image_member_path(
     field: &'static str,
     value: &str,
@@ -799,7 +758,6 @@ fn validate_inrou_image_member_path(
     }
     Ok(())
 }
-
 fn is_portable_inrou_path_component(component: &str) -> bool {
     if component.is_empty()
         || component == "."
@@ -832,7 +790,6 @@ fn is_portable_inrou_path_component(component: &str) -> bool {
     }
     true
 }
-
 fn validate_bundle_absolute_path(
     manifest: &'static str,
     field: &'static str,
@@ -879,7 +836,6 @@ fn validate_bundle_absolute_path(
     }
     Ok(())
 }
-
 /// Authoritative config entry tracked for one Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -898,7 +854,6 @@ pub struct SoraServiceConfigEntryV1 {
     /// Audit sequence of the last update affecting this config entry.
     pub last_update_sequence: u64,
 }
-
 impl SoraServiceConfigEntryV1 {
     /// Return the deterministic hash of the canonical JSON value.
     ///
@@ -908,7 +863,6 @@ impl SoraServiceConfigEntryV1 {
         let payload = canonical_service_config_json_payload(&self.value_json)?;
         Ok(Hash::new(payload))
     }
-
     /// Validate config entry metadata and hash linkage.
     ///
     /// # Errors
@@ -943,7 +897,6 @@ impl SoraServiceConfigEntryV1 {
         Ok(())
     }
 }
-
 fn canonical_service_config_json_payload(
     value_json: &Json,
 ) -> Result<Vec<u8>, SoracloudManifestError> {
@@ -963,7 +916,6 @@ fn canonical_service_config_json_payload(
     }
     Ok(canonical.get().as_bytes().to_vec())
 }
-
 /// Authoritative encrypted secret entry tracked for one Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -980,7 +932,6 @@ pub struct SoraServiceSecretEntryV1 {
     /// Audit sequence of the last update affecting this secret entry.
     pub last_update_sequence: u64,
 }
-
 impl SoraServiceSecretEntryV1 {
     /// Validate secret-entry metadata and envelope bounds.
     ///
@@ -1008,7 +959,6 @@ impl SoraServiceSecretEntryV1 {
         self.envelope.validate()
     }
 }
-
 /// Authoritative service-state entry tracked for Soracloud bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1057,7 +1007,6 @@ pub struct SoraServiceStateEntryV1 {
     /// Action that produced the current ciphertext row.
     pub source_action: SoraServiceLifecycleActionV1,
 }
-
 impl SoraServiceStateEntryV1 {
     /// Validate deterministic service-state entry metadata.
     ///
@@ -1139,7 +1088,6 @@ impl SoraServiceStateEntryV1 {
         Ok(())
     }
 }
-
 fn validate_service_state_fhe_bound_metadata(
     encryption: SoraStateEncryptionV1,
     bound: Option<u128>,
@@ -1207,7 +1155,6 @@ fn validate_service_state_fhe_bound_metadata(
     }
     Ok(())
 }
-
 /// Authoritative record of a policy-gated decryption or health-access request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1230,7 +1177,6 @@ pub struct SoraDecryptionRequestRecordV1 {
     /// Provenance signer that authorized the request.
     pub signer: PublicKey,
 }
-
 impl SoraDecryptionRequestRecordV1 {
     /// Validate schema version, policy/request linkage, and audit metadata.
     ///
@@ -1259,13 +1205,11 @@ impl SoraDecryptionRequestRecordV1 {
         self.request.validate_for_policy(&self.policy)?;
         Ok(())
     }
-
     /// Return the canonical hash of the attached policy snapshot.
     pub fn policy_snapshot_hash(&self) -> Hash {
         Hash::new(Encode::encode(&self.policy))
     }
 }
-
 /// Training-job lifecycle status tracked by the authoritative Soracloud model runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1283,7 +1227,6 @@ pub enum SoraTrainingJobStatusV1 {
     /// Job exhausted its retry budget and can no longer advance.
     Exhausted,
 }
-
 /// Training-job audit action recorded in authoritative Soracloud state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1299,7 +1242,6 @@ pub enum SoraTrainingJobActionV1 {
     /// A retry request transitioned the job into retry-pending state.
     Retry,
 }
-
 /// Authoritative training-job state tracked for Soracloud-managed model workflows.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1357,7 +1299,6 @@ pub struct SoraTrainingJobRecordV1 {
     /// Audit sequence that last updated the job.
     pub updated_sequence: u64,
 }
-
 impl SoraTrainingJobRecordV1 {
     /// Validate training-job invariants and resource-accounting bounds.
     ///
@@ -1372,7 +1313,6 @@ impl SoraTrainingJobRecordV1 {
         self.validate_digest_fields()?;
         self.validate_sequence_fields()
     }
-
     fn validate_identity_fields(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora training job record",
@@ -1388,7 +1328,6 @@ impl SoraTrainingJobRecordV1 {
         validate_nonblank_field("sora training job record", "job_id", &self.job_id)?;
         Ok(())
     }
-
     fn validate_progress_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.worker_group_size == 0 {
             return Err(invalid_field(
@@ -1457,7 +1396,6 @@ impl SoraTrainingJobRecordV1 {
         }
         Ok(())
     }
-
     fn validate_storage_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.storage_budget_bytes == 0 {
             return Err(invalid_field(
@@ -1475,7 +1413,6 @@ impl SoraTrainingJobRecordV1 {
         }
         Ok(())
     }
-
     fn validate_sequence_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.created_sequence == 0 || self.updated_sequence == 0 {
             return Err(invalid_field(
@@ -1493,7 +1430,6 @@ impl SoraTrainingJobRecordV1 {
         }
         Ok(())
     }
-
     fn validate_digest_fields(&self) -> Result<(), SoracloudManifestError> {
         if let Some(latest_metrics_hash) = self.latest_metrics_hash {
             validate_soracloud_digest_hash(
@@ -1505,7 +1441,6 @@ impl SoraTrainingJobRecordV1 {
         Ok(())
     }
 }
-
 /// Audit record for deterministic training-job lifecycle updates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1551,7 +1486,6 @@ pub struct SoraTrainingJobAuditEventV1 {
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
 }
-
 impl SoraTrainingJobAuditEventV1 {
     /// Validate training-job audit metadata.
     ///
@@ -1592,7 +1526,6 @@ impl SoraTrainingJobAuditEventV1 {
         Ok(())
     }
 }
-
 /// Authoritative service-level model registry state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1614,7 +1547,6 @@ pub struct SoraModelRegistryV1 {
     /// Audit sequence that last updated the registry.
     pub updated_sequence: u64,
 }
-
 impl SoraModelRegistryV1 {
     /// Validate model-registry metadata.
     ///
@@ -1654,7 +1586,6 @@ impl SoraModelRegistryV1 {
         Ok(())
     }
 }
-
 /// Audit action recorded for model-weight lifecycle changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1670,7 +1601,6 @@ pub enum SoraModelWeightActionV1 {
     /// The model registry rolled back to a prior weight version.
     Rollback,
 }
-
 /// Provenance source for model artifacts and weight versions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1686,7 +1616,6 @@ pub enum SoraModelProvenanceKindV1 {
     /// The model was uploaded through the private Soracloud model-vault path.
     UserUpload,
 }
-
 /// Reference to the origin of a model artifact or weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1699,7 +1628,6 @@ pub struct SoraModelProvenanceRefV1 {
     /// Stable origin identifier.
     pub id: String,
 }
-
 impl SoraModelProvenanceRefV1 {
     /// Validate model provenance references.
     ///
@@ -1710,7 +1638,6 @@ impl SoraModelProvenanceRefV1 {
         Ok(())
     }
 }
-
 /// Package format admitted for SoraFS-backed uploaded-model registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1725,7 +1652,6 @@ pub enum SoraUploadedModelRuntimeFormatV1 {
     /// Deterministic quantized CPU operator-set v1.
     DeterministicQuantizedCpuV1,
 }
-
 /// Policy pricing for uploaded-model storage.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1736,7 +1662,6 @@ pub struct SoraUploadedModelPricingPolicyV1 {
     /// Nominal XOR quantity charged for storing encrypted uploaded-model bytes.
     pub storage_price: Quantity,
 }
-
 /// Key-encapsulation suite used to wrap uploaded-model bundle keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1749,7 +1674,6 @@ pub enum SoraUploadedModelKeyEncapsulationV1 {
     #[default]
     X25519HkdfSha256,
 }
-
 /// AEAD suite used to wrap uploaded-model bundle keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1762,7 +1686,6 @@ pub enum SoraUploadedModelKeyWrapAeadV1 {
     #[default]
     Aes256Gcm,
 }
-
 fn validate_uploaded_model_x25519_public_key(
     manifest: &'static str,
     field: &'static str,
@@ -1788,7 +1711,6 @@ fn validate_uploaded_model_x25519_public_key(
     })?;
     Ok(())
 }
-
 /// Soracloud-upload recipient metadata advertised for model bundle encryption.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1807,15 +1729,13 @@ pub struct SoraUploadedModelEncryptionRecipientV1 {
     /// AEAD suite expected for the wrapped bundle key.
     pub aead: SoraUploadedModelKeyWrapAeadV1,
     /// Raw recipient public key bytes for the configured KEM.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub public_key_bytes: Vec<u8>,
     /// Commitment over the recipient public key bytes.
     pub public_key_fingerprint: Hash,
 }
-
 impl SoraUploadedModelEncryptionRecipientV1 {
     const MAX_PUBLIC_KEY_BYTES: usize = 256;
-
     /// Validate advertised upload-recipient metadata.
     ///
     /// # Errors
@@ -1872,7 +1792,6 @@ impl SoraUploadedModelEncryptionRecipientV1 {
         Ok(())
     }
 }
-
 /// Wrapped symmetric key used to decrypt one uploaded-model bundle on Soracloud.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1891,25 +1810,23 @@ pub struct SoraUploadedModelWrappedKeyV1 {
     /// AEAD suite used to encrypt the wrapped bundle key.
     pub aead: SoraUploadedModelKeyWrapAeadV1,
     /// Raw ephemeral public key bytes used for the KEM exchange.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ephemeral_public_key: Vec<u8>,
     /// Nonce used by the AEAD wrapping operation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub nonce: Vec<u8>,
     /// Opaque wrapped bundle-key ciphertext bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub wrapped_key_ciphertext: Vec<u8>,
     /// Commitment over `wrapped_key_ciphertext`.
     pub ciphertext_hash: Hash,
     /// Digest over the public AAD bound to the key-wrap operation.
     pub aad_digest: Hash,
 }
-
 impl SoraUploadedModelWrappedKeyV1 {
     const MAX_PUBLIC_KEY_BYTES: usize = 256;
     const MAX_NONCE_BYTES: usize = 256;
     const MAX_WRAPPED_KEY_BYTES: usize = 4_096;
-
     /// Validate wrapped bundle-key metadata.
     ///
     /// # Errors
@@ -2005,7 +1922,6 @@ impl SoraUploadedModelWrappedKeyV1 {
         Ok(())
     }
 }
-
 /// Bundle storage reference and metadata for a user-uploaded Soracloud model.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2051,7 +1967,6 @@ pub struct SoraUploadedModelBundleV1 {
     /// Reference to the decryption release policy.
     pub decryption_policy_ref: String,
 }
-
 fn validate_uploaded_model_wrapped_key_matches_recipient(
     recipient: &SoraUploadedModelEncryptionRecipientV1,
     wrapped_key: &SoraUploadedModelWrappedKeyV1,
@@ -2088,7 +2003,6 @@ fn validate_uploaded_model_wrapped_key_matches_recipient(
     }
     Ok(())
 }
-
 impl SoraUploadedModelBundleV1 {
     /// Validate uploaded-model bundle metadata.
     ///
@@ -2163,7 +2077,6 @@ impl SoraUploadedModelBundleV1 {
         Ok(())
     }
 }
-
 /// SoraFS-backed encrypted artifact reference for private uploaded-model execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2182,7 +2095,6 @@ pub struct SoraPrivateModelArtifactRefV1 {
     /// Stable artifact role, for example `input` or `output`.
     pub artifact_role: String,
 }
-
 impl SoraPrivateModelArtifactRefV1 {
     /// Validate encrypted artifact metadata.
     ///
@@ -2218,7 +2130,6 @@ impl SoraPrivateModelArtifactRefV1 {
         Ok(())
     }
 }
-
 /// Receipt committed for deterministic private uploaded-model execution.
 ///
 /// The receipt intentionally carries only commitments and encrypted artifact
@@ -2263,7 +2174,6 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     /// Monotonic Soracloud sequence that emitted the receipt.
     pub emitted_sequence: u64,
 }
-
 impl SoraPrivateUploadedModelExecutionReceiptV1 {
     /// Validate private uploaded-model execution receipt metadata.
     ///
@@ -2334,7 +2244,6 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
         Ok(())
     }
 }
-
 /// Immutable metadata for an admitted model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2383,7 +2292,6 @@ pub struct SoraModelWeightVersionRecordV1 {
     #[norito(default)]
     pub promoted_by: Option<PublicKey>,
 }
-
 impl SoraModelWeightVersionRecordV1 {
     /// Validate model-weight version metadata and sequencing.
     ///
@@ -2471,7 +2379,6 @@ impl SoraModelWeightVersionRecordV1 {
         Ok(())
     }
 }
-
 /// Audit record for model-weight lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2508,7 +2415,6 @@ pub struct SoraModelWeightAuditEventV1 {
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
 }
-
 impl SoraModelWeightAuditEventV1 {
     /// Validate model-weight audit metadata.
     ///
@@ -2549,7 +2455,6 @@ impl SoraModelWeightAuditEventV1 {
         Ok(())
     }
 }
-
 /// Audit action recorded for model-artifact lifecycle changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2561,7 +2466,6 @@ pub enum SoraModelArtifactActionV1 {
     /// A completed training job registered an artifact description.
     Register,
 }
-
 /// Authoritative record for model artifacts derived from completed training jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2607,7 +2511,6 @@ pub struct SoraModelArtifactRecordV1 {
     #[norito(default)]
     pub chunk_manifest_root: Option<Hash>,
 }
-
 impl SoraModelArtifactRecordV1 {
     /// Validate model-artifact metadata.
     ///

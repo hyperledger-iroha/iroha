@@ -1,11 +1,9 @@
 //! Adversarial edge coverage for the final Kotodama V1 frontend contract.
-
 use kotodama_lang::{
     ast::{BinaryOp, Expr, Item, Program, UnaryOp},
     parser::parse,
     session::{CompileRequest, CompilerSession},
 };
-
 fn function_tail<'program>(program: &'program Program, name: &str) -> &'program Expr {
     program
         .items
@@ -16,14 +14,12 @@ fn function_tail<'program>(program: &'program Program, name: &str) -> &'program 
         })
         .unwrap_or_else(|| panic!("missing tail expression for `{name}`"))
 }
-
 fn assert_ident(expression: &Expr, expected: &str) {
     assert!(
         matches!(expression.kind(), Expr::Ident(actual) if actual == expected),
         "expected identifier `{expected}`, found {expression:?}"
     );
 }
-
 #[test]
 fn operator_precedence_and_left_associativity_are_structural() {
     let program = parse(
@@ -44,7 +40,6 @@ fn operator_precedence_and_left_associativity_are_structural() {
         "#,
     )
     .expect("parse the complete V1 precedence ladder");
-
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
@@ -91,7 +86,6 @@ fn operator_precedence_and_left_associativity_are_structural() {
     assert_ident(d, "d");
     assert_ident(e, "e");
     assert_ident(f, "f");
-
     let Expr::Binary {
         op: BinaryOp::Or,
         left: a,
@@ -147,7 +141,6 @@ fn operator_precedence_and_left_associativity_are_structural() {
     assert_ident(z, "z");
     assert_ident(w, "w");
     assert_ident(c, "c");
-
     let Expr::Binary {
         op: BinaryOp::And,
         left,
@@ -169,7 +162,6 @@ fn operator_precedence_and_left_associativity_are_structural() {
     assert_ident(maybe, "maybe");
     assert_ident(fallback, "fallback");
 }
-
 #[test]
 fn native_json_rejects_keys_that_collide_only_after_escape_decoding() {
     let source = r#"
@@ -196,7 +188,6 @@ fn native_json_rejects_keys_that_collide_only_after_escape_decoding() {
         diagnostic.message
     );
 }
-
 #[test]
 fn json_parse_rejects_duplicate_object_keys_before_artifact_emission() {
     let source = r#"
@@ -230,7 +221,6 @@ fn json_parse_rejects_duplicate_object_keys_before_artifact_emission() {
         Some("duplicate-parsed-json-key.ko")
     );
 }
-
 #[test]
 fn json_parse_rejects_malformed_literals_before_artifact_emission() {
     let source = r#"

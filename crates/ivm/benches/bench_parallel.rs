@@ -4,7 +4,6 @@ use ivm::{
     IVM, ProgramMetadata, encoding,
     parallel::{Block, Scheduler, State, StateAccessSet, Transaction, TxResult},
 };
-
 fn build_block(n: usize) -> Block {
     let mut txs = Vec::new();
     for i in 0..n {
@@ -18,7 +17,6 @@ fn build_block(n: usize) -> Block {
     }
     Block { transactions: txs }
 }
-
 fn bench_scheduler(c: &mut Criterion) {
     let cores = num_cpus::get_physical();
     let scheduler = Scheduler::new(cores);
@@ -41,7 +39,6 @@ fn bench_scheduler(c: &mut Criterion) {
         });
     });
 }
-
 fn bench_ivm_execute(c: &mut Criterion) {
     let cores = num_cpus::get_physical();
     let mut ivm = IVM::new_with_options(Some(cores), State::new(), u64::MAX);
@@ -58,13 +55,11 @@ fn bench_ivm_execute(c: &mut Criterion) {
         });
     });
 }
-
 fn sample_program() -> Vec<u8> {
     let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog
 }
-
 fn bench_ivm_multi_transaction_block(c: &mut Criterion) {
     let cores = num_cpus::get_physical();
     let mut ivm = IVM::new_with_options(Some(cores), State::new(), u64::MAX);
@@ -86,7 +81,6 @@ fn bench_ivm_multi_transaction_block(c: &mut Criterion) {
         });
     });
 }
-
 fn bench_scheduler_threads(c: &mut Criterion) {
     let block = build_block(1000);
     let max = num_cpus::get_physical();
@@ -105,7 +99,6 @@ fn bench_scheduler_threads(c: &mut Criterion) {
     }
     group.finish();
 }
-
 fn bench_scheduler_dynamic(c: &mut Criterion) {
     let block = build_block(1000);
     let max = num_cpus::get_physical();
@@ -119,7 +112,6 @@ fn bench_scheduler_dynamic(c: &mut Criterion) {
         });
     });
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     // Silence ASCII banner and feature selection in benches.

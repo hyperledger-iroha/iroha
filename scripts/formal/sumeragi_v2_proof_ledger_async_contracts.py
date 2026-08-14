@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "4038baf8706294252436e6dc8cf8934556c4553fb234df6a22e578f7f802a6ae"
+    "cdb9c8d7a6a8e5896d43a5d080a496a5d3465d7ff461e433a5b0560638565ab4"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -191,7 +191,6 @@ ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
     "SumeragiV2AsyncInstallRunnerProofs": 159,
-    "SumeragiV2AsyncRecoveryVoteEpochProofs": 158,
 }
 ASYNC_LIVENESS_THEOREM_MAX_LINES = 600
 ASYNC_LIVENESS_THEOREM_MAX_STEPS = 256
@@ -633,6 +632,7 @@ ASYNC_LIVENESS_SHARDS = (
     ("SumeragiV2AsyncInstallRunnerContinuationProofs", None),
     ("SumeragiV2AsyncTimeoutKernelProofs", None),
     ("SumeragiV2AsyncRecoveryVoteEpochProofs", None),
+    ("SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs", None),
     ("SumeragiV2AsyncRecoveryVoteEpochContinuationProofs", None),
     ("SumeragiV2AsyncFairServiceProofs", None),
     ("SumeragiV2AsyncProgressOwnershipProofs", None),

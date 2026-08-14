@@ -446,6 +446,10 @@ Implemented foundations include:
   - `sorafs_cli governance dag mirror-query --index <path>` queries the local
     mirror index by head, block CID, or node CID in table or JSON form.
 - Torii local Governance DAG mirror API:
+  - Every route in this local mirror, publication-index, CAR-queue, and runtime
+    family requires a fresh exact-NetworkId operator signature over the GET
+    method, path, and query before any local index or artifact is opened. These
+    node-operational inventories are not anonymous public content APIs.
   - `GET /v1/sorafs/governance/dag/dashboard` summarizes the service-owned
     authenticated mirror snapshot with signed-head metadata, block counts,
     payload-kind counts, sequence bounds, timestamp bounds, typed-store and
@@ -879,7 +883,7 @@ The rollout evidence scripts have focused Python coverage in:
 - Use `sorafs_cli governance dag mirror-build` and `mirror-query` for local
   signed-snapshot lookup by head, block CID, or governance-node CID without
   contacting the shipped runtime mirror service.
-- Use Torii `GET /v1/sorafs/governance/dag/dashboard`, `/head`,
+- Use an operator-signed Torii `GET /v1/sorafs/governance/dag/dashboard`, `/head`,
   `/blocks/{block_cid_hex}`, and `/nodes/{node_cid_hex}` when an enabled SoraFS
   node has a configured Governance DAG root and irohad has installed the
   supervised service's mirror-read capability. That capability is the route's
@@ -888,20 +892,20 @@ The rollout evidence scripts have focused Python coverage in:
   publication snapshot as the runtime-local feed of filesystem-published
   governance artifacts. The envelope is a dashboard source, not the public
   signed head or a replacement for the bounded authenticated public mirror.
-- Use Torii `GET /v1/sorafs/governance/dag/publish-index?limit=N`,
+- Use operator-signed Torii `GET /v1/sorafs/governance/dag/publish-index?limit=N`,
   `/publish-index/digests/{encoded_blake3_hex}`, and
   `/publish-index/kinds/{payload_kind}` to query that runtime-local feed through
   the node API when filesystem governance publication is enabled. Top-level and
   digest/kind result arrays are bounded by `limit` while total match counts remain
   visible.
-- Use Torii `GET /v1/sorafs/governance/dag/car-queue`,
+- Use operator-signed Torii `GET /v1/sorafs/governance/dag/car-queue`,
   `/car-queue/digests/{encoded_blake3_hex}`,
   `/car-queue/kinds/{payload_kind}`, and
   `/car-queue/archives/{car_archive_blake3_hex}` to inspect assembled local CAR
   segment queue state before the always-on service publishes it. Digest/kind
   lookup segment arrays are bounded by `limit` while total match counts remain
   visible.
-- Use Torii `GET /v1/sorafs/governance/dag/runtime`, `/runtime/head`,
+- Use operator-signed Torii `GET /v1/sorafs/governance/dag/runtime`, `/runtime/head`,
   `/runtime/blocks/{block_cid_hex}`, `/runtime/nodes/{node_cid_hex}`,
   `/runtime/digests/{encoded_blake3_hex}`, and `/runtime/kinds/{payload_kind}`
   to inspect the authenticated typed runtime DAG head/index generation

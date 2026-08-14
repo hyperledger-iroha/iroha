@@ -7,7 +7,6 @@ struct Variant6;
 struct Variant7;
 struct Variant8;
 struct Variant9;
-
 #[derive(iroha_derive::FromVariant)]
 enum Enum {
     Variant1(Variant1),
@@ -20,5 +19,4 @@ enum Enum {
     Variant8(Variant8),
     Variant9(Variant9),
 }
-
 fn main() {}

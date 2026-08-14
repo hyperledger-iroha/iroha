@@ -6,7 +6,6 @@ struct PreparedAutonomousCertification {
     source: DurableAutonomousLaneMergeSource,
     plan: CertifiedBundleCapacityPlan,
 }
-
 fn prepare_autonomous_certification_for_capacity(
     kura: &Kura,
     lane_config: &RuntimeLaneConfig,
@@ -17,7 +16,6 @@ fn prepare_autonomous_certification_for_capacity(
     let (_, _, payload) = autonomous_lane_payload_for_kura(lane_id, lane.dataspace_id, 1, &signer);
     prepare_autonomous_certification_for_capacity_payload(kura, lane_config, &payload, &signer)
 }
-
 fn prepare_autonomous_certification_for_capacity_payload(
     kura: &Kura,
     lane_config: &RuntimeLaneConfig,
@@ -81,7 +79,6 @@ fn prepare_autonomous_certification_for_capacity_payload(
         plan,
     }
 }
-
 fn autonomous_capacity_payload_at(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -93,14 +90,12 @@ fn autonomous_capacity_payload_at(
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, lane_block_height, signer);
     repropose_autonomous_lane_payload_for_kura(&payload, proposal_height, signer)
 }
-
 struct PreparedCertifiedBundleReset {
     prepared: PreparedAutonomousCertification,
     authority: crate::state::CertifiedLaneBlockPersistenceAuthority,
     old_slot: CertifiedLaneBlockArtifact,
     old_tip: CertifiedLaneBlockArtifact,
 }
-
 fn prepare_certified_bundle_reset_fixture(
     kura: &Kura,
     lane_config: &RuntimeLaneConfig,
@@ -114,19 +109,16 @@ fn prepare_certified_bundle_reset_fixture(
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 513, 100, &signer);
     let fresh_payload = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 101, &signer);
     install_autonomous_lane_marker_for_kura(kura, lane_config, &fresh_payload);
-
     let (old_slot_session, old_slot_pops) =
         committed_lane_block_session_for_kura_proposal(&old_slot_payload.origin_proposal, &signer);
     let old_slot = CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
     kura.persist_committed_lane_block_session(&old_slot_session, &old_slot_pops)
         .expect("persist occupied pre-reset certified slot");
-
     let (old_tip_session, old_tip_pops) =
         committed_lane_block_session_for_kura_proposal(&old_tip_payload.origin_proposal, &signer);
     let old_tip = CertifiedLaneBlockArtifact::new(old_tip_session.clone(), old_tip_pops.clone());
     kura.persist_committed_lane_block_session(&old_tip_session, &old_tip_pops)
         .expect("persist high pre-reset certified frontier");
-
     let prepared = prepare_autonomous_certification_for_capacity_payload(
         kura,
         lane_config,
@@ -147,7 +139,6 @@ fn prepare_certified_bundle_reset_fixture(
         old_tip,
     }
 }
-
 fn certified_bundle_reserved_for(
     plan: &CertifiedBundleCapacityPlan,
     components: impl IntoIterator<Item = CertifiedBundleCapacityComponent>,
@@ -159,11 +150,9 @@ fn certified_bundle_reserved_for(
     .reserved_bytes()
     .expect("composite reservation byte count")
 }
-
 fn initial_certified_bundle_reserved(plan: &CertifiedBundleCapacityPlan) -> u64 {
     certified_bundle_reserved_for(plan, plan.component_bytes.keys().copied())
 }
-
 #[test]
 fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() {
     let temp_dir = TempDir::new().expect("missing transient-entry temp dir");
@@ -180,7 +169,6 @@ fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() 
         .expect("capacity plan carries a transient component");
     assert!(plan.component_bytes.contains_key(&component));
     assert!(plan.component_transient_bytes.remove(&component).is_some());
-
     assert_eq!(
         CertifiedBundleCapacityReservation {
             plan,
@@ -190,7 +178,6 @@ fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() 
         None,
     );
 }
-
 #[test]
 fn certified_bundle_rejects_mismatched_authority_before_reserving_or_writing() {
     let temp_dir = TempDir::new().expect("mismatched authority temp dir");
@@ -207,14 +194,12 @@ fn certified_bundle_rejects_mismatched_authority_before_reserving_or_writing() {
         None,
     );
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
-
     kura.persist_committed_lane_block_session_with_authority(
         &prepared.session,
         &prepared.signer_pops,
         &authority,
     )
     .expect_err("mismatched authority must reject before composite admission");
-
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
     assert_eq!(
         kura.certified_bundle_capacity_reserved_bytes()
@@ -222,7 +207,6 @@ fn certified_bundle_rejects_mismatched_authority_before_reserving_or_writing() {
         0,
     );
 }
-
 #[test]
 fn certified_bundle_authorized_active_slot_reset_publishes_exact_bundle() {
     let temp_dir = TempDir::new().expect("authorized reset temp dir");
@@ -240,14 +224,12 @@ fn certified_bundle_authorized_active_slot_reset_publishes_exact_bundle() {
         Some(fixture.old_tip.clone())
     );
     let expected = fixture.prepared.source.bundle.certified.clone();
-
     kura.persist_committed_lane_block_session_with_authority(
         &fixture.prepared.session,
         &fixture.prepared.signer_pops,
         &fixture.authority,
     )
     .expect("authorized reset replaces the active slot and high frontier");
-
     assert_eq!(
         kura.certified_bundle_capacity_reserved_bytes()
             .expect("authorized reset reservation inventory"),
@@ -272,7 +254,6 @@ fn certified_bundle_authorized_active_slot_reset_publishes_exact_bundle() {
         fixture.prepared.source
     );
 }
-
 #[test]
 fn certified_bundle_active_slot_reset_without_authority_is_read_only() {
     let temp_dir = TempDir::new().expect("unauthorized reset temp dir");
@@ -283,13 +264,11 @@ fn certified_bundle_active_slot_reset_without_authority_is_read_only() {
     let fixture = prepare_certified_bundle_reset_fixture(&kura, &lane_config, lane_id);
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
-
     kura.persist_committed_lane_block_session(
         &fixture.prepared.session,
         &fixture.prepared.signer_pops,
     )
     .expect_err("same-incarnation reset without authority must fail before admission");
-
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
     assert_eq!(
         *kura.certified_bundle_capacity_reservations.lock(),
@@ -304,7 +283,6 @@ fn certified_bundle_active_slot_reset_without_authority_is_read_only() {
         Some(fixture.old_tip)
     );
 }
-
 #[test]
 fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
     let temp_dir = TempDir::new().expect("proposal regression temp dir");
@@ -334,7 +312,6 @@ fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
     let incoming = prepared.source.bundle.certified.clone();
-
     let error = {
         let _prune_guard = kura.prune_lock.lock();
         kura.ensure_certified_bundle_capacity_reservation_under_prune_guard(
@@ -346,7 +323,6 @@ fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
     error.expect_err(
         "higher lane height with regressed proposal height must fail composite preflight",
     );
-
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
     assert_eq!(
         *kura.certified_bundle_capacity_reservations.lock(),
@@ -357,7 +333,6 @@ fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
         Some(existing)
     );
 }
-
 fn exact_certified_bundle_limit(kura: &Kura, plan: &CertifiedBundleCapacityPlan) -> u64 {
     kura.refresh_disk_usage_bytes()
         .expect("refresh composite-capacity accounting");
@@ -389,7 +364,6 @@ fn exact_certified_bundle_limit(kura: &Kura, plan: &CertifiedBundleCapacityPlan)
         .and_then(|bytes| bytes.checked_add(initial_certified_bundle_reserved(plan)))
         .expect("exact composite capacity fits")
 }
-
 #[test]
 fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
     let temp_dir = TempDir::new().expect("composite capacity temp dir");
@@ -405,7 +379,6 @@ fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
     Arc::get_mut(&mut kura)
         .expect("exclusive composite capacity Kura")
         .max_disk_usage_bytes = exact_limit - 1;
-
     let error = kura
         .persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect_err("one byte below the complete composite peak must reject");
@@ -420,7 +393,6 @@ fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
         *kura.certified_bundle_capacity_reservations.lock(),
         reservations_before
     );
-
     Arc::get_mut(&mut kura)
         .expect("exclusive composite capacity Kura remains")
         .max_disk_usage_bytes = exact_limit;
@@ -445,7 +417,6 @@ fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
         0
     );
 }
-
 #[test]
 fn certified_bundle_frontier_crash_rebuilds_exact_remaining_obligation() {
     let temp_dir = TempDir::new().expect("frontier crash temp dir");
@@ -488,7 +459,6 @@ fn certified_bundle_frontier_crash_rebuilds_exact_remaining_obligation() {
         0
     );
 }
-
 #[test]
 fn certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obligation() {
     let temp_dir = TempDir::new().expect("frontier build-only temp dir");
@@ -507,7 +477,6 @@ fn certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obliga
         Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, temp_dir.path());
     assert!(!frontier_path.exists());
     assert!(build_path.exists());
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("authenticate and promote exact frontier build");
     assert!(frontier_path.exists());
@@ -531,7 +500,6 @@ fn certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obliga
         0
     );
 }
-
 #[test]
 fn certified_frontier_build_conflict_fails_before_rebuild_map_publication() {
     let temp_dir = TempDir::new().expect("frontier build conflict temp dir");
@@ -559,7 +527,6 @@ fn certified_frontier_build_conflict_fails_before_rebuild_map_publication() {
     .expect("stage conflicting durable frontier");
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect_err("conflicting frontier and build must fail closed");
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
@@ -570,7 +537,6 @@ fn certified_frontier_build_conflict_fails_before_rebuild_map_publication() {
         reservations_before
     );
 }
-
 #[test]
 fn certified_pair_crash_rebuilds_only_bundle_obligation() {
     let temp_dir = TempDir::new().expect("bundle crash temp dir");
@@ -606,7 +572,6 @@ fn certified_pair_crash_rebuilds_only_bundle_obligation() {
         0
     );
 }
-
 #[test]
 fn durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback() {
     let temp_dir = TempDir::new().expect("durable bundle-pair crash temp dir");
@@ -626,7 +591,6 @@ fn durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback() {
             [CertifiedBundleCapacityComponent::AutonomousBundlePair],
         )
     );
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("strict bundle readback consumes rebuilt obligation");
     assert_eq!(
@@ -635,17 +599,11 @@ fn durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback() {
         0
     );
     assert_eq!(
-        kura.durable_autonomous_lane_merge_source(
-            lane_id,
-            1,
-            prepared.network_id,
-            prepared.epoch,
-        )
-        .expect("durable bundle remains exact after rebuild"),
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, prepared.network_id, prepared.epoch,)
+            .expect("durable bundle remains exact after rebuild"),
         prepared.source
     );
 }
-
 #[test]
 fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
     let temp_dir = TempDir::new().expect("bundle append-intent temp dir");
@@ -697,17 +655,11 @@ fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
         0
     );
     assert_eq!(
-        kura.durable_autonomous_lane_merge_source(
-            lane_id,
-            1,
-            prepared.network_id,
-            prepared.epoch,
-        )
-        .expect("repaired bundle source is exact"),
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, prepared.network_id, prepared.epoch,)
+            .expect("repaired bundle source is exact"),
         prepared.source
     );
 }
-
 #[test]
 fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
     let temp_dir = TempDir::new().expect("certified append-intent temp dir");
@@ -730,7 +682,6 @@ fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
         Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
     let intent_path = Kura::bound_progress_append_intent_path(&certified_index_path);
     assert!(intent_path.exists());
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("original exact limit admits certified append recovery");
     assert!(
@@ -747,17 +698,11 @@ fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
         0
     );
     assert_eq!(
-        kura.durable_autonomous_lane_merge_source(
-            lane_id,
-            1,
-            prepared.network_id,
-            prepared.epoch,
-        )
-        .expect("certified append repair source is exact"),
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, prepared.network_id, prepared.epoch,)
+            .expect("certified append repair source is exact"),
         prepared.source
     );
 }
-
 fn assert_authenticated_append_build_restart_at_exact_limit(
     calls_before_failure: usize,
     bundle_role: bool,
@@ -778,7 +723,6 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
     fail_after_bound_progress_append_build_for_tests(calls_before_failure);
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect_err("inject crash after authenticated append-build fsync");
-
     let (_, index_path) = if bundle_role {
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane, temp_dir.path())
     } else {
@@ -790,7 +734,6 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
     assert!(!intent_path.exists());
     kura.refresh_disk_usage_bytes()
         .expect("refresh authenticated build physical usage");
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("authenticated append build is admitted at its original exact limit");
     assert!(
@@ -825,23 +768,16 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
         0
     );
     assert_eq!(
-        kura.durable_autonomous_lane_merge_source(
-            lane_id,
-            1,
-            prepared.network_id,
-            prepared.epoch,
-        )
-        .expect("authenticated build repair source is exact"),
+        kura.durable_autonomous_lane_merge_source(lane_id, 1, prepared.network_id, prepared.epoch,)
+            .expect("authenticated build repair source is exact"),
         prepared.source
     );
 }
-
 #[test]
 fn certified_and_bundle_authenticated_append_builds_restart_at_original_exact_limit() {
     assert_authenticated_append_build_restart_at_exact_limit(0, false);
     assert_authenticated_append_build_restart_at_exact_limit(1, true);
 }
-
 fn assert_append_recovery_restart_rejects_one_under(build_only: bool) {
     let temp_dir = TempDir::new().expect("one-under append recovery temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -861,7 +797,6 @@ fn assert_append_recovery_restart_rejects_one_under(build_only: bool) {
     }
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect_err("inject authenticated append recovery crash");
-
     let (_, index_path) = if build_only {
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane, temp_dir.path())
     } else {
@@ -880,7 +815,6 @@ fn assert_append_recovery_restart_rejects_one_under(build_only: bool) {
         .max_disk_usage_bytes = exact_limit - 1;
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
-
     let error = kura
         .rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect_err("one byte below the authenticated recovery envelope must reject");
@@ -895,13 +829,11 @@ fn assert_append_recovery_restart_rejects_one_under(build_only: bool) {
         reservations_before
     );
 }
-
 #[test]
 fn append_intent_and_build_restart_preflight_reject_one_under_without_mutation() {
     assert_append_recovery_restart_rejects_one_under(false);
     assert_append_recovery_restart_rejects_one_under(true);
 }
-
 #[test]
 fn lane_retirement_is_blocked_by_outstanding_certified_bundle_reservation() {
     let temp_dir = TempDir::new().expect("retirement blocker temp dir");
@@ -922,7 +854,6 @@ fn lane_retirement_is_blocked_by_outstanding_certified_bundle_reservation() {
     kura.preflight_retire_lane_storage(lane)
         .expect_err("lane retirement must not outrun composite publication capacity");
 }
-
 #[test]
 fn certified_bundle_preflight_rejects_lone_append_build_without_mutation() {
     let temp_dir = TempDir::new().expect("lone append-build temp dir");
@@ -937,7 +868,6 @@ fn certified_bundle_preflight_rejects_lone_append_build_without_mutation() {
     fs::write(&build_path, b"forged lone append build").expect("stage lone append build");
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
-
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect_err("a lone unauthenticated append build must fail closed");
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
@@ -946,7 +876,6 @@ fn certified_bundle_preflight_rejects_lone_append_build_without_mutation() {
         reservations_before
     );
 }
-
 #[test]
 fn certified_bundle_preflight_rejects_authenticated_mismatched_append_build() {
     let temp_dir = TempDir::new().expect("mismatched append-build temp dir");
@@ -975,7 +904,6 @@ fn certified_bundle_preflight_rejects_authenticated_mismatched_append_build() {
     .expect("replace build with mismatched sealed intent");
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect_err("sealed append build for another payload must fail closed");
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
@@ -984,7 +912,6 @@ fn certified_bundle_preflight_rejects_authenticated_mismatched_append_build() {
         reservations_before
     );
 }
-
 #[test]
 fn certified_bundle_preflight_checks_bad_older_history_beneath_exact_append_intent() {
     let temp_dir = TempDir::new().expect("append preimage conflict temp dir");
@@ -1010,7 +937,6 @@ fn certified_bundle_preflight_checks_bad_older_history_beneath_exact_append_inte
     fs::write(&data_path, data).expect("corrupt only older stable certified payload");
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect_err("bad older history beneath an exact intent must fail before repair");
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
@@ -1020,7 +946,6 @@ fn certified_bundle_preflight_checks_bad_older_history_beneath_exact_append_inte
         reservations_before
     );
 }
-
 #[test]
 fn certified_bundle_stale_incarnation_reservation_blocks_aba_without_mutation() {
     let temp_dir = TempDir::new().expect("ABA reservation temp dir");
@@ -1041,7 +966,6 @@ fn certified_bundle_stale_incarnation_reservation_blocks_aba_without_mutation() 
     );
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
-
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect_err("a stale same-route reservation must block lane-ID ABA");
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
@@ -1050,7 +974,6 @@ fn certified_bundle_stale_incarnation_reservation_blocks_aba_without_mutation() 
         reservations_before
     );
 }
-
 #[test]
 fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
     let temp_dir = TempDir::new().expect("late-route rebuild temp dir");
@@ -1084,7 +1007,6 @@ fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
         Kura::latest_certified_lane_block_frontier_paths_for_entry(lane2, temp_dir.path());
     fs::write(&late_frontier_path, b"malformed late-route frontier")
         .expect("stage malformed late-route frontier");
-
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect_err("late-route conflict must fail the whole rebuild");
     assert_eq!(

@@ -1,12 +1,4 @@
 //! Unified Kotodama V1 developer command.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    env,
-    io::{BufRead, Write},
-    path::{Path, PathBuf},
-};
-
 use ivm::kotodama::{
     builtins::{Builtin, BuiltinSurface},
     compiler::CompilerOptions,
@@ -26,14 +18,18 @@ use ivm::kotodama::{
     session::CompilerSession,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId},
 };
-
 #[cfg(test)]
 use ivm::kotodama::{
     diagnostic::{DiagnosticFix, DiagnosticLabel},
     session::{CompileOutput, CompileRequest},
     source::TextRange,
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    env,
+    io::{BufRead, Write},
+    path::{Path, PathBuf},
+};
 const USAGE: &str = "\
 Kotodama V1 toolchain
 
@@ -51,7 +47,6 @@ Usage:
   koto explain <diagnostic-code>
   koto lsp [--zk] [--project <kotodama.project.json>]
 ";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KotoCommand {
     Check,
@@ -62,7 +57,6 @@ enum KotoCommand {
     Explain,
     Lsp,
 }
-
 const KOTO_COMMAND_INVENTORY: [(&str, KotoCommand); 7] = [
     ("check", KotoCommand::Check),
     ("build", KotoCommand::Build),
@@ -72,13 +66,11 @@ const KOTO_COMMAND_INVENTORY: [(&str, KotoCommand); 7] = [
     ("explain", KotoCommand::Explain),
     ("lsp", KotoCommand::Lsp),
 ];
-
 fn koto_command(raw: &str) -> Option<KotoCommand> {
     KOTO_COMMAND_INVENTORY
         .iter()
         .find_map(|(name, command)| (*name == raw).then_some(*command))
 }
-
 // JSON can escape one source byte into as many as six ASCII bytes. The wire
 // budget admits every canonical 1 MiB source while remaining strictly bounded.
 const MAX_LSP_MESSAGE_BYTES: usize = MAX_SOURCE_BYTES * 6 + 256 * 1024;
@@ -87,14 +79,12 @@ const MAX_LSP_HEADERS: usize = 32;
 const MAX_LSP_URI_BYTES: usize = 8 * 1024;
 const MAX_LSP_OPEN_DOCUMENTS: usize = 256;
 const MAX_LSP_DOCUMENT_BYTES: usize = 64 * MAX_SOURCE_BYTES;
-
 // Contextual syntax and compiler intrinsics do not appear in the lexical
 // keyword or public builtin registries, but they are still source-visible V1
 // completions. Registered builtins (including receiver methods), sum paths,
 // rounding paths, types, and bounded-list members are sourced from their
 // canonical compiler tables below.
 const V1_CONTEXTUAL_COMPLETIONS: &[(&str, u64)] = &[("json", 14), ("div_round", 2)];
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DiagnosticFormat {
     #[default]
@@ -102,7 +92,6 @@ enum DiagnosticFormat {
     Json,
     Sarif,
 }
-
 impl DiagnosticFormat {
     fn parse(raw: &str) -> Result<Self, String> {
         match raw {
@@ -114,7 +103,6 @@ impl DiagnosticFormat {
             )),
         }
     }
-
     fn render(self, diagnostics: &DiagnosticBundle) -> String {
         match self {
             Self::Human => diagnostics.render_human(),
@@ -127,7 +115,6 @@ impl DiagnosticFormat {
         }
     }
 }
-
 #[derive(Debug)]
 enum KotoError {
     Message(String),
@@ -136,13 +123,11 @@ enum KotoError {
         diagnostics: DiagnosticBundle,
     },
 }
-
 impl From<String> for KotoError {
     fn from(message: String) -> Self {
         Self::Message(message)
     }
 }
-
 impl std::fmt::Display for KotoError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -154,7 +139,6 @@ impl std::fmt::Display for KotoError {
         }
     }
 }
-
 fn build_error(format: DiagnosticFormat, error: BuildError) -> KotoError {
     match error.into_diagnostics() {
         Ok(diagnostics) => KotoError::Diagnostics {
@@ -164,7 +148,6 @@ fn build_error(format: DiagnosticFormat, error: BuildError) -> KotoError {
         Err(error) => KotoError::Message(error.to_string()),
     }
 }
-
 fn main() {
     if let Err(error) = run(env::args().skip(1).collect()) {
         match error {
@@ -177,7 +160,6 @@ fn main() {
         std::process::exit(1);
     }
 }
-
 fn run(mut args: Vec<String>) -> Result<(), KotoError> {
     let Some(command) = args.first().cloned() else {
         print!("{USAGE}");
@@ -201,7 +183,6 @@ fn run(mut args: Vec<String>) -> Result<(), KotoError> {
         ))),
     }
 }
-
 fn check(args: Vec<String>) -> Result<(), String> {
     let CheckOptions {
         format,
@@ -243,7 +224,6 @@ fn check(args: Vec<String>) -> Result<(), String> {
         Ok(())
     }
 }
-
 fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>, DiagnosticBundle) {
     let loaded = match load_source_project_manifest(manifest) {
         Ok(loaded) => loaded,
@@ -303,7 +283,6 @@ fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>,
         }
     }
 }
-
 fn check_project_paths(
     driver: &BuildDriver,
     inputs: Vec<PathBuf>,
@@ -385,7 +364,6 @@ fn check_project_paths(
         });
         project_inputs.push(path);
     }
-
     if !sources.is_empty() {
         match driver.check_explicit_sources(sources) {
             Ok(warnings) => {
@@ -416,7 +394,6 @@ fn check_project_paths(
     }
     (checked, DiagnosticBundle::new(diagnostics))
 }
-
 #[cfg(test)]
 fn check_paths(
     session: &CompilerSession,
@@ -435,7 +412,6 @@ fn check_paths(
     }
     (checked, DiagnosticBundle::new(diagnostics))
 }
-
 fn build(args: Vec<String>) -> Result<(), KotoError> {
     let mut diagnostic_format = DiagnosticFormat::Human;
     let mut profile = String::from("dev");
@@ -639,7 +615,6 @@ fn build(args: Vec<String>) -> Result<(), KotoError> {
     }
     Ok(())
 }
-
 fn format_sources(args: Vec<String>) -> Result<(), String> {
     let (check_only, inputs) = parse_format_sources_args(args)?;
     let mut changed = false;
@@ -663,7 +638,6 @@ fn format_sources(args: Vec<String>) -> Result<(), String> {
         Ok(())
     }
 }
-
 fn parse_format_sources_args(args: Vec<String>) -> Result<(bool, Vec<PathBuf>), String> {
     let mut check_only = false;
     let mut check_seen = false;
@@ -691,12 +665,10 @@ fn parse_format_sources_args(args: Vec<String>) -> Result<(bool, Vec<PathBuf>), 
     }
     Ok((check_only, inputs))
 }
-
 fn format_source_text(source: &str, source_name: Option<&str>) -> Result<String, String> {
     let file = SourceFile::new(SourceId(0), source_name.unwrap_or("<source>"), source);
     format_source(&file, FrontendBudget::v1()).map_err(|diagnostics| diagnostics.render_human())
 }
-
 fn document(args: Vec<String>) -> Result<(), String> {
     let mut format = "markdown";
     let mut zk_enabled = false;
@@ -749,17 +721,14 @@ fn document(args: Vec<String>) -> Result<(), String> {
     println!("{rendered}");
     Ok(())
 }
-
 fn markdown_inline(text: &str) -> String {
     text.replace(['\n', '\r'], " ").replace('`', "\\`")
 }
-
 fn render_contract_documentation(
     manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
 ) -> String {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     use std::fmt::Write as _;
-
     let seiyaku_name = manifest.seiyaku_name.as_deref().unwrap_or("Seiyaku");
     let mut output = format!("# {}\n", markdown_inline(seiyaku_name));
     if let Some(code_hash) = manifest.code_hash.as_ref() {
@@ -768,7 +737,6 @@ fn render_contract_documentation(
     if let Some(abi_hash) = manifest.abi_hash.as_ref() {
         let _ = writeln!(output, "ABI V1: `{abi_hash}`");
     }
-
     output.push_str("\n## `kotoage` / `言挙げ`, views, and lifecycle\n");
     for entrypoint in manifest.entrypoints.as_deref().unwrap_or_default() {
         let parameters = entrypoint
@@ -852,7 +820,6 @@ fn render_contract_documentation(
             let _ = writeln!(output, "Access note: {}", markdown_inline(reason));
         }
     }
-
     if let Some(states) = manifest.states.as_deref()
         && !states.is_empty()
     {
@@ -882,7 +849,6 @@ fn render_contract_documentation(
     }
     output
 }
-
 fn explain(args: Vec<String>) -> Result<(), String> {
     if args.len() != 1 {
         return Err("explain expects one diagnostic code".to_owned());
@@ -899,7 +865,6 @@ fn explain(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct CheckOptions {
     format: DiagnosticFormat,
@@ -908,7 +873,6 @@ struct CheckOptions {
     project: Option<PathBuf>,
     inputs: Vec<PathBuf>,
 }
-
 fn parse_chain_discriminant(raw: &str) -> Result<u16, String> {
     if raw.is_empty()
         || (raw.len() > 1 && raw.starts_with('0'))
@@ -928,7 +892,6 @@ fn parse_chain_discriminant(raw: &str) -> Result<u16, String> {
     }
     Ok(value)
 }
-
 fn parse_check_options(args: Vec<String>) -> Result<CheckOptions, String> {
     let mut format = DiagnosticFormat::Human;
     let mut zk_enabled = false;
@@ -986,7 +949,6 @@ fn parse_check_options(args: Vec<String>) -> Result<CheckOptions, String> {
         inputs,
     })
 }
-
 #[cfg(test)]
 fn compile_path(session: &CompilerSession, path: &Path) -> Result<CompileOutput, DiagnosticBundle> {
     let source = read_source_file(path).map_err(|error| {
@@ -1002,7 +964,6 @@ fn compile_path(session: &CompilerSession, path: &Path) -> Result<CompileOutput,
         source_name: path.to_str(),
     })
 }
-
 #[cfg(test)]
 fn check_path(
     session: &CompilerSession,
@@ -1027,7 +988,6 @@ fn check_path(
             .collect(),
     ))
 }
-
 fn lint_diagnostic(warning: ivm::kotodama::lint::LintWarning, path: &Path) -> Diagnostic {
     let code = warning.diagnostic_code();
     let (line, column) = warning
@@ -1055,7 +1015,6 @@ fn lint_diagnostic(warning: ivm::kotodama::lint::LintWarning, path: &Path) -> Di
     ));
     diagnostic
 }
-
 fn language_server(args: Vec<String>) -> Result<(), String> {
     let (zk_enabled, project_manifest) = parse_lsp_options(args)?;
     let project = project_manifest
@@ -1073,7 +1032,6 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
         ..CompilerOptions::default()
     });
     let driver = BuildDriver::new(session, "koto-lsp");
-
     while let Some(message) = read_lsp_message(&mut input)? {
         let method = message
             .get("method")
@@ -1218,7 +1176,6 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn parse_lsp_options(args: Vec<String>) -> Result<(bool, Option<PathBuf>), String> {
     let mut zk_enabled = false;
     let mut project = None;
@@ -1247,7 +1204,6 @@ fn parse_lsp_options(args: Vec<String>) -> Result<(bool, Option<PathBuf>), Strin
     }
     Ok((zk_enabled, project))
 }
-
 fn store_lsp_document(
     documents: &mut HashMap<String, String>,
     uri: &str,
@@ -1282,7 +1238,6 @@ fn store_lsp_document(
     documents.insert(uri.to_owned(), source.to_owned());
     Ok(())
 }
-
 fn read_bounded_lsp_header_line(
     input: &mut impl BufRead,
     line: &mut Vec<u8>,
@@ -1312,7 +1267,6 @@ fn read_bounded_lsp_header_line(
         }
     }
 }
-
 fn read_lsp_message(input: &mut impl BufRead) -> Result<Option<norito::json::Value>, String> {
     let mut content_length = None;
     let mut line = Vec::new();
@@ -1364,7 +1318,6 @@ fn read_lsp_message(input: &mut impl BufRead) -> Result<Option<norito::json::Val
         .map(Some)
         .map_err(|error| format!("decode LSP JSON: {error}"))
 }
-
 fn write_lsp_message(output: &mut impl Write, message: &norito::json::Value) -> Result<(), String> {
     let body =
         norito::json::to_string(message).map_err(|error| format!("encode LSP JSON: {error}"))?;
@@ -1374,7 +1327,6 @@ fn write_lsp_message(output: &mut impl Write, message: &norito::json::Value) -> 
         .flush()
         .map_err(|error| format!("flush LSP message: {error}"))
 }
-
 fn write_lsp_response(
     output: &mut impl Write,
     id: Option<norito::json::Value>,
@@ -1389,7 +1341,6 @@ fn write_lsp_response(
         ]),
     )
 }
-
 fn write_lsp_error(
     output: &mut impl Write,
     id: Option<norito::json::Value>,
@@ -1411,7 +1362,6 @@ fn write_lsp_error(
         ]),
     )
 }
-
 fn publish_lsp_notification(
     output: &mut impl Write,
     method: &str,
@@ -1426,7 +1376,6 @@ fn publish_lsp_notification(
         ]),
     )
 }
-
 fn collect_lsp_project_diagnostics(
     driver: &BuildDriver,
     documents: &HashMap<String, String>,
@@ -1450,7 +1399,6 @@ fn collect_lsp_project_diagnostics(
         .iter()
         .map(|(uri, _)| ((*uri).clone(), Vec::new()))
         .collect::<HashMap<_, Vec<Diagnostic>>>();
-
     match driver.check_lsp_open_sources(sources) {
         Ok(warnings) => {
             for warning in warnings {
@@ -1494,7 +1442,6 @@ fn collect_lsp_project_diagnostics(
         .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
         .collect()
 }
-
 fn collect_lsp_workspace_diagnostics(
     driver: &BuildDriver,
     documents: &HashMap<String, String>,
@@ -1508,7 +1455,6 @@ fn collect_lsp_workspace_diagnostics(
     else {
         return collect_lsp_project_diagnostics(driver, documents);
     };
-
     let mut grouped = documents
         .keys()
         .cloned()
@@ -1568,7 +1514,6 @@ fn collect_lsp_workspace_diagnostics(
             }
         }
     }
-
     let loose_documents = documents
         .iter()
         .filter(|(uri, _)| !project_documents.contains(*uri))
@@ -1582,7 +1527,6 @@ fn collect_lsp_workspace_diagnostics(
         .map(|(uri, diagnostics)| (uri, DiagnosticBundle::new(diagnostics)))
         .collect()
 }
-
 fn lsp_project_with_open_overlays(
     project: &LoadedSourceProject,
     documents: &HashMap<String, String>,
@@ -1617,7 +1561,6 @@ fn lsp_project_with_open_overlays(
     }
     (!source_uris.is_empty()).then_some((graph, source_uris, project_documents))
 }
-
 fn replace_project_source(
     graph: &mut ivm::kotodama::linker::SourceLinkRequest,
     key: &ProjectSourceKey,
@@ -1645,7 +1588,6 @@ fn replace_project_source(
         None => false,
     }
 }
-
 fn lsp_file_uri_path(uri: &str) -> Option<PathBuf> {
     let encoded = uri
         .strip_prefix("file://localhost")
@@ -1677,7 +1619,6 @@ fn lsp_file_uri_path(uri: &str) -> Option<PathBuf> {
         .unwrap_or(&decoded);
     PathBuf::from(decoded).canonicalize().ok()
 }
-
 fn decode_hex_digit(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -1686,7 +1627,6 @@ fn decode_hex_digit(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn remap_lsp_locked_project_diagnostic(
     diagnostic: &mut Diagnostic,
     source_uris: &BTreeMap<ProjectSourceKey, String>,
@@ -1713,7 +1653,6 @@ fn remap_lsp_locked_project_diagnostic(
         remap(&mut fix.span);
     }
 }
-
 fn remap_project_diagnostic_sources(
     diagnostic: &mut Diagnostic,
     logical_to_uri: &HashMap<String, String>,
@@ -1737,7 +1676,6 @@ fn remap_project_diagnostic_sources(
         remap(&mut fix.span);
     }
 }
-
 fn remap_locked_project_diagnostic_sources(
     diagnostic: &mut Diagnostic,
     source_paths: &BTreeMap<ProjectSourceKey, PathBuf>,
@@ -1764,7 +1702,6 @@ fn remap_locked_project_diagnostic_sources(
         remap(&mut fix.span);
     }
 }
-
 fn publish_lsp_project_diagnostics(
     output: &mut impl Write,
     driver: &BuildDriver,
@@ -1795,7 +1732,6 @@ fn publish_lsp_project_diagnostics(
     }
     Ok(())
 }
-
 fn lsp_initialize_result() -> norito::json::Value {
     json_object(vec![(
         "capabilities",
@@ -1813,7 +1749,6 @@ fn lsp_initialize_result() -> norito::json::Value {
         ]),
     )])
 }
-
 #[cfg(test)]
 fn collect_lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> DiagnosticBundle {
     // LSP validates reusable modules as well as deployable contracts. Calling
@@ -1832,7 +1767,6 @@ fn collect_lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -
         Err(bundle) => bundle,
     }
 }
-
 #[cfg(test)]
 fn lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> Vec<norito::json::Value> {
     collect_lsp_diagnostics(session, uri, source)
@@ -1841,7 +1775,6 @@ fn lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> Vec<no
         .map(|diagnostic| lsp_diagnostic_value(diagnostic, source))
         .collect()
 }
-
 fn lsp_diagnostic_value(diagnostic: &Diagnostic, source: &str) -> norito::json::Value {
     let range = diagnostic.primary_span.as_ref().map_or_else(
         || lsp_range(0, 0, 0, 1),
@@ -1864,7 +1797,6 @@ fn lsp_diagnostic_value(diagnostic: &Diagnostic, source: &str) -> norito::json::
         ),
     ])
 }
-
 #[cfg(test)]
 fn lsp_code_action_items(
     session: &CompilerSession,
@@ -1873,7 +1805,6 @@ fn lsp_code_action_items(
 ) -> norito::json::Value {
     lsp_code_actions_from_bundle(collect_lsp_diagnostics(session, uri, source), uri, source)
 }
-
 fn lsp_project_code_action_items(
     driver: &BuildDriver,
     documents: &HashMap<String, String>,
@@ -1886,7 +1817,6 @@ fn lsp_project_code_action_items(
         .unwrap_or_else(|| DiagnosticBundle::new(Vec::new()));
     lsp_code_actions_from_bundle(bundle, uri, source)
 }
-
 fn lsp_code_actions_from_bundle(
     bundle: DiagnosticBundle,
     uri: &str,
@@ -1937,7 +1867,6 @@ fn lsp_code_actions_from_bundle(
         .collect();
     norito::json::Value::Array(actions)
 }
-
 fn lsp_source_span_range(source: &str, span: &SourceSpan) -> norito::json::Value {
     span.byte_range.map_or_else(
         || {
@@ -1951,13 +1880,11 @@ fn lsp_source_span_range(source: &str, span: &SourceSpan) -> norito::json::Value
         |range| lsp_text_range(source, range),
     )
 }
-
 fn lsp_text_range(source: &str, range: ivm::kotodama::source::TextRange) -> norito::json::Value {
     let (start_line, start_character) = lsp_offset_position(source, range.start);
     let (end_line, end_character) = lsp_offset_position(source, range.end);
     lsp_range(start_line, start_character, end_line, end_character)
 }
-
 fn lsp_offset_position(source: &str, offset: u32) -> (u64, u64) {
     let offset = usize::try_from(offset)
         .unwrap_or(source.len())
@@ -1977,7 +1904,6 @@ fn lsp_offset_position(source: &str, offset: u32) -> (u64, u64) {
     let character = prefix[line_start..].encode_utf16().count() as u64;
     (line, character)
 }
-
 fn lsp_range(
     start_line: u64,
     start_character: u64,
@@ -1989,7 +1915,6 @@ fn lsp_range(
         ("end", lsp_position(end_line, end_character)),
     ])
 }
-
 fn lsp_completion_items() -> norito::json::Value {
     let mut labels = BTreeSet::new();
     let mut items = Vec::new();
@@ -2035,14 +1960,12 @@ fn lsp_completion_items() -> norito::json::Value {
     }
     norito::json::Value::Array(items)
 }
-
 fn lsp_position(line: impl Into<u64>, character: impl Into<u64>) -> norito::json::Value {
     json_object(vec![
         ("line", norito::json::Value::from(line.into())),
         ("character", norito::json::Value::from(character.into())),
     ])
 }
-
 fn json_object(entries: Vec<(&str, norito::json::Value)>) -> norito::json::Value {
     norito::json::object(
         entries
@@ -2051,11 +1974,9 @@ fn json_object(entries: Vec<(&str, norito::json::Value)>) -> norito::json::Value
     )
     .unwrap_or(norito::json::Value::Null)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn command_inventory_is_exact_and_retired_names_stay_rejected() {
         let inventory = KOTO_COMMAND_INVENTORY
@@ -2066,19 +1987,16 @@ mod tests {
             inventory,
             ["check", "build", "test", "fmt", "doc", "explain", "lsp"]
         );
-
         let usage_inventory = USAGE
             .lines()
             .filter_map(|line| line.strip_prefix("  koto "))
             .filter_map(|line| line.split_ascii_whitespace().next())
             .collect::<Vec<_>>();
         assert_eq!(usage_inventory, inventory);
-
         for retired in ["compile", "lint", "koto_compile", "koto_lint", "koto_test"] {
             assert_eq!(koto_command(retired), None, "retired command `{retired}`");
         }
     }
-
     #[test]
     fn layout_normalization_is_idempotent() {
         let formatted =
@@ -2089,7 +2007,6 @@ mod tests {
             formatted
         );
     }
-
     #[test]
     fn contract_documentation_is_stable_markdown_from_the_manifest() {
         let output = CompilerSession::default()
@@ -2131,7 +2048,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn formatter_validation_uses_lossless_v1_syntax() {
         format_source_text(
@@ -2156,7 +2072,6 @@ mod tests {
         assert!(error.contains("K0100"));
         assert!(error.contains("invalid.ko"));
     }
-
     #[test]
     fn check_options_select_zk_policy_without_source_metadata() {
         let options = parse_check_options(vec![
@@ -2178,7 +2093,6 @@ mod tests {
         );
         assert!(options.inputs.is_empty());
     }
-
     #[test]
     fn chain_discriminant_option_is_strict_and_nonzero() {
         assert_eq!(parse_chain_discriminant("369").expect("Taira value"), 369);
@@ -2192,7 +2106,6 @@ mod tests {
                 "accepted invalid discriminant {invalid:?}"
             );
         }
-
         let duplicate = parse_check_options(vec![
             "--chain-discriminant".to_owned(),
             "369".to_owned(),
@@ -2203,7 +2116,6 @@ mod tests {
         .expect_err("duplicate option must fail closed");
         assert!(duplicate.contains("only once"));
     }
-
     #[test]
     fn unreadable_sources_emit_native_structured_diagnostics() {
         let missing = std::env::temp_dir().join(format!(
@@ -2215,7 +2127,6 @@ mod tests {
                 .as_nanos()
         ));
         let session = CompilerSession::default();
-
         for diagnostics in [
             compile_path(&session, &missing).expect_err("missing build source"),
             check_path(&session, &missing).expect_err("missing check source"),
@@ -2231,7 +2142,6 @@ mod tests {
             assert!(!diagnostic.message.starts_with("K0000:"));
         }
     }
-
     #[test]
     fn check_batch_has_one_equivalent_json_and_sarif_diagnostic_set() {
         let root = std::env::temp_dir().join(format!(
@@ -2247,7 +2157,6 @@ mod tests {
         let second = root.join("second.ko");
         std::fs::write(&first, "seiyaku First { € }").expect("write first invalid source");
         std::fs::write(&second, "seiyaku Second { £ }").expect("write second invalid source");
-
         let (checked, diagnostics) = check_paths(
             &CompilerSession::default(),
             vec![first.clone(), second.clone()],
@@ -2266,7 +2175,6 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert!(sources.contains(first.to_str().expect("UTF-8 first path")));
         assert!(sources.contains(second.to_str().expect("UTF-8 second path")));
-
         let json: norito::json::Value =
             norito::json::from_str(&DiagnosticFormat::Json.render(&diagnostics))
                 .expect("batch JSON is one document");
@@ -2282,7 +2190,6 @@ mod tests {
         );
         std::fs::remove_dir_all(root).expect("remove check batch root");
     }
-
     #[test]
     fn build_errors_preserve_identical_canonical_fields_in_every_renderer() {
         let primary = SourceSpan {
@@ -2326,7 +2233,6 @@ mod tests {
             replacement: "math::visible".to_owned(),
         });
         let diagnostics = DiagnosticBundle::single(diagnostic.clone());
-
         let human = build_error(
             DiagnosticFormat::Human,
             BuildError::Compile(diagnostics.clone()),
@@ -2347,7 +2253,6 @@ mod tests {
                 "human diagnostics omitted {expected:?}"
             );
         }
-
         let json: norito::json::Value = norito::json::from_str(
             &build_error(
                 DiagnosticFormat::Json,
@@ -2370,7 +2275,6 @@ mod tests {
             Some(&canonical),
         );
     }
-
     #[test]
     fn unified_check_surfaces_lints_as_non_fatal_structured_warnings() {
         let root = std::env::temp_dir().join(format!(
@@ -2388,7 +2292,6 @@ mod tests {
             "seiyaku Lint { view fn value(int unused) -> int { return 1; } }",
         )
         .expect("write lint source");
-
         let warnings = check_path(&CompilerSession::default(), &source)
             .expect("lint warning must not fail semantic checking");
         let warning = warnings
@@ -2404,7 +2307,6 @@ mod tests {
         );
         std::fs::remove_dir_all(root).expect("remove lint check root");
     }
-
     #[test]
     fn unified_check_links_only_the_explicit_locked_project_graph() {
         let root = std::env::temp_dir().join(format!(
@@ -2444,7 +2346,6 @@ mod tests {
             }"#,
         )
         .expect("write explicit project manifest");
-
         let driver = BuildDriver::new(CompilerSession::default(), "koto-check-test");
         let (checked, diagnostics) = check_locked_project(&driver, &project);
         let canonical_app = app.canonicalize().expect("canonical app path");
@@ -2478,7 +2379,6 @@ mod tests {
                 .and_then(|span| span.package_identity.as_deref()),
             Some("example/math@1.0.0")
         );
-
         let (checked, positional) = check_project_paths(&driver, vec![app.clone(), module.clone()]);
         assert!(checked.is_empty());
         assert!(
@@ -2487,7 +2387,6 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "E_PROJECT_MANIFEST_REQUIRED")
         );
-
         std::fs::write(
             &app,
             "seiyaku App { view fn run() -> int { return Missing::value(); } }",
@@ -2509,7 +2408,6 @@ mod tests {
         );
         std::fs::remove_dir_all(root).expect("remove project check root");
     }
-
     #[test]
     fn unified_check_rejects_multiple_explicit_roots_with_physical_spans() {
         let root = std::env::temp_dir().join(format!(
@@ -2530,7 +2428,6 @@ mod tests {
             "seiyaku B { view fn value() -> int { return 2; } }",
         )
         .expect("write second root");
-
         let driver = BuildDriver::new(CompilerSession::default(), "koto-check-test");
         let (checked, diagnostics) =
             check_project_paths(&driver, vec![second.clone(), first.clone()]);
@@ -2551,13 +2448,11 @@ mod tests {
         assert_eq!(diagnostic.labels[0].span.source.as_deref(), second.to_str());
         std::fs::remove_dir_all(root).expect("remove multiple-root check directory");
     }
-
     #[test]
     fn formatter_options_fail_closed_and_allow_dash_paths_after_separator() {
         let error = parse_format_sources_args(vec!["--write".to_owned(), "demo.ko".to_owned()])
             .expect_err("unknown formatter flags must not become file paths");
         assert!(error.contains("unknown fmt option"));
-
         let error = parse_format_sources_args(vec![
             "--check".to_owned(),
             "--check".to_owned(),
@@ -2565,11 +2460,9 @@ mod tests {
         ])
         .expect_err("duplicate formatter options must fail closed");
         assert!(error.contains("more than once"));
-
         let error = parse_format_sources_args(vec![String::new()])
             .expect_err("empty formatter paths must fail closed");
         assert!(error.contains("must not be empty"));
-
         let (check_only, inputs) = parse_format_sources_args(vec![
             "--check".to_owned(),
             "--".to_owned(),
@@ -2579,7 +2472,6 @@ mod tests {
         assert!(check_only);
         assert_eq!(inputs, vec![PathBuf::from("--literal-name.ko")]);
     }
-
     #[test]
     fn build_rejects_standalone_module_without_publishing_artifact() {
         let root = std::env::temp_dir().join(format!(
@@ -2609,12 +2501,10 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!target.join("dev/math.to").exists());
-
         let session = CompilerSession::default();
         check_path(&session, &source).expect("module remains valid for koto check");
         std::fs::remove_dir_all(root).expect("remove module test root");
     }
-
     #[test]
     fn build_project_uses_the_same_explicit_locked_graph_as_check() {
         let root = std::env::temp_dir().join(format!(
@@ -2654,7 +2544,6 @@ mod tests {
             }"#,
         )
         .expect("write project manifest");
-
         build(vec![
             "--target-dir".to_owned(),
             target.display().to_string(),
@@ -2663,7 +2552,6 @@ mod tests {
         ])
         .expect("build exact project graph");
         assert!(target.join("dev/app.to").is_file());
-
         let malformed = std::fs::read_to_string(&project)
             .expect("read project manifest")
             .replace("\"exports\": [\"value\"]", "\"exports\": []");
@@ -2678,7 +2566,6 @@ mod tests {
         assert!(error.to_string().contains("E_UNEXPORTED_SYMBOL"), "{error}");
         std::fs::remove_dir_all(root).expect("remove project build root");
     }
-
     #[test]
     fn lsp_framing_and_completion_use_canonical_syntax_tables() {
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
@@ -2701,7 +2588,6 @@ mod tests {
                 .and_then(norito::json::Value::as_bool),
             Some(true),
         );
-
         let completions = lsp_completion_items();
         let labels = completions
             .as_array()
@@ -2804,12 +2690,10 @@ mod tests {
             assert!(!labels.contains(&retired));
         }
     }
-
     #[test]
     fn lsp_quick_fixes_are_exact_current_document_workspace_edits() {
         let session = CompilerSession::default();
         let uri = "file:///workspace/fixes.ko";
-
         let mixed =
             "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
         let mixed_actions = lsp_code_action_items(&session, uri, mixed);
@@ -2851,7 +2735,6 @@ mod tests {
             .and_then(norito::json::Value::as_u64)
             .expect("mixed edit end") as usize;
         assert_eq!(&mixed[start..end], "1");
-
         let unresolved = "seiyaku C { fn f() { target(1, second: 2); } }";
         let unresolved_diagnostics = collect_lsp_diagnostics(&session, uri, unresolved);
         assert!(unresolved_diagnostics.diagnostics.iter().any(|diagnostic| {
@@ -2871,7 +2754,6 @@ mod tests {
                 }),
             "an unresolved call must not receive a guessed parameter-name edit"
         );
-
         let positional =
             "seiyaku C { struct Pair { int left, int right } fn f() { let pair = Pair(1, 2); } }";
         let positional_actions = lsp_code_action_items(&session, uri, positional);
@@ -2899,7 +2781,6 @@ mod tests {
             Some("Pair { left: 1, right: 2, }")
         );
     }
-
     #[test]
     fn lsp_check_accepts_reusable_modules_without_artifact_codegen() {
         let session = CompilerSession::default();
@@ -2912,7 +2793,6 @@ mod tests {
             module.is_empty(),
             "valid reusable modules must not receive deployable-only K4003: {module:?}",
         );
-
         let invalid = lsp_diagnostics(
             &session,
             "file:///workspace/broken.ko",
@@ -2920,7 +2800,6 @@ mod tests {
         );
         assert!(!invalid.is_empty());
     }
-
     #[test]
     fn lsp_open_documents_never_infer_cross_file_graph_authority() {
         let driver = BuildDriver::new(CompilerSession::default(), "lsp-test");
@@ -2952,7 +2831,6 @@ mod tests {
         );
         assert!(diagnostics[module_uri].diagnostics.is_empty());
     }
-
     #[test]
     fn lsp_project_uses_open_overlays_on_the_exact_locked_graph() {
         let root = std::env::temp_dir().join(format!(
@@ -2989,7 +2867,6 @@ mod tests {
             }"#,
         )
         .expect("write exact LSP project manifest");
-
         let project = load_source_project_manifest(&manifest).expect("load exact LSP project");
         let app_uri = format!(
             "file://{}",
@@ -3021,10 +2898,8 @@ mod tests {
                 .all(|diagnostic| diagnostic.code != "E_PROJECT_MANIFEST_REQUIRED"),
             "an explicit LSP project must provide graph authority"
         );
-
         std::fs::remove_dir_all(root).expect("remove LSP project root");
     }
-
     #[test]
     fn lsp_options_require_one_explicit_project_value() {
         let (zk, project) = parse_lsp_options(vec![
@@ -3051,7 +2926,6 @@ mod tests {
             .contains("only once")
         );
     }
-
     #[test]
     fn lsp_document_store_is_bounded_and_removes_rejected_updates() {
         let mut documents = HashMap::new();
@@ -3071,12 +2945,10 @@ mod tests {
         .expect_err("document count must be bounded");
         assert!(error.contains("workspace limit"));
         assert!(!documents.contains_key("file:///workspace/overflow.ko"));
-
         let huge_uri = format!("file:///{}", "u".repeat(MAX_LSP_URI_BYTES));
         let error = store_lsp_document(&mut documents, &huge_uri, "module Uri {}")
             .expect_err("document URI must be bounded");
         assert!(error.contains("document URI exceeds"));
-
         let existing = "file:///workspace/0.ko";
         let oversized = "x".repeat(MAX_SOURCE_BYTES + 1);
         let error = store_lsp_document(&mut documents, existing, &oversized)
@@ -3087,34 +2959,28 @@ mod tests {
             "a rejected update must not leave stale source available to formatting",
         );
     }
-
     #[test]
     fn lsp_framing_rejects_oversized_and_ambiguous_inputs_before_allocation() {
         let oversized = format!("Content-Length: {}\r\n\r\n", MAX_LSP_MESSAGE_BYTES + 1);
         let error = read_lsp_message(&mut std::io::Cursor::new(oversized.into_bytes()))
             .expect_err("oversized LSP frame must fail");
         assert!(error.contains("exceeds"), "unexpected error: {error}");
-
         let duplicate = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}";
         let error = read_lsp_message(&mut std::io::Cursor::new(duplicate))
             .expect_err("duplicate length must fail");
         assert!(error.contains("duplicate"), "unexpected error: {error}");
-
         let mixed_case_duplicate = b"content-length: 2\r\nCONTENT-LENGTH: 2\r\n\r\n{}";
         let error = read_lsp_message(&mut std::io::Cursor::new(mixed_case_duplicate))
             .expect_err("header names are case-insensitive");
         assert!(error.contains("duplicate"), "unexpected error: {error}");
-
         let lowercase = b"content-length: 2\r\n\r\n{}";
         read_lsp_message(&mut std::io::Cursor::new(lowercase))
             .expect("lowercase header is valid")
             .expect("one lowercase-header message");
-
         let malformed = b"Content-Length 2\r\n\r\n{}";
         let error = read_lsp_message(&mut std::io::Cursor::new(malformed))
             .expect_err("malformed header must fail closed");
         assert!(error.contains("malformed"), "unexpected error: {error}");
-
         let long_header = format!("{}\n", "x".repeat(MAX_LSP_HEADER_LINE_BYTES + 1));
         let error = read_lsp_message(&mut std::io::Cursor::new(long_header.into_bytes()))
             .expect_err("oversized header line must fail");

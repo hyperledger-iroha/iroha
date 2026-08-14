@@ -12,7 +12,6 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
-
 mod axt_binding;
 mod backend;
 mod batch;
@@ -24,7 +23,14 @@ mod cyclotomic;
 mod digest;
 mod error;
 mod fastpq_cuda;
+mod fft;
 pub mod gadgets;
+#[cfg(feature = "fastpq-gpu")]
+#[path = "gpu.rs"]
+mod gpu;
+#[cfg(not(feature = "fastpq-gpu"))]
+#[path = "gpu_stub.rs"]
+mod gpu;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
 mod metal_config;
@@ -35,16 +41,6 @@ mod poseidon;
 mod poseidon_manifest;
 mod proof;
 pub mod trace;
-
-#[cfg(feature = "fastpq-gpu")]
-#[path = "gpu.rs"]
-mod gpu;
-#[cfg(not(feature = "fastpq-gpu"))]
-#[path = "gpu_stub.rs"]
-mod gpu;
-
-mod fft;
-
 pub use axt_binding::{
     AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY, AxtFastpqProofPayload,
     AxtVerifiedProof, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, axt_proof_blob_from_bound_batch,
@@ -103,7 +99,6 @@ pub use trace::{
 pub use trace::{
     PoseidonPipelineStats, enable_poseidon_pipeline_stats, take_poseidon_pipeline_stats,
 };
-
 #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
 /// No-op when the Metal backend is unavailable.
 ///

@@ -1,10 +1,8 @@
 use ivm::{IVM, Memory, ProgramMetadata, encoding, instruction};
 mod common;
 use common::{MODE_VECTOR, assemble, assemble_with_mode};
-
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 const VECTOR_BASE: usize = 32;
-
 fn words(words: &[u32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(words.len() * 4);
     for &word in words {
@@ -12,7 +10,6 @@ fn words(words: &[u32]) -> Vec<u8> {
     }
     out
 }
-
 #[test]
 fn test_vadd32_basic() {
     let mut vm = IVM::new(u64::MAX);
@@ -24,7 +21,6 @@ fn test_vadd32_basic() {
     vm.run().unwrap();
     assert_eq!(vm.vector_register(2), [6, 8, 10, 12]);
 }
-
 #[test]
 fn test_vadd64_basic() {
     let mut vm = IVM::new(u64::MAX);
@@ -36,13 +32,11 @@ fn test_vadd64_basic() {
     vm.run().unwrap();
     assert_eq!(vm.vector_register(2), [0, 1, 0x1234_5677, 1]);
 }
-
 #[test]
 fn test_vector_bit_ops() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_vector_register(0, [0xffff_0000, 0xaaaa_aaaa, 0x1234_5678, 0]);
     vm.set_vector_register(1, [0xff00_ff00, 0x5555_5555, 0xffff_ffff, 0xffff_ffff]);
-
     let instr_and = encoding::wide::encode_rr(instruction::wide::crypto::VAND, 2, 0, 1);
     let instr_xor = encoding::wide::encode_rr(instruction::wide::crypto::VXOR, 3, 0, 1);
     let prog = assemble_with_mode(&words(&[instr_and, instr_xor, HALT_WORD]), MODE_VECTOR);
@@ -57,7 +51,6 @@ fn test_vector_bit_ops() {
         [0x00ff_ff00, 0xffff_ffff, 0xedcb_a987, 0xffff_ffff]
     );
 }
-
 #[test]
 fn test_vrot32_basic() {
     let mut vm = IVM::new(u64::MAX);
@@ -71,7 +64,6 @@ fn test_vrot32_basic() {
         [0x1122_2211, 0x3344_4433, 0x5566_6655, 0x7788_8877]
     );
 }
-
 #[test]
 fn vector_add_chunked_stride_eight() {
     let meta = ProgramMetadata {
@@ -84,10 +76,8 @@ fn vector_add_chunked_stride_eight() {
     let mut prog = meta.encode();
     prog.extend_from_slice(&add.to_le_bytes());
     prog.extend_from_slice(&HALT_WORD.to_le_bytes());
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
-
     let base = VECTOR_BASE;
     let stride = 8usize;
     let lhs = [1u32, 2, 3, 4, 5, 6, 7, 8];
@@ -98,16 +88,13 @@ fn vector_add_chunked_stride_eight() {
     for (i, &val) in rhs.iter().enumerate() {
         vm.set_register(base + stride + i, val as u64);
     }
-
     vm.run().unwrap();
-
     let out_base = base + 2 * stride;
     let expected = [11u64, 22, 33, 44, 55, 66, 77, 88];
     for (i, &exp) in expected.iter().enumerate() {
         assert_eq!(vm.register(out_base + i), exp);
     }
 }
-
 #[test]
 fn vector_bit_ops_cover_tail_lanes() {
     let meta = ProgramMetadata {
@@ -120,10 +107,8 @@ fn vector_bit_ops_cover_tail_lanes() {
     let mut prog = meta.encode();
     prog.extend_from_slice(&op.to_le_bytes());
     prog.extend_from_slice(&HALT_WORD.to_le_bytes());
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
-
     let base = VECTOR_BASE;
     let stride = 6usize;
     let lhs = [
@@ -148,9 +133,7 @@ fn vector_bit_ops_cover_tail_lanes() {
     for (i, &val) in rhs.iter().enumerate() {
         vm.set_register(base + stride + i, val as u64);
     }
-
     vm.run().unwrap();
-
     let out_base = base + 3 * stride;
     let expected = [
         0x00ff_ff00u64,
@@ -164,7 +147,6 @@ fn vector_bit_ops_cover_tail_lanes() {
         assert_eq!(vm.register(out_base + i), exp);
     }
 }
-
 #[test]
 fn vrot32_chunked_stride_eight() {
     let meta = ProgramMetadata {
@@ -177,10 +159,8 @@ fn vrot32_chunked_stride_eight() {
     let mut prog = meta.encode();
     prog.extend_from_slice(&rot.to_le_bytes());
     prog.extend_from_slice(&HALT_WORD.to_le_bytes());
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&prog).unwrap();
-
     let base = VECTOR_BASE;
     let stride = 8usize;
     let values = [
@@ -196,9 +176,7 @@ fn vrot32_chunked_stride_eight() {
     for (i, &val) in values.iter().enumerate() {
         vm.set_register(base + i, val as u64);
     }
-
     vm.run().unwrap();
-
     let out_base = base + stride;
     let expected = [
         0x1122_2211u64,
@@ -214,7 +192,6 @@ fn vrot32_chunked_stride_eight() {
         assert_eq!(vm.register(out_base + i), exp);
     }
 }
-
 fn sha256_compress_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -278,7 +255,6 @@ fn sha256_compress_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     state[7] = state[7].wrapping_add(h);
     state
 }
-
 #[test]
 fn test_sha256block_and_gas() {
     let block = [0u8; 64];
@@ -287,7 +263,6 @@ fn test_sha256block_and_gas() {
         0x5be0cd19,
     ];
     let expected = sha256_compress_ref(initial, &block);
-
     // Prepare VM
     let mut vm = IVM::new(u64::MAX);
     for (i, b) in block.iter().enumerate() {
@@ -298,7 +273,6 @@ fn test_sha256block_and_gas() {
     vm.set_vector_register(1, [initial[4], initial[5], initial[6], initial[7]]);
     let instr = encoding::wide::encode_rr(instruction::wide::crypto::SHA256BLOCK, 0, 1, 0);
     let code = words(&[instr, HALT_WORD]);
-
     // Enough gas
     let prog_vec = assemble_with_mode(&code, MODE_VECTOR);
     vm.load_program(&prog_vec).unwrap();
@@ -308,7 +282,6 @@ fn test_sha256block_and_gas() {
     result[..4].copy_from_slice(&vm.vector_register(0));
     result[4..].copy_from_slice(&vm.vector_register(1));
     assert_eq!(result, expected);
-
     // Insufficient gas
     let mut vm2 = IVM::new(u64::MAX);
     for (i, b) in block.iter().enumerate() {
@@ -323,7 +296,6 @@ fn test_sha256block_and_gas() {
     let res = vm2.run();
     assert!(res.is_err());
 }
-
 #[test]
 fn test_vector_disabled_error() {
     let block = [0u8; 64];
@@ -331,7 +303,6 @@ fn test_vector_disabled_error() {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
         0x5be0cd19,
     ];
-
     let mut vm = IVM::new(u64::MAX);
     for (i, b) in block.iter().enumerate() {
         vm.store_u8(Memory::HEAP_START + i as u64, *b).unwrap();
@@ -347,7 +318,6 @@ fn test_vector_disabled_error() {
     let res = vm.run();
     assert!(matches!(res, Err(ivm::VMError::VectorExtensionDisabled)));
 }
-
 #[test]
 fn test_auto_vector_helpers() {
     let lanes = ivm::simd_lanes();
@@ -359,7 +329,6 @@ fn test_auto_vector_helpers() {
         assert_eq!(out[i], a[i].wrapping_add(b[i]));
     }
 }
-
 #[cfg(target_os = "macos")]
 #[test]
 fn test_metal_bit_pipeline_cached() {

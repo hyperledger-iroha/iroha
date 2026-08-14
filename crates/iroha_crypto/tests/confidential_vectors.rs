@@ -1,8 +1,6 @@
 //! Ensures confidential key derivations match the published fixtures.
-
 use hex::decode;
 use iroha_crypto::derive_keyset;
-
 #[test]
 fn confidential_vectors_match_fixture() {
     let fixture = include_str!("../../../specs/confidential_key_vectors.json");
@@ -18,7 +16,6 @@ fn confidential_vectors_match_fixture() {
         let mut seed_array = [0u8; 32];
         seed_array.copy_from_slice(&seed_bytes);
         let derived = derive_keyset(seed_array).expect("derive keyset");
-
         assert_eq!(
             hex::encode(derived.nullifier_key()),
             obj.get("nullifier_key_hex")

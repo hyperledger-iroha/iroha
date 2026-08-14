@@ -2,19 +2,14 @@
 //!
 //! [`crate::kex::X25519Sha256`] is the only key exchange scheme currently supported,
 //! as it is the only one used by the Iroha p2p transport protocol.
-
 mod x25519;
-
-pub use x25519::X25519Sha256;
-
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError};
-
+pub use x25519::X25519Sha256;
 /// Return `true` when an X25519 public key is low-order.
 #[cfg(feature = "pqc")]
 pub(crate) fn is_x25519_low_order_public_key(public_key: &x25519_dalek::PublicKey) -> bool {
     x25519::is_x25519_low_order_public_key(public_key)
 }
-
 /// A Generic trait for key exchange schemes. Each scheme provides a way to generate keys and
 /// do a diffie-hellman computation
 pub trait KeyExchangeScheme {
@@ -24,7 +19,6 @@ pub trait KeyExchangeScheme {
     type PrivateKey: Send;
     /// Generate a new instance of the scheme.
     fn new() -> Self;
-
     /// Create new keypairs. Prefer [`Self::try_keypair`] when the caller can
     /// propagate key generation failures. If
     /// - `options` is [`Random`](KeyGenOption::Random), the keys are generated ephemerally from the [`OsRng`](rand::rngs::OsRng)
@@ -36,7 +30,6 @@ pub trait KeyExchangeScheme {
         &self,
         options: KeyGenOption<Self::PrivateKey>,
     ) -> (Self::PublicKey, Self::PrivateKey);
-
     /// Create new keypairs while reporting key generation failures.
     ///
     /// # Errors
@@ -49,7 +42,6 @@ pub trait KeyExchangeScheme {
     ) -> Result<(Self::PublicKey, Self::PrivateKey), Error> {
         Ok(self.keypair(options))
     }
-
     /// Compute the diffie-hellman shared secret.
     /// `local_private_key` is the key generated from calling `keypair` while
     /// `remote_public_key` is the key received from a different call to `keypair` from another party.
@@ -62,17 +54,14 @@ pub trait KeyExchangeScheme {
         local_private_key: &Self::PrivateKey,
         remote_public_key: &Self::PublicKey,
     ) -> Result<SessionKey, Error>;
-
     /// Get byte representation of a public key.
     fn encode_public_key(pk: &Self::PublicKey) -> Vec<u8>;
-
     /// Decode public key from byte representation.
     ///
     /// # Errors
     ///
     /// Any error during key decoding, e.g. wrong `bytes` length.
     fn decode_public_key(bytes: &[u8]) -> Result<Self::PublicKey, ParseError>;
-
     /// Size of the shared secret in bytes.
     const SHARED_SECRET_SIZE: usize;
     /// Size of the public key in bytes.

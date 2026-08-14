@@ -4,9 +4,6 @@
 //! the V1 core-query host. Page and quantity invariants are enforced during both
 //! construction and Norito decoding so untrusted contract payloads cannot
 //! manufacture values that the host itself would never return.
-
-use std::fmt;
-
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
     Quantity,
@@ -15,10 +12,9 @@ use norito::{
     Decode, Encode, NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, DecodeFromSlice},
 };
-
+use std::fmt;
 /// Maximum number of entities in one V1 core-query page.
 pub const QUERY_PAGE_CAPACITY_V1: usize = 64;
-
 /// Stable entity discriminator used by the V1 core-query host protocol.
 ///
 /// The numeric values are ABI, not Rust enum ordinals.  They must never be
@@ -37,7 +33,6 @@ pub enum CoreQueryEntityTagV1 {
     /// Non-fungible-asset projection.
     Nft = 5,
 }
-
 impl CoreQueryEntityTagV1 {
     /// Stable numeric ABI tag.
     #[must_use]
@@ -45,14 +40,12 @@ impl CoreQueryEntityTagV1 {
         self as u64
     }
 }
-
 /// An unknown V1 core-query entity tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownCoreQueryEntityTagV1(
     /// Rejected raw ABI tag.
     pub u64,
 );
-
 impl fmt::Display for UnknownCoreQueryEntityTagV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -62,12 +55,9 @@ impl fmt::Display for UnknownCoreQueryEntityTagV1 {
         )
     }
 }
-
 impl std::error::Error for UnknownCoreQueryEntityTagV1 {}
-
 impl TryFrom<u64> for CoreQueryEntityTagV1 {
     type Error = UnknownCoreQueryEntityTagV1;
-
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Account),
@@ -79,26 +69,21 @@ impl TryFrom<u64> for CoreQueryEntityTagV1 {
         }
     }
 }
-
 impl NoritoSerialize for CoreQueryEntityTagV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.as_u64().serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.as_u64().encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.as_u64().encoded_len_exact()
     }
 }
-
 impl<'de> NoritoDeserialize<'de> for CoreQueryEntityTagV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 core-query entity tag")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let pointer = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(pointer)?;
@@ -106,7 +91,6 @@ impl<'de> NoritoDeserialize<'de> for CoreQueryEntityTagV1 {
         Ok(value)
     }
 }
-
 impl<'de> DecodeFromSlice<'de> for CoreQueryEntityTagV1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
         let (tag, used) = <u64 as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -114,7 +98,6 @@ impl<'de> DecodeFromSlice<'de> for CoreQueryEntityTagV1 {
         Ok((tag, used))
     }
 }
-
 /// Nominal V1 quantity, backed by the canonical nonnegative numeric domain.
 ///
 /// The inner value is private so every constructed or decoded instance has a
@@ -122,7 +105,6 @@ impl<'de> DecodeFromSlice<'de> for CoreQueryEntityTagV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct QuantityV1(Quantity);
-
 impl QuantityV1 {
     /// Construct a quantity from an already-canonical decimal payload.
     ///
@@ -132,7 +114,6 @@ impl QuantityV1 {
     pub fn try_new(value: Numeric) -> Result<Self, NumericOperationError> {
         Quantity::from_canonical_numeric(value).map(Self)
     }
-
     /// Canonicalise a nonnegative decimal payload and construct a quantity.
     ///
     /// # Errors
@@ -141,77 +122,63 @@ impl QuantityV1 {
     pub fn canonicalize(value: Numeric) -> Result<Self, NumericOperationError> {
         Quantity::try_from_numeric(value).map(Self)
     }
-
     /// Borrow the nominal quantity.
     #[must_use]
     pub fn as_quantity(&self) -> &Quantity {
         &self.0
     }
-
     /// Borrow the canonical numeric payload.
     #[must_use]
     pub fn as_numeric(&self) -> &Numeric {
         self.0.as_numeric()
     }
-
     /// Consume the wrapper and return the nominal quantity.
     #[must_use]
     pub fn into_quantity(self) -> Quantity {
         self.0
     }
-
     /// Consume the wrapper and return its canonical numeric payload.
     #[must_use]
     pub fn into_numeric(self) -> Numeric {
         self.0.into_numeric()
     }
 }
-
 impl TryFrom<Numeric> for QuantityV1 {
     type Error = NumericOperationError;
-
     fn try_from(value: Numeric) -> Result<Self, Self::Error> {
         Self::try_new(value)
     }
 }
-
 impl From<Quantity> for QuantityV1 {
     fn from(value: Quantity) -> Self {
         Self(value)
     }
 }
-
 impl From<QuantityV1> for Quantity {
     fn from(value: QuantityV1) -> Self {
         value.into_quantity()
     }
 }
-
 impl From<QuantityV1> for Numeric {
     fn from(value: QuantityV1) -> Self {
         value.into_numeric()
     }
 }
-
 impl NoritoSerialize for QuantityV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'de> NoritoDeserialize<'de> for QuantityV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 quantity payload")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let pointer = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(pointer)?;
@@ -219,14 +186,12 @@ impl<'de> NoritoDeserialize<'de> for QuantityV1 {
         Ok(value)
     }
 }
-
 impl<'de> DecodeFromSlice<'de> for QuantityV1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
         let (quantity, used) = <Quantity as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok((Self(quantity), used))
     }
 }
-
 /// Typed account projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
@@ -236,7 +201,6 @@ pub struct AccountView {
     /// Canonical JSON representation of account metadata.
     pub metadata: Json,
 }
-
 /// Typed asset projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
@@ -246,7 +210,6 @@ pub struct AssetView {
     /// Canonical nonnegative quantity held by the asset.
     pub amount: QuantityV1,
 }
-
 /// Typed asset-definition projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
@@ -264,7 +227,6 @@ pub struct AssetDefinitionView {
     /// Canonical JSON representation of asset-definition metadata.
     pub metadata: Json,
 }
-
 /// Typed domain projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
@@ -276,7 +238,6 @@ pub struct DomainView {
     /// Canonical JSON representation of domain metadata.
     pub metadata: Json,
 }
-
 /// Typed non-fungible-asset projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
@@ -288,50 +249,39 @@ pub struct NftView {
     /// Canonical JSON representation of NFT content.
     pub content: Json,
 }
-
 /// Associates a V1 projection record with its stable entity tag.
 pub trait CoreQueryProjectionV1 {
     /// Stable entity tag for this projection.
     const ENTITY_TAG: CoreQueryEntityTagV1;
 }
-
 impl CoreQueryProjectionV1 for AccountView {
     const ENTITY_TAG: CoreQueryEntityTagV1 = CoreQueryEntityTagV1::Account;
 }
-
 impl CoreQueryProjectionV1 for AssetView {
     const ENTITY_TAG: CoreQueryEntityTagV1 = CoreQueryEntityTagV1::Asset;
 }
-
 impl CoreQueryProjectionV1 for AssetDefinitionView {
     const ENTITY_TAG: CoreQueryEntityTagV1 = CoreQueryEntityTagV1::AssetDefinition;
 }
-
 impl CoreQueryProjectionV1 for DomainView {
     const ENTITY_TAG: CoreQueryEntityTagV1 = CoreQueryEntityTagV1::Domain;
 }
-
 impl CoreQueryProjectionV1 for NftView {
     const ENTITY_TAG: CoreQueryEntityTagV1 = CoreQueryEntityTagV1::Nft;
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueryPageItemsV1<T>(Vec<T>);
-
 impl<T: NoritoSerialize> NoritoSerialize for QueryPageItemsV1<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'de, T> NoritoDeserialize<'de> for QueryPageItemsV1<T>
 where
     T: NoritoSerialize
@@ -341,7 +291,6 @@ where
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid bounded V1 query-page items")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let pointer = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(pointer)?;
@@ -349,7 +298,6 @@ where
         Ok(value)
     }
 }
-
 impl<'de, T> DecodeFromSlice<'de> for QueryPageItemsV1<T>
 where
     T: NoritoSerialize
@@ -370,29 +318,23 @@ where
         Ok((Self(items), used))
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NonNegativeOffsetV1(i64);
-
 impl NoritoSerialize for NonNegativeOffsetV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'de> NoritoDeserialize<'de> for NonNegativeOffsetV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("negative V1 query-page offset")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let pointer = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(pointer)?;
@@ -400,7 +342,6 @@ impl<'de> NoritoDeserialize<'de> for NonNegativeOffsetV1 {
         Ok(value)
     }
 }
-
 impl<'de> DecodeFromSlice<'de> for NonNegativeOffsetV1 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
         let (offset, used) = <i64 as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -412,7 +353,6 @@ impl<'de> DecodeFromSlice<'de> for NonNegativeOffsetV1 {
         Ok((Self(offset), used))
     }
 }
-
 /// Failure to construct a valid [`QueryPageV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryPageErrorV1 {
@@ -435,7 +375,6 @@ pub enum QueryPageErrorV1 {
     /// Computing the next page offset overflowed `i64`.
     OffsetOverflow,
 }
-
 impl fmt::Display for QueryPageErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -463,9 +402,7 @@ impl fmt::Display for QueryPageErrorV1 {
         }
     }
 }
-
 impl std::error::Error for QueryPageErrorV1 {}
-
 fn validate_query_page_components(
     item_count: usize,
     next_offset: Option<i64>,
@@ -492,7 +429,6 @@ fn validate_query_page_components(
     }
     Ok(())
 }
-
 /// One bounded page returned by a V1 plural core query.
 ///
 /// Construction and decoding both enforce at most 64 items and a progressing,
@@ -503,13 +439,11 @@ pub struct QueryPageV1<T> {
     items: QueryPageItemsV1<T>,
     next_offset: Option<NonNegativeOffsetV1>,
 }
-
 #[derive(Encode, Decode)]
 struct QueryPageWireV1<T> {
     items: QueryPageItemsV1<T>,
     next_offset: Option<NonNegativeOffsetV1>,
 }
-
 impl<'de, T> NoritoDeserialize<'de> for QueryPageV1<T>
 where
     T: NoritoSerialize
@@ -519,7 +453,6 @@ where
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 query page")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let pointer = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(pointer)?;
@@ -527,7 +460,6 @@ where
         Ok(value)
     }
 }
-
 impl<'de, T> DecodeFromSlice<'de> for QueryPageV1<T>
 where
     T: NoritoSerialize
@@ -547,7 +479,6 @@ where
         ))
     }
 }
-
 impl<T> QueryPageV1<T> {
     /// Construct a page from host-projected items and an optional continuation.
     ///
@@ -561,7 +492,6 @@ impl<T> QueryPageV1<T> {
             next_offset: next_offset.map(NonNegativeOffsetV1),
         })
     }
-
     /// Construct a page and derive its continuation from a starting offset.
     ///
     /// `has_more` should come from a one-item lookahead performed by the host.
@@ -598,65 +528,54 @@ impl<T> QueryPageV1<T> {
         };
         Self::try_new(items, next_offset)
     }
-
     /// Borrow the page items in canonical query order.
     #[must_use]
     pub fn items(&self) -> &[T] {
         &self.items.0
     }
-
     /// Return the next offset only when another page exists.
     #[must_use]
     pub fn next_offset(&self) -> Option<i64> {
         self.next_offset.map(|offset| offset.0)
     }
-
     /// Consume the page and return its public components.
     #[must_use]
     pub fn into_parts(self) -> (Vec<T>, Option<i64>) {
         (self.items.0, self.next_offset.map(|offset| offset.0))
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::{
         AccountId, AssetDefinition, AssetDefinitionId, AssetId, DomainId, Name, Registrable,
     };
-
-    use super::*;
-
     fn bare<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("encode bare payload");
         bytes
     }
-
     fn account_id(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("valid deterministic key pair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("valid domain id")
     }
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             domain_id(),
             "rose".parse::<Name>().expect("valid name"),
         )
     }
-
     fn account_view(seed: u8) -> AccountView {
         AccountView {
             id: account_id(seed),
             metadata: Json::default(),
         }
     }
-
     #[test]
     fn entity_tags_have_stable_values_and_reject_unknown_values() {
         let expected = [
@@ -680,7 +599,6 @@ mod tests {
             assert!(CoreQueryEntityTagV1::decode_from_slice(&bytes).is_err());
         }
     }
-
     #[test]
     fn quantity_validation_is_strict_and_canonicalization_is_explicit() {
         let canonical = Numeric::new(125, 2);
@@ -688,25 +606,21 @@ mod tests {
             QuantityV1::try_new(Numeric::new(-1, 0)),
             Err(NumericOperationError::NegativeQuantity)
         );
-
         let quantity = QuantityV1::canonicalize(Numeric::new(1_250, 3))
             .expect("nonnegative values canonicalize");
         assert_eq!(quantity.as_numeric(), &canonical);
         let zero = QuantityV1::canonicalize(Numeric::new(0, 28)).expect("zero canonicalizes");
         assert_eq!(zero.as_numeric(), &Numeric::zero());
     }
-
     #[test]
     fn quantity_decoder_rejects_negative_payloads() {
         let bytes = bare(&Numeric::new(-1, 0));
         assert!(QuantityV1::decode_from_slice(&bytes).is_err());
-
         let quantity = QuantityV1::from("1.25".parse::<Quantity>().expect("canonical quantity"));
         let encoded = norito::to_bytes(&quantity).expect("encode quantity");
         let decoded: QuantityV1 = norito::decode_from_bytes(&encoded).expect("decode quantity");
         assert_eq!(decoded, quantity);
     }
-
     #[test]
     fn query_page_construction_enforces_capacity_and_offsets() {
         let too_many = vec![account_view(1); QUERY_PAGE_CAPACITY_V1 + 1];
@@ -750,7 +664,6 @@ mod tests {
             QueryPageV1::from_window(i64::MAX, vec![account_view(1)], true),
             Err(QueryPageErrorV1::OffsetOverflow)
         );
-
         let maximum_page = QueryPageV1::try_new(
             vec![account_view(3); QUERY_PAGE_CAPACITY_V1],
             Some(QUERY_PAGE_CAPACITY_V1 as i64),
@@ -758,13 +671,11 @@ mod tests {
         .expect("the exact V1 capacity is valid");
         assert_eq!(maximum_page.items().len(), QUERY_PAGE_CAPACITY_V1);
         assert_eq!(maximum_page.next_offset(), Some(64));
-
         let page = QueryPageV1::from_window(9, vec![account_view(1), account_view(2)], true)
             .expect("valid page");
         assert_eq!(page.items().len(), 2);
         assert_eq!(page.next_offset(), Some(11));
     }
-
     #[test]
     fn bounded_page_decoder_rejects_oversized_and_negative_wire_values() {
         let oversized = vec![account_view(1); QUERY_PAGE_CAPACITY_V1 + 1];
@@ -778,7 +689,6 @@ mod tests {
         assert!(
             norito::decode_from_bytes::<QueryPageV1<AccountView>>(&oversized_page_bytes).is_err()
         );
-
         let negative_bytes = bare(&-1_i64);
         assert!(NonNegativeOffsetV1::decode_from_slice(&negative_bytes).is_err());
         let negative_page = QueryPageV1 {
@@ -789,7 +699,6 @@ mod tests {
         assert!(
             norito::decode_from_bytes::<QueryPageV1<AccountView>>(&negative_page_bytes).is_err()
         );
-
         let nonadvancing_page = QueryPageV1::<AccountView> {
             items: QueryPageItemsV1(Vec::new()),
             next_offset: Some(NonNegativeOffsetV1(0)),
@@ -800,7 +709,6 @@ mod tests {
             norito::decode_from_bytes::<QueryPageV1<AccountView>>(&nonadvancing_page_bytes)
                 .is_err()
         );
-
         for (items, next_offset) in [
             (vec![account_view(3)], 0),
             (vec![account_view(3), account_view(4)], 1),
@@ -816,7 +724,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn page_roundtrip_rejects_trailing_and_malformed_bytes() {
         let page = QueryPageV1::try_new(vec![account_view(7)], Some(1)).expect("valid page");
@@ -824,15 +731,12 @@ mod tests {
         let decoded: QueryPageV1<AccountView> =
             norito::decode_from_bytes(&encoded).expect("decode page");
         assert_eq!(decoded, page);
-
         let mut trailing = encoded.clone();
         trailing.push(0);
         assert!(norito::decode_from_bytes::<QueryPageV1<AccountView>>(&trailing).is_err());
-
         let truncated = &encoded[..encoded.len() - 1];
         assert!(norito::decode_from_bytes::<QueryPageV1<AccountView>>(truncated).is_err());
     }
-
     #[test]
     fn asset_definition_projection_field_order_is_stable() {
         #[derive(Encode)]
@@ -844,7 +748,6 @@ mod tests {
             total_quantity: QuantityV1,
             metadata: Json,
         }
-
         let view = AssetDefinitionView {
             id: asset_definition_id(),
             name: "Rose".to_owned(),
@@ -863,10 +766,8 @@ mod tests {
             total_quantity: view.total_quantity.clone(),
             metadata: view.metadata.clone(),
         };
-
         assert_eq!(bare(&view), bare(&expected));
     }
-
     #[test]
     fn declared_projection_is_smaller_than_a_full_entity_fixture() {
         let owner = account_id(6);
@@ -886,7 +787,6 @@ mod tests {
             total_quantity: full.total_quantity.clone().into(),
             metadata: Json::new(full.metadata.clone()),
         };
-
         let full_bytes = norito::to_bytes(&full).expect("encode full asset definition");
         let projection_bytes = norito::to_bytes(&projection).expect("encode projection");
         assert!(
@@ -896,13 +796,11 @@ mod tests {
             full_bytes.len()
         );
     }
-
     #[test]
     fn every_projection_roundtrips_through_a_bounded_page() {
         let owner = account_id(8);
         let definition = asset_definition_id();
         let quantity = QuantityV1::from(Quantity::from(10_u32));
-
         let account_page = QueryPageV1::try_new(vec![account_view(8)], None).expect("page");
         let asset_page = QueryPageV1::try_new(
             vec![AssetView {
@@ -942,7 +840,6 @@ mod tests {
             None,
         )
         .expect("page");
-
         macro_rules! assert_roundtrip {
             ($page:expr, $ty:ty) => {{
                 let encoded = norito::to_bytes(&$page).expect("encode projection page");
@@ -951,7 +848,6 @@ mod tests {
                 assert_eq!(decoded, $page);
             }};
         }
-
         assert_roundtrip!(account_page, AccountView);
         assert_roundtrip!(asset_page, AssetView);
         assert_roundtrip!(definition_page, AssetDefinitionView);

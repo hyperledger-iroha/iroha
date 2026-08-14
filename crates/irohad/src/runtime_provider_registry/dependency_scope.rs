@@ -3,16 +3,13 @@
 //! The registry accepts only the dependency roles requested by the sanitized
 //! binding catalog. Shared provider objects remain valid only when every role
 //! in their fixed V1 pair was requested.
-
 use super::*;
-
 /// Return whether the resolved dependency catalog contains the requested role.
 pub(super) fn dependency_is_present(
     dependencies: &IrohaRuntimeDeps,
     slot: IrohaRuntimeProviderSlotV1,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     let deps = dependencies;
     match slot {
         Slot::BootleLanternIssuanceProviderRegistry => {
@@ -120,7 +117,6 @@ pub(super) fn dependency_is_present(
         }
     }
 }
-
 /// Reject any resolved dependency that was not requested by exact binding.
 pub(super) fn has_unrequested_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
@@ -152,7 +148,6 @@ pub(super) fn has_unrequested_dependency(
         )
         || has_unrequested_musubi_provider_attestation_dependency(bindings, dependencies)
 }
-
 fn dependency_is_unrequested(
     bindings: &IrohaRuntimeProviderBindingsV1,
     slot: IrohaRuntimeProviderSlotV1,
@@ -160,7 +155,6 @@ fn dependency_is_unrequested(
 ) -> bool {
     is_present && !bindings.iter().any(|binding| binding.slot() == slot)
 }
-
 fn paired_dependency_is_unrequested(
     bindings: &IrohaRuntimeProviderBindingsV1,
     first_slot: IrohaRuntimeProviderSlotV1,
@@ -172,13 +166,11 @@ fn paired_dependency_is_unrequested(
             .into_iter()
             .all(|slot| bindings.iter().any(|binding| binding.slot() == slot))
 }
-
 fn has_unrequested_storage_security_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::ModerationQuarantineKeyWrapper,
@@ -241,13 +233,11 @@ fn has_unrequested_storage_security_dependency(
         dependencies.sorafs_por_finalized_replay_archive.is_some(),
     )
 }
-
 fn has_unrequested_finance_native_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::AppealFinanceTransactionSigner,
@@ -276,13 +266,11 @@ fn has_unrequested_finance_native_dependency(
         dependencies.sorafs_orderbook_transaction_signer.is_some(),
     )
 }
-
 fn has_unrequested_moderation_viewer_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::ModerationTransactionSigner,
@@ -345,13 +333,11 @@ fn has_unrequested_moderation_viewer_dependency(
             .is_some(),
     )
 }
-
 fn has_unrequested_pop_potr_gateway_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::PopCredentialProviderRegistry,
@@ -375,13 +361,11 @@ fn has_unrequested_pop_potr_gateway_dependency(
             .is_some(),
     )
 }
-
 fn has_unrequested_reputation_billing_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::ReputationJournalCheckpoint,
@@ -440,13 +424,11 @@ fn has_unrequested_reputation_billing_dependency(
             .is_some(),
     )
 }
-
 fn has_unrequested_provider_ingest_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::ProviderIngestAuthenticatedSource,
@@ -474,13 +456,11 @@ fn has_unrequested_provider_ingest_dependency(
             .is_some(),
     )
 }
-
 fn has_unrequested_musubi_provider_attestation_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     dependency_is_unrequested(
         bindings,
         Slot::MusubiProviderAttestationClockSeal,
@@ -501,17 +481,14 @@ fn has_unrequested_musubi_provider_attestation_dependency(
             .is_some(),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const MUSUBI_PROVIDER_ATTESTATION_SLOTS: [IrohaRuntimeProviderSlotV1; 3] = [
         IrohaRuntimeProviderSlotV1::MusubiProviderAttestationClockSeal,
         IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
         IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory,
     ];
-
     #[derive(Clone, Debug)]
     struct AttestationProviderMetadata {
         handle: String,
@@ -523,7 +500,6 @@ mod tests {
         qualification_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         unavailable: bool,
     }
-
     impl AttestationProviderMetadata {
         fn from_binding(binding: &IrohaRuntimeProviderBindingV1) -> Self {
             Self {
@@ -539,7 +515,6 @@ mod tests {
                 unavailable: false,
             }
         }
-
         fn with_drift(mut self, drift: AttestationProviderDrift) -> Self {
             match drift {
                 AttestationProviderDrift::Handle => {
@@ -562,7 +537,6 @@ mod tests {
             }
             self
         }
-
         fn observed_handle(&self) -> &str {
             let call = self
                 .handle_calls
@@ -573,7 +547,6 @@ mod tests {
                 &self.handle
             }
         }
-
         fn observed_qualification(&self) -> (u64, [u8; 32]) {
             let call = self
                 .qualification_calls
@@ -586,7 +559,6 @@ mod tests {
             (revision, self.policy_digest)
         }
     }
-
     #[derive(Clone, Copy)]
     enum AttestationProviderDrift {
         Handle,
@@ -596,15 +568,12 @@ mod tests {
         QualificationAfterSnapshot,
         Unavailable,
     }
-
     #[derive(Debug)]
     struct ClockSeal(AttestationProviderMetadata);
-
     impl sorafs_node::MusubiProviderAttestationClockSealV1 for ClockSeal {
         fn runtime_handle(&self) -> &str {
             self.0.observed_handle()
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -623,7 +592,6 @@ mod tests {
                 )
             }
         }
-
         fn load_latest<'a>(
             &'a self,
             _scope_digest: [u8; 32],
@@ -638,7 +606,6 @@ mod tests {
                 Err(sorafs_node::MusubiProviderAttestationClockSealErrorV1::Unavailable)
             })
         }
-
         fn compare_and_swap<'a>(
             &'a self,
             _scope_digest: [u8; 32],
@@ -653,14 +620,12 @@ mod tests {
             })
         }
     }
-
     struct ApprovalSigner {
         metadata: AttestationProviderMetadata,
         authority: iroha_data_model::account::AccountId,
         policy: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1,
         malformed_qualification: bool,
     }
-
     impl ApprovalSigner {
         fn new(metadata: AttestationProviderMetadata) -> Self {
             let key_pair = iroha_crypto::KeyPair::try_from_seed(
@@ -682,16 +647,13 @@ mod tests {
             }
         }
     }
-
     impl sorafs_node::MusubiProviderAttestationSignerV1 for ApprovalSigner {
         fn runtime_handle(&self) -> &str {
             self.metadata.observed_handle()
         }
-
         fn authority(&self) -> &iroha_data_model::account::AccountId {
             &self.authority
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -716,14 +678,12 @@ mod tests {
                 Ok(qualification)
             }
         }
-
         fn signer_policy(
             &self,
         ) -> iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1
         {
             self.policy
         }
-
         fn current_eligibility(
             &self,
         ) -> Result<
@@ -732,7 +692,6 @@ mod tests {
         > {
             Ok(self.policy)
         }
-
         fn approve<'a>(
             &'a self,
             _request: &'a sorafs_node::ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -748,9 +707,7 @@ mod tests {
             })
         }
     }
-
     struct Inventory(AttestationProviderMetadata);
-
     impl sorafs_node::MusubiProviderAttestationInventorySinkV1 for Inventory {
         fn put<'a>(
             &'a self,
@@ -764,7 +721,6 @@ mod tests {
             })
         }
     }
-
     impl sorafs_node::MusubiProviderAttestationInventoryReaderV1 for Inventory {
         fn get<'a>(
             &'a self,
@@ -781,7 +737,6 @@ mod tests {
                 Err(sorafs_node::MusubiProviderAttestationInventoryErrorV1::Unavailable)
             })
         }
-
         fn inventory<'a>(
             &'a self,
             _scope: &'a sorafs_node::MusubiProviderAttestationInventoryScopeV1,
@@ -797,12 +752,10 @@ mod tests {
             })
         }
     }
-
     impl sorafs_node::MusubiProviderAttestationInventoryRuntimeV1 for Inventory {
         fn runtime_handle(&self) -> &str {
             self.0.observed_handle()
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -821,7 +774,6 @@ mod tests {
                 )
             }
         }
-
         fn check_readiness<'a>(
             &'a self,
         ) -> sorafs_node::ProviderIngestFutureV1<
@@ -833,7 +785,6 @@ mod tests {
             })
         }
     }
-
     fn attestation_metadata(
         bindings: &IrohaRuntimeProviderBindingsV1,
         slot: IrohaRuntimeProviderSlotV1,
@@ -849,14 +800,12 @@ mod tests {
             Some(_) | None => metadata,
         }
     }
-
     fn musubi_provider_attestation_dependencies_with_drift(
         bindings: &IrohaRuntimeProviderBindingsV1,
         mask: u8,
         drift: Option<(IrohaRuntimeProviderSlotV1, AttestationProviderDrift)>,
     ) -> IrohaRuntimeDeps {
         use IrohaRuntimeProviderSlotV1 as Slot;
-
         let mut dependencies = IrohaRuntimeDeps::default();
         if mask & 0b001 != 0 {
             dependencies = dependencies.with_sorafs_musubi_provider_attestation_clock_seal(
@@ -887,16 +836,13 @@ mod tests {
         }
         dependencies
     }
-
     fn musubi_provider_attestation_dependencies(
         bindings: &IrohaRuntimeProviderBindingsV1,
         mask: u8,
     ) -> IrohaRuntimeDeps {
         musubi_provider_attestation_dependencies_with_drift(bindings, mask, None)
     }
-
     struct FixedRegistry(IrohaRuntimeDeps);
-
     impl IrohaRuntimeProviderRegistryV1 for FixedRegistry {
         fn resolve(
             &self,
@@ -905,7 +851,6 @@ mod tests {
             Ok(self.0.clone())
         }
     }
-
     fn bindings_for(slots: &[IrohaRuntimeProviderSlotV1]) -> IrohaRuntimeProviderBindingsV1 {
         let bindings = slots
             .iter()
@@ -927,11 +872,9 @@ mod tests {
             bindings,
         }
     }
-
     #[test]
     fn single_dependency_scope_requires_the_exact_requested_slot() {
         use IrohaRuntimeProviderSlotV1 as Slot;
-
         let bindings = bindings_for(&[Slot::GatewayAcmeClient]);
         assert!(!dependency_is_unrequested(
             &bindings,
@@ -949,11 +892,9 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn shared_dependency_scope_requires_the_complete_role_pair() {
         use IrohaRuntimeProviderSlotV1 as Slot;
-
         let gateway_only = bindings_for(&[Slot::PotrGatewaySigner]);
         assert!(paired_dependency_is_unrequested(
             &gateway_only,
@@ -961,7 +902,6 @@ mod tests {
             Slot::PotrProviderSigner,
             true,
         ));
-
         let complete = bindings_for(&[Slot::PotrGatewaySigner, Slot::PotrProviderSigner]);
         assert!(!paired_dependency_is_unrequested(
             &complete,
@@ -976,11 +916,9 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn enabled_musubi_provider_attestation_rejects_every_missing_effect_combination() {
         let bindings = bindings_for(&MUSUBI_PROVIDER_ATTESTATION_SLOTS);
-
         for mask in 0_u8..0b111 {
             let dependencies = musubi_provider_attestation_dependencies(&bindings, mask);
             assert!(
@@ -1008,11 +946,9 @@ mod tests {
         assert!(!has_unrequested_dependency(&bindings, &complete));
         assert!(!complete.is_empty());
     }
-
     #[test]
     fn disabled_musubi_provider_attestation_rejects_every_extra_effect_combination() {
         let bindings = bindings_for(&[]);
-
         for mask in 1_u8..=0b111 {
             let configured = bindings_for(&MUSUBI_PROVIDER_ATTESTATION_SLOTS);
             let dependencies = musubi_provider_attestation_dependencies(&configured, mask);
@@ -1026,13 +962,11 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn musubi_provider_attestation_qualification_requires_exact_deployment_metadata() {
         let bindings = bindings_for(&MUSUBI_PROVIDER_ATTESTATION_SLOTS);
         let exact = musubi_provider_attestation_dependencies(&bindings, 0b111);
         assert!(resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(exact))).is_ok());
-
         for slot in MUSUBI_PROVIDER_ATTESTATION_SLOTS {
             for drift in [
                 AttestationProviderDrift::Revision,
@@ -1051,7 +985,6 @@ mod tests {
                     Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
                 ));
             }
-
             let substituted = musubi_provider_attestation_dependencies_with_drift(
                 &bindings,
                 0b111,
@@ -1061,7 +994,6 @@ mod tests {
                 resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(substituted))),
                 Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
             ));
-
             let unavailable = musubi_provider_attestation_dependencies_with_drift(
                 &bindings,
                 0b111,
@@ -1071,7 +1003,6 @@ mod tests {
                 resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(unavailable))),
                 Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
             ));
-
             let handle_drift = musubi_provider_attestation_dependencies_with_drift(
                 &bindings,
                 0b111,
@@ -1081,7 +1012,6 @@ mod tests {
                 resolve_runtime_deps_from_bindings(&bindings, Some(&FixedRegistry(handle_drift))),
                 Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
             ));
-
             let qualification_drift = musubi_provider_attestation_dependencies_with_drift(
                 &bindings,
                 0b111,
@@ -1095,7 +1025,6 @@ mod tests {
                 Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
             ));
         }
-
         let mut malformed_dependencies = musubi_provider_attestation_dependencies(&bindings, 0b111);
         let signer_metadata = attestation_metadata(
             &bindings,
@@ -1114,7 +1043,6 @@ mod tests {
             Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
         ));
     }
-
     #[test]
     fn musubi_provider_attestation_binding_catalog_is_all_or_none() {
         assert!(validate_musubi_provider_attestation_binding_set(&bindings_for(&[])).is_ok());

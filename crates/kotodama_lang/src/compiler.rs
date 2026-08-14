@@ -10,16 +10,30 @@
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
-
 /// Opaque phase boundaries used by the compiler regression benchmark.
 #[doc(hidden)]
 pub mod benchmark;
-
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+use super::{
+    ast::{BinaryOp, FunctionKind, FunctionModifiers, SourceLocation, SourceUnitKind, UnaryOp},
+    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
+    i18n::{self, Language, Message},
+    ir::{self, Instr, Terminator},
+    policy, regalloc,
+    semantic::{self, TypedItem, TypedProgram},
 };
-
+use crate::{
+    builtins::{Builtin, BuiltinAccess},
+    encoding, instruction,
+    metadata::{
+        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
+        EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
+        EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
+        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
+        ProgramMetadata, encode_literal_descriptor,
+    },
+    pointer_abi::PointerType,
+    syscalls,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexSet;
@@ -49,29 +63,10 @@ use iroha_data_model::{
     trigger::{Trigger, TriggerId},
 };
 use norito::json;
-
-use super::{
-    ast::{BinaryOp, FunctionKind, FunctionModifiers, SourceLocation, SourceUnitKind, UnaryOp},
-    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
-    i18n::{self, Language, Message},
-    ir::{self, Instr, Terminator},
-    policy, regalloc,
-    semantic::{self, TypedItem, TypedProgram},
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 };
-use crate::{
-    builtins::{Builtin, BuiltinAccess},
-    encoding, instruction,
-    metadata::{
-        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
-        EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-        EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
-        ProgramMetadata, encode_literal_descriptor,
-    },
-    pointer_abi::PointerType,
-    syscalls,
-};
-
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const LITERAL_SHIFT_REG: u8 = 26;
@@ -91,7 +86,6 @@ const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-r
 const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
 const HINT_SKIP_INTERNAL_CALL_TARGET: &str = "internal call target is not compiler-resolved";
 const HINT_SKIP_OPAQUE_ISI: &str = "opaque ISI access is not compiler-resolved";
-
 fn multiply_defined_temps(program: &ir::Program) -> HashSet<(usize, ir::Temp)> {
     let mut seen = HashSet::new();
     let mut multiple = HashSet::new();
@@ -119,13 +113,11 @@ const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const AUTHORITY_PLACEHOLDER: &str = "$authority";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
-
 #[derive(Clone, PartialEq, Eq)]
 struct AccessSets {
     reads: IndexSet<String>,
     writes: IndexSet<String>,
 }
-
 impl Default for AccessSets {
     fn default() -> Self {
         Self {
@@ -134,34 +126,29 @@ impl Default for AccessSets {
         }
     }
 }
-
 impl AccessSets {
     fn union_with(&mut self, other: &Self) {
         self.reads.extend(other.reads.iter().cloned());
         self.writes.extend(other.writes.iter().cloned());
     }
 }
-
 #[derive(Clone, PartialEq, Eq)]
 enum StatePathHint {
     Path(String),
     NameBase(String),
     DynamicMapChild,
 }
-
 #[derive(Clone)]
 enum AccountAccessHint {
     Literal(AccountId),
     Authority,
 }
-
 #[derive(Clone, PartialEq, Eq)]
 struct LiteralPointerFact {
     raw: String,
     kind: ir::DataRefKind,
     is_string_literal: bool,
 }
-
 impl StatePathHint {
     fn name_base(&self) -> Option<&str> {
         match self {
@@ -170,13 +157,11 @@ impl StatePathHint {
         }
     }
 }
-
 struct CompilationArtifacts {
     bytes: Vec<u8>,
     compile_report: CompileReport,
     contract_interface: EmbeddedContractInterfaceV1,
 }
-
 struct LoweredCompilation {
     typed: TypedProgram,
     state_descriptors: Vec<EmbeddedStateDescriptor>,
@@ -184,7 +169,6 @@ struct LoweredCompilation {
     executable_roots: BTreeSet<String>,
     source_name: Option<String>,
 }
-
 struct SsaCompilation {
     typed: TypedProgram,
     state_descriptors: Vec<EmbeddedStateDescriptor>,
@@ -192,21 +176,18 @@ struct SsaCompilation {
     executable_roots: BTreeSet<String>,
     source_name: Option<String>,
 }
-
 struct PreparedCompilation {
     typed: TypedProgram,
     state_descriptors: Vec<EmbeddedStateDescriptor>,
     ssa_program: crate::ssa::Program,
     source_name: Option<String>,
 }
-
 struct CodegenCompilation {
     typed: TypedProgram,
     state_descriptors: Vec<EmbeddedStateDescriptor>,
     ir_program: ir::Program,
     source_name: Option<String>,
 }
-
 fn source_span(
     source_name: Option<&str>,
     location: Option<super::ast::SourceLocation>,
@@ -229,7 +210,6 @@ fn source_span(
         byte_range: None,
     })
 }
-
 fn native_diagnostic_bundle(
     code: &str,
     phase: DiagnosticPhase,
@@ -244,7 +224,6 @@ fn native_diagnostic_bundle(
         source_span(source_name, location),
     ))
 }
-
 fn lowering_diagnostic_bundle(
     code: &str,
     failures: Vec<ir::LoweringFailure>,
@@ -264,7 +243,6 @@ fn lowering_diagnostic_bundle(
             .collect(),
     )
 }
-
 #[derive(Clone)]
 struct FunctionDebugSeed {
     name: String,
@@ -274,7 +252,6 @@ struct FunctionDebugSeed {
     pc_end: u64,
     frame_bytes: u32,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileReport {
     /// Canonical deployable-artifact hash used to key this sidecar.
@@ -283,7 +260,6 @@ pub struct CompileReport {
     pub budget_report: Vec<EmbeddedFunctionBudgetReportV1>,
     pub access_hint_diagnostics: AccessHintDiagnostics,
 }
-
 impl CompileReport {
     /// Render the canonical, hash-bound source-map sidecar shared by all compiler drivers.
     ///
@@ -337,7 +313,6 @@ impl CompileReport {
             ("entries", json::Value::Array(entries)),
         ]))
     }
-
     /// Render the canonical, hash-bound compiler budget sidecar shared by all drivers.
     pub fn render_budget_json(&self) -> Result<String, json::Error> {
         let entries = self
@@ -430,7 +405,6 @@ impl CompileReport {
         ]))
     }
 }
-
 fn report_json_object<const N: usize>(entries: [(&str, json::Value); N]) -> json::Value {
     let mut object = json::Map::new();
     for (key, value) in entries {
@@ -438,7 +412,6 @@ fn report_json_object<const N: usize>(entries: [(&str, json::Value); N]) -> json
     }
     json::Value::Object(object)
 }
-
 /// Diagnostics emitted when access hints cannot be fully derived.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccessHintDiagnostics {
@@ -449,7 +422,6 @@ pub struct AccessHintDiagnostics {
     /// Number of literal trigger specs that could not yield trigger access hints.
     pub literal_trigger_spec_decode_failures: usize,
 }
-
 impl AccessHintDiagnostics {
     /// Whether any access-hint fallback occurred.
     #[must_use]
@@ -459,17 +431,14 @@ impl AccessHintDiagnostics {
             && self.literal_trigger_spec_decode_failures == 0
     }
 }
-
 struct HintReport {
     emitted: bool,
     complete: bool,
     skipped_reasons: Vec<String>,
 }
-
 fn push_word(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
-
 fn emit_parallel_register_moves(
     code: &mut Vec<u8>,
     mut moves: Vec<(u8, u8)>,
@@ -486,7 +455,6 @@ fn emit_parallel_register_moves(
     if moves.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err("parallel ABI move has duplicate destinations".to_owned());
     }
-
     while !moves.is_empty() {
         if let Some(index) = moves
             .iter()
@@ -496,7 +464,6 @@ fn emit_parallel_register_moves(
             push_word(code, encode_addi(destination, source, 0)?);
             continue;
         }
-
         let destination = moves[0].0;
         push_word(code, encode_addi(scratch, destination, 0)?);
         for (_, source) in &mut moves {
@@ -507,7 +474,6 @@ fn emit_parallel_register_moves(
     }
     Ok(())
 }
-
 fn emit_private_numeric_valcom_arguments(
     code: &mut Vec<u8>,
     value_register: u8,
@@ -523,7 +489,6 @@ fn emit_private_numeric_valcom_arguments(
         scratch,
     )
 }
-
 fn emit_get_private_input_arguments(
     code: &mut Vec<u8>,
     index_register: u8,
@@ -542,7 +507,6 @@ fn emit_get_private_input_arguments(
     push_word(code, encode_addi(11, 0, tag)?);
     Ok(())
 }
-
 fn push_syscall(code: &mut Vec<u8>, number: u32) {
     let word = if let Ok(imm8) = u8::try_from(number) {
         encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
@@ -551,7 +515,6 @@ fn push_syscall(code: &mut Vec<u8>, number: u32) {
     };
     push_word(code, word);
 }
-
 fn chunk_immediate(value: i64) -> i8 {
     if value > WIDE_IMM_MAX as i64 {
         WIDE_IMM_MAX as i8
@@ -561,7 +524,6 @@ fn chunk_immediate(value: i64) -> i8 {
         value as i8
     }
 }
-
 fn emit_addi_inplace(code: &mut Vec<u8>, reg: u8, mut value: i64) {
     while value != 0 {
         let chunk = chunk_immediate(value);
@@ -572,7 +534,6 @@ fn emit_addi_inplace(code: &mut Vec<u8>, reg: u8, mut value: i64) {
         value -= chunk as i64;
     }
 }
-
 fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
     if rd != rs1 {
         let first = chunk_immediate(value);
@@ -586,7 +547,6 @@ fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
         emit_addi_inplace(code, rd, value);
     }
 }
-
 fn emit_bounded_add(
     code: &mut Vec<u8>,
     fixups: &LiteralFixups,
@@ -612,7 +572,6 @@ fn emit_bounded_add(
     );
     Ok(())
 }
-
 fn signed_compare_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, bool)> {
     match op {
         BinaryOp::Lt => Some((left, right, false)),
@@ -622,7 +581,6 @@ fn signed_compare_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, boo
         _ => None,
     }
 }
-
 fn signed_branch_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, u8)> {
     match op {
         BinaryOp::Lt => Some((0x4, left, right)),
@@ -632,7 +590,6 @@ fn signed_branch_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, u8)>
         _ => None,
     }
 }
-
 /// Lay out lowering blocks so every conditional has one adjacent successor.
 ///
 /// The iterative scheduler follows one unplaced successor when possible. If a
@@ -659,7 +616,6 @@ fn layout_compact_branch_fallthrough(function: &mut ir::Function) -> Result<(), 
                 function.entry, function.name
             )
         })?;
-
     let mut next_label = function
         .blocks
         .iter()
@@ -676,13 +632,11 @@ fn layout_compact_branch_fallthrough(function: &mut ir::Function) -> Result<(), 
     let mut heads = Vec::with_capacity(original_len);
     heads.push(entry_index);
     heads.extend((0..original_len).filter(|index| *index != entry_index));
-
     enum TraceAction {
         Follow(usize),
         Stop,
         Bridge { label: ir::Label, target: ir::Label },
     }
-
     for head in heads {
         if scheduled[head] {
             continue;
@@ -784,7 +738,6 @@ fn layout_compact_branch_fallthrough(function: &mut ir::Function) -> Result<(), 
     }));
     Ok(())
 }
-
 fn emit_load64(
     code: &mut Vec<u8>,
     fixups: &LiteralFixups,
@@ -808,7 +761,6 @@ fn emit_load64(
     push_word(code, encode_load64_rv(rd, addr_reg, 0)?);
     Ok(())
 }
-
 fn emit_store64(
     code: &mut Vec<u8>,
     fixups: &LiteralFixups,
@@ -828,31 +780,25 @@ fn emit_store64(
     push_word(code, encode_store64_rv(scratch, rs, 0)?);
     Ok(())
 }
-
 fn stack_slot_offset_bytes(frame_prefix: usize, offset: usize) -> i64 {
     frame_prefix.saturating_add(offset) as i64
 }
-
 fn checked_align_stack_frame_size(size: usize) -> Result<usize, String> {
     let padding = (STACK_FRAME_ALIGNMENT - size % STACK_FRAME_ALIGNMENT) % STACK_FRAME_ALIGNMENT;
     size.checked_add(padding)
         .ok_or_else(|| "Kotodama stack frame alignment overflow".to_owned())
 }
-
 fn encode_nop() -> u32 {
     encode_addi(0, 0, 0).expect("ADDI x0, x0, 0 must always encode")
 }
-
 fn write_word(code: &mut [u8], at: usize, word: u32) {
     code[at..at + 4].copy_from_slice(&word.to_le_bytes());
 }
-
 fn reserve_word(code: &mut Vec<u8>) -> usize {
     let start = code.len();
     push_word(code, encode_nop());
     start
 }
-
 fn transfer_offset(start: usize, target: usize, kind: &str) -> Result<i64, String> {
     let start = i64::try_from(start).map_err(|_| format!("{kind} source offset is too large"))?;
     let target = i64::try_from(target).map_err(|_| format!("{kind} target offset is too large"))?;
@@ -862,7 +808,6 @@ fn transfer_offset(start: usize, target: usize, kind: &str) -> Result<i64, Strin
     }
     Ok(off)
 }
-
 fn encode_long_transfer(op: u8, offset: i64, kind: &str) -> Result<u32, String> {
     let offset_words = offset / 4;
     if !(-0x80_0000..=0x7f_ffff).contains(&offset_words) {
@@ -872,7 +817,6 @@ fn encode_long_transfer(op: u8, offset: i64, kind: &str) -> Result<u32, String> 
     }
     Ok(encoding::wide::encode_offset24(op, offset_words as i32))
 }
-
 fn patch_jump_transfer(code: &mut [u8], start: usize, target: usize) -> Result<(), String> {
     let offset = transfer_offset(start, target, "jump")?;
     let word = if let Ok(offset) = i32::try_from(offset)
@@ -885,14 +829,12 @@ fn patch_jump_transfer(code: &mut [u8], start: usize, target: usize) -> Result<(
     write_word(code, start, word);
     Ok(())
 }
-
 fn patch_trampoline_jump(code: &mut [u8], start: usize, target: usize) -> Result<(), String> {
     let offset = transfer_offset(start, target, "trampoline jump")?;
     let word = encode_long_transfer(instruction::wide::control::JMP, offset, "trampoline jump")?;
     write_word(code, start, word);
     Ok(())
 }
-
 fn patch_call_transfer(code: &mut [u8], start: usize, target: usize) -> Result<(), String> {
     let offset = transfer_offset(start, target, "call")?;
     let word = if let Ok(offset) = i32::try_from(offset)
@@ -905,20 +847,17 @@ fn patch_call_transfer(code: &mut [u8], start: usize, target: usize) -> Result<(
     write_word(code, start, word);
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TransferKind {
     Jump,
     Call,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct DeferredTransfer {
     at: usize,
     target: usize,
     kind: TransferKind,
 }
-
 fn patch_or_defer_transfer(
     code: &mut [u8],
     at: usize,
@@ -961,16 +900,13 @@ fn patch_or_defer_transfer(
     }
     Ok(())
 }
-
 const TRAMPOLINE_ISLAND_BYTES: usize = 8;
 const TRAMPOLINE_HOP_BYTES: usize = 4 * 1024 * 1024;
-
 #[derive(Clone, Copy, Debug)]
 enum ControlRelocationKind {
     Conditional(u32),
     Transfer(TransferKind),
 }
-
 #[derive(Clone, Copy, Debug)]
 struct ControlRelocation {
     at: usize,
@@ -978,30 +914,25 @@ struct ControlRelocation {
     kind: ControlRelocationKind,
     deferred: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct TrampolineIsland {
     boundary: usize,
     relocation: usize,
     ordinal: usize,
 }
-
 #[derive(Clone, Debug)]
 struct CodeOffsetMap {
     islands: Vec<TrampolineIsland>,
 }
-
 impl CodeOffsetMap {
     fn islands_before(&self, offset: usize) -> usize {
         self.islands
             .partition_point(|island| island.boundary < offset)
     }
-
     fn islands_through(&self, offset: usize) -> usize {
         self.islands
             .partition_point(|island| island.boundary <= offset)
     }
-
     /// Map a control-flow entry boundary. Islands at the boundary execute
     /// their skip words before reaching the original instruction.
     fn entry(&self, offset: usize) -> usize {
@@ -1010,7 +941,6 @@ impl CodeOffsetMap {
                 .saturating_mul(TRAMPOLINE_ISLAND_BYTES),
         )
     }
-
     /// Map the original instruction at a boundary, after any inserted islands.
     fn instruction(&self, offset: usize) -> usize {
         offset.saturating_add(
@@ -1018,7 +948,6 @@ impl CodeOffsetMap {
                 .saturating_mul(TRAMPOLINE_ISLAND_BYTES),
         )
     }
-
     fn island_instruction(&self, island: TrampolineIsland) -> usize {
         let index = self
             .islands
@@ -1030,7 +959,6 @@ impl CodeOffsetMap {
             .saturating_add(4)
     }
 }
-
 fn decoded_control_target(at: usize, offset_words: i64) -> Result<usize, String> {
     let byte_offset = offset_words
         .checked_mul(4)
@@ -1042,7 +970,6 @@ fn decoded_control_target(at: usize, offset_words: i64) -> Result<usize, String>
         .ok_or_else(|| format!("control-flow target is outside the code image at {at}"))?;
     Ok(target)
 }
-
 fn scan_control_relocations(
     code: &[u8],
     deferred: &[DeferredTransfer],
@@ -1122,7 +1049,6 @@ fn scan_control_relocations(
     }
     Ok(relocations)
 }
-
 fn transfer_fits_signed24(start: usize, target: usize) -> bool {
     transfer_offset(start, target, "transfer")
         .ok()
@@ -1131,7 +1057,6 @@ fn transfer_fits_signed24(start: usize, target: usize) -> bool {
         })
         .is_some()
 }
-
 fn conditional_insertion_forbidden(boundary: usize, relocations: &[ControlRelocation]) -> bool {
     relocations.iter().any(|relocation| {
         if !matches!(relocation.kind, ControlRelocationKind::Conditional(_)) {
@@ -1142,7 +1067,6 @@ fn conditional_insertion_forbidden(boundary: usize, relocations: &[ControlReloca
         lower <= boundary && boundary <= upper
     })
 }
-
 fn choose_trampoline_boundary(
     mut boundary: usize,
     forward: bool,
@@ -1166,7 +1090,6 @@ fn choose_trampoline_boundary(
     }
     Ok(boundary)
 }
-
 fn route_boundaries(
     relocation: &ControlRelocation,
     relocations: &[ControlRelocation],
@@ -1206,7 +1129,6 @@ fn route_boundaries(
     }
     Ok(boundaries)
 }
-
 fn relax_control_transfers_with_trampolines(
     code: Vec<u8>,
     deferred: &[DeferredTransfer],
@@ -1227,7 +1149,6 @@ fn relax_control_transfers_with_trampolines(
                 .then_some(index)
         })
         .collect::<BTreeSet<_>>();
-
     let offset_map = loop {
         let mut islands = Vec::new();
         for &relocation_index in &routed {
@@ -1262,7 +1183,6 @@ fn relax_control_transfers_with_trampolines(
         }
         routed.extend(newly_routed);
     };
-
     let mut island_positions_with_ordinals = vec![Vec::new(); relocations.len()];
     for island in &offset_map.islands {
         island_positions_with_ordinals[island.relocation]
@@ -1278,7 +1198,6 @@ fn relax_control_transfers_with_trampolines(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-
     let mut relaxed = Vec::with_capacity(
         code.len()
             .saturating_add(offset_map.islands.len() * TRAMPOLINE_ISLAND_BYTES),
@@ -1302,7 +1221,6 @@ fn relax_control_transfers_with_trampolines(
     if island_cursor != offset_map.islands.len() {
         return Err("trampoline route points outside the code image".to_owned());
     }
-
     for (index, relocation) in relocations.iter().enumerate() {
         let source = offset_map.instruction(relocation.at);
         match relocation.kind {
@@ -1337,7 +1255,6 @@ fn relax_control_transfers_with_trampolines(
                     TransferKind::Jump => patch_jump_transfer(&mut relaxed, source, target)?,
                     TransferKind::Call => patch_call_transfer(&mut relaxed, source, target)?,
                 }
-
                 for (ordinal, island) in island_positions[index].iter().copied().enumerate() {
                     let target = island_positions[index]
                         .get(ordinal + 1)
@@ -1348,10 +1265,8 @@ fn relax_control_transfers_with_trampolines(
             }
         }
     }
-
     Ok((relaxed, offset_map))
 }
-
 fn patch_indexed_literal_load(
     code: &mut [u8],
     start: usize,
@@ -1369,21 +1284,17 @@ fn patch_indexed_literal_load(
         encoding::wide::encode_literal(opcode, rd, index),
     );
 }
-
 #[cfg(test)]
 fn patch_literal_load(code: &mut [u8], start: usize, rd: u8, index: u16) {
     patch_indexed_literal_load(code, start, rd, index, LiteralKindV1::PointerTlv);
 }
-
 fn emit_literal_load(code: &mut Vec<u8>, fixups: &LiteralFixups, rd: u8, key: DataKey) {
     let off = reserve_word(code);
     fixups.borrow_mut().push((off, rd, key));
 }
-
 fn emit_i64_literal_load(code: &mut Vec<u8>, fixups: &LiteralFixups, rd: u8, value: i64) {
     emit_literal_load(code, fixups, rd, DataKey(DataKind::I64, value.to_string()));
 }
-
 fn validate_literal_count(count: usize) -> Result<(), String> {
     if count > usize::from(u16::MAX) + 1 {
         return Err(format!(
@@ -1393,7 +1304,6 @@ fn validate_literal_count(count: usize) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DataKind {
     I64,
@@ -1416,13 +1326,10 @@ enum DataKind {
     Decimal,
     Quantity,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DataKey(DataKind, String);
-
 type LiteralFixup = (usize, u8, DataKey);
 type LiteralFixups = RefCell<Vec<LiteralFixup>>;
-
 impl DataKind {
     const fn literal_kind(self) -> LiteralKindV1 {
         match self {
@@ -1448,7 +1355,6 @@ impl DataKind {
         }
     }
 }
-
 fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
     use ir::DataRefKind::*;
     match kind {
@@ -1472,7 +1378,6 @@ fn pointer_type_for_kind(kind: ir::DataRefKind) -> Option<PointerType> {
         Quantity => Some(PointerType::Quantity),
     }
 }
-
 fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
     use ir::DataRefKind::*;
     match kind {
@@ -1496,7 +1401,6 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         Quantity => DataKey(DataKind::Quantity, value.to_owned()),
     }
 }
-
 fn quantity_literal_data_key(
     func_idx: usize,
     value: ir::Temp,
@@ -1513,7 +1417,6 @@ fn quantity_literal_data_key(
         )),
     }
 }
-
 fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     if let Some(trimmed) = raw.strip_prefix("0x") {
         if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -1533,7 +1436,6 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     }
     Ok(raw.as_bytes().to_vec())
 }
-
 fn state_path_literal_data_key(
     func_idx: usize,
     path: ir::Temp,
@@ -1558,11 +1460,9 @@ fn state_path_literal_data_key(
         )),
     }
 }
-
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
-
     let (type_id, payload) = match kind {
         DRK::Account => {
             let id = iroha_data_model::account::AccountId::parse_encoded(raw)
@@ -1717,7 +1617,6 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             )
         }
     };
-
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     out.extend_from_slice(&(type_id as u16).to_be_bytes());
     out.push(1u8);
@@ -1727,7 +1626,6 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
     out.extend_from_slice(&h);
     Some(out)
 }
-
 fn parse_u64_literal(raw: &str) -> Option<u64> {
     if let Some(hex) = raw.strip_prefix("0x") {
         u64::from_str_radix(hex, 16).ok()
@@ -1735,7 +1633,6 @@ fn parse_u64_literal(raw: &str) -> Option<u64> {
         raw.parse::<u64>().ok()
     }
 }
-
 // Kotodama ZK capabilities are supported by semantic/IR lowering:
 //   - namespaced verification operations lower to their typed ABI-v1 syscalls;
 //   - namespaced governance operations build their exact instruction payloads
@@ -1743,27 +1640,23 @@ fn parse_u64_literal(raw: &str) -> Option<u64> {
 // Raw instruction submission and direct syscall spellings are not source APIs.
 // See `kotodama::semantic`, `kotodama::ir`, and the sample
 // `crates/kotodama_lang/src/samples/zk_vote_ballot.ko`.
-
 /// Compiler entry point for translating KOTODAMA programs into IVM bytecode.
 #[derive(Clone)]
 pub struct Compiler {
     lang: Language,
     opts: CompilerOptions,
 }
-
 impl Default for Compiler {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Build mode accepted by the compiler driver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompilerMode {
     Production,
     Test,
 }
-
 /// Caller-selectable deployment policy.
 #[derive(Clone, Debug)]
 pub struct CompilerOptions {
@@ -1785,7 +1678,6 @@ pub struct CompilerOptions {
     /// CNTR section.
     pub mode: CompilerMode,
 }
-
 impl Default for CompilerOptions {
     fn default() -> Self {
         Self {
@@ -1796,17 +1688,8 @@ impl Default for CompilerOptions {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-
-    use indexmap::IndexSet;
-    use iroha_data_model::{
-        DomainId,
-        asset::{AssetBalanceScope, id::AssetDefinitionId},
-    };
-
     use super::{
         ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
         COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
@@ -1833,21 +1716,24 @@ mod tests {
         metadata::{EmbeddedStateDescriptor, EmbeddedStateType, ProgramMetadata},
         pointer_abi::PointerType,
     };
+    use indexmap::IndexSet;
+    use iroha_data_model::{
+        DomainId,
+        asset::{AssetBalanceScope, id::AssetDefinitionId},
+    };
     use ivm_abi::syscalls;
-
+    use std::collections::{HashMap, HashSet};
     fn test_mode_compiler() -> Compiler {
         Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         })
     }
-
     fn canonical_norito_hex<T: norito::NoritoSerialize>(value: &T) -> String {
         let bytes =
             ivm_abi::codec::encode_canonical_norito(value).expect("encode canonical test frame");
         format!("0x{}", hex::encode(bytes))
     }
-
     fn alternate_norito_hex<T: norito::NoritoSerialize>(value: &T) -> String {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -1855,12 +1741,9 @@ mod tests {
         let bytes = norito::to_bytes(value).expect("encode alternate-layout test frame");
         format!("0x{}", hex::encode(bytes))
     }
-
     fn sample_asset_handle() -> crate::axt::AssetHandle {
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
-
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
-
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
         AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
@@ -1886,7 +1769,6 @@ mod tests {
             issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         }
     }
-
     fn compile_with_injected_ir(instructions: Vec<ir::Instr>) -> Result<Vec<u8>, String> {
         let options = CompilerOptions::default();
         let session = crate::session::CompilerSession::new(options.clone());
@@ -1932,7 +1814,6 @@ mod tests {
             .compile_codegen(codegen)
             .map(|artifact| artifact.bytes)
     }
-
     fn assert_internal_source_names_rejected(names: &[&str]) {
         let mut calls = String::new();
         for name in names {
@@ -1959,14 +1840,12 @@ mod tests {
             );
         }
     }
-
     fn assert_no_global_access_key(keys: &[String]) {
         assert!(
             keys.iter().all(|key| key != GLOBAL_WILDCARD_KEY),
             "access hints unexpectedly require the global wildcard in {keys:?}"
         );
     }
-
     fn assert_test_mode_override_read(keys: &[String]) {
         assert_eq!(
             keys,
@@ -1974,7 +1853,6 @@ mod tests {
             "test-mode entrypoints must disclose their compiler-owned argument-override read"
         );
     }
-
     fn assert_conservative_ledger_read(read_keys: &[String], write_keys: &[String]) {
         assert!(
             read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY),
@@ -1985,7 +1863,6 @@ mod tests {
             "read-only host operations must not claim a global write: {write_keys:?}"
         );
     }
-
     fn unresolved_world_access(instr: &ir::Instr) -> (AccessSets, IndexSet<String>) {
         let IrAccessClass::Ledger(access) = classify_ir_access(instr) else {
             panic!("expected ledger access for {instr:?}");
@@ -2011,7 +1888,6 @@ mod tests {
         );
         (access_set, skips)
     }
-
     #[test]
     fn ir_access_classification_is_registry_backed_and_fail_closed() {
         let temp = ir::Temp(0);
@@ -2085,7 +1961,6 @@ mod tests {
             IrAccessClass::None
         );
     }
-
     #[test]
     fn unresolved_world_ir_uses_read_or_write_appropriate_wildcards() {
         let temp = ir::Temp(0);
@@ -2099,7 +1974,6 @@ mod tests {
         );
         assert!(access.writes.is_empty());
         assert!(skips.is_empty());
-
         let (access, skips) = unresolved_world_access(&ir::Instr::ZkVerify {
             number: syscalls::SYSCALL_ZK_VERIFY_BATCH,
             payload: temp,
@@ -2110,7 +1984,6 @@ mod tests {
         );
         assert!(access.writes.is_empty());
         assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
-
         let (access, skips) = unresolved_world_access(&ir::Instr::CreateNftsForAllUsers);
         assert_eq!(
             access.reads,
@@ -2122,7 +1995,6 @@ mod tests {
         );
         assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
     }
-
     #[test]
     fn dynamic_state_fallback_preserves_registry_read_write_class() {
         let temp = ir::Temp(0);
@@ -2147,7 +2019,6 @@ mod tests {
         let mut access_sets = vec![AccessSets::default(); 2];
         let mut diagnostics = AccessHintDiagnostics::default();
         let mut skips = vec![IndexSet::new(); 2];
-
         super::derive_state_access_hints(
             &program,
             &HashMap::new(),
@@ -2155,7 +2026,6 @@ mod tests {
             &mut diagnostics,
             &mut skips,
         );
-
         assert_eq!(
             access_sets[0].reads,
             IndexSet::from([STATE_WILDCARD_KEY.to_owned()])
@@ -2178,13 +2048,11 @@ mod tests {
             ]
         );
     }
-
     fn canonical_numeric_state_key(base: &str, kind: ir::DataRefKind, value: &str) -> String {
         let encoded = super::encode_pointer_tlv_bytes(kind, value)
             .expect("encode canonical pointer-backed numeric state key");
         format!("state:{base}/{}", hex::encode(encoded))
     }
-
     fn sample_account_id() -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
@@ -2192,21 +2060,17 @@ mod tests {
                 .expect("public key"),
         )
     }
-
     fn sample_account_literal() -> String {
         sample_account_id().to_string()
     }
-
     fn kotodama_escrow_hex(name: &str) -> String {
         let name: iroha_data_model::name::Name = name.parse().expect("valid escrow name");
         let id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&name);
         hex::encode(id.as_hash().as_ref())
     }
-
     fn kotodama_bytes_literal(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect()
     }
-
     fn sample_account_id_alt() -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -2214,7 +2078,6 @@ mod tests {
                 .expect("public key"),
         )
     }
-
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
         use super::ir::DataRefKind::*;
@@ -2247,18 +2110,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn axt_descriptor_literal_encoding_enforces_host_invariants() {
-        use iroha_data_model::nexus::DataSpaceId;
-
         use crate::axt::{AxtDescriptor, AxtTouchSpec};
-
+        use iroha_data_model::nexus::DataSpaceId;
         fn literal(descriptor: &AxtDescriptor) -> String {
             let bytes = norito::to_bytes(descriptor).expect("encode AXT descriptor");
             format!("0x{}", hex::encode(bytes))
         }
-
         let dsid = DataSpaceId::new(7);
         let other = DataSpaceId::new(11);
         let touch = AxtTouchSpec {
@@ -2295,7 +2154,6 @@ mod tests {
             super::decode_axt_descriptor_literal(&alternate_literal),
             None
         );
-
         let invalid = [
             AxtDescriptor {
                 dsids: Vec::new(),
@@ -2339,18 +2197,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn capability_pointer_encoding_rejects_context_free_faults() {
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
-
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob};
-
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
         fn literal<T: norito::NoritoSerialize>(value: &T) -> String {
             let bytes = norito::to_bytes(value).expect("encode capability literal");
             format!("0x{}", hex::encode(bytes))
         }
-
         let valid_handle = AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
@@ -2384,7 +2238,6 @@ mod tests {
             super::decode_asset_handle_literal(&valid_handle_literal),
             Some(valid_handle.clone())
         );
-
         let alternate_handle_literal = {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -2403,7 +2256,6 @@ mod tests {
             super::decode_asset_handle_literal(&alternate_handle_literal),
             None
         );
-
         let mut malformed_handle = valid_handle.clone();
         malformed_handle.manifest_view_root.pop();
         let malformed_handle_literal = literal(&malformed_handle);
@@ -2418,7 +2270,6 @@ mod tests {
             super::decode_asset_handle_literal(&malformed_handle_literal),
             None
         );
-
         let mut unusable_handle = valid_handle.clone();
         unusable_handle.budget.per_use = Some("0".parse().expect("zero quantity"));
         let unusable_handle_literal = literal(&unusable_handle);
@@ -2430,7 +2281,6 @@ mod tests {
             super::decode_asset_handle_literal(&unusable_handle_literal),
             None
         );
-
         let empty_proof_literal = literal(&ProofBlob {
             payload: Vec::new(),
             expiry_slot: None,
@@ -2440,7 +2290,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn instruction_access_hints_reject_alternate_layout_independent_of_ambient_flags() {
         let instruction =
@@ -2451,7 +2300,6 @@ mod tests {
         let canonical_payload = ivm_abi::codec::encode_canonical_norito(&instruction)
             .expect("encode canonical InstructionBox fixture");
         let canonical_literal = format!("0x{}", hex::encode(&canonical_payload));
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_payload = {
@@ -2465,14 +2313,12 @@ mod tests {
             "ordinary Norito must accept its advertised alternate layout"
         );
         let alternate_literal = format!("0x{}", hex::encode(alternate_payload));
-
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         assert!(super::decode_instruction_box_literal(&canonical_literal).is_some());
         assert!(super::access_for_instruction_literal(&canonical_literal).is_some());
         assert!(super::decode_instruction_box_literal(&alternate_literal).is_none());
         assert!(super::access_for_instruction_literal(&alternate_literal).is_none());
     }
-
     #[test]
     fn instruction_access_hints_do_not_unwrap_prewrapped_norito_tlvs() {
         let instruction =
@@ -2485,7 +2331,6 @@ mod tests {
             super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &instruction_literal)
                 .expect("wrap the canonical instruction as a source-level NoritoBytes TLV");
         let prewrapped_literal = format!("0x{}", hex::encode(&prewrapped));
-
         let emitted =
             super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &prewrapped_literal)
                 .expect("emit the literal's exact bytes in the outer pointer TLV");
@@ -2499,14 +2344,12 @@ mod tests {
         assert!(super::decode_instruction_box_literal(&prewrapped_literal).is_none());
         assert!(super::access_for_instruction_literal(&prewrapped_literal).is_none());
     }
-
     #[test]
     fn instruction_access_hints_reject_direct_concrete_instruction_frames() {
         use iroha_data_model::{
             isi::{InstructionBox, zk::SubmitBallot},
             proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         };
-
         let backend = "halo2/ipa".to_owned();
         let submit = SubmitBallot {
             election_id: "election".to_owned(),
@@ -2521,16 +2364,13 @@ mod tests {
         let direct_literal = canonical_norito_hex(&submit);
         assert!(super::decode_instruction_box_literal(&direct_literal).is_none());
         assert!(super::access_for_instruction_literal(&direct_literal).is_none());
-
         let boxed_literal = canonical_norito_hex(&InstructionBox::from(submit));
         assert!(super::decode_instruction_box_literal(&boxed_literal).is_some());
         assert!(super::access_for_instruction_literal(&boxed_literal).is_some());
     }
-
     #[test]
     fn codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests() {
         use crate::axt::TouchManifest;
-
         let invalid = TouchManifest {
             read: vec!["z".to_owned(), "a".to_owned()],
             write: Vec::new(),
@@ -2541,7 +2381,6 @@ mod tests {
         };
         let alternate = alternate_norito_hex(&valid);
         assert_ne!(alternate, canonical_norito_hex(&valid));
-
         for manifest in [canonical_norito_hex(&invalid), alternate] {
             let error = compile_with_injected_ir(vec![
                 ir::Instr::DataRef {
@@ -2567,13 +2406,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
-        use iroha_data_model::nexus::DataSpaceId;
-
         use crate::axt::{RemoteSpendIntent, SpendOp};
-
+        use iroha_data_model::nexus::DataSpaceId;
         let invalid = RemoteSpendIntent {
             asset_dsid: DataSpaceId::new(7),
             op: SpendOp {
@@ -2595,7 +2431,6 @@ mod tests {
         let alternate = alternate_norito_hex(&valid);
         assert_ne!(alternate, canonical_norito_hex(&valid));
         let handle = canonical_norito_hex(&sample_asset_handle());
-
         for intent in [canonical_norito_hex(&invalid), alternate] {
             let error = compile_with_injected_ir(vec![
                 ir::Instr::DataRef {
@@ -2622,11 +2457,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
         use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest, VrfEpochSeedRequest};
-
         let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
             .parse()
             .expect("canonical asset definition");
@@ -2641,7 +2474,6 @@ mod tests {
             epoch: 42,
             fallback_to_latest: true,
         };
-
         let mut roots_access = AccessSets::default();
         assert_eq!(
             super::record_zk_roots_get_access(&canonical_norito_hex(&roots), &mut roots_access),
@@ -2652,7 +2484,6 @@ mod tests {
             IndexSet::from([super::key_zk_asset(&asset)])
         );
         assert!(roots_access.writes.is_empty());
-
         let mut tally_access = AccessSets::default();
         assert_eq!(
             super::record_zk_vote_get_tally_access(
@@ -2666,7 +2497,6 @@ mod tests {
             IndexSet::from(["zk:election:election:tally".to_owned()])
         );
         assert!(tally_access.writes.is_empty());
-
         let mut vrf_access = AccessSets::default();
         assert_eq!(
             super::record_vrf_epoch_seed_access(&canonical_norito_hex(&vrf), &mut vrf_access),
@@ -2680,14 +2510,12 @@ mod tests {
             ])
         );
         assert!(vrf_access.writes.is_empty());
-
         let alternate_roots = alternate_norito_hex(&roots);
         let alternate_tally = alternate_norito_hex(&tally);
         let alternate_vrf = alternate_norito_hex(&vrf);
         assert_ne!(alternate_roots, canonical_norito_hex(&roots));
         assert_ne!(alternate_tally, canonical_norito_hex(&tally));
         assert_ne!(alternate_vrf, canonical_norito_hex(&vrf));
-
         for (raw, decode) in [
             (
                 alternate_roots,
@@ -2712,7 +2540,6 @@ mod tests {
             assert_eq!(decode(&raw, &mut access), None);
             assert!(access.reads.is_empty() && access.writes.is_empty());
         }
-
         let mut malformed_bool =
             ivm_abi::codec::encode_canonical_norito(&vrf).expect("encode canonical VRF request");
         assert_eq!(
@@ -2733,14 +2560,12 @@ mod tests {
         );
         assert!(access.reads.is_empty() && access.writes.is_empty());
     }
-
     #[test]
     fn default_max_cycles_matches_pipeline_bound() {
         let opts = CompilerOptions::default();
         assert_eq!(opts.max_cycles, DEFAULT_MAX_CYCLES);
         assert!(opts.max_cycles > 0);
     }
-
     #[test]
     fn expression_and_named_call_sugar_emit_identical_executable_bytecode() {
         fn executable_code(source: &str) -> Vec<u8> {
@@ -2750,7 +2575,6 @@ mod tests {
             let metadata = ProgramMetadata::parse(&artifact).expect("parse V1 artifact");
             artifact[metadata.code_offset..].to_vec()
         }
-
         let tail =
             executable_code("seiyaku Equivalence { view fn main(int value) -> int { value } }");
         let explicit = executable_code(
@@ -2760,7 +2584,6 @@ mod tests {
             tail, explicit,
             "function tail expressions must add no emitted instructions"
         );
-
         let positional = executable_code(
             "seiyaku Equivalence { fn choose(int count, bool enabled) -> int { if enabled { count } else { 0 } } view fn main() -> int { choose(7, true) } }",
         );
@@ -2772,7 +2595,6 @@ mod tests {
             "named-call sugar must be erased before executable code generation"
         );
     }
-
     #[test]
     fn source_metadata_changes_sidecars_but_not_optimized_ir_or_artifact_bytes() {
         let source_text = "seiyaku MetadataFree { view fn answer(int value) -> int { value + 1 } }";
@@ -2798,7 +2620,6 @@ mod tests {
         for state in &mut stripped.states {
             state.source = None;
         }
-
         let mut sourced_ir = ir::lower(&sourced).expect("lower source-backed HIR");
         let mut stripped_ir = ir::lower(&stripped).expect("lower metadata-free HIR");
         crate::regalloc::optimize_program(&mut sourced_ir);
@@ -2807,7 +2628,6 @@ mod tests {
             sourced_ir, stripped_ir,
             "source metadata must not enter optimized semantic IR"
         );
-
         let compiler = Compiler::new();
         let sourced_output = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
@@ -2837,7 +2657,6 @@ mod tests {
                 .all(|entry| { entry.source.source_id == 0 && entry.source.source_path.is_none() })
         );
     }
-
     #[test]
     fn compiler_api_rejects_bare_fragments_and_implicit_main() {
         let error = Compiler::new()
@@ -2845,7 +2664,6 @@ mod tests {
             .expect_err("deployable source requires a named source unit");
         assert!(error.contains("exactly one"), "unexpected error: {error}");
     }
-
     #[test]
     fn selected_max_cycles_is_embedded_in_artifact() {
         let opts = CompilerOptions {
@@ -2858,7 +2676,6 @@ mod tests {
         let parsed = ProgramMetadata::parse(&code).expect("parse meta");
         assert_eq!(parsed.metadata.max_cycles, 42);
     }
-
     #[test]
     fn zero_max_cycles_is_rejected_before_artifact_generation() {
         let compiler = Compiler::new_with_options(CompilerOptions {
@@ -2874,7 +2691,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn loop_phi_lowering_is_deterministic() {
         let compiler = Compiler::new();
@@ -2885,7 +2701,6 @@ mod tests {
             assert_eq!(next, first);
         }
     }
-
     #[test]
     fn emit_addi_zero_uses_addi_copy() {
         let mut code = Vec::new();
@@ -2897,7 +2712,6 @@ mod tests {
             encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 7, 0)
         );
     }
-
     #[test]
     fn emit_addi_combines_a_small_immediate_with_the_initial_copy() {
         let mut code = Vec::new();
@@ -2909,7 +2723,6 @@ mod tests {
             encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 7, 42)
         );
     }
-
     #[test]
     fn emit_load64_uses_bounded_indexed_offset() {
         let mut code = Vec::new();
@@ -2946,7 +2759,6 @@ mod tests {
             instruction::wide::memory::LOAD64
         );
     }
-
     #[test]
     fn emit_store64_uses_bounded_indexed_offset() {
         let mut code = Vec::new();
@@ -2980,7 +2792,6 @@ mod tests {
             instruction::wide::memory::STORE64
         );
     }
-
     #[test]
     fn stack_slot_offsets_do_not_truncate_large_offsets() {
         let offset = i16::MAX as usize + 2048;
@@ -2988,7 +2799,6 @@ mod tests {
         assert_eq!(bytes, 8i64 + offset as i64);
         assert!(bytes > i16::MAX as i64);
     }
-
     #[test]
     fn stack_frame_alignment_is_checked_and_includes_odd_eight_byte_prefixes() {
         for (unpadded, expected) in [(0, 0), (8, 16), (16, 16), (24, 32), (4097, 4112)] {
@@ -3000,7 +2810,6 @@ mod tests {
         }
         assert!(checked_align_stack_frame_size(usize::MAX).is_err());
     }
-
     #[test]
     fn indexed_literal_fixup_is_one_word() {
         let mut code = Vec::new();
@@ -3013,7 +2822,6 @@ mod tests {
         assert_eq!(rd, 5);
         assert_eq!(index, u16::MAX);
     }
-
     #[test]
     fn far_jump_fixup_uses_one_word_signed24_transfer() {
         let mut code = Vec::new();
@@ -3027,7 +2835,6 @@ mod tests {
         );
         assert_eq!(instruction::wide::imm24(word), 50_000);
     }
-
     #[test]
     fn trampoline_jump_is_always_non_linking_and_range_checked() {
         let mut code = vec![0_u8; 4];
@@ -3039,20 +2846,17 @@ mod tests {
             "even a near trampoline hop must not use a link-writing opcode"
         );
         assert_eq!(instruction::wide::imm24(word), 1);
-
         let mut code = vec![0_u8; 4];
         let first_out_of_range = 0x80_0000usize * 4;
         let error = super::patch_trampoline_jump(&mut code, 0, first_out_of_range)
             .expect_err("trampoline hops beyond signed24 must fail closed");
         assert!(error.contains("signed 24-bit word range"), "{error}");
     }
-
     #[test]
     fn near_call_fixup_is_one_word_jal() {
         let mut code = Vec::new();
         let start = super::reserve_word(&mut code);
         super::patch_call_transfer(&mut code, start, start + 16).expect("patch near call");
-
         assert_eq!(code.len(), 4);
         let call_word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
         assert_eq!(
@@ -3060,7 +2864,6 @@ mod tests {
             super::encode_jal(1, 16).expect("encode short call")
         );
     }
-
     #[test]
     fn far_call_fixup_uses_one_word_signed24_transfer() {
         let mut code = Vec::new();
@@ -3074,17 +2877,14 @@ mod tests {
         );
         assert_eq!(instruction::wide::imm24(word), 50_000);
     }
-
     #[test]
     fn transfer_beyond_signed24_is_deferred_instead_of_rejected() {
         let mut code = Vec::new();
         let at = reserve_word(&mut code);
         let target = (0x80_0000usize + 1) * 4;
         let mut deferred = Vec::new();
-
         super::patch_or_defer_transfer(&mut code, at, target, TransferKind::Call, &mut deferred)
             .expect("far call must be deferred");
-
         assert_eq!(deferred.len(), 1);
         assert_eq!(deferred[0].at, at);
         assert_eq!(deferred[0].target, target);
@@ -3094,7 +2894,6 @@ mod tests {
             super::encode_nop()
         );
     }
-
     #[test]
     fn ordinary_control_relaxation_is_byte_identical() {
         let mut code = Vec::new();
@@ -3102,16 +2901,13 @@ mod tests {
         push_word(&mut code, encode_nop());
         push_word(&mut code, encoding::wide::encode_halt());
         let expected = code.clone();
-
         let (relaxed, offsets) =
             relax_control_transfers_with_trampolines(code, &[], 32).expect("relax near code");
-
         assert_eq!(relaxed, expected);
         assert!(offsets.islands.is_empty());
         assert_eq!(offsets.entry(8), 8);
         assert_eq!(offsets.instruction(8), 8);
     }
-
     #[test]
     fn trampoline_relaxation_rejects_duplicate_or_out_of_image_fixups() {
         let code = encoding::wide::encode_halt().to_le_bytes().to_vec();
@@ -3139,7 +2935,6 @@ mod tests {
             .contains("outside")
         );
     }
-
     #[test]
     fn deferred_far_jump_uses_sparse_direct_trampoline_chain() {
         let mut code = Vec::new();
@@ -3154,7 +2949,6 @@ mod tests {
             target,
             kind: TransferKind::Jump,
         }];
-
         let (relaxed, offsets) = relax_control_transfers_with_trampolines(code, &deferred, 32)
             .expect("relax deferred jump");
         assert!(offsets.islands.len() >= 3);
@@ -3162,7 +2956,6 @@ mod tests {
             relaxed.len(),
             33 * 4 + offsets.islands.len() * TRAMPOLINE_ISLAND_BYTES
         );
-
         let mut pc = offsets.instruction(source);
         let expected_target = offsets.entry(target);
         for _ in 0..=offsets.islands.len() {
@@ -3191,7 +2984,6 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn deferred_far_call_links_once_and_trampolines_without_relinking() {
         let mut code = Vec::new();
@@ -3206,7 +2998,6 @@ mod tests {
             target,
             kind: TransferKind::Call,
         }];
-
         let (relaxed, offsets) = relax_control_transfers_with_trampolines(code, &deferred, 24)
             .expect("relax deferred call");
         let source = offsets.instruction(source);
@@ -3229,13 +3020,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn indexed_literal_count_accepts_full_u16_domain() {
         assert!(super::validate_literal_count(usize::from(u16::MAX) + 1).is_ok());
         assert!(super::validate_literal_count(usize::from(u16::MAX) + 2).is_err());
     }
-
     #[test]
     fn literal_and_call_heavy_minimal_program_has_no_stub_padding() {
         let source = include_str!("compiler/fixtures/v1/c004.ko");
@@ -3260,7 +3049,6 @@ mod tests {
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
-
         assert!(
             words
                 .iter()
@@ -3277,7 +3065,6 @@ mod tests {
             code.len()
         );
     }
-
     #[test]
     fn parameterized_entrypoint_emits_one_argument_record_decode() {
         let source = include_str!("compiler/fixtures/v1/c005.ko");
@@ -3289,7 +3076,6 @@ mod tests {
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
-
         let record_decodes = words
             .iter()
             .filter(|word| {
@@ -3299,7 +3085,6 @@ mod tests {
             })
             .count();
         assert_eq!(record_decodes, 1, "public payload must be decoded once");
-
         let typed_getters = [
             syscalls::SYSCALL_JSON_GET_INT,
             syscalls::SYSCALL_JSON_GET_DECIMAL,
@@ -3316,7 +3101,6 @@ mod tests {
                 || !typed_getters.contains(&encoding::wide::decode_syscallx(*word))
         }));
     }
-
     #[test]
     fn sum_type_join_fallbacks_do_not_become_false_constant_facts() {
         let source = include_str!("compiler/fixtures/v1/c006.ko");
@@ -3337,7 +3121,6 @@ mod tests {
             "dynamic Option/Result joins must retain the checked source addition"
         );
     }
-
     #[test]
     fn mint_trigger_takes_amount_from_one_typed_argument_record() {
         let source = include_str!("samples/mint_rose_trigger.ko");
@@ -3368,7 +3151,6 @@ mod tests {
                 ivm_abi::entrypoint::EntrypointValueKindV1::Quantity
             )]
         ));
-
         let words = bytes[parsed.code_offset..]
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
@@ -3387,7 +3169,6 @@ mod tests {
                 || encoding::wide::decode_syscallx(*word) != syscalls::SYSCALL_JSON_GET_QUANTITY
         }));
     }
-
     fn call_graph_function(name: &str, instructions: Vec<ir::Instr>) -> ir::Function {
         ir::Function {
             name: name.to_owned(),
@@ -3401,7 +3182,6 @@ mod tests {
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         }
     }
-
     fn direct_call(callee: &str) -> ir::Instr {
         ir::Instr::Call {
             callee: callee.to_owned(),
@@ -3409,7 +3189,6 @@ mod tests {
             dest: None,
         }
     }
-
     #[test]
     fn access_hints_propagate_transitively_through_helper_calls() {
         let program = ir::Program {
@@ -3426,9 +3205,7 @@ mod tests {
             .insert(super::STATE_WILDCARD_KEY.to_owned());
         let mut hint_skips = vec![IndexSet::new(); 3];
         hint_skips[2].insert(super::HINT_SKIP_DYNAMIC_STATE_PATH.to_owned());
-
         super::propagate_transitive_access_hints(&program, &mut access_sets, &mut hint_skips);
-
         for index in [0, 1] {
             assert!(access_sets[index].reads.contains("state:secret"));
             assert!(
@@ -3442,7 +3219,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn access_hint_fixed_point_handles_recursive_ir_cycles() {
         let program = ir::Program {
@@ -3455,15 +3231,12 @@ mod tests {
         access_sets[0].reads.insert("state:left".to_owned());
         access_sets[1].writes.insert("state:right".to_owned());
         let mut hint_skips = vec![IndexSet::new(); 2];
-
         super::propagate_transitive_access_hints(&program, &mut access_sets, &mut hint_skips);
-
         for access in &access_sets {
             assert!(access.reads.contains("state:left"));
             assert!(access.writes.contains("state:right"));
         }
     }
-
     #[test]
     fn unresolved_and_indirect_calls_are_conservative() {
         let program = ir::Program {
@@ -3483,9 +3256,7 @@ mod tests {
         };
         let mut access_sets = vec![super::AccessSets::default(); 2];
         let mut hint_skips = vec![IndexSet::new(); 2];
-
         super::propagate_transitive_access_hints(&program, &mut access_sets, &mut hint_skips);
-
         for access_set in &access_sets {
             assert!(access_set.reads.contains(super::GLOBAL_WILDCARD_KEY));
             assert!(access_set.writes.contains(super::GLOBAL_WILDCARD_KEY));
@@ -3493,7 +3264,6 @@ mod tests {
         assert!(hint_skips[0].contains(super::HINT_SKIP_INTERNAL_CALL_TARGET));
         assert!(hint_skips[1].contains(super::HINT_SKIP_CONTRACT_CALL_TARGET));
     }
-
     #[test]
     fn entrypoint_hints_include_access_hidden_behind_helper_chain() {
         let source = include_str!("compiler/fixtures/v1/c007.ko");
@@ -3513,12 +3283,10 @@ mod tests {
             .into_iter()
             .find(|entry| entry.name == "run")
             .expect("run entrypoint");
-
         assert!(run.write_keys.contains(&"state:counter".to_owned()));
         assert_eq!(run.access_hints_complete, Some(true));
         assert!(run.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn entrypoint_hints_inherit_helper_incompleteness() {
         let source = include_str!("compiler/fixtures/v1/c008.ko");
@@ -3538,21 +3306,18 @@ mod tests {
             .into_iter()
             .find(|entry| entry.name == "run")
             .expect("run entrypoint");
-
         assert_eq!(run.access_hints_complete, Some(false));
         assert!(
             run.access_hints_skipped
                 .contains(&super::HINT_SKIP_DYNAMIC_STATE_PATH.to_owned())
         );
     }
-
     #[test]
     fn unknown_state_path_call_before_literal_keeps_helper_hints_conservative() {
         let source = include_str!("compiler/fixtures/v1/c009.ko");
         let output = test_mode_compiler()
             .compile_source_output(source, None)
             .expect("compile mixed dynamic/literal helper calls");
-
         for name in ["dynamic", "literal"] {
             let entrypoint = output
                 .contract_interface
@@ -3576,13 +3341,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn encode_addi_rejects_out_of_range_immediate() {
         let imm = (WIDE_IMM_MAX + 1) as i16;
         assert!(super::encode_addi(1, 1, imm).is_err());
     }
-
     #[test]
     fn parallel_abi_moves_preserve_cycles_and_are_deterministic() {
         let moves = vec![(10, 11), (11, 12), (12, 10), (13, 14)];
@@ -3593,7 +3356,6 @@ mod tests {
         emit_parallel_register_moves(&mut second, moves, 27)
             .expect("repeat parallel ABI move cycle");
         assert_eq!(code, second);
-
         let mut registers = [0u64; 32];
         registers[10] = 10;
         registers[11] = 11;
@@ -3612,13 +3374,11 @@ mod tests {
         assert_eq!(registers[12], 10);
         assert_eq!(registers[13], 14);
     }
-
     #[test]
     fn private_numeric_valcom_staging_preserves_cross_aliased_operands() {
         let mut code = Vec::new();
         emit_private_numeric_valcom_arguments(&mut code, 11, 10, 29)
             .expect("stage cross-aliased private commitment operands");
-
         let mut registers = [0u64; 32];
         registers[10] = 101;
         registers[11] = 202;
@@ -3633,7 +3393,6 @@ mod tests {
         assert_eq!(registers[10], 202);
         assert_eq!(registers[11], 101);
     }
-
     #[test]
     fn get_private_input_staging_preserves_index_aliased_with_kind_register() {
         for kind in [
@@ -3644,7 +3403,6 @@ mod tests {
             let mut code = Vec::new();
             emit_get_private_input_arguments(&mut code, 11, kind, 29)
                 .expect("stage private-input index and kind");
-
             let mut registers = [0u64; 32];
             registers[11] = 37;
             for word in code.chunks_exact(4) {
@@ -3659,7 +3417,6 @@ mod tests {
             assert_eq!(registers[11], kind.tag());
         }
     }
-
     #[test]
     fn private_numeric_staging_rejects_reserved_scratch_aliases_without_emitting_code() {
         let mut commitment_code = Vec::new();
@@ -3668,7 +3425,6 @@ mod tests {
                 .expect_err("commitment source must not alias staging scratch");
         assert!(commitment_error.contains("reserved scratch register"));
         assert!(commitment_code.is_empty());
-
         let mut private_input_code = Vec::new();
         let private_input_error = emit_get_private_input_arguments(
             &mut private_input_code,
@@ -3680,29 +3436,24 @@ mod tests {
         assert!(private_input_error.contains("reserved scratch register"));
         assert!(private_input_code.is_empty());
     }
-
     #[test]
     fn encode_load64_rejects_out_of_range_offset() {
         let imm = (WIDE_IMM_MAX + 1) as i16;
         assert!(super::encode_load64_rv(1, 2, imm).is_err());
     }
-
     #[test]
     fn encode_store64_rejects_out_of_range_offset() {
         let imm = (WIDE_IMM_MAX + 1) as i16;
         assert!(super::encode_store64_rv(1, 2, imm).is_err());
     }
-
     #[test]
     fn encode_branch_rejects_unaligned_offsets() {
         assert!(super::encode_branch_rv(0x0, 1, 2, 2).is_err());
     }
-
     #[test]
     fn encode_jal_rejects_unaligned_offsets() {
         assert!(super::encode_jal(0, 2).is_err());
     }
-
     #[test]
     fn emit_load64_requires_scratch_when_rd_equals_base() {
         let mut code = Vec::new();
@@ -3710,7 +3461,6 @@ mod tests {
         let err = emit_load64(&mut code, &fixups, 5, 5, 0, None).unwrap_err();
         assert!(err.contains("emit_load64 requires scratch"));
     }
-
     #[test]
     fn emit_store64_requires_distinct_scratch() {
         let mut code = Vec::new();
@@ -3718,19 +3468,16 @@ mod tests {
         let err = emit_store64(&mut code, &fixups, 5, 6, 256, 5).unwrap_err();
         assert!(err.contains("emit_store64 scratch"));
     }
-
     #[test]
     fn decode_hex_or_raw_bytes_accepts_hex_prefix() {
         let bytes = super::decode_hex_or_raw_bytes("0x0a0b").expect("hex literal");
         assert_eq!(bytes, vec![0x0a, 0x0b]);
     }
-
     #[test]
     fn decode_hex_or_raw_bytes_preserves_raw_text() {
         let bytes = super::decode_hex_or_raw_bytes("raw").expect("raw literal");
         assert_eq!(bytes, b"raw".to_vec());
     }
-
     #[test]
     fn unary_neg_emits_exact_int_syscall() {
         let src = include_str!("compiler/fixtures/v1/c010.ko");
@@ -3749,7 +3496,6 @@ mod tests {
         }
         assert!(found, "expected INT_NEG syscall in compiled code");
     }
-
     #[test]
     fn signed_comparison_plans_match_i64_ordering_boundaries() {
         let values = [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX];
@@ -3776,7 +3522,6 @@ mod tests {
                         expected,
                         "value plan mismatch for {left} {op:?} {right}"
                     );
-
                     let (funct3, branch_left, branch_right) =
                         super::signed_branch_plan(op, 0, 1).expect("signed branch plan");
                     let branch = match funct3 {
@@ -3792,7 +3537,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c011.ko");
@@ -3804,7 +3548,6 @@ mod tests {
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
-
         for syscall in [
             syscalls::SYSCALL_INT_LT,
             syscalls::SYSCALL_INT_LE,
@@ -3834,7 +3577,6 @@ mod tests {
             "adaptive int pointers must never enter scalar signed comparison opcodes"
         );
     }
-
     #[test]
     fn logical_operators_emit_control_flow_instead_of_eager_bitwise_ops() {
         let src = include_str!("compiler/fixtures/v1/c012.ko");
@@ -3850,7 +3592,6 @@ mod tests {
                 ))
             })
             .collect::<Vec<_>>();
-
         assert!(
             opcodes.contains(&instruction::wide::control::BNE),
             "logical expressions must branch before the right-hand side"
@@ -3864,7 +3605,6 @@ mod tests {
             "logical || must not compile to eager bitwise OR"
         );
     }
-
     #[test]
     fn get_quantity_emits_typed_option_quantity_syscall() {
         let src = include_str!("compiler/fixtures/v1/c013.ko");
@@ -3880,7 +3620,6 @@ mod tests {
             "expected JSON_GET_QUANTITY syscall in compiled code"
         );
     }
-
     #[test]
     fn get_asset_definition_id_emits_asset_definition_syscall() {
         let src = include_str!("compiler/fixtures/v1/c014.ko");
@@ -3901,7 +3640,6 @@ mod tests {
             "expected JSON_GET_ASSET_DEFINITION_ID syscall in compiled code"
         );
     }
-
     #[test]
     fn native_escrow_builtins_emit_escrow_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c015.ko");
@@ -3911,7 +3649,6 @@ mod tests {
             .expect("compile native escrow builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_ESCROW_OPEN_OFFER,
@@ -3944,7 +3681,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn native_escrow_builtins_report_literal_access_hints() {
         let asset_def = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -3995,7 +3731,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
         }
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -4004,7 +3739,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn escrow_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -4034,7 +3768,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
             );
         }
     }
-
     #[test]
     fn soracloud_envelopes_and_host_calls_are_not_source_apis() {
         for source in [
@@ -4049,7 +3782,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
                 "unexpected Soracloud surface error: {error}"
             );
         }
-
         assert_internal_source_names_rejected(&[
             "soracloud_request",
             "soracloud_response",
@@ -4065,7 +3797,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
             "soracloud::read_secret_envelope",
         ]);
     }
-
     #[test]
     fn static_account_multisig_admin_builtins_emit_exact_account_hints() {
         let account = sample_account_literal();
@@ -4090,7 +3821,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile account multisig admin builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_ADD_SIGNATORY, "ADD_SIGNATORY"),
             (
@@ -4112,7 +3842,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let hints = manifest
             .access_set_hints
             .expect("expected static account multisig access hints");
@@ -4123,7 +3852,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn dynamic_account_quorum_emits_checked_conversion_and_scoped_account_hints() {
         let src = include_str!("compiler/fixtures/v1/c020.ko");
@@ -4133,7 +3861,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile dynamic account quorum builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         let set_quorum = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
             u8::try_from(ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM)
@@ -4152,7 +3879,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 .any(|window| window == int_to_u64),
             "dynamic quorum must use checked int-to-u64 conversion"
         );
-
         let hints = manifest
             .access_set_hints
             .expect("expected dynamic account quorum access hints");
@@ -4161,7 +3887,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn account_multisig_admin_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -4200,7 +3925,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn account_balance_query_builtin_emits_balance_syscall_and_exact_reads() {
         let account = sample_account_literal();
@@ -4230,12 +3954,10 @@ view fn read() -> quantity {{
                 .expect("account balance syscall id fits in u8"),
         )
         .to_le_bytes();
-
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected GET_ACCOUNT_BALANCE syscall in compiled code"
         );
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let read = entrypoints
             .iter()
@@ -4254,7 +3976,6 @@ view fn read() -> quantity {{
                 .contains(&format!("asset_def:{asset_definition}"))
         );
     }
-
     #[test]
     fn account_balance_query_builtin_rejects_invalid_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c027.ko")).expect("parse source");
@@ -4267,7 +3988,6 @@ view fn read() -> quantity {{
             err.message
         );
     }
-
     #[test]
     fn set_account_detail_builtin_emits_syscall_and_exact_access() {
         let account = sample_account_literal();
@@ -4297,7 +4017,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile set_account_detail builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -4318,7 +4037,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let hints = manifest
             .access_set_hints
             .expect("expected account detail access hints");
@@ -4331,7 +4049,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn set_account_detail_builtin_rejects_invalid_arguments() {
         for (src, expected) in [
@@ -4354,7 +4071,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn native_asset_operation_builtins_emit_syscalls_and_exact_access() {
         let from = sample_account_id();
@@ -4397,7 +4113,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile native asset operation builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED,
@@ -4416,7 +4131,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let literal_section = parsed.literal_section.expect("literal section");
         let quantity_literal_indices = (0..literal_section.count)
             .filter(|&index| {
@@ -4454,7 +4168,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             quantity_loads, 6,
             "every literal mint, burn, and transfer amount must load a canonical Quantity TLV"
         );
-
         let hints = manifest
             .access_set_hints
             .expect("expected asset operation access hints");
@@ -4473,7 +4186,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn native_asset_operation_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -4500,7 +4212,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn nft_asset_operation_builtins_emit_syscalls_and_exact_access() {
         let owner = sample_account_id();
@@ -4533,7 +4244,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile NFT asset operation builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_NFT_MINT_ASSET, "NFT_MINT_ASSET"),
             (
@@ -4556,7 +4266,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let hints = manifest
             .access_set_hints
             .expect("expected NFT operation access hints");
@@ -4589,7 +4298,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn nft_asset_operation_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -4620,7 +4328,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn lifecycle_builtins_emit_syscalls_and_exact_access() {
         let owner = sample_account_id();
@@ -4670,7 +4377,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile lifecycle builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_REGISTER_DOMAIN,
@@ -4709,7 +4415,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let hints = manifest
             .access_set_hints
             .expect("expected lifecycle access hints");
@@ -4734,7 +4439,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn lifecycle_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -4773,7 +4477,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn peer_trigger_management_builtins_emit_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c043.ko");
@@ -4783,7 +4486,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile peer/trigger management builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_REGISTER_PEER, "REGISTER_PEER"),
             (
@@ -4808,7 +4510,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn peer_trigger_management_builtins_report_exact_trigger_access() {
         let src = include_str!("compiler/fixtures/v1/c044.ko");
@@ -4825,7 +4526,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn role_permission_management_builtins_emit_syscalls_and_exact_access() {
         let account = sample_account_id();
@@ -4861,7 +4561,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile role/permission management builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_CREATE_ROLE, "CREATE_ROLE"),
             (ivm_abi::syscalls::SYSCALL_DELETE_ROLE, "DELETE_ROLE"),
@@ -4886,7 +4585,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let hints = manifest
             .access_set_hints
             .expect("expected role/permission access hints");
@@ -4904,7 +4602,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
-
     #[test]
     fn role_permission_peer_trigger_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -4951,7 +4648,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn public_input_builtin_emits_public_input_syscall_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c053.ko");
@@ -4961,7 +4657,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile get_public_input builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -4982,7 +4677,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let read_input = entrypoints
             .iter()
@@ -4993,7 +4687,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert_test_mode_override_read(&read_input.read_keys);
         assert!(read_input.write_keys.is_empty());
     }
-
     #[test]
     fn public_input_builtin_rejects_invalid_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c054.ko")).expect("parse source");
@@ -5005,7 +4698,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             err.message
         );
     }
-
     #[test]
     fn debug_info_emits_the_single_v1_debug_syscall_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c055.ko");
@@ -5015,7 +4707,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile debug builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
             u8::try_from(ivm_abi::syscalls::SYSCALL_DEBUG_LOG)
@@ -5038,7 +4729,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 .any(|window| window == retired_print),
             "V1 source must not expose the raw integer debug syscall"
         );
-
         let publish_needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
             ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -5050,7 +4740,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 .any(|window| window == publish_needle),
             "debug helpers must not publish host input TLVs"
         );
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let inspect = entrypoints
             .iter()
@@ -5061,7 +4750,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert_test_mode_override_read(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
     }
-
     #[test]
     fn debug_surface_rejects_raw_variants_and_invalid_info_arguments() {
         for call in [
@@ -5083,7 +4771,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn assertion_logging_builtins_emit_abort_and_log_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c056.ko");
@@ -5093,7 +4780,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile assertion/logging builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_DEBUG_LOG, "DEBUG_LOG"),
             (ivm_abi::syscalls::SYSCALL_ABORT, "ABORT"),
@@ -5108,7 +4794,6 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let inspect = entrypoints
             .iter()
@@ -5119,7 +4804,6 @@ kotoage fn main() authorize("CompilerFixture") {{
         assert_test_mode_override_read(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
     }
-
     #[test]
     fn assertion_logging_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -5151,7 +4835,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn privacy_output_builtins_emit_runtime_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c061.ko");
@@ -5165,7 +4848,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("compile privacy/output builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_GET_PRIVATE_INPUT,
@@ -5188,7 +4870,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn privacy_output_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -5212,7 +4893,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn compiler_internal_seiyaku_lifecycle_operations_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -5222,7 +4902,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             "register_smart_contract_bytes",
             "activate_contract_instance",
         ]);
-
         for name in [
             "seiyaku::deactivate_instance",
             "seiyaku::remove_code",
@@ -5249,7 +4928,6 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
     }
-
     #[test]
     fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_exact_access() {
         let from = sample_account_id();
@@ -5291,7 +4969,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("compile transfer_v1_batch_apply builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -5312,7 +4989,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let apply_batch = entrypoints
             .iter()
@@ -5339,7 +5015,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn fastpq_batch_apply_builtin_rejects_invalid_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c064.ko")).expect("parse source");
@@ -5351,7 +5026,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             err.message
         );
     }
-
     #[test]
     fn fastpq_batch_boundary_builtins_emit_boundary_syscalls_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c065.ko");
@@ -5361,7 +5035,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("compile transfer V1 batch boundary builtins");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN,
@@ -5386,7 +5059,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "expected direct and call-sugar {label} syscalls in compiled code, got {count}"
             );
         }
-
         let publish_tlv = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
             ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -5398,7 +5070,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 .any(|window| window == publish_tlv),
             "batch boundary helpers must not publish input TLVs"
         );
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let batch = entrypoints
             .iter()
@@ -5409,7 +5080,6 @@ kotoage fn apply_batch() authorize("Admin") {{
         assert_test_mode_override_read(&batch.read_keys);
         assert!(batch.write_keys.is_empty());
     }
-
     #[test]
     fn fastpq_batch_boundary_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -5439,14 +5109,12 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn transfer_batch_builtin_lowers_entries_between_boundaries() {
         let src = include_str!("compiler/fixtures/v1/c070.ko");
         let parsed = parse(src).expect("parse transfer_batch source");
         let typed = analyze(&parsed).expect("analyze transfer_batch source");
         let ir = ir::lower(&typed).expect("lower transfer_batch source");
-
         let mut begins = 0;
         let mut transfers = 0;
         let mut ends = 0;
@@ -5463,12 +5131,10 @@ kotoage fn apply_batch() authorize("Admin") {{
                 _ => {}
             }
         }
-
         assert_eq!(begins, 2, "expected direct and call-sugar batch begin");
         assert_eq!(transfers, 2, "expected one transfer per batch entry");
         assert_eq!(ends, 2, "expected direct and call-sugar batch end");
     }
-
     #[test]
     fn transfer_batch_builtin_rejects_invalid_arguments() {
         for (src, expected) in [
@@ -5491,7 +5157,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn axt_capabilities_and_host_calls_are_not_source_apis() {
         for source in [
@@ -5507,7 +5172,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "unexpected AXT surface error: {error}"
             );
         }
-
         assert_internal_source_names_rejected(&[
             "axt::begin",
             "axt::touch",
@@ -5516,7 +5180,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             "axt::commit",
         ]);
     }
-
     #[test]
     fn opaque_pointer_abi_types_are_not_source_types() {
         for type_name in ["Domain", "Blob", "NoritoBytes", "Opaque"] {
@@ -5531,7 +5194,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "unexpected type rejection for `{type_name}`: {error}"
             );
         }
-
         assert_internal_source_names_rejected(&[
             "domain",
             "blob",
@@ -5543,7 +5205,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             "soracloud_response",
         ]);
     }
-
     #[test]
     fn verify_proof_builtin_emits_verify_proof_syscall_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c073.ko");
@@ -5553,7 +5214,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("compile verify_proof builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -5571,7 +5231,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let check = entrypoints
             .iter()
@@ -5582,7 +5241,6 @@ kotoage fn apply_batch() authorize("Admin") {{
         assert_test_mode_override_read(&check.read_keys);
         assert!(check.write_keys.is_empty());
     }
-
     #[test]
     fn verify_proof_builtin_rejects_invalid_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c074.ko")).expect("parse source");
@@ -5595,7 +5253,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             err.message
         );
     }
-
     #[test]
     fn prove_execution_builtin_emits_prove_execution_syscall_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c075.ko");
@@ -5611,7 +5268,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 .expect("prove_execution syscall id fits in u8"),
         )
         .to_le_bytes();
-
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
             "expected PROVE_EXECUTION syscall in compiled code"
@@ -5626,7 +5282,6 @@ kotoage fn apply_batch() authorize("Admin") {{
         assert_test_mode_override_read(&proof.read_keys);
         assert!(proof.write_keys.is_empty());
     }
-
     #[test]
     fn prove_execution_builtin_rejects_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c076.ko")).expect("parse source");
@@ -5638,7 +5293,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             err.message
         );
     }
-
     #[test]
     fn allocation_and_heap_controls_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -5648,7 +5302,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             "memory::grow_heap",
         ]);
     }
-
     #[test]
     fn raw_memory_merkle_controls_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -5660,7 +5313,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             "memory::get_register_merkle_compact",
         ]);
     }
-
     #[test]
     fn direct_codec_numeric_builtins_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -5695,7 +5347,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             "numeric_ge_direct",
         ]);
     }
-
     #[test]
     fn schema_codec_builtins_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -5707,7 +5358,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             "codec::schema::info",
         ]);
     }
-
     #[test]
     fn vrf_builtins_emit_vrf_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c077.ko");
@@ -5715,7 +5365,6 @@ kotoage fn apply_batch() authorize("Admin") {{
         let bytes = compiler.compile_source(src).expect("compile VRF helpers");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -5742,7 +5391,6 @@ kotoage fn apply_batch() authorize("Admin") {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let publish = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
             u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
@@ -5756,7 +5404,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             2,
             "single and batch VRF verification each publish exactly one request envelope"
         );
-
         let syscall_words = code
             .chunks_exact(4)
             .filter_map(|chunk| {
@@ -5784,7 +5431,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn vrf_builtins_reject_invalid_arguments() {
         for (src, expected_code, expected_message) in [
@@ -5816,7 +5462,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn zk_verify_builtins_emit_verify_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c081.ko");
@@ -5826,7 +5471,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("compile ZK verify helpers");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -5856,7 +5500,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn zk_verify_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -5878,7 +5521,6 @@ kotoage fn apply_batch() authorize("Admin") {{
             );
         }
     }
-
     #[test]
     fn inline_submit_ballot_builtin_lowers_to_ir() {
         let nullifier = "\\x00".repeat(32);
@@ -5903,7 +5545,6 @@ fn main() {{
         let parsed = parse(&src).expect("parse inline builder source");
         let typed = analyze(&parsed).expect("analyze inline builder source");
         let ir = ir::lower(&typed).expect("lower inline builder source");
-
         assert!(
             ir.functions
                 .iter()
@@ -5913,7 +5554,6 @@ fn main() {{
             "expected BuildSubmitBallotInline IR"
         );
     }
-
     #[test]
     fn inline_submit_ballot_requires_a_canonical_governance_selector() {
         let nullifier = "\\x00".repeat(32);
@@ -5937,11 +5577,9 @@ fn main() {{
 "#
             )
         };
-
         Compiler::new()
             .compile_source(&source(&"a".repeat(128)))
             .expect("a 128-byte canonical governance selector must compile");
-
         let overlong = "a".repeat(129);
         for (case, selector) in [
             ("empty", ""),
@@ -5964,7 +5602,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn noncanonical_inline_submit_ballot_cannot_seed_access_hints() {
         let election_id = ir::Temp(0);
@@ -5996,7 +5633,6 @@ fn main() {{
                 vk,
             )
         };
-
         let maximum = "a".repeat(128);
         for selector in ["a", maximum.as_str()] {
             let raw = fold(selector).expect("canonical selector must produce a literal");
@@ -6005,7 +5641,6 @@ fn main() {{
                 "canonical selector must remain eligible for static access hints"
             );
         }
-
         let overlong = "a".repeat(129);
         for selector in [
             "",
@@ -6024,7 +5659,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn inline_submit_ballot_builtin_rejects_invalid_arguments() {
         let src = include_str!("compiler/fixtures/v1/c084.ko");
@@ -6038,7 +5672,6 @@ fn main() {{
             err.message
         );
     }
-
     #[test]
     fn vendor_bridge_and_subscription_builtins_emit_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c085.ko");
@@ -6048,7 +5681,6 @@ fn main() {{
             .expect("compile vendor bridge and subscription helpers");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         let syscall_needle = |syscall: u32| {
             encoding::wide::encode_sys(
                 instruction::wide::system::SCALL,
@@ -6056,7 +5688,6 @@ fn main() {{
             )
             .to_le_bytes()
         };
-
         let execute_instruction =
             syscall_needle(ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION);
         let execute_instruction_count = code
@@ -6087,7 +5718,6 @@ fn main() {{
                 "expected {label} operation tag in compiled code"
             );
         }
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -6109,7 +5739,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn vendor_bridge_and_subscription_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -6131,14 +5760,12 @@ fn main() {{
                 err.message
             );
         }
-
         assert_internal_source_names_rejected(&[
             "query_execute_norito",
             "execute_query",
             "ledger::query::execute_raw",
         ]);
     }
-
     #[test]
     fn raw_contract_calls_are_not_a_source_api() {
         for call in [
@@ -6164,7 +5791,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn hash_builtins_emit_hash_syscalls_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c088.ko");
@@ -6174,7 +5800,6 @@ fn main() {{
             .expect("compile hash helpers");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -6200,7 +5825,6 @@ fn main() {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let digest = entrypoints
             .iter()
@@ -6211,7 +5835,6 @@ fn main() {{
         assert_test_mode_override_read(&digest.read_keys);
         assert!(digest.write_keys.is_empty());
     }
-
     #[test]
     fn hash_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -6233,7 +5856,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn crypto_builtins_emit_signature_and_sm4_syscalls_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c091.ko");
@@ -6243,7 +5865,6 @@ fn main() {{
             .expect("compile crypto helpers");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
@@ -6269,7 +5890,6 @@ fn main() {{
                 "expected {label} syscall in compiled code"
             );
         }
-
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let crypt = entrypoints
             .iter()
@@ -6280,7 +5900,6 @@ fn main() {{
         assert_test_mode_override_read(&crypt.read_keys);
         assert!(crypt.write_keys.is_empty());
     }
-
     #[test]
     fn crypto_builtins_reject_invalid_arguments() {
         for (src, expected) in [
@@ -6318,7 +5937,6 @@ fn main() {{
             }
         }
     }
-
     #[test]
     fn raw_codec_builtins_are_not_a_source_api() {
         assert_internal_source_names_rejected(&[
@@ -6332,7 +5950,6 @@ fn main() {{
             "codec::decode_json",
         ]);
     }
-
     #[test]
     fn truncated_scalar_crypto_and_ephemeral_nullifiers_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -6342,7 +5959,6 @@ fn main() {{
             "crypto::use_nullifier",
         ]);
     }
-
     #[test]
     fn public_scalar_valcom_is_rejected() {
         let src = include_str!("compiler/fixtures/v1/c097.ko");
@@ -6356,7 +5972,6 @@ fn main() {{
             "crypto::valcom expects two typed Secret<int|decimal|quantity> arguments"
         );
     }
-
     #[test]
     fn retired_numeric_helper_surface_is_rejected() {
         for call in [
@@ -6384,13 +5999,11 @@ fn main() {{
                 "unexpected rejection for {call}: {error}"
             );
         }
-
         let canonical = include_str!("compiler/fixtures/v1/c098.ko");
         test_mode_compiler()
             .compile_source(canonical)
             .expect("canonical V1 wrapping helpers must not match retired-helper diagnostics");
     }
-
     #[test]
     fn numeric_operators_emit_the_nominal_v1_syscall_families() {
         let source = include_str!("compiler/fixtures/v1/c099.ko");
@@ -6413,12 +6026,10 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn raw_name_decode_builtin_is_not_a_source_api() {
         assert_internal_source_names_rejected(&["name_decode", "codec::decode_name"]);
     }
-
     #[test]
     fn raw_pointer_codec_plumbing_is_not_a_source_api() {
         assert_internal_source_names_rejected(&[
@@ -6429,7 +6040,6 @@ fn main() {{
             "codec::tlv_len",
             "codec::to_norito",
         ]);
-
         for (name, code, message) in [
             (
                 "path",
@@ -6454,7 +6064,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn bytes_len_emits_only_the_typed_tlv_length_path_and_complete_access() {
         let source = include_str!("compiler/fixtures/v1/c100.ko");
@@ -6477,7 +6086,6 @@ fn main() {{
                 "missing bytes length syscall {syscall:#x}"
             );
         }
-
         let entrypoint = manifest
             .entrypoints
             .expect("entrypoint manifest")
@@ -6489,7 +6097,6 @@ fn main() {{
         assert_test_mode_override_read(&entrypoint.read_keys);
         assert!(entrypoint.write_keys.is_empty());
     }
-
     #[test]
     fn bytes_len_rejects_wrong_types_flat_aliases_and_raw_codec_names() {
         for ty in ["Json", "Name", "AccountId", "string", "int"] {
@@ -6504,7 +6111,6 @@ fn main() {{
                 "wrong-type `{ty}` was rejected for the wrong reason: {error}"
             );
         }
-
         for name in [
             "len",
             "bytes_len",
@@ -6528,7 +6134,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = test_mode_compiler();
@@ -6548,7 +6153,6 @@ fn main() {{
             "expected RESOLVE_ACCOUNT_ALIAS syscall for alias shorthand"
         );
     }
-
     #[test]
     fn account_id_domain_qualified_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = test_mode_compiler();
@@ -6568,7 +6172,6 @@ fn main() {{
             "expected RESOLVE_ACCOUNT_ALIAS syscall for domain-qualified alias shorthand"
         );
     }
-
     #[test]
     fn resolve_account_alias_builtin_emits_syscall() {
         let compiler = test_mode_compiler();
@@ -6588,7 +6191,6 @@ fn main() {{
             "expected RESOLVE_ACCOUNT_ALIAS syscall for builtin alias resolution"
         );
     }
-
     #[test]
     fn resolve_account_alias_builtin_rejects_invalid_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c104.ko"))
@@ -6601,7 +6203,6 @@ fn main() {{
             err.message
         );
     }
-
     #[test]
     fn public_context_builtins_emit_syscalls() {
         let compiler = test_mode_compiler();
@@ -6610,7 +6211,6 @@ fn main() {{
             .expect("compile runtime sysvars");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_GET_AUTHORITY, "GET_AUTHORITY"),
             (
@@ -6654,7 +6254,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn public_context_builtins_reject_invalid_arguments() {
         for (source, expected) in [
@@ -6683,10 +6282,8 @@ fn main() {{
                 err.message
             );
         }
-
         assert_internal_source_names_rejected(&["sysvar_authority"]);
     }
-
     #[test]
     fn native_control_and_recovery_builtins_emit_typed_syscalls() {
         let compiler = test_mode_compiler();
@@ -6732,7 +6329,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn native_control_and_recovery_builtins_reject_wrong_types_and_arity() {
         for (source, expected) in [
@@ -6775,7 +6371,6 @@ fn main() {{
             );
         }
     }
-
     #[test]
     fn create_nfts_for_all_users_builtin_emits_syscall() {
         let compiler = test_mode_compiler();
@@ -6784,7 +6379,6 @@ fn main() {{
             .expect("compile create-for-all-users operation");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
-
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
             u8::try_from(ivm_abi::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS)
@@ -6796,7 +6390,6 @@ fn main() {{
             "expected CREATE_NFTS_FOR_ALL_USERS syscall"
         );
     }
-
     #[test]
     fn create_nfts_for_all_users_builtin_rejects_invalid_arguments() {
         let source = include_str!("compiler/fixtures/v1/c119.ko");
@@ -6809,7 +6402,6 @@ fn main() {{
             err.message
         );
     }
-
     #[test]
     fn runtime_execution_controls_are_not_source_apis() {
         assert_internal_source_names_rejected(&[
@@ -6817,7 +6409,6 @@ fn main() {{
             "ledger::parameters::set_execution_depth",
         ]);
     }
-
     #[test]
     fn resolve_account_alias_invalid_literal_emits_syscall() {
         let compiler = test_mode_compiler();
@@ -6837,7 +6428,6 @@ fn main() {{
             "expected RESOLVE_ACCOUNT_ALIAS syscall for malformed builtin alias literals"
         );
     }
-
     #[test]
     fn resolve_account_alias_domain_qualified_builtin_emits_syscall() {
         let compiler = test_mode_compiler();
@@ -6857,7 +6447,6 @@ fn main() {{
             "expected RESOLVE_ACCOUNT_ALIAS syscall for domain-qualified builtin"
         );
     }
-
     #[test]
     fn resolve_account_alias_invalid_domain_qualified_literal_emits_syscall() {
         let compiler = test_mode_compiler();
@@ -6877,7 +6466,6 @@ fn main() {{
             "expected RESOLVE_ACCOUNT_ALIAS syscall for malformed domain-qualified builtin alias literals"
         );
     }
-
     #[test]
     fn account_id_canonical_literal_stays_static_without_alias_resolution() {
         let canonical = iroha_data_model::account::AccountId::new(
@@ -6908,7 +6496,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
                 .any(|window| window == resolve),
             "canonical AccountId literals must not emit alias resolution syscalls"
         );
-
         let static_tlv =
             super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Account, &canonical)
                 .expect("encode static AccountId tlv");
@@ -6919,7 +6506,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "canonical AccountId literals should be embedded as static TLVs"
         );
     }
-
     #[test]
     fn account_id_invalid_alias_shaped_literal_compiles_for_runtime_resolution() {
         let compiler = test_mode_compiler();
@@ -6939,7 +6525,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "alias-shaped literals should defer validation to runtime resolution"
         );
     }
-
     #[test]
     fn account_id_invalid_domain_qualified_alias_shaped_literal_compiles_for_runtime_resolution() {
         let compiler = test_mode_compiler();
@@ -6959,7 +6544,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "invalid domain-qualified alias-shaped literals should defer validation to runtime resolution"
         );
     }
-
     #[test]
     fn account_id_invalid_non_alias_literal_fails_compile_time_encoding() {
         let compiler = test_mode_compiler();
@@ -6975,7 +6559,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "expected failing literal in error, got: {err}"
         );
     }
-
     #[test]
     fn detect_vector_usage_includes_vector_gated_crypto_ops() {
         let ops = [
@@ -6992,7 +6575,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             );
         }
     }
-
     #[test]
     fn detect_zk_usage_includes_zk_ops() {
         let ops = [
@@ -7009,7 +6591,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             );
         }
     }
-
     #[test]
     fn require_exports_stable_error_code_and_uses_contract_abort_syscall() {
         let src = include_str!("compiler/fixtures/v1/c126.ko");
@@ -7040,7 +6621,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             assert_eq!(codes[0].name, "Unauthorized");
             assert_eq!(codes[0].code, 1001);
         }
-
         let mut found_abort = false;
         let mut found_zk_assert = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
@@ -7065,7 +6645,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "require should not emit ZK ASSERT/ASSERT_EQ opcodes"
         );
     }
-
     #[test]
     fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
         let src = include_str!("compiler/fixtures/v1/c127.ko");
@@ -7077,7 +6656,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             0,
             "assert should not enable ZK mode"
         );
-
         let mut found_abort = false;
         let mut found_zk_assert = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
@@ -7099,7 +6677,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "assert should not emit ZK ASSERT/ASSERT_EQ opcodes"
         );
     }
-
     #[test]
     fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
         let src = include_str!("compiler/fixtures/v1/c128.ko");
@@ -7111,7 +6688,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             0,
             "assert_eq should not enable ZK mode"
         );
-
         let mut found_abort = false;
         let mut found_zk_assert = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
@@ -7133,7 +6709,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "assert_eq should not emit ZK ASSERT/ASSERT_EQ opcodes"
         );
     }
-
     #[test]
     fn source_meta_cannot_override_build_configuration() {
         let src = include_str!("compiler/fixtures/v1/c129.ko");
@@ -7143,7 +6718,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             .expect_err("source policy must be rejected");
         assert!(err.contains("source-level `meta { ... }` is not supported"));
     }
-
     #[test]
     fn production_rejects_test_only_assertions() {
         for assertion in [
@@ -7166,7 +6740,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
                 .expect("test mode should enable assertion builtins");
         }
     }
-
     #[test]
     fn vector_length_is_compiler_owned() {
         for expression in ["runtime::set_vector_length(8)", "setvl(8)"] {
@@ -7185,7 +6758,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             );
         }
     }
-
     #[test]
     fn manifest_access_set_hints_from_state_only_contract() {
         let src = include_str!("compiler/fixtures/v1/c130.ko");
@@ -7199,7 +6771,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
         assert_eq!(hints.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
         assert_eq!(hints.write_keys, vec![STATE_WILDCARD_KEY.to_string()]);
     }
-
     #[test]
     fn zero_arg_public_entrypoint_retains_scalar_state_hints() {
         let src = include_str!("compiler/fixtures/v1/c131.ko");
@@ -7216,7 +6787,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             vec!["state:counter".to_string()],
             "the seiyaku-wide union must include the hajimari write"
         );
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let run = entrypoints
             .iter()
@@ -7227,7 +6797,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
         assert_eq!(run.access_hints_complete, Some(true));
         assert!(run.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn whole_program_dce_excludes_dead_private_dynamic_access_hints() {
         let src = include_str!("compiler/fixtures/v1/c132.ko");
@@ -7248,7 +6817,6 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
             "a dynamic read in removed private code must not constrain scheduler metadata: {hints:?}"
         );
     }
-
     #[test]
     fn unreachable_scans_in_retained_functions_emit_no_dynamic_hints() {
         for body in [
@@ -7280,7 +6848,6 @@ seiyaku ReachableHintControlFlow {{
             );
         }
     }
-
     #[test]
     fn expression_nested_scans_retain_post_optimization_provenance() {
         let cases = [
@@ -7293,7 +6860,6 @@ seiyaku ReachableHintControlFlow {{
                 ("state:Entries", "int", "range", 2),
             ),
         ];
-
         for (source, expected) in cases {
             let (_artifact, manifest) = Compiler::new()
                 .compile_source_with_manifest(source)
@@ -7316,11 +6882,9 @@ seiyaku ReachableHintControlFlow {{
             assert_eq!(actual, vec![expected]);
         }
     }
-
     #[test]
     fn optimized_ir_dynamic_provenance_must_match_the_emitted_state_schema() {
         use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
-
         fn state_keys(hint: Option<DynamicAccessHint>) -> ir::Instr {
             ir::Instr::StateKeys {
                 dest: ir::Temp(0),
@@ -7330,7 +6894,6 @@ seiyaku ReachableHintControlFlow {{
                 dynamic_access_hint: hint,
             }
         }
-
         fn hint(key_type: &str) -> DynamicAccessHint {
             DynamicAccessHint {
                 base_key: "state:Orders".to_owned(),
@@ -7339,14 +6902,12 @@ seiyaku ReachableHintControlFlow {{
                 max_keys: 1,
             }
         }
-
         fn state(name: &str, ty: EmbeddedStateType) -> EmbeddedStateDescriptor {
             EmbeddedStateDescriptor {
                 name: name.to_owned(),
                 ty,
             }
         }
-
         let exact_hint = hint("int");
         let exact_states = [state(
             "Orders",
@@ -7365,7 +6926,6 @@ seiyaku ReachableHintControlFlow {{
         .expect("exact optimized-IR provenance must validate");
         assert_eq!(reads, vec![exact_hint]);
         assert!(writes.is_empty());
-
         let (reads, writes) = collect_dynamic_access_hints(
             &[call_graph_function(
                 "direct_state_keys",
@@ -7376,7 +6936,6 @@ seiyaku ReachableHintControlFlow {{
         .expect("direct state::keys has no compiler-proven StateMap hint");
         assert!(reads.is_empty());
         assert!(writes.is_empty());
-
         for (states, expected) in [
             (Vec::new(), "does not name a declared top-level StateMap"),
             (
@@ -7406,7 +6965,6 @@ seiyaku ReachableHintControlFlow {{
             assert!(error.contains(expected), "{error}");
         }
     }
-
     #[test]
     fn bounded_state_map_scans_emit_exact_dynamic_read_hints() {
         let src = include_str!("compiler/fixtures/v1/c139.ko");
@@ -7442,14 +7000,12 @@ seiyaku ReachableHintControlFlow {{
             "first-release scan hints never infer dynamic writes"
         );
     }
-
     #[test]
     fn zero_length_state_map_scans_are_exact_bytecode_no_ops() {
         let baseline = include_str!("compiler/fixtures/v1/c140.ko");
         let (baseline_artifact, baseline_manifest) = Compiler::new()
             .compile_source_with_manifest(baseline)
             .expect("compile no-scan baseline");
-
         for iterator in ["Entries.take(0)", "Entries.range(3, 3)"] {
             let source = format!(
                 r#"
@@ -7483,7 +7039,6 @@ seiyaku ZeroScanNoOp {{
             );
         }
     }
-
     #[test]
     fn free_calls_cannot_forge_state_map_scan_provenance() {
         for iterator in ["take(Names, 2)", "range(Names, 0, 2)"] {
@@ -7513,7 +7068,6 @@ seiyaku ExactScanProvenance {{
             );
         }
     }
-
     #[test]
     fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
         let src = include_str!("compiler/fixtures/v1/c141.ko");
@@ -7549,7 +7103,6 @@ seiyaku ExactScanProvenance {{
         assert_eq!(read_lit.access_hints_complete, Some(true));
         assert!(read_lit.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_build_rejects_dynamic_state_iteration_bounds() {
         let src = include_str!("compiler/fixtures/v1/c142.ko");
@@ -7562,7 +7115,6 @@ seiyaku ExactScanProvenance {{
             "{error}"
         );
     }
-
     #[test]
     fn manifest_access_set_hints_preserve_state_wildcard_for_dynamic_state_path() {
         let src = include_str!("compiler/fixtures/v1/c143.ko");
@@ -7589,7 +7141,6 @@ seiyaku ExactScanProvenance {{
         assert_eq!(read.access_hints_complete, Some(false));
         assert!(!read.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_compilation_rejects_raw_call_contract() {
         let src = include_str!("compiler/fixtures/v1/c144.ko");
@@ -7601,7 +7152,6 @@ seiyaku ExactScanProvenance {{
             "{error}"
         );
     }
-
     #[test]
     fn compile_native_json_object_with_exact_int_and_pointer_values() {
         let src = include_str!("compiler/fixtures/v1/c145.ko");
@@ -7610,7 +7160,6 @@ seiyaku ExactScanProvenance {{
             .compile_source_with_manifest(src)
             .expect("compile json object builders");
     }
-
     #[test]
     fn native_json_construction_emits_one_extended_build_syscall() {
         let source = include_str!("compiler/fixtures/v1/c146.ko");
@@ -7644,7 +7193,6 @@ seiyaku ExactScanProvenance {{
             }));
         }
     }
-
     #[test]
     fn manifest_access_set_hints_include_register_trigger_from_json() {
         let src = include_str!("compiler/fixtures/v1/c147.ko");
@@ -7662,7 +7210,6 @@ seiyaku ExactScanProvenance {{
         assert_eq!(hints.read_keys, expected);
         assert_eq!(hints.write_keys, expected);
     }
-
     #[test]
     fn manifest_access_set_hints_include_nft_set_metadata_literal() {
         let src = include_str!("compiler/fixtures/v1/c148.ko");
@@ -7683,7 +7230,6 @@ seiyaku ExactScanProvenance {{
         assert!(hints.write_keys.contains(&nft_detail));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -7692,7 +7238,6 @@ seiyaku ExactScanProvenance {{
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_set_metadata() {
         let src = include_str!("compiler/fixtures/v1/c149.ko");
@@ -7707,7 +7252,6 @@ seiyaku ExactScanProvenance {{
         assert!(hints.write_keys.contains(&NFT_COARSE_KEY.to_string()));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let entry = entrypoints
             .iter()
@@ -7716,7 +7260,6 @@ seiyaku ExactScanProvenance {{
         assert_eq!(entry.access_hints_complete, Some(true));
         assert!(entry.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_mint() {
         let src = include_str!("compiler/fixtures/v1/c150.ko");
@@ -7731,7 +7274,6 @@ seiyaku ExactScanProvenance {{
         assert!(hints.write_keys.contains(&NFT_COARSE_KEY.to_string()));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let entry = entrypoints
             .iter()
@@ -7740,11 +7282,9 @@ seiyaku ExactScanProvenance {{
         assert_eq!(entry.access_hints_complete, Some(true));
         assert!(entry.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_include_asset_registration_literals() {
         use iroha_data_model::asset::id::{AssetDefinitionId, AssetId};
-
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let asset_def = AssetDefinitionId::parse_address_literal(asset_literal).unwrap();
         let account = sample_account_id();
@@ -7773,7 +7313,6 @@ kotoage fn main() authorize("AssetAdmin") {{
 }}
 "#
         );
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -7788,7 +7327,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert!(hints.read_keys.contains(&format!("account:{account}")));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -7797,7 +7335,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_include_authority_placeholders() {
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -7824,7 +7361,6 @@ kotoage fn main() authorize("AssetAdmin") {{
 }}
 "#
         );
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -7851,7 +7387,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         );
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -7860,7 +7395,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_propagate_context_authority_bindings() {
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -7888,7 +7422,6 @@ kotoage fn main() authorize("AssetAdmin") {{
 }}
 "#
         );
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&source)
@@ -7901,7 +7434,6 @@ kotoage fn main() authorize("AssetAdmin") {{
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL
         );
         let authority_detail = "account.detail:$authority:status".to_owned();
-
         assert!(hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
         assert!(hints.read_keys.contains(&authority_asset));
         assert!(hints.write_keys.contains(&authority_asset));
@@ -7909,7 +7441,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert!(hints.write_keys.contains(&authority_detail));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -7923,7 +7454,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert!(main.read_keys.contains(&authority_detail));
         assert!(main.write_keys.contains(&authority_detail));
     }
-
     #[test]
     fn manifest_access_set_hints_include_inline_ballot_vendor_payload() {
         let compiler = Compiler::new();
@@ -7944,7 +7474,6 @@ kotoage fn main() authorize("AssetAdmin") {{
                 .contains(&"zk:election:election-1:nullifiers".to_string())
         );
         assert_conservative_ledger_read(&hints.read_keys, &hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let demo = entrypoints
             .iter()
@@ -7957,11 +7486,9 @@ kotoage fn main() authorize("AssetAdmin") {{
             "opaque proof envelopes require a conservative read wildcard even when the ballot instruction payload is exact"
         );
     }
-
     #[test]
     fn manifest_access_set_hints_include_transfer_domain_literal() {
         use iroha_data_model::domain::DomainId;
-
         let from_literal = sample_account_literal();
         let to = sample_account_id_alt();
         let to_literal = to.to_string();
@@ -7969,7 +7496,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         let src = format!(
             "seiyaku CompilerFixture {{ kotoage fn main() authorize(\"Admin\") {{ ledger::domain::transfer(source: AccountId::parse(\"{from_literal}\"), domain: DomainId::parse(\"{domain}\"), destination: AccountId::parse(\"{to_literal}\")); }} }}"
         );
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -7980,7 +7506,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert!(hints.read_keys.contains(&format!("domain:{domain}")));
         assert!(hints.write_keys.contains(&format!("domain:{domain}")));
         assert!(hints.read_keys.contains(&format!("account:{to}")));
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -7989,7 +7514,6 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_conservatively_serialize_alias_shorthand_account_id() {
         let from_literal = sample_account_literal();
@@ -8001,7 +7525,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8011,7 +7534,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8022,7 +7544,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_alias_shorthand_account_id_transfer()
      {
@@ -8035,7 +7556,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8045,7 +7565,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8056,7 +7575,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_domain_qualified_alias_shorthand_account_id()
      {
@@ -8069,7 +7587,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8079,7 +7596,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8090,7 +7606,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_domain_qualified_alias_shorthand_account_id_transfer()
      {
@@ -8103,7 +7618,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8113,7 +7627,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8124,7 +7637,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_resolve_account_alias_builtin_transfer() {
         let from_literal = sample_account_literal();
@@ -8136,7 +7648,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8146,7 +7657,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8157,7 +7667,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_resolve_account_alias_builtin_transfer()
      {
@@ -8170,7 +7679,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8180,7 +7688,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8191,7 +7698,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_domain_qualified_resolve_account_alias_builtin_transfer()
      {
@@ -8204,7 +7710,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8214,7 +7719,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8225,7 +7729,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_omit_global_wildcard_for_invalid_domain_qualified_resolve_account_alias_builtin_transfer()
      {
@@ -8238,7 +7741,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 }}
 "#
         );
-
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -8248,7 +7750,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             .expect("expected access_set_hints");
         assert_no_global_access_key(&hints.read_keys);
         assert_no_global_access_key(&hints.write_keys);
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
@@ -8259,7 +7760,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_preserve_coarse_asset_keys_for_dynamic_asset_contract() {
         let src = include_str!("compiler/fixtures/v1/c151.ko");
@@ -8290,7 +7790,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn manifest_access_set_hints_preserve_global_wildcard_for_opaque_host_calls() {
         let src = include_str!("compiler/fixtures/v1/c152.ko");
@@ -8328,7 +7827,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
         assert_eq!(register.access_hints_complete, Some(false));
         assert!(!register.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
@@ -8399,7 +7897,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
                 "typed lifecycle request must decode for syscall {syscall:#x}"
             );
         }
-
         for key in [
             super::key_contract_code(&code_hash),
             super::key_contract_manifest(&code_hash),
@@ -8425,7 +7922,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             );
         }
     }
-
     #[test]
     fn ephemeral_u64_nullifier_helper_is_rejected_from_source() {
         let src = include_str!("compiler/fixtures/v1/c153.ko");
@@ -8445,7 +7941,6 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
             "removed nullifier compiler metadata still influenced resolution: {error}"
         );
     }
-
     #[test]
     fn manifest_access_set_hints_include_static_peer_helpers() {
         let public_key = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
@@ -8481,7 +7976,6 @@ seiyaku Test {{
         assert_eq!(peers.read_keys, std::slice::from_ref(&peer_key));
         assert_eq!(peers.write_keys, [peer_key]);
     }
-
     #[test]
     fn manifest_access_set_hints_include_subscription_helpers() {
         let src = include_str!("compiler/fixtures/v1/c154.ko");
@@ -8505,7 +7999,6 @@ seiyaku Test {{
         assert_eq!(subscription.read_keys, keys);
         assert_eq!(subscription.write_keys, keys);
     }
-
     #[test]
     fn manifest_access_set_hints_make_adversarial_static_host_payloads_conservative() {
         let src = include_str!("compiler/fixtures/v1/c155.ko");
@@ -8531,7 +8024,6 @@ seiyaku Test {{
             entry.access_hints_skipped,
             [HINT_SKIP_OPAQUE_ISI.to_owned()]
         );
-
         let (_bytes, production_manifest) = Compiler::new()
             .compile_source_with_manifest(src)
             .expect("production must preserve conservative incomplete metadata");
@@ -8552,11 +8044,9 @@ seiyaku Test {{
             entry.access_hints_skipped
         );
     }
-
     #[test]
     fn manifest_trigger_decl_sets_authority() {
         use iroha_data_model::account::{AccountId, ParsedAccountId};
-
         let authority_literal = sample_account_literal();
         let src = format!(
             r#"
@@ -8590,7 +8080,6 @@ seiyaku Test {{
             )
         );
     }
-
     #[test]
     fn manifest_trigger_decl_preserves_namespaced_callback() {
         let src = include_str!("compiler/fixtures/v1/c156.ko");
@@ -8608,7 +8097,6 @@ seiyaku Test {{
         assert_eq!(callback.namespace.as_deref(), Some("callee"));
         assert_eq!(callback.entrypoint, "run");
     }
-
     #[test]
     fn trigger_callback_dispatches_only_through_cntr_entry_pc() {
         let src = include_str!("compiler/fixtures/v1/c157.ko");
@@ -8643,7 +8131,6 @@ seiyaku Test {{
         );
         assert_eq!(run.name, "run");
     }
-
     #[test]
     fn source_order_and_main_name_do_not_select_raw_dispatch() {
         let src = include_str!("compiler/fixtures/v1/c158.ko");
@@ -8657,7 +8144,6 @@ seiyaku Test {{
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
         assert_eq!(main.name, "main");
-
         let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse metadata");
         let embedded = parsed
             .contract_interface
@@ -8715,9 +8201,7 @@ seiyaku Test {{
             "raw PC 0 must not imply a `main` entrypoint"
         );
     }
-
     include!("compiler/tests/staged_mint_access_hints.rs");
-
     #[test]
     fn manifest_trigger_decl_lowers_structured_data_filter() {
         use iroha_data_model::events::{
@@ -8727,7 +8211,6 @@ seiyaku Test {{
                 prelude::{AssetEventFilter, AssetEventSet},
             },
         };
-
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
@@ -8764,7 +8247,6 @@ seiyaku Test {{
             ))
         );
     }
-
     #[test]
     fn manifest_trigger_decl_lowers_structured_data_filters_for_core_families() {
         use iroha_data_model::{
@@ -8791,7 +8273,6 @@ seiyaku Test {{
             rwa::RwaId,
             trigger::TriggerId,
         };
-
         let account_literal = sample_account_literal();
         let account = AccountId::parse_encoded(account_literal.as_str())
             .map(ParsedAccountId::into_account_id)
@@ -8814,7 +8295,6 @@ seiyaku Test {{
         .expect("rwa");
         let trigger_id: TriggerId = "wake".parse().expect("trigger");
         let role_id: RoleId = "auditor".parse().expect("role");
-
         let cases = vec![
             (
                 format!(
@@ -9002,7 +8482,6 @@ seiyaku Test {{
                 )),
             ),
         ];
-
         let compiler = Compiler::new();
         for (src, expected_filter) in cases {
             let (_bytes, manifest) = compiler
@@ -9017,14 +8496,12 @@ seiyaku Test {{
             assert_eq!(run.triggers[0].filter, expected_filter);
         }
     }
-
     #[test]
     fn manifest_trigger_decl_lowers_pipeline_filter() {
         use iroha_data_model::events::{
             EventFilterBox,
             pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
         };
-
         let src = include_str!("compiler/fixtures/v1/c161.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
@@ -9043,7 +8520,6 @@ seiyaku Test {{
             ))
         );
     }
-
     #[test]
     fn access_hint_diagnostics_report_isi_wildcards() {
         let src = include_str!("compiler/fixtures/v1/c162.ko");
@@ -9054,7 +8530,6 @@ seiyaku Test {{
         assert!(diag.isi_wildcards > 0);
         assert_eq!(diag.state_wildcards, 0);
     }
-
     #[test]
     fn access_hint_diagnostics_report_literal_trigger_spec_decode_failures() {
         let src = include_str!("compiler/fixtures/v1/c163.ko");
@@ -9066,7 +8541,6 @@ seiyaku Test {{
         assert_eq!(diag.isi_wildcards, 1);
         assert_eq!(diag.state_wildcards, 0);
         assert!(!diag.is_empty());
-
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let register = entrypoints
             .iter()
@@ -9078,7 +8552,6 @@ seiyaku Test {{
             vec![HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE.to_string()]
         );
     }
-
     #[test]
     fn production_accepts_dynamic_state_path_access_fallback() {
         let src = include_str!("compiler/fixtures/v1/c164.ko");
@@ -9101,7 +8574,6 @@ seiyaku Test {{
             vec![HINT_SKIP_DYNAMIC_STATE_PATH.to_string()]
         );
     }
-
     #[test]
     fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
         let src = include_str!("compiler/fixtures/v1/c165.ko");
@@ -9112,7 +8584,6 @@ seiyaku Test {{
         assert!(err.contains("E_ACCESS_INCOMPLETE"));
         assert!(err.contains(HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE));
     }
-
     #[test]
     fn production_rejects_raw_call_contract_surface() {
         let src = include_str!("compiler/fixtures/v1/c166.ko");
@@ -9124,7 +8595,6 @@ seiyaku Test {{
             "{error}"
         );
     }
-
     #[test]
     fn production_contract_invoke_quantity2_is_typed_and_conservative() {
         let src = include_str!("compiler/fixtures/v1/c167.ko");
@@ -9156,7 +8626,6 @@ seiyaku Test {{
             [HINT_SKIP_CONTRACT_CALL_TARGET.to_owned()]
         );
     }
-
     #[test]
     fn production_contract_invoke_quantity2_rejects_dynamic_schema_selectors() {
         for (source_fragment, expected) in [
@@ -9193,7 +8662,6 @@ seiyaku Test {{
             assert!(error.contains(expected), "{error}");
         }
     }
-
     #[test]
     fn production_accepts_opaque_isi_access_fallback() {
         let src = include_str!("compiler/fixtures/v1/c168.ko");
@@ -9224,11 +8692,9 @@ seiyaku Test {{
             vec![HINT_SKIP_OPAQUE_ISI.to_string()]
         );
     }
-
     #[test]
     fn production_preserves_dynamic_asset_definition_transfer_coarse_hints() {
         let src = include_str!("compiler/fixtures/v1/c169.ko");
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9254,7 +8720,6 @@ seiyaku Test {{
         assert_eq!(move_entry.access_hints_complete, Some(true));
         assert!(move_entry.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn production_accepts_fixed_asset_dynamic_account_transfer_hints() {
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -9273,7 +8738,6 @@ seiyaku Test {{
 }}
 "#
         );
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -9309,7 +8773,6 @@ seiyaku Test {{
         assert_eq!(move_entry.access_hints_complete, Some(true));
         assert!(move_entry.access_hints_skipped.is_empty());
     }
-
     #[test]
     fn production_propagates_asset_definition_helper_return_into_access_hints() {
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -9334,7 +8797,6 @@ seiyaku Test {{
 }}
 "#
         );
-
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(&src)
@@ -9357,7 +8819,6 @@ seiyaku Test {{
                 .contains(&format!("asset_def:{asset_literal}"))
         );
     }
-
     #[test]
     fn explicit_global_wildcards_are_rejected() {
         let src = include_str!("compiler/fixtures/v1/c170.ko");
@@ -9367,7 +8828,6 @@ seiyaku Test {{
             .expect_err("manual access hints should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
     }
-
     #[test]
     fn manifest_access_set_hints_rejects_explicit_access() {
         let account_literal = sample_account_literal();
@@ -9394,7 +8854,6 @@ seiyaku Test {{
             .expect_err("manual access hints should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
     }
-
     #[test]
     fn manifest_access_set_hints_include_literal_map_keys() {
         let src = include_str!("compiler/fixtures/v1/c171.ko");
@@ -9409,7 +8868,6 @@ seiyaku Test {{
         assert_eq!(hints.read_keys, vec![literal_key.clone()]);
         assert_eq!(hints.write_keys, vec![literal_key]);
     }
-
     #[test]
     fn manifest_access_set_hints_use_norito_i64_for_bool_map_keys() {
         let src = include_str!("compiler/fixtures/v1/c172.ko");
@@ -9422,7 +8880,6 @@ seiyaku Test {{
         assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
         assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
     }
-
     #[test]
     fn manifest_access_set_hints_support_canonical_quantity_map_keys() {
         let src = include_str!("compiler/fixtures/v1/c173.ko");
@@ -9444,7 +8901,6 @@ seiyaku Test {{
             "7.00 and 7 must canonicalize to the same quantity key"
         );
     }
-
     #[test]
     fn manifest_access_set_hints_include_literal_pointer_map_keys() {
         let src = include_str!("compiler/fixtures/v1/c174.ko");
@@ -9463,11 +8919,8 @@ seiyaku Test {{
         assert!(hints.read_keys.contains(&expected));
         assert!(hints.write_keys.contains(&expected));
     }
-
     #[test]
     fn manifest_access_set_hints_include_create_trigger() {
-        use std::str::FromStr;
-
         use iroha_data_model::{
             account::AccountId,
             events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter},
@@ -9478,7 +8931,7 @@ seiyaku Test {{
                 action::{Action, Repeats},
             },
         };
-
+        use std::str::FromStr;
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
         let authority = AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
@@ -9513,7 +8966,6 @@ seiyaku Test {{
         assert!(hints.write_keys.contains(&trigger_key));
         assert!(hints.write_keys.contains(&repetitions_key));
     }
-
     #[test]
     fn state_path_for_norito_key_uses_reversible_canonical_hex() {
         let base = "Map";
@@ -9523,7 +8975,6 @@ seiyaku Test {{
             Some("Map/6162")
         );
     }
-
     #[test]
     fn state_codegen_rejects_legacy_name_literal_carrier() {
         let path = ir::Temp(0);
@@ -9533,7 +8984,6 @@ seiyaku Test {{
             .expect_err("Name must not remain a state-path carrier");
         assert!(error.contains("expected NoritoBytes(StatePath)"), "{error}");
     }
-
     #[test]
     fn entry_spills_use_stack_frame() {
         // The compiler pipeline may use a few MiB of stack in debug builds; run this test on a
@@ -9556,7 +9006,6 @@ seiyaku Test {{
                     src.push_str(&format!("a{i}"));
                 }
                 src.push_str(";\n    return sum;\n  }\n}\n");
-
                 let parsed = crate::parser::parse(&src).expect("parse spill test");
                 let typed = crate::semantic::analyze(&parsed).expect("type spill test");
                 let ir_prog = crate::ir::lower(&typed).expect("lower spill test");
@@ -9577,17 +9026,14 @@ seiyaku Test {{
             .expect("test thread panicked");
     }
 }
-
 /// Convenience wrapper for encoding `rd = rs1 + rs2` using the canonical wide layout.
 pub fn encode_add(rd: u8, rs1: u8, rs2: u8) -> u32 {
     encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, rd, rs1, rs2)
 }
-
 /// Convenience wrapper for encoding `rd = rs1 - rs2` using the canonical wide layout.
 pub fn encode_sub(rd: u8, rs1: u8, rs2: u8) -> u32 {
     encoding::wide::encode_rr(instruction::wide::arithmetic::SUB, rd, rs1, rs2)
 }
-
 /// Encode `rd = rs1 + imm` using the canonical wide register–immediate format.
 ///
 /// This helper is primarily used by the Kotodama code generator to materialize
@@ -9615,7 +9061,6 @@ pub fn encode_addi(rd: u8, rs1: u8, imm: i16) -> Result<u32, String> {
         imm as i8,
     ))
 }
-
 /// Encode a 64-bit load (`rd <- [rs1 + imm]`) using the canonical wide layout.
 #[inline]
 pub fn encode_load64_rv(rd: u8, rs1: u8, imm: i16) -> Result<u32, String> {
@@ -9631,7 +9076,6 @@ pub fn encode_load64_rv(rd: u8, rs1: u8, imm: i16) -> Result<u32, String> {
         imm as i8,
     ))
 }
-
 /// Encode a 64-bit store (`[rs1 + imm] <- rs2`) using the canonical wide layout.
 #[inline]
 pub fn encode_store64_rv(rs1: u8, rs2: u8, imm: i16) -> Result<u32, String> {
@@ -9647,7 +9091,6 @@ pub fn encode_store64_rv(rs1: u8, rs2: u8, imm: i16) -> Result<u32, String> {
         imm as i8,
     ))
 }
-
 /// Encode a branch using the canonical wide layout. `funct3` selects the branch condition.
 /// Encoding for B‑type branches (BEQ/BNE/BLT/BGE/BLTU/BGEU).
 pub fn encode_branch_rv(funct3: u8, rs1: u8, rs2: u8, imm: i16) -> Result<u32, String> {
@@ -9680,7 +9123,6 @@ pub fn encode_branch_rv(funct3: u8, rs1: u8, rs2: u8, imm: i16) -> Result<u32, S
         offset_words as i8,
     ))
 }
-
 /// Encode a jump-and-link (`JAL`) in the canonical wide layout. Use `rd = 0` for a plain jump.
 pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
     if (imm % 4) != 0 {
@@ -9698,15 +9140,12 @@ pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
         offset_words as i16,
     ))
 }
-
 #[cfg(test)]
 mod test_mode_tests {
     use super::*;
-
     #[test]
     fn production_mode_rejects_test_functions_instead_of_stripping_them() {
         let src = include_str!("compiler/fixtures/v1/c175.ko");
-
         let production = Compiler::new_with_options(CompilerOptions::default());
         let error = production
             .compile_source_with_manifest_and_report(src)
@@ -9715,7 +9154,6 @@ mod test_mode_tests {
             error.contains("E_TEST_ONLY_PRODUCTION"),
             "unexpected error: {error}"
         );
-
         let test_mode = Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
@@ -9756,7 +9194,6 @@ mod test_mode_tests {
                 .all(|entry| entry.function_name != "helper"),
             "an ordinary unreachable private function must not become a test root"
         );
-
         let production_code = Compiler::new()
             .compile_source("seiyaku ProductionFixture { view fn inspect() {} }")
             .expect("compile production contract");
@@ -9768,7 +9205,6 @@ mod test_mode_tests {
             "production contracts must retain their CNTR interface"
         );
     }
-
     #[test]
     fn test_mode_public_entrypoints_report_the_injected_override_state_read() {
         let test_mode = Compiler::new_with_options(CompilerOptions {
@@ -9794,11 +9230,9 @@ mod test_mode_tests {
         assert!(run.write_keys.is_empty());
         assert_eq!(run.access_hints_complete, Some(true));
     }
-
     #[test]
     fn production_rejects_tests_before_resolving_test_only_helpers() {
         let test_only_call_src = include_str!("compiler/fixtures/v1/c176.ko");
-
         let production = Compiler::new_with_options(CompilerOptions::default());
         let error = production
             .compile_source_with_manifest_and_report(test_only_call_src)
@@ -9807,7 +9241,6 @@ mod test_mode_tests {
             error.contains("E_TEST_ONLY_PRODUCTION"),
             "unexpected error: {error}"
         );
-
         let test_mode = Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
@@ -9820,11 +9253,9 @@ mod test_mode_tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn test_mode_helpers_emit_private_scallx_syscalls() {
         let src = include_str!("compiler/fixtures/v1/c177.ko");
-
         let compiler = Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
@@ -9832,7 +9263,6 @@ mod test_mode_tests {
         let code = compiler.compile_source(src).expect("compile test helpers");
         let metadata = ProgramMetadata::parse(&code).expect("parse metadata");
         let code_region = &code[metadata.code_offset..];
-
         for (builtin, syscall) in [
             (
                 crate::builtins::Builtin::TestActorAccount,
@@ -9865,7 +9295,6 @@ mod test_mode_tests {
             );
         }
     }
-
     #[test]
     fn implicit_first_release_prelude_helpers_fail_closed() {
         for (name, call) in [
@@ -9894,7 +9323,6 @@ mod test_mode_tests {
             );
         }
     }
-
     #[test]
     fn decimal_operators_use_extended_nominal_syscalls() {
         let source = include_str!("compiler/fixtures/v1/c178.ko");
@@ -9913,12 +9341,10 @@ mod test_mode_tests {
             );
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn every_typed_query_page_compiles_with_a_structural_public_schema() {
         use ivm_abi::entrypoint::{EntrypointValueTypeNodeV1 as Node, EntrypointValueTypeV1};
-
         let source = include_str!("compiler/fixtures/v1/c179.ko");
         let artifact = Compiler::new()
             .compile_source(source)
@@ -9929,7 +9355,6 @@ mod test_mode_tests {
             .as_ref()
             .expect("typed query-page interface");
         assert_eq!(interface.entrypoints.len(), 5);
-
         let mut encoded_schemas = HashSet::new();
         for (entrypoint_name, view_name) in [
             ("accounts", "AccountView"),
@@ -9982,7 +9407,6 @@ mod test_mode_tests {
                 Some(expected_return_type.as_str()),
                 "artifact verification must see the same structural type name"
             );
-
             let encoded = norito::to_bytes(schema).expect("encode embedded query-page schema");
             let decoded: EntrypointValueTypeV1 =
                 norito::decode_from_bytes(&encoded).expect("decode embedded query-page schema");
@@ -9993,7 +9417,6 @@ mod test_mode_tests {
             );
         }
         assert_eq!(encoded_schemas.len(), 5);
-
         let syscall = encoding::wide::encode_syscallx(syscalls::SYSCALL_CORE_QUERY_PAGE);
         assert_eq!(
             artifact[parsed.code_offset..]
@@ -10005,7 +9428,6 @@ mod test_mode_tests {
             "each page entrypoint must lower to exactly one core-query host call"
         );
     }
-
     #[test]
     fn ordinary_struct_entrypoint_names_come_from_the_exact_abi_schema() {
         let source = include_str!("compiler/fixtures/v1/c180.ko");
@@ -10044,7 +9466,6 @@ mod test_mode_tests {
                 .type_name,
             parameter_type
         );
-
         let return_schema = entrypoint
             .return_schema
             .as_ref()
@@ -10058,7 +9479,6 @@ mod test_mode_tests {
             Some(return_type.as_str())
         );
     }
-
     #[test]
     fn quantity_div_round_uses_one_extended_nominal_syscall() {
         let source = include_str!("compiler/fixtures/v1/c181.ko");
@@ -10075,11 +9495,9 @@ mod test_mode_tests {
             "dynamic rounded division must lower to one extended quantity syscall"
         );
     }
-
     #[test]
     fn manifest_state_descriptors_use_canonical_type_names() {
         let src = include_str!("compiler/fixtures/v1/c182.ko");
-
         let (_code, manifest) = Compiler::new()
             .compile_source_with_manifest(src)
             .expect("compile state schema");
@@ -10105,7 +9523,6 @@ mod test_mode_tests {
             })
         );
     }
-
     fn wide_durable_state_source(field_count: usize, use_state: bool) -> String {
         let mut source = String::from("seiyaku RuntimeSchemaBoundary {\nstruct Wide {\n");
         for index in 0..field_count {
@@ -10128,7 +9545,6 @@ mod test_mode_tests {
         source.push_str("}\n");
         source
     }
-
     #[test]
     fn compiler_enforces_the_exact_runtime_state_schema_node_limit() {
         Compiler::new()
@@ -10137,7 +9553,6 @@ mod test_mode_tests {
                 false,
             ))
             .expect("one struct plus 255 leaves is exactly 256 runtime schema nodes");
-
         let error = Compiler::new()
             .compile_source(&wide_durable_state_source(
                 ivm_abi::state_value::MAX_STATE_VALUE_NODES,
@@ -10151,7 +9566,6 @@ mod test_mode_tests {
             "unexpected compiler error: {error}"
         );
     }
-
     #[test]
     fn used_state_reports_the_exact_runtime_schema_limit_before_lowering() {
         let error = Compiler::new()
@@ -10171,7 +9585,6 @@ mod test_mode_tests {
             "the generic lowering error must not hide the exact CNTR limit: {error}"
         );
     }
-
     #[test]
     fn lowering_time_abi_schemas_ignore_ambient_norito_flags() {
         let source = include_str!("compiler/fixtures/v1/c183.ko");
@@ -10194,7 +9607,6 @@ mod test_mode_tests {
             alternate, canonical,
             "ambient Norito flags must not change a deployable artifact"
         );
-
         let parsed = ProgramMetadata::parse(&canonical).expect("parse canonical artifact");
         let literals = parsed.literal_section.expect("schema literal table");
         let mut norito_payloads = Vec::new();
@@ -10264,7 +9676,6 @@ mod test_mode_tests {
                     .expect("pointer payload inside artifact"),
             );
         }
-
         assert!(norito_payloads.iter().any(|payload| {
             ivm_abi::codec::decode_canonical_norito::<ivm_abi::state_value::StateValueSchemaV1>(
                 payload,
@@ -10284,11 +9695,9 @@ mod test_mode_tests {
             .is_ok()
         }));
     }
-
     #[test]
     fn contract_identity_is_preserved_in_artifact_and_manifest() {
         let source = include_str!("compiler/fixtures/v1/c184.ko");
-
         let (artifact, manifest) = Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile named seiyaku");
@@ -10296,15 +9705,12 @@ mod test_mode_tests {
             .expect("parse contract artifact")
             .contract_interface
             .expect("embedded contract interface");
-
         assert_eq!(interface.seiyaku_name, "Treasury");
         assert_eq!(manifest.seiyaku_name.as_deref(), Some("Treasury"));
     }
-
     #[test]
     fn user_facing_type_first_counter_example_compiles_as_a_complete_contract() {
         let source = include_str!("compiler/fixtures/v1/c185.ko");
-
         let (artifact, manifest) = Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile the normative type-first Counter example");
@@ -10312,7 +9718,6 @@ mod test_mode_tests {
             .expect("parse Counter artifact")
             .contract_interface
             .expect("Counter embeds its contract interface");
-
         assert_eq!(interface.seiyaku_name, "Counter");
         assert!(
             interface
@@ -10341,11 +9746,9 @@ mod test_mode_tests {
         assert_eq!(manifest.seiyaku_name.as_deref(), Some("Counter"));
         assert!(manifest.abi_hash.is_some());
     }
-
     #[test]
     fn leaf_identity_emits_no_frame_or_stack_traffic() {
         let source = include_str!("compiler/fixtures/v1/c186.ko");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile leaf optimization fixture");
@@ -10359,7 +9762,6 @@ mod test_mode_tests {
             identity.bytecode_words, 1,
             "precoloured identity should contain only its register return"
         );
-
         let metadata = ProgramMetadata::parse(&artifact).expect("parse leaf artifact");
         let start = metadata.code_offset + identity.pc_start as usize;
         let end = metadata.code_offset + identity.pc_end as usize;
@@ -10373,11 +9775,9 @@ mod test_mode_tests {
             instruction::wide::control::JALR
         );
     }
-
     #[test]
     fn call_local_values_avoid_callee_save_and_spill_stack_traffic() {
         let source = include_str!("compiler/fixtures/v1/c187.ko");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile call-aware allocation fixture");
@@ -10397,7 +9797,6 @@ mod test_mode_tests {
             implementation.frame_bytes, 16,
             "a nested-call leaf needs only its aligned return-address frame"
         );
-
         let metadata = ProgramMetadata::parse(&artifact).expect("parse call-aware artifact");
         let words = artifact[metadata.code_offset + implementation.pc_start as usize
             ..metadata.code_offset + implementation.pc_end as usize]
@@ -10414,11 +9813,9 @@ mod test_mode_tests {
             .count();
         assert_eq!((loads, stores), (1, 1), "{words:08x?}");
     }
-
     #[test]
     fn whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers() {
         let source = include_str!("compiler/fixtures/v1/c188.ko");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile whole-program DCE fixture");
@@ -10447,7 +9844,6 @@ mod test_mode_tests {
                 .iter()
                 .any(|function| { function.function_name == "__entrypoint_impl__exposed" })
         );
-
         let metadata = ProgramMetadata::parse(&artifact).expect("parse DCE artifact");
         let entrypoint_count = metadata
             .contract_interface
@@ -10470,11 +9866,9 @@ mod test_mode_tests {
             "code must contain only PC-zero HALT, reachable function bodies, and one call/HALT dispatch wrapper per public entrypoint"
         );
     }
-
     #[test]
     fn whole_program_dce_preserves_lifecycle_trigger_helpers_and_cntr_targets() {
         let source = include_str!("compiler/fixtures/v1/c189.ko");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile lifecycle reachability fixture");
@@ -10501,7 +9895,6 @@ mod test_mode_tests {
             !emitted.contains("orphan"),
             "a private function outside the executable graph must be removed"
         );
-
         let metadata = ProgramMetadata::parse(&artifact).expect("parse lifecycle artifact");
         let interface = metadata
             .contract_interface
@@ -10514,7 +9907,6 @@ mod test_mode_tests {
             .find(|entrypoint| entrypoint.name == "run")
             .expect("trigger callback entrypoint");
         assert_eq!(run.triggers.len(), 1);
-
         for entrypoint in &interface.entrypoints {
             let wrapper_pc = usize::try_from(entrypoint.entry_pc).expect("entry PC fits usize");
             let wrapper_start = metadata.code_offset + wrapper_pc;
@@ -10562,11 +9954,9 @@ mod test_mode_tests {
             );
         }
     }
-
     #[test]
     fn split_spill_cluster_reloads_once_and_reuses_a_real_register() {
         let source = include_str!("compiler/fixtures/v1/c190.ko");
-
         let parsed = crate::parser::parse(source).expect("parse split-spill fixture");
         let typed = crate::semantic::analyze(&parsed).expect("analyze split-spill fixture");
         let implementation_name = typed
@@ -10600,7 +9990,6 @@ mod test_mode_tests {
             "fixture spill offsets assume no return-address prefix"
         );
         let split_register = plan.first_split_register(a0).expect("a0 split register");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile split-spill fixture");
@@ -10611,7 +10000,6 @@ mod test_mode_tests {
             artifact, second,
             "split code generation must be deterministic"
         );
-
         let metadata = ProgramMetadata::parse(&artifact).expect("parse split-spill artifact");
         let budget = report
             .budget_report
@@ -10657,11 +10045,9 @@ mod test_mode_tests {
             "the split register must feed every clustered checked numeric syscall: {words:08x?}"
         );
     }
-
     #[test]
     fn structured_branches_use_two_words_and_fuse_signed_comparisons() {
         let source = include_str!("compiler/fixtures/v1/c191.ko");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile branch optimization fixture");
@@ -10683,7 +10069,6 @@ mod test_mode_tests {
                 .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
                 .collect::<Vec<_>>()
         };
-
         let choose = function_words("choose");
         let branch_index = choose
             .iter()
@@ -10703,7 +10088,6 @@ mod test_mode_tests {
             instruction::wide::opcode(choose[branch_index + 1]),
             instruction::wide::control::JAL | instruction::wide::control::JMP
         ));
-
         let ordered = function_words("ordered");
         assert!(
             ordered.iter().any(|word| {
@@ -10721,7 +10105,6 @@ mod test_mode_tests {
             }),
             "adaptive int pointers must never be compared by scalar signed opcodes"
         );
-
         let copied_length = function_words("copied_length");
         let fused_branches = copied_length
             .iter()
@@ -10757,7 +10140,6 @@ mod test_mode_tests {
             "the fused scalar comparison must not also materialize an SLT boolean: {copied_length:08x?}"
         );
     }
-
     #[test]
     fn compact_branch_layout_splits_merge_heavy_and_backward_edges() {
         let branch = |label, then_bb, else_bb| ir::BasicBlock {
@@ -10787,7 +10169,6 @@ mod test_mode_tests {
             entry: ir::Label(0),
             location: SourceLocation { line: 1, column: 1 },
         };
-
         super::layout_compact_branch_fallthrough(&mut function)
             .expect("merge-heavy graph has a compact fallthrough layout");
         assert_eq!(function.blocks[0].label, function.entry);
@@ -10812,7 +10193,6 @@ mod test_mode_tests {
                 .label;
             assert!(next == *then_bb || next == *else_bb, "{function:?}");
         }
-
         let mut backward_only = ir::Function {
             name: "irreducible".to_owned(),
             params: Vec::new(),
@@ -10839,7 +10219,6 @@ mod test_mode_tests {
             ir::Terminator::Jump(ir::Label(0))
         );
     }
-
     #[test]
     fn valid_many_diamond_and_bounded_backedge_sources_keep_conditionals_two_words() {
         let mut source = String::from(include_str!("compiler/fixtures/v1/c192.ko"));
@@ -10849,7 +10228,6 @@ mod test_mode_tests {
             ));
         }
         source.push_str(include_str!("compiler/fixtures/v1/c193.ko"));
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(&source)
             .expect("compile merge-heavy diamonds and bounded backedges");
@@ -10895,11 +10273,9 @@ mod test_mode_tests {
             assert!(conditional_count > 0, "{name} must retain conditional CFGs");
         }
     }
-
     #[test]
     fn compile_report_excludes_dead_and_unreachable_instructions() {
         let source = include_str!("compiler/fixtures/v1/c194.ko");
-
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile dead-code optimization fixture");
@@ -10920,7 +10296,6 @@ mod test_mode_tests {
             "only the returned literal load and leaf return should remain; report={answer:?}; words={words:08x?}"
         );
     }
-
     #[test]
     fn compile_report_sidecars_are_hash_bound_and_preserve_locations() {
         let source = include_str!("compiler/fixtures/v1/c195.ko");
@@ -10954,7 +10329,6 @@ mod test_mode_tests {
             entry.source.as_mut().expect("budget source").source_path =
                 Some("contracts/sidecar.ko".to_owned());
         }
-
         let source_map = json::parse_value(
             &report
                 .render_source_map_json()
@@ -10964,7 +10338,6 @@ mod test_mode_tests {
         let budget =
             json::parse_value(&report.render_budget_json().expect("render budget sidecar"))
                 .expect("parse budget sidecar");
-
         assert_eq!(source_map["sidecar_version"].as_u64(), Some(1));
         assert_eq!(source_map["kind"].as_str(), Some("source-map"));
         assert_eq!(
@@ -10986,7 +10359,6 @@ mod test_mode_tests {
         );
         assert!(budget["entries"][0]["line"].as_u64().is_some());
     }
-
     #[test]
     fn legacy_source_facade_cannot_bypass_canonical_resolution_audits() {
         let source = include_str!("compiler/fixtures/v1/c196.ko");
@@ -11008,7 +10380,6 @@ mod test_mode_tests {
             diagnostic.message,
             "local binding `limit` shadows a const declaration"
         );
-
         let error = compiler
             .compile_source(source)
             .expect_err("a parameter must not shadow a seiyaku constant");
@@ -11019,7 +10390,6 @@ mod test_mode_tests {
         );
     }
 }
-
 impl Compiler {
     /// Create a new compiler instance.
     pub fn new() -> Self {
@@ -11029,7 +10399,6 @@ impl Compiler {
             opts: CompilerOptions::default(),
         }
     }
-
     /// Create a new compiler using a specific language.
     pub fn new_with_language(lang: Language) -> Self {
         Self {
@@ -11037,13 +10406,11 @@ impl Compiler {
             opts: CompilerOptions::default(),
         }
     }
-
     /// Create a new compiler with custom options.
     pub fn new_with_options(opts: CompilerOptions) -> Self {
         let lang = i18n::detect_language();
         Self { lang, opts }
     }
-
     /// Compile a KOTODAMA source file into IVM bytecode.
     pub fn compile_file<P: std::convert::AsRef<std::path::Path>>(
         &self,
@@ -11056,13 +10423,11 @@ impl Compiler {
         self.compile_source_output(&src, Some(&path_str))
             .map(|output| output.artifact)
     }
-
     /// Compile a KOTODAMA source string into IVM bytecode.
     pub fn compile_source(&self, src: &str) -> Result<Vec<u8>, String> {
         self.compile_source_output(src, None)
             .map(|output| output.artifact)
     }
-
     /// Run every source compilation through the canonical spanned session.
     ///
     /// Keeping this adapter inside the legacy facade prevents SDK and test
@@ -11080,7 +10445,6 @@ impl Compiler {
             })
             .map_err(|diagnostics| diagnostics.render_human())
     }
-
     fn lower_typed_program(
         &self,
         typed: TypedProgram,
@@ -11169,7 +10533,6 @@ impl Compiler {
             source_name: source_name.map(ToOwned::to_owned),
         })
     }
-
     fn construct_ssa_program(
         &self,
         lowered: LoweredCompilation,
@@ -11198,7 +10561,6 @@ impl Compiler {
             source_name,
         })
     }
-
     fn optimize_ssa_program(
         &self,
         ssa: SsaCompilation,
@@ -11228,7 +10590,6 @@ impl Compiler {
             source_name,
         })
     }
-
     fn destroy_ssa_program(
         &self,
         prepared: PreparedCompilation,
@@ -11255,7 +10616,6 @@ impl Compiler {
             source_name,
         })
     }
-
     fn compile_codegen(
         &self,
         prepared: CodegenCompilation,
@@ -11272,7 +10632,6 @@ impl Compiler {
         for function in &mut ir_prog.functions {
             layout_compact_branch_fallthrough(function)?;
         }
-
         // Stage 1 pointer‑ABI: collect string constants and integer constants used by ops.
         use std::collections::{HashMap, HashSet};
         let mut string_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
@@ -11606,7 +10965,6 @@ impl Compiler {
                 }
             }
         }
-
         propagate_function_return_literal_facts(
             &ir_prog,
             &mut string_map,
@@ -11614,7 +10972,6 @@ impl Compiler {
             &mut string_literal_temps,
             &multiply_defined_dests,
         );
-
         // Propagate string literals across call boundaries so callee parameters inherit literal metadata
         // only when every call site agrees on the same literal value.
         let mut fn_index_by_name: HashMap<&str, usize> = HashMap::new();
@@ -11745,7 +11102,6 @@ impl Compiler {
                 }
             }
         }
-
         propagate_function_return_literal_facts(
             &ir_prog,
             &mut string_map,
@@ -11753,7 +11109,6 @@ impl Compiler {
             &mut string_literal_temps,
             &multiply_defined_dests,
         );
-
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
@@ -11814,7 +11169,6 @@ impl Compiler {
                 }
             }
         }
-
         // A join/loop temporary with more than one definition has no single
         // compile-time value. Keep every codegen and access-analysis fact map
         // fail-closed even if an earlier propagation pass encountered one arm.
@@ -11828,7 +11182,6 @@ impl Compiler {
             string_literal_temps.remove(key);
             authority_account_temps.remove(key);
         }
-
         derive_state_access_hints(
             &ir_prog,
             &state_path_hints,
@@ -11836,7 +11189,6 @@ impl Compiler {
             &mut hint_diagnostics,
             &mut hint_skips,
         );
-
         for (func_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
@@ -11870,7 +11222,6 @@ impl Compiler {
                 }
             }
         }
-
         derive_isi_access_hints(
             &ir_prog,
             &string_map,
@@ -11895,9 +11246,7 @@ impl Compiler {
                 skipped_reasons,
             });
         }
-
         // Data section builder and fixups.
-
         // Norito blobs for AccountId/AssetDefinitionId placed in data section
         let mut data_bytes: Vec<u8> = Vec::new();
         let mut data_offsets: HashMap<DataKey, u64> = HashMap::new();
@@ -11905,7 +11254,6 @@ impl Compiler {
         // Code-generation callbacks share this explicit compilation-local
         // recorder; there is no thread-local or process-global registry.
         let fixups = LiteralFixups::default();
-
         // Compile every function retained by whole-program reachability and stitch
         // them together. Track global code, per-function start offsets, and fixups
         // for inter-block control flow.
@@ -11940,7 +11288,6 @@ impl Compiler {
         let mut ordered_funcs: Vec<(usize, &ir::Function)> =
             ir_prog.functions.iter().enumerate().collect();
         ordered_funcs.sort_by(|(_, left), (_, right)| left.name.cmp(&right.name));
-
         for (func_idx, func) in ordered_funcs {
             // Record start offset for call patching
             func_start_offsets.insert(func.name.clone(), code.len());
@@ -12079,7 +11426,6 @@ impl Compiler {
                             zero_loads.push(target);
                         }
                     }
-
                     // Consume every register source before a literal or stack
                     // materialization overwrites an ABI destination. Cycles
                     // use the dedicated non-allocatable scratch register.
@@ -12115,11 +11461,9 @@ impl Compiler {
                 }
                 Ok(())
             };
-
             let mut block_offsets: HashMap<usize, usize> = HashMap::new();
             let mut jump_fixups: Vec<JumpFixup> = Vec::new();
             let mut branch_fixups: Vec<BranchFixup> = Vec::new();
-
             // Tuple materialization map per function
             let mut tuple_map: std::collections::HashMap<ir::Temp, Vec<ir::Temp>> =
                 Default::default();
@@ -12695,7 +12039,6 @@ impl Compiler {
                                 let r_amt = src_reg(amount, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_amt, 0)?);
                             }
-
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -12945,7 +12288,6 @@ impl Compiler {
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             push_word(&mut code, encode_addi(12, 10, 0)?); // x12 = x10
-
                             // Load 'to' AccountId into x11
                             if let Some(to_str) = string_map.get(&(func_idx, *to)) {
                                 let key_to = DataKey(DataKind::Account, to_str.clone());
@@ -12960,7 +12302,6 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             // Restore domain pointer: x10 <- x12
                             push_word(&mut code, encode_addi(10, 12, 0)?);
-
                             // SCALL transfer
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -14323,7 +13664,6 @@ impl Compiler {
                             push_word(&mut code, encode_addi(12, 10, 0)?);
                             // Restore account pointer into x10 before issuing the syscall
                             push_word(&mut code, encode_addi(10, 13, 0)?);
-
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SET_ACCOUNT_DETAIL as u8,
@@ -15502,13 +14842,11 @@ impl Compiler {
                             push_word(&mut code, encode_addi(11, 10, 0)?);
                             load_ptr(right, 10, scratch2, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
-
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_TLV_EQ as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-
                             let (rd, spilled, imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
@@ -15519,11 +14857,9 @@ impl Compiler {
                             //   flag := SEQ(LOAD64 [map + 0], key)
                             //   dest := LOAD64 [map + 8]
                             //   dest := dest * flag
-
                             let rmap = src_reg(map, scratch1, &mut code)?;
                             let rkey = src_reg(key, scratch2, &mut code)?;
                             let (rd, spilled, imm) = dst_reg(dest);
-
                             let mut flag_reg = None;
                             for cand in [scratch1, scratch2, scratchd] {
                                 if cand != rmap && cand != rkey && cand != rd {
@@ -15531,7 +14867,6 @@ impl Compiler {
                                     break;
                                 }
                             }
-
                             if let Some(rflag) = flag_reg {
                                 emit_load64(&mut code, &fixups, rflag, rmap, 0, None)?;
                                 let eq = encoding::wide::encode_rr(
@@ -15541,7 +14876,6 @@ impl Compiler {
                                     rkey,
                                 );
                                 push_word(&mut code, eq);
-
                                 let value_scratch = if rd == rmap {
                                     Some(if rflag != scratch1 {
                                         scratch1
@@ -15700,7 +15034,6 @@ impl Compiler {
                             let (rd_k, spilled_k, imm_k) = dst_reg(dest_key);
                             let (rd_v, spilled_v, imm_v) = dst_reg(dest_val);
                             let base_off = *offset as i64; // in bytes
-
                             let key_scratch = if rd_k == rmap {
                                 Some(if rmap != scratch1 { scratch1 } else { scratch2 })
                             } else {
@@ -15708,7 +15041,6 @@ impl Compiler {
                             };
                             emit_load64(&mut code, &fixups, rd_k, rmap, base_off, key_scratch)?;
                             spill_back(dest_key, rd_k, spilled_k, imm_k, &mut code)?;
-
                             let val_scratch = if rd_v == rmap {
                                 Some(if rmap != scratch1 { scratch1 } else { scratch2 })
                             } else {
@@ -17113,7 +16445,6 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-
                         Instr::NameDecode { dest, blob } => {
                             // r10=&NoritoBytes; publish; SCALL NAME_DECODE; move
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
@@ -17668,7 +16999,6 @@ impl Compiler {
             debug_seed.pc_end = function_end;
             uses_zk_global |= uses_zk;
         }
-
         let mut wrapper_functions = typed
             .items
             .iter()
@@ -17695,7 +17025,6 @@ impl Compiler {
             ));
             push_word(&mut code, encoding::wide::encode_halt());
         }
-
         // Patch call sites now that function offsets are known.
         for (at, callee, _caller) in &call_fixups {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
@@ -17709,7 +17038,6 @@ impl Compiler {
                 &mut deferred_transfers,
             )?;
         }
-
         let (relaxed_code, code_offsets) = relax_control_transfers_with_trampolines(
             code,
             &deferred_transfers,
@@ -17736,7 +17064,6 @@ impl Compiler {
             seed.pc_end = u64::try_from(code_offsets.entry(old_end))
                 .map_err(|_| "relaxed function end does not fit u64".to_owned())?;
         }
-
         // Local test functions return through r1 just like ordinary private
         // calls. Give the test driver a compiler-owned terminal return target
         // inside the authenticated artifact instead of requiring it to append
@@ -17744,10 +17071,8 @@ impl Compiler {
         if self.opts.mode == CompilerMode::Test {
             push_word(&mut code, encoding::wide::encode_halt());
         }
-
         uses_vector_global |= detect_vector_usage(&code);
         uses_zk_global |= detect_zk_usage(&code);
-
         // Build metadata and finalize program (with data appended).
         // Resolve mode bits from emitted operations and compiler-owned build policy.
         let mut mode = 0u8;
@@ -17757,7 +17082,6 @@ impl Compiler {
         if uses_vector_global {
             mode |= metadata::mode::VECTOR;
         }
-
         let meta = ProgramMetadata {
             version_major: 1,
             // Local test harnesses are executable tooling images, not
@@ -18161,7 +17485,6 @@ impl Compiler {
             data_offsets.insert(key.clone(), off);
             Ok(off)
         };
-
         let mut entrypoint_start_offsets = func_start_offsets.clone();
         entrypoint_start_offsets.extend(entrypoint_wrapper_offsets);
         let mut entrypoint_descriptors = build_entrypoint_descriptors(
@@ -18182,7 +17505,6 @@ impl Compiler {
                 entrypoint.read_keys.sort();
                 entrypoint.read_keys.dedup();
             }
-
             // Test suites keep their exact compiler-owned interface beside the
             // generic IVM 1.0 image even when the production projection has no
             // public entrypoint. Authenticate the return target through a
@@ -18303,7 +17625,6 @@ impl Compiler {
                 key.0.literal_kind(),
             );
         }
-
         // Final layout assembly
         let mut out = meta_bytes;
         out.extend_from_slice(&contract_section);
@@ -18366,14 +17687,12 @@ impl Compiler {
             &typed.source_files,
             hint_diagnostics.clone(),
         );
-
         Ok(CompilationArtifacts {
             bytes: out,
             compile_report,
             contract_interface,
         })
     }
-
     /// Compile source and produce a manifest with code_hash and abi_hash.
     ///
     /// The returned `ContractManifest` includes
@@ -18392,7 +17711,6 @@ impl Compiler {
         let (bytes, manifest, _report) = self.compile_source_with_manifest_and_report(src)?;
         Ok((bytes, manifest))
     }
-
     /// Compile already linked typed HIR with native phase-aware diagnostics.
     pub(crate) fn compile_typed_program_with_manifest_and_report_diagnostics(
         &self,
@@ -18422,7 +17740,6 @@ impl Compiler {
             )
         })
     }
-
     /// Compile source and produce a manifest plus compiler report data.
     pub fn compile_source_with_manifest_and_report(
         &self,
@@ -18438,7 +17755,6 @@ impl Compiler {
         let output = self.compile_source_output(src, None)?;
         Ok((output.artifact, output.manifest, output.report))
     }
-
     fn manifest_from_artifacts(
         &self,
         artifacts: CompilationArtifacts,
@@ -18516,7 +17832,6 @@ impl Compiler {
             report: compile_report,
         })
     }
-
     /// Compile source and produce a manifest plus access-hint diagnostics.
     pub fn compile_source_with_manifest_and_diagnostics(
         &self,
@@ -18533,7 +17848,6 @@ impl Compiler {
         Ok((bytes, manifest, report.access_hint_diagnostics))
     }
 }
-
 fn build_compile_report(
     artifact_hash: iroha_crypto::Hash,
     function_debug_seeds: &[FunctionDebugSeed],
@@ -18544,7 +17858,6 @@ fn build_compile_report(
 ) -> CompileReport {
     let mut entries = function_debug_seeds.to_vec();
     entries.sort_by_key(|seed| seed.pc_start);
-
     let mut source_map = Vec::new();
     let mut budget_report = Vec::with_capacity(entries.len());
     for seed in &entries {
@@ -18572,7 +17885,6 @@ fn build_compile_report(
             source: Some(source),
         });
     }
-
     CompileReport {
         artifact_hash,
         source_map,
@@ -18580,7 +17892,6 @@ fn build_compile_report(
         access_hint_diagnostics,
     }
 }
-
 fn embedded_source_location(
     source: Option<crate::source::SourceRange>,
     fallback_path: Option<&str>,
@@ -18608,7 +17919,6 @@ fn embedded_source_location(
         ),
     }
 }
-
 fn render_state_value_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
         StatePathHint::Path(path) => Some(format!("state:{path}")),
@@ -18617,7 +17927,6 @@ fn render_state_value_hint(hint: Option<&StatePathHint>) -> Option<String> {
         StatePathHint::NameBase(_) | StatePathHint::DynamicMapChild => None,
     }
 }
-
 fn render_state_scan_hint(hint: Option<&StatePathHint>) -> Option<String> {
     match hint? {
         StatePathHint::Path(path) if !path.contains('/') => Some(format!("state:{path}[*]")),
@@ -18628,11 +17937,9 @@ fn render_state_scan_hint(hint: Option<&StatePathHint>) -> Option<String> {
         }
     }
 }
-
 fn insert_state_hint(keys: &mut IndexSet<String>, key: String) {
     keys.insert(key);
 }
-
 fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     if bytes.is_empty() || bytes.len() > syscalls::STATE_MAP_MAX_KEY_BYTES {
@@ -18644,14 +17951,12 @@ fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
     out.push_str(&hex::encode(bytes));
     StatePath::try_from(out).ok().map(|path| path.to_string())
 }
-
 fn state_path_from_norito_literal(raw: &str) -> Option<String> {
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     ivm_abi::codec::decode_canonical_norito::<StatePath>(&bytes)
         .ok()
         .map(|path| path.to_string())
 }
-
 fn build_access_set_hints(
     ir_functions: &[ir::Function],
     access_sets: &[AccessSets],
@@ -18686,7 +17991,6 @@ fn build_access_set_hints(
         dynamic_writes,
     }))
 }
-
 fn collect_dynamic_access_hints(
     ir_functions: &[ir::Function],
     state_descriptors: &[EmbeddedStateDescriptor],
@@ -18745,7 +18049,6 @@ fn collect_dynamic_access_hints(
         Vec::new(),
     ))
 }
-
 fn build_message_entries(
     entries: &[super::ast::MessageEntry],
 ) -> Vec<iroha_data_model::smart_contract::manifest::KotobaTranslationEntry> {
@@ -18768,7 +18071,6 @@ fn build_message_entries(
         )
         .collect()
 }
-
 fn build_state_descriptors(typed: &TypedProgram) -> Result<Vec<EmbeddedStateDescriptor>, String> {
     typed
         .states
@@ -18798,7 +18100,6 @@ fn build_state_descriptors(typed: &TypedProgram) -> Result<Vec<EmbeddedStateDesc
         })
         .collect()
 }
-
 fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDescriptor> {
     states
         .iter()
@@ -18808,7 +18109,6 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
         })
         .collect()
 }
-
 fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     match ty {
         EmbeddedStateType::Int => "int".to_string(),
@@ -18863,10 +18163,8 @@ fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
         }
     }
 }
-
 fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType, String> {
     use semantic::Type;
-
     Ok(match semantic::resolve_struct_type(ty) {
         Type::Int => EmbeddedStateType::Int,
         Type::Decimal => EmbeddedStateType::Decimal,
@@ -18931,7 +18229,6 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
         }
     })
 }
-
 fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
     let needs_wrapper = !matches!(func.modifiers.kind, super::ast::FunctionKind::Private)
         && !func.param_types.is_empty();
@@ -18941,7 +18238,6 @@ fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
         func.name.clone()
     }
 }
-
 fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<String> {
     typed
         .items
@@ -18954,7 +18250,6 @@ fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<St
         })
         .collect()
 }
-
 /// Scheduler-relevant access class for one lowered IR instruction.
 ///
 /// Keeping this classification exhaustive over [`ir::Instr`] makes a newly
@@ -18969,7 +18264,6 @@ enum IrAccessClass {
     /// Ledger/world access, recorded by the ISI-hint pass.
     Ledger(BuiltinAccess),
 }
-
 fn access_class_for_builtin(builtin: Builtin) -> IrAccessClass {
     match builtin.spec().access {
         BuiltinAccess::None => IrAccessClass::None,
@@ -18981,7 +18275,6 @@ fn access_class_for_builtin(builtin: Builtin) -> IrAccessClass {
         | BuiltinAccess::Dynamic) => IrAccessClass::Ledger(access),
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn derive_isi_access_hints(
     ir_prog: &ir::Program,
@@ -19015,11 +18308,9 @@ fn derive_isi_access_hints(
         }
     }
 }
-
 fn record_hint_skip(skips: &mut IndexSet<String>, reason: &str) {
     skips.insert(reason.to_owned());
 }
-
 fn propagate_transitive_access_hints(
     ir_prog: &ir::Program,
     access_sets: &mut [AccessSets],
@@ -19027,7 +18318,6 @@ fn propagate_transitive_access_hints(
 ) {
     assert_eq!(ir_prog.functions.len(), access_sets.len());
     assert_eq!(ir_prog.functions.len(), hint_skips.len());
-
     let function_by_name = ir_prog
         .functions
         .iter()
@@ -19035,7 +18325,6 @@ fn propagate_transitive_access_hints(
         .map(|(index, function)| (function.name.as_str(), index))
         .collect::<HashMap<_, _>>();
     let mut callees = vec![IndexSet::new(); ir_prog.functions.len()];
-
     let mark_conservative = |function_index: usize,
                              reason: &str,
                              access_sets: &mut [AccessSets],
@@ -19048,7 +18337,6 @@ fn propagate_transitive_access_hints(
             .insert(GLOBAL_WILDCARD_KEY.to_owned());
         record_hint_skip(&mut hint_skips[function_index], reason);
     };
-
     for (caller_index, function) in ir_prog.functions.iter().enumerate() {
         for block in &function.blocks {
             for instruction in &block.instrs {
@@ -19090,7 +18378,6 @@ fn propagate_transitive_access_hints(
             }
         }
     }
-
     // Snapshot-based fixed point is deterministic and naturally handles SCCs.
     // Every iteration only adds set members, so termination is guaranteed even
     // if a malformed/pre-semantic IR graph contains recursion.
@@ -19120,7 +18407,6 @@ fn propagate_transitive_access_hints(
         }
     }
 }
-
 fn production_allows_incomplete_access_hints(skipped_reasons: &[String]) -> bool {
     !skipped_reasons.is_empty()
         && skipped_reasons.iter().all(|reason| {
@@ -19132,7 +18418,6 @@ fn production_allows_incomplete_access_hints(skipped_reasons: &[String]) -> bool
             )
         })
 }
-
 fn derive_state_access_hints(
     ir_prog: &ir::Program,
     state_path_hints: &HashMap<(usize, ir::Temp), StatePathHint>,
@@ -19226,7 +18511,6 @@ fn derive_state_access_hints(
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn record_isi_access(
     instr: &ir::Instr,
@@ -19778,7 +19062,6 @@ fn record_isi_access(
         _ => apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI),
     }
 }
-
 fn decode_norito_literal_payload(raw: &str) -> Option<Vec<u8>> {
     // `DataKind::NoritoBytes` wraps these exact source bytes in the emitted
     // pointer TLV. Access analysis must inspect that exact payload: unwrapping a
@@ -19786,24 +19069,20 @@ fn decode_norito_literal_payload(raw: &str) -> Option<Vec<u8>> {
     // receives.
     decode_hex_or_raw_bytes(raw).ok()
 }
-
 fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
     let payload = decode_norito_literal_payload(raw)?;
     ivm_abi::codec::decode_canonical_norito(&payload).ok()
 }
-
 fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
     let instr = decode_instruction_box_literal(raw)?;
     let mut access = AccessSets::default();
     record_instruction_box_access(&instr, &mut access)?;
     Some(access)
 }
-
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
     let payload = decode_norito_literal_payload(raw)?;
     ivm_abi::codec::decode_canonical_norito(&payload).ok()
 }
-
 fn record_zk_roots_get_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
     let request: ivm_abi::host_payload::RootsGetRequest =
@@ -19812,7 +19091,6 @@ fn record_zk_roots_get_access(raw: &str, access_set: &mut AccessSets) -> Option<
     add_zk_asset_r(access_set, &asset);
     Some(())
 }
-
 fn record_zk_vote_get_tally_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
     let request: ivm_abi::host_payload::VoteGetTallyRequest =
@@ -19820,7 +19098,6 @@ fn record_zk_vote_get_tally_access(raw: &str, access_set: &mut AccessSets) -> Op
     add_zk_election_tally_r(access_set, &request.election_id);
     Some(())
 }
-
 fn record_vrf_epoch_seed_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
     let request: ivm_abi::host_payload::VrfEpochSeedRequest =
@@ -19833,14 +19110,12 @@ fn record_vrf_epoch_seed_access(raw: &str, access_set: &mut AccessSets) -> Optio
     }
     Some(())
 }
-
 fn record_smart_contract_lifecycle_access(
     raw: &str,
     syscall: u32,
     access_set: &mut AccessSets,
 ) -> Option<()> {
     use iroha_data_model::isi::smart_contract_code as DMScode;
-
     let payload = decode_norito_literal_payload(raw)?;
     match syscall {
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
@@ -19874,14 +19149,12 @@ fn record_smart_contract_lifecycle_access(
     }
     Some(())
 }
-
 fn record_transfer_asset_batch_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
     let batch: iroha_data_model::isi::transfer::TransferAssetBatch =
         ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
     record_transfer_asset_batch_entries_access(&batch, access_set)
 }
-
 fn record_transfer_asset_batch_entries_access(
     batch: &iroha_data_model::isi::transfer::TransferAssetBatch,
     access_set: &mut AccessSets,
@@ -19897,35 +19170,30 @@ fn record_transfer_asset_batch_entries_access(
     }
     Some(())
 }
-
 fn decode_axt_descriptor_literal(raw: &str) -> Option<crate::axt::AxtDescriptor> {
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     let descriptor = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
     crate::axt::validate_descriptor(&descriptor).ok()?;
     Some(descriptor)
 }
-
 fn decode_axt_touch_manifest_literal(raw: &str) -> Option<crate::axt::TouchManifest> {
     let payload = decode_norito_literal_payload(raw)?;
     let manifest = ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
     crate::axt::validate_touch_manifest(&manifest).ok()?;
     Some(manifest)
 }
-
 fn decode_asset_handle_literal(raw: &str) -> Option<crate::axt::AssetHandle> {
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     let handle = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
     crate::axt::validate_asset_handle(&handle).ok()?;
     Some(handle)
 }
-
 fn decode_remote_spend_intent_literal(raw: &str) -> Option<crate::axt::RemoteSpendIntent> {
     let payload = decode_norito_literal_payload(raw)?;
     let intent = ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
     crate::axt::validate_remote_spend_intent(&intent).ok()?;
     Some(intent)
 }
-
 fn parse_dataspace_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
@@ -19938,7 +19206,6 @@ fn parse_dataspace_temp(
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     ivm_abi::codec::decode_canonical_norito(&bytes).ok()
 }
-
 fn public_key_from_json_value(value: &json::Value) -> Option<iroha_crypto::PublicKey> {
     if let Some(key_str) = value.as_str() {
         return key_str.parse().ok();
@@ -19950,7 +19217,6 @@ fn public_key_from_json_value(value: &json::Value) -> Option<iroha_crypto::Publi
         .or_else(|| map.get("key"))?;
     public_key_from_json_value(value)
 }
-
 fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_data_model::peer::PeerId> {
     if let Some(peer_str) = value.as_str() {
         if let Ok(peer_id) = peer_str.parse::<iroha_data_model::peer::PeerId>() {
@@ -19975,12 +19241,10 @@ fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_data_model::peer
         .or_else(|| map.get("key"))?;
     public_key_from_json_value(key).map(iroha_data_model::peer::PeerId::from)
 }
-
 fn peer_id_from_json_literal(raw: &str) -> Option<iroha_data_model::peer::PeerId> {
     let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
     peer_id_from_json_value(&value)
 }
-
 fn record_soracloud_request_access(
     raw: &str,
     syscall: u32,
@@ -19990,7 +19254,6 @@ fn record_soracloud_request_access(
         SoracloudHostOperationV1 as Op, SoracloudHostRequestEnvelopeV1,
         SoracloudHostRequestPayloadV1 as Payload,
     };
-
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     let request: SoracloudHostRequestEnvelopeV1 =
         ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
@@ -20054,11 +19317,9 @@ fn record_soracloud_request_access(
     }
     Some(())
 }
-
 fn soracloud_host_path_key_segment(path: &str) -> &str {
     path.strip_prefix('/').unwrap_or(path)
 }
-
 fn soracloud_operation_for_syscall(
     syscall: u32,
 ) -> Option<iroha_data_model::soracloud::SoracloudHostOperationV1> {
@@ -20077,7 +19338,6 @@ fn soracloud_operation_for_syscall(
         _ => None,
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn submit_ballot_inline_instruction_literal(
     string_map: &HashMap<(usize, ir::Temp), String>,
@@ -20093,7 +19353,6 @@ fn submit_ballot_inline_instruction_literal(
         isi::zk as DMZk,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
-
     let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
     let eid = literal(election_id)?;
     if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid) {
@@ -20120,17 +19379,14 @@ fn submit_ballot_inline_instruction_literal(
     let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
     Some(format!("0x{}", hex::encode(bytes)))
 }
-
 fn record_instruction_box_access(
     instr: &InstructionBox,
     access_set: &mut AccessSets,
 ) -> Option<()> {
     let any = instr.as_any();
-
     if any.downcast_ref::<Log>().is_some() {
         return Some(());
     }
-
     if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::CreateElection>() {
         add_zk_election_w(access_set, instr.election_id());
         return Some(());
@@ -20146,10 +19402,8 @@ fn record_instruction_box_access(
     if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::transfer::TransferAssetBatch>() {
         return record_transfer_asset_batch_entries_access(instr, access_set);
     }
-
     {
         use iroha_data_model::isi::escrow as DMEscrow;
-
         if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAssetEscrow>() {
             record_asset_escrow_open_access(
                 access_set,
@@ -20183,7 +19437,6 @@ fn record_instruction_box_access(
             return Some(());
         }
     }
-
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
         match tb {
             TransferBox::Asset(t) => {
@@ -20210,7 +19463,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(mb) = any.downcast_ref::<MintBox>() {
         match mb {
             MintBox::Asset(m) => {
@@ -20223,7 +19475,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(bb) = any.downcast_ref::<BurnBox>() {
         match bb {
             BurnBox::Asset(b) => {
@@ -20236,7 +19487,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(sb) = any.downcast_ref::<SetKeyValueBox>() {
         match sb {
             SetKeyValueBox::Account(s) => {
@@ -20260,7 +19510,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(rb) = any.downcast_ref::<RemoveKeyValueBox>() {
         match rb {
             RemoveKeyValueBox::Account(r) => {
@@ -20284,7 +19533,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(access_set, r.object.id()),
@@ -20304,7 +19552,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
             UnregisterBox::Domain(u) => add_domain_rw(access_set, &u.object),
@@ -20317,7 +19564,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(gb) = any.downcast_ref::<GrantBox>() {
         match gb {
             GrantBox::Permission(g) => {
@@ -20336,7 +19582,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(rb) = any.downcast_ref::<RevokeBox>() {
         match rb {
             RevokeBox::Permission(r) => {
@@ -20355,7 +19600,6 @@ fn record_instruction_box_access(
         }
         return Some(());
     }
-
     if let Some(exe) = any.downcast_ref::<ExecuteTrigger>() {
         access_set.reads.insert(key_trigger(&exe.trigger));
         access_set
@@ -20363,17 +19607,14 @@ fn record_instruction_box_access(
             .insert(key_trigger_repetitions(&exe.trigger));
         return Some(());
     }
-
     None
 }
-
 fn record_query_request_access(request: &QueryRequest, access_set: &mut AccessSets) -> Option<()> {
     match request {
         QueryRequest::Singular(query) => record_singular_query_access(query, access_set),
         QueryRequest::Start(_) | QueryRequest::Continue(_) => None,
     }
 }
-
 fn record_singular_query_access(
     query: &SingularQueryBox,
     access_set: &mut AccessSets,
@@ -20394,7 +19635,6 @@ fn record_singular_query_access(
         _ => None,
     }
 }
-
 fn record_typed_core_query_get_access(
     key: ir::Temp,
     entity: ivm_abi::core_query::CoreQueryEntityTagV1,
@@ -20404,7 +19644,6 @@ fn record_typed_core_query_get_access(
     access_set: &mut AccessSets,
 ) -> Option<()> {
     use ivm_abi::core_query::CoreQueryEntityTagV1;
-
     match entity {
         CoreQueryEntityTagV1::Account => {
             let account =
@@ -20434,17 +19673,14 @@ fn record_typed_core_query_get_access(
         }
     }
 }
-
 trait ParseTempLiteral: Sized {
     fn parse_temp_literal(raw: &str) -> Option<Self>;
 }
-
 impl<T: std::str::FromStr> ParseTempLiteral for T {
     fn parse_temp_literal(raw: &str) -> Option<Self> {
         raw.parse().ok()
     }
 }
-
 fn parse_temp<T: ParseTempLiteral>(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
@@ -20452,7 +19688,6 @@ fn parse_temp<T: ParseTempLiteral>(
 ) -> Option<T> {
     T::parse_temp_literal(string_map.get(&(func_idx, temp))?)
 }
-
 fn escrow_id_from_name_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
@@ -20460,7 +19695,6 @@ fn escrow_id_from_name_temp(
 ) -> Option<EscrowId> {
     parse_temp::<Name>(string_map, func_idx, temp).map(|name| EscrowId::from_kotodama_name(&name))
 }
-
 fn parse_domain_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
@@ -20469,7 +19703,6 @@ fn parse_domain_temp(
     iroha_data_model::domain::DomainId::parse_fully_qualified(string_map.get(&(func_idx, temp))?)
         .ok()
 }
-
 fn parse_account_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
@@ -20479,7 +19712,6 @@ fn parse_account_temp(
         .ok()
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
-
 fn collect_function_return_literal_facts(
     ir_prog: &ir::Program,
     string_map: &HashMap<(usize, ir::Temp), String>,
@@ -20561,7 +19793,6 @@ fn collect_function_return_literal_facts(
     }
     out
 }
-
 fn propagate_function_return_literal_facts(
     ir_prog: &ir::Program,
     string_map: &mut HashMap<(usize, ir::Temp), String>,
@@ -20628,7 +19859,6 @@ fn propagate_function_return_literal_facts(
         }
     }
 }
-
 fn propagate_literal_copy_facts(
     ir_prog: &ir::Program,
     string_map: &mut HashMap<(usize, ir::Temp), String>,
@@ -20675,7 +19905,6 @@ fn propagate_literal_copy_facts(
     }
     changed
 }
-
 fn account_access_hint_for_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
@@ -20687,7 +19916,6 @@ fn account_access_hint_for_temp(
     }
     parse_account_temp(string_map, func_idx, temp).map(AccountAccessHint::Literal)
 }
-
 fn permission_name_from_token(
     string_map: &HashMap<(usize, ir::Temp), String>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
@@ -20701,14 +19929,12 @@ fn permission_name_from_token(
         _ => None,
     }
 }
-
 fn permission_name_from_literal(raw: &str) -> String {
     raw.split_once(':')
         .map(|(name, _)| name)
         .unwrap_or(raw)
         .to_string()
 }
-
 fn permission_name_from_json(raw: &str) -> Option<String> {
     let value: norito::json::Value = norito::json::from_slice(raw.as_bytes()).ok()?;
     if let Some(name) = value.as_str() {
@@ -20718,7 +19944,6 @@ fn permission_name_from_json(raw: &str) -> Option<String> {
     let kind = map.get("type").and_then(norito::json::Value::as_str)?;
     Some(permission_name_from_literal(kind))
 }
-
 fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
     let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
     match value {
@@ -20734,38 +19959,30 @@ fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
         _ => None,
     }
 }
-
 fn key_account(id: &AccountId) -> String {
     format!("account:{id}")
 }
-
 fn key_account_hint(account: &AccountAccessHint) -> String {
     match account {
         AccountAccessHint::Literal(id) => key_account(id),
         AccountAccessHint::Authority => AUTHORITY_ACCOUNT_KEY.to_owned(),
     }
 }
-
 fn key_domain(id: &DomainId) -> String {
     format!("domain:{id}")
 }
-
 fn key_asset_def(id: &AssetDefinitionId) -> String {
     format!("asset_def:{id}")
 }
-
 fn key_escrow_id(id: &EscrowId) -> String {
     format!("escrow_id:{}", hex::encode(id.as_hash().as_ref()))
 }
-
 fn key_asset_escrow(id: &EscrowId) -> String {
     format!("asset_escrow:{}", hex::encode(id.as_hash().as_ref()))
 }
-
 fn key_asset(id: &AssetId) -> String {
     format!("asset:{id}")
 }
-
 fn key_asset_for_account_hint(
     definition: &AssetDefinitionId,
     account: &AccountAccessHint,
@@ -20777,7 +19994,6 @@ fn key_asset_for_account_hint(
         AccountAccessHint::Authority => format!("asset:{definition}:{AUTHORITY_PLACEHOLDER}"),
     }
 }
-
 fn key_scoped_asset_for_account_hint(
     definition: &AssetDefinitionId,
     account: &AccountAccessHint,
@@ -20794,106 +20010,82 @@ fn key_scoped_asset_for_account_hint(
         }
     }
 }
-
 fn key_nft(id: &NftId) -> String {
     format!("nft:{id}")
 }
-
 fn key_role(id: &RoleId) -> String {
     format!("role:{id}")
 }
-
 fn key_role_binding(account: &AccountId, role: &RoleId) -> String {
     format!("role.binding:{account}:{role}")
 }
-
 fn key_role_binding_hint(account: &AccountAccessHint, role: &RoleId) -> String {
     match account {
         AccountAccessHint::Literal(account) => key_role_binding(account, role),
         AccountAccessHint::Authority => format!("role.binding:{AUTHORITY_PLACEHOLDER}:{role}"),
     }
 }
-
 fn key_perm_account(account: &AccountId, perm: &str) -> String {
     format!("perm.account:{account}:{perm}")
 }
-
 fn key_perm_account_hint(account: &AccountAccessHint, perm: &str) -> String {
     match account {
         AccountAccessHint::Literal(account) => key_perm_account(account, perm),
         AccountAccessHint::Authority => format!("perm.account:{AUTHORITY_PLACEHOLDER}:{perm}"),
     }
 }
-
 fn key_perm_role(role: &RoleId, perm: &str) -> String {
     format!("perm.role:{role}:{perm}")
 }
-
 fn key_trigger(id: &TriggerId) -> String {
     format!("trigger:{id}")
 }
-
 fn key_trigger_repetitions(id: &TriggerId) -> String {
     format!("trigger.repetitions:{id}")
 }
-
 fn key_trigger_detail(id: &TriggerId, key: &Name) -> String {
     format!("trigger.detail:{id}:{key}")
 }
-
 fn key_account_detail(id: &AccountId, key: &Name) -> String {
     format!("account.detail:{id}:{key}")
 }
-
 fn key_domain_detail(id: &DomainId, key: &Name) -> String {
     format!("domain.detail:{id}:{key}")
 }
-
 fn key_asset_def_detail(id: &AssetDefinitionId, key: &Name) -> String {
     format!("asset_def.detail:{id}:{key}")
 }
-
 fn key_zk_asset(id: &AssetDefinitionId) -> String {
     format!("zk_asset:{id}")
 }
-
 fn key_peer(id: &iroha_data_model::peer::PeerId) -> String {
     format!("peer:{id}")
 }
-
 fn key_contract_manifest(code_hash: &iroha_crypto::Hash) -> String {
     format!("contract.manifest:{code_hash}")
 }
-
 fn key_contract_code(code_hash: &iroha_crypto::Hash) -> String {
     format!("contract.code:{code_hash}")
 }
-
 fn key_contract_instance(address: &iroha_data_model::smart_contract::ContractAddress) -> String {
     format!("contract.instance:{address}")
 }
-
 fn key_contract_instance_code_hash(code_hash: &iroha_crypto::Hash) -> String {
     format!("contract.instance.code_hash:{code_hash}")
 }
-
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
 }
-
 fn add_account_r(set: &mut AccessSets, id: &AccountId) {
     set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
     set.reads.insert(key_account(id));
 }
-
 fn add_account_hint_r(set: &mut AccessSets, account: &AccountAccessHint) {
     set.reads.insert(key_account_hint(account));
 }
-
 fn add_domain_r(set: &mut AccessSets, id: &DomainId) {
     set.reads.insert(key_domain(id));
 }
-
 fn add_account_rw(set: &mut AccessSets, id: &AccountId) {
     set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
     set.writes.insert(ACCOUNT_WILDCARD_KEY.to_string());
@@ -20901,20 +20093,17 @@ fn add_account_rw(set: &mut AccessSets, id: &AccountId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_account_hint_rw(set: &mut AccessSets, account: &AccountAccessHint) {
     let key = key_account_hint(account);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_account_detail_rw(set: &mut AccessSets, id: &AccountId, key: &Name) {
     add_account_r(set, id);
     let detail = key_account_detail(id, key);
     set.reads.insert(detail.clone());
     set.writes.insert(detail);
 }
-
 fn add_account_detail_hint_rw(set: &mut AccessSets, account: &AccountAccessHint, key: &Name) {
     add_account_hint_r(set, account);
     let detail = match account {
@@ -20924,20 +20113,17 @@ fn add_account_detail_hint_rw(set: &mut AccessSets, account: &AccountAccessHint,
     set.reads.insert(detail.clone());
     set.writes.insert(detail);
 }
-
 fn add_domain_rw(set: &mut AccessSets, id: &DomainId) {
     let key = key_domain(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_domain_detail_rw(set: &mut AccessSets, id: &DomainId, key: &Name) {
     add_domain_r(set, id);
     let detail = key_domain_detail(id, key);
     set.reads.insert(detail.clone());
     set.writes.insert(detail);
 }
-
 fn add_asset_def_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(ASSET_DEF_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_DEF_WILDCARD_KEY.to_string());
@@ -20945,23 +20131,19 @@ fn add_asset_def_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(ASSET_DEF_WILDCARD_KEY.to_string());
     set.reads.insert(key_asset_def(id));
 }
-
 fn add_asset_definition_ownership_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     add_asset_def_r(set, id);
 }
-
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
     add_asset_definition_ownership_r(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
-
 fn add_asset_r_for_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
@@ -20973,57 +20155,47 @@ fn add_asset_r_for_account_hint(
     add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
-
 fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &Name) {
     add_asset_def_r(set, id);
     let detail = key_asset_def_detail(id, key);
     set.reads.insert(detail.clone());
     set.writes.insert(detail);
 }
-
 fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_zk_asset(id));
 }
-
 fn add_escrow_id_rw(set: &mut AccessSets, id: &EscrowId) {
     let key = key_escrow_id(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
     add_escrow_id_rw(set, id);
     let key = key_asset_escrow(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_peer_rw(set: &mut AccessSets, id: &iroha_data_model::peer::PeerId) {
     let key = key_peer(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_contract_manifest_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     set.reads.insert(key_contract_manifest(code_hash));
 }
-
 fn add_contract_manifest_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     let key = key_contract_manifest(code_hash);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_contract_code_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     set.reads.insert(key_contract_code(code_hash));
 }
-
 fn add_contract_code_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     let key = key_contract_code(code_hash);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_contract_instance_rw(
     set: &mut AccessSets,
     address: &iroha_data_model::smart_contract::ContractAddress,
@@ -21032,37 +20204,30 @@ fn add_contract_instance_rw(
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_contract_instance_code_hash_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     set.reads.insert(key_contract_instance_code_hash(code_hash));
 }
-
 fn add_contract_instance_code_hash_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
     let key = key_contract_instance_code_hash(code_hash);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_zk_election_w(set: &mut AccessSets, election_id: &str) {
     set.writes.insert(format!("zk:election:{election_id}"));
 }
-
 fn add_zk_election_submit_w(set: &mut AccessSets, election_id: &str) {
     set.writes
         .insert(format!("zk:election:{election_id}:ciphertexts"));
     set.writes
         .insert(format!("zk:election:{election_id}:nullifiers"));
 }
-
 fn add_zk_election_tally_w(set: &mut AccessSets, election_id: &str) {
     set.writes
         .insert(format!("zk:election:{election_id}:tally"));
 }
-
 fn add_zk_election_tally_r(set: &mut AccessSets, election_id: &str) {
     set.reads.insert(format!("zk:election:{election_id}:tally"));
 }
-
 fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
@@ -21073,7 +20238,6 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     add_asset_definition_ownership_r(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
-
 fn add_asset_rw_for_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
@@ -21088,7 +20252,6 @@ fn add_asset_rw_for_account_hint(
     add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
-
 fn add_scoped_asset_rw_for_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
@@ -21104,7 +20267,6 @@ fn add_scoped_asset_rw_for_account_hint(
     add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
-
 fn add_dynamic_asset_account_rw(set: &mut AccessSets, definition: &AssetDefinitionId) {
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
@@ -21112,14 +20274,12 @@ fn add_dynamic_asset_account_rw(set: &mut AccessSets, definition: &AssetDefiniti
     add_asset_definition_ownership_r(set, definition);
     add_asset_def_rw(set, definition);
 }
-
 fn add_dynamic_asset_definition_rw(set: &mut AccessSets) {
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
     set.reads.insert(ASSET_DEF_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_DEF_WILDCARD_KEY.to_string());
 }
-
 fn add_dynamic_asset_definition_rw_for_optional_account_hint(
     set: &mut AccessSets,
     account: Option<&AccountAccessHint>,
@@ -21131,7 +20291,6 @@ fn add_dynamic_asset_definition_rw_for_optional_account_hint(
         set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
     }
 }
-
 fn add_asset_rw_for_optional_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
@@ -21143,7 +20302,6 @@ fn add_asset_rw_for_optional_account_hint(
         add_dynamic_asset_account_rw(set, definition);
     }
 }
-
 fn add_scoped_asset_rw_for_optional_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
@@ -21156,74 +20314,60 @@ fn add_scoped_asset_rw_for_optional_account_hint(
         add_dynamic_asset_account_rw(set, definition);
     }
 }
-
 fn add_nft_rw(set: &mut AccessSets, id: &NftId) {
     add_nft_coarse_rw(set);
     let key = key_nft(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_nft_r(set: &mut AccessSets, id: &NftId) {
     set.reads.insert(NFT_COARSE_KEY.to_string());
     set.reads.insert(key_nft(id));
 }
-
 fn add_nft_coarse_rw(set: &mut AccessSets) {
     set.reads.insert(NFT_COARSE_KEY.to_string());
     set.writes.insert(NFT_COARSE_KEY.to_string());
 }
-
 fn add_nft_detail_rw(set: &mut AccessSets, id: &NftId, key: &Name) {
     add_nft_rw(set, id);
     let detail = key_nft_detail(id, key);
     set.reads.insert(detail.clone());
     set.writes.insert(detail);
 }
-
 fn add_role_rw(set: &mut AccessSets, id: &RoleId) {
     let key = key_role(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_role_r(set: &mut AccessSets, id: &RoleId) {
     set.reads.insert(key_role(id));
 }
-
 fn add_role_binding_w(set: &mut AccessSets, account: &AccountId, role: &RoleId) {
     set.writes.insert(key_role_binding(account, role));
 }
-
 fn add_role_binding_hint_w(set: &mut AccessSets, account: &AccountAccessHint, role: &RoleId) {
     set.writes.insert(key_role_binding_hint(account, role));
 }
-
 fn add_permission_account_w(set: &mut AccessSets, account: &AccountId, perm: &str) {
     set.writes.insert(key_perm_account(account, perm));
 }
-
 fn add_permission_account_hint_w(set: &mut AccessSets, account: &AccountAccessHint, perm: &str) {
     set.writes.insert(key_perm_account_hint(account, perm));
 }
-
 fn add_permission_role_w(set: &mut AccessSets, role: &RoleId, perm: &str) {
     set.writes.insert(key_perm_role(role, perm));
 }
-
 fn add_subscription_context_rw(set: &mut AccessSets, kind: &str) {
     let key = format!("subscription:trigger_context:{kind}");
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_soracloud_state_r(set: &mut AccessSets, binding: &Name, state_key: &str) {
     set.reads.insert(format!(
         "soracloud:state:{binding}:{}",
         soracloud_host_path_key_segment(state_key)
     ));
 }
-
 fn add_soracloud_state_rw(set: &mut AccessSets, binding: &Name, state_key: &str) {
     let key = format!(
         "soracloud:state:{binding}:{}",
@@ -21232,21 +20376,17 @@ fn add_soracloud_state_rw(set: &mut AccessSets, binding: &Name, state_key: &str)
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn axt_dataspace_key(dsid: iroha_data_model::nexus::DataSpaceId) -> String {
     format!("axt:dataspace:{}", dsid.as_u64())
 }
-
 fn add_axt_dataspace_r(set: &mut AccessSets, dsid: iroha_data_model::nexus::DataSpaceId) {
     set.reads.insert(axt_dataspace_key(dsid));
 }
-
 fn add_axt_dataspace_rw(set: &mut AccessSets, dsid: iroha_data_model::nexus::DataSpaceId) {
     let key = axt_dataspace_key(dsid);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_axt_touch_key_r(
     set: &mut AccessSets,
     dsid: iroha_data_model::nexus::DataSpaceId,
@@ -21256,7 +20396,6 @@ fn add_axt_touch_key_r(
     set.reads
         .insert(format!("axt:dataspace:{}:{key}", dsid.as_u64()));
 }
-
 fn add_axt_touch_key_rw(
     set: &mut AccessSets,
     dsid: iroha_data_model::nexus::DataSpaceId,
@@ -21267,7 +20406,6 @@ fn add_axt_touch_key_rw(
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-
 fn add_axt_touch_manifest_access(
     set: &mut AccessSets,
     dsid: iroha_data_model::nexus::DataSpaceId,
@@ -21281,7 +20419,6 @@ fn add_axt_touch_manifest_access(
         add_axt_touch_key_rw(set, dsid, key);
     }
 }
-
 fn add_axt_descriptor_access(set: &mut AccessSets, descriptor: &crate::axt::AxtDescriptor) {
     for dsid in &descriptor.dsids {
         add_axt_dataspace_rw(set, *dsid);
@@ -21296,7 +20433,6 @@ fn add_axt_descriptor_access(set: &mut AccessSets, descriptor: &crate::axt::AxtD
         }
     }
 }
-
 fn add_asset_handle_access(
     set: &mut AccessSets,
     handle: &crate::axt::AssetHandle,
@@ -21313,14 +20449,12 @@ fn add_asset_handle_access(
         add_axt_dataspace_rw(set, origin);
     }
 }
-
 fn add_trigger_rw(set: &mut AccessSets, id: &TriggerId) {
     let key = key_trigger(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
     set.writes.insert(key_trigger_repetitions(id));
 }
-
 fn record_asset_escrow_open_access(
     set: &mut AccessSets,
     escrow_id: &EscrowId,
@@ -21340,16 +20474,13 @@ fn record_asset_escrow_open_access(
         );
     }
 }
-
 fn record_asset_escrow_lifecycle_access(set: &mut AccessSets, escrow_id: &EscrowId) {
     add_asset_escrow_rw(set, escrow_id);
 }
-
 fn record_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) {
     add_asset_escrow_rw(set, escrow_id);
     add_dynamic_asset_definition_rw(set);
 }
-
 fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
     match instr {
         ir::Instr::Const { .. }
@@ -21436,7 +20567,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::SchemaDecode { .. }
         | ir::Instr::SchemaInfo { .. }
         | ir::Instr::PointerEq { .. } => IrAccessClass::None,
-
         ir::Instr::Sm3Hash { .. } => access_class_for_builtin(Builtin::Sm3Hash),
         ir::Instr::Sha256Hash { .. } => access_class_for_builtin(Builtin::Sha256Hash),
         ir::Instr::Sha3Hash { .. } => access_class_for_builtin(Builtin::Sha3Hash),
@@ -21450,7 +20580,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::Sm4CcmSeal { .. } => access_class_for_builtin(Builtin::Sm4CcmSeal),
         ir::Instr::Sm4CcmOpen { .. } => access_class_for_builtin(Builtin::Sm4CcmOpen),
         ir::Instr::PrivateNumericValcom { .. } => access_class_for_builtin(Builtin::Valcom),
-
         ir::Instr::RegisterAsset { .. } => access_class_for_builtin(Builtin::RegisterAsset),
         ir::Instr::CreateNewAsset { .. } => access_class_for_builtin(Builtin::CreateNewAsset),
         ir::Instr::TransferAsset { .. } => access_class_for_builtin(Builtin::TransferAsset),
@@ -21619,7 +20748,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         }
     }
 }
-
 fn detect_vector_usage(code: &[u8]) -> bool {
     const VECTOR_OPS: [u8; 14] = [
         instruction::wide::crypto::VADD32,
@@ -21643,7 +20771,6 @@ fn detect_vector_usage(code: &[u8]) -> bool {
         VECTOR_OPS.contains(&opcode)
     })
 }
-
 fn detect_zk_usage(code: &[u8]) -> bool {
     const ZK_OPS: [u8; 7] = [
         instruction::wide::zk::ASSERT,
@@ -21660,7 +20787,6 @@ fn detect_zk_usage(code: &[u8]) -> bool {
         ZK_OPS.contains(&opcode)
     })
 }
-
 fn build_entrypoint_descriptors(
     typed: &TypedProgram,
     access_sets: &[AccessSets],
@@ -21678,7 +20804,6 @@ fn build_entrypoint_descriptors(
         hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
         hint_report_by_name.insert(&func.name, report);
     }
-
     let trigger_anchor_names = typed
         .items
         .iter()
@@ -21692,7 +20817,6 @@ fn build_entrypoint_descriptors(
         })
         .collect::<Vec<_>>();
     let namespaced_trigger_anchor = trigger_anchor_names.first().cloned();
-
     let mut triggers_by_name: HashMap<String, Vec<TriggerDescriptor>> = HashMap::new();
     for trigger in &typed.triggers {
         let descriptor = TriggerDescriptor {
@@ -21721,7 +20845,6 @@ fn build_entrypoint_descriptors(
             .or_default()
             .push(descriptor);
     }
-
     let build_descriptor = |func: &semantic::TypedFunction,
                             kind: EntryPointKind|
      -> Result<EmbeddedEntrypointDescriptor, String> {
@@ -21833,7 +20956,6 @@ fn build_entrypoint_descriptors(
                 .map_err(|_| format!("entrypoint `{}` PC does not fit u64", func.name))?,
         })
     };
-
     let entrypoints: Vec<EmbeddedEntrypointDescriptor> = typed
         .items
         .iter()
@@ -21844,10 +20966,8 @@ fn build_entrypoint_descriptors(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     Ok(entrypoints)
 }
-
 fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {
     match modifiers.kind {
         FunctionKind::Kotoage => Some(EntryPointKind::Kotoage),
@@ -21857,10 +20977,8 @@ fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<Entry
         FunctionKind::Private => None,
     }
 }
-
 pub mod test_helpers {
     use super::*;
-
     /// Trigger just the CallMulti guard in codegen with a fabricated IR function.
     /// This avoids parsing/semantic stages and focuses on the emission error path.
     pub fn try_emit_callmulti_guard_only(ret_arity: usize) -> Result<(), String> {
@@ -21892,7 +21010,6 @@ pub mod test_helpers {
             entry: ir::Label(0),
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
-
         // Allocate registers once to mimic real emission environment
         let _alloc = regalloc::allocate(&func);
         // Visit instructions and hit the CallMulti guard path identical to emission.
@@ -21913,7 +21030,6 @@ pub mod test_helpers {
         Ok(())
     }
 }
-
 fn validate_codegen_supported(tp: &semantic::TypedProgram) -> Result<(), Vec<ir::LoweringFailure>> {
     use semantic::{ExprKind as EK, TypedItem, TypedStatement as S};
     fn expr_ok(e: &semantic::TypedExpr) -> Result<(), String> {

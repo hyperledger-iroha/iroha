@@ -22,7 +22,6 @@ fn private_dataspace_peer_configs_use_direct_fee_settlement() {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
         for peer in 0..4 {
@@ -37,7 +36,6 @@ fn private_dataspace_peer_configs_use_direct_fee_settlement() {
                 .and_then(|nexus| nexus.get("fees"))
                 .and_then(toml::Value::as_table)
                 .expect("nexus fees table");
-
             assert_eq!(
                 fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
                 Some("0.00005")
@@ -50,7 +48,6 @@ fn private_dataspace_peer_configs_use_direct_fee_settlement() {
         }
     }
 }
-
 #[test]
 fn account_id_raw_string_parses_as_account_id() {
     let seed_bytes = Some(b"localnet-gas-parse".as_slice());

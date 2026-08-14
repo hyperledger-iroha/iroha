@@ -5,7 +5,6 @@ fn pointer_abi_holding_limit_preserves_some_and_none() {
         DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
-
     for expected in [Some(Quantity::from(2_500_u64)), None] {
         let mut vm = IVM::new(10_000);
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
@@ -28,7 +27,6 @@ fn pointer_abi_holding_limit_preserves_some_and_none() {
         vm.set_register(10, account_ptr);
         vm.set_register(11, asset_ptr);
         vm.set_register(12, limit_ptr);
-
         let mut host = CoreHost::new(account.clone());
         host.syscall(ivm_sys::SYSCALL_SET_ASSET_HOLDING_LIMIT, &mut vm)
             .expect("queue holding-limit instruction");
@@ -43,19 +41,16 @@ fn pointer_abi_holding_limit_preserves_some_and_none() {
         assert_eq!(instruction.holding_limit, expected);
     }
 }
-
 #[test]
 fn pointer_abi_daily_limit_rejects_noncanonical_options() {
     let mut vm = IVM::new(10_000);
     let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
-
     let invalid_tag = vm.alloc_heap(layout.allocation_bytes().unwrap()).unwrap();
     vm.store_u64(invalid_tag, 2).unwrap();
     assert_eq!(
         CoreHost::decode_optional_amount(&vm, invalid_tag),
         Err(ivm::VMError::DecodeError)
     );
-
     let noncanonical_none = vm.alloc_heap(layout.allocation_bytes().unwrap()).unwrap();
     vm.store_u64(noncanonical_none, 0).unwrap();
     vm.store_u64(noncanonical_none + 8, 1).unwrap();
@@ -63,7 +58,6 @@ fn pointer_abi_daily_limit_rejects_noncanonical_options() {
         CoreHost::decode_optional_amount(&vm, noncanonical_none),
         Err(ivm::VMError::DecodeError)
     );
-
     let wrong_payload = store_tlv(
         &mut vm,
         PointerType::Name,
@@ -74,7 +68,6 @@ fn pointer_abi_daily_limit_rejects_noncanonical_options() {
     assert!(CoreHost::decode_optional_amount(&vm, wrong_some).is_err());
     assert!(CoreHost::decode_optional_amount(&vm, invalid_tag + 1).is_err());
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn pointer_abi_transfer_asset_enqueues_isi() {
@@ -100,7 +93,6 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
         pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
     let amount_tlv =
         pointer_abi_tests::make_tlv(ivm::PointerType::Quantity as u16, &quantity_frame(&amount));
-
     // Offsets in INPUT region
     let off_from = 0u64;
     let off_to = 256u64;
@@ -112,7 +104,6 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
-
     let mut vm = IVM::new(10_000);
     // Preload the INPUT region
     vm.memory
@@ -130,7 +121,6 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
     vm.memory
         .preload_input(off_dataspace, &dataspace_tlv)
         .expect("preload input");
-
     let state = scoped_transfer_state(
         &from,
         &to,
@@ -142,14 +132,12 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
     let view = state.view();
     let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(from.clone());
     host.set_query_state(&view);
-
     // Set arg registers to pointers and amount
     vm.set_register(10, ptr_from);
     vm.set_register(11, ptr_to);
     vm.set_register(12, ptr_asset);
     vm.set_register(13, ptr_amount);
     vm.set_register(14, ptr_dataspace);
-
     host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
         .unwrap();
     let queued = host.drain_instructions();
@@ -170,7 +158,6 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
         panic!("expected TransferBox instruction");
     }
 }
-
 // NOTE: Additional CoreHost tests for NFT syscalls can be added once the VM instruction
 // builder helpers stabilize across metadata header formats.
 #[test]
@@ -181,7 +168,6 @@ fn nft_mint_enqueues_register_and_transfer() {
     let nft_id: NftId = "gold$wonderland.universal".parse().unwrap();
     let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
     let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
-
     let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -191,9 +177,7 @@ fn nft_mint_enqueues_register_and_transfer() {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
     let program = build_program(&code, 4);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new(authority_clone));
     vm.load_program(&program).unwrap();
@@ -206,7 +190,6 @@ fn nft_mint_enqueues_register_and_transfer() {
     vm.set_register(10, ivm::Memory::INPUT_START);
     vm.set_register(11, ivm::Memory::INPUT_START + 256);
     vm.run().unwrap();
-
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<CoreHost>().unwrap();
     let queued = host.drain_instructions();
@@ -232,7 +215,6 @@ fn nft_mint_enqueues_register_and_transfer() {
         _ => panic!("expected NFT transfer"),
     }
 }
-
 #[cfg(all(feature = "telemetry", feature = "sm"))]
 #[test]
 fn sm3_syscall_records_success_metric() {
@@ -240,12 +222,10 @@ fn sm3_syscall_records_success_metric() {
     let authority: AccountId = fixture_account("alice");
     let message = b"telemetry";
     let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::Blob as u16, message);
-
     let mut vm = IVM::new(10_000);
     vm.memory
         .preload_input(0, &tlv)
         .expect("preload SM3 input TLV");
-
     let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -255,9 +235,7 @@ fn sm3_syscall_records_success_metric() {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
     let program = build_program(&code, 4);
-
     let accounts = Arc::new(vec![authority.clone()]);
     let mut host = CoreHost::with_accounts(authority, accounts);
     host.force_sm_enabled_for_tests(true);
@@ -267,7 +245,6 @@ fn sm3_syscall_records_success_metric() {
     vm.load_program(&program).expect("load SM3 program");
     vm.set_register(10, ivm::Memory::INPUT_START);
     vm.run().expect("SM3 syscall must succeed");
-
     assert_eq!(
         metrics
             .sm_syscall_total
@@ -276,7 +253,6 @@ fn sm3_syscall_records_success_metric() {
         1
     );
 }
-
 #[cfg(all(feature = "telemetry", feature = "sm"))]
 #[test]
 fn sm3_syscall_failure_records_failure_metric() {
@@ -285,12 +261,10 @@ fn sm3_syscall_failure_records_failure_metric() {
     let message = b"not-a-blob";
     // Encode a TLV with the wrong pointer type to trigger a Norito validation error.
     let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, message);
-
     let mut vm = IVM::new(10_000);
     vm.memory
         .preload_input(0, &tlv)
         .expect("preload SM3 input TLV");
-
     let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -300,9 +274,7 @@ fn sm3_syscall_failure_records_failure_metric() {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
     let program = build_program(&code, 4);
-
     let accounts = Arc::new(vec![authority.clone()]);
     let mut host = CoreHost::with_accounts(authority, accounts);
     host.force_sm_enabled_for_tests(true);
@@ -315,7 +287,6 @@ fn sm3_syscall_failure_records_failure_metric() {
         .run()
         .expect_err("SM3 must be rejected when TLV carries the wrong type");
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
-
     assert_eq!(
         metrics
             .sm_syscall_failures_total

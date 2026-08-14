@@ -9,26 +9,22 @@
 //! dashboards. This mirrors the behaviour implemented by the reference relay
 //! privacy aggregator while providing schema-stable Norito payloads for
 //! long-term storage and operator dashboards.
-
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
-
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-
 /// Aggregated GAR abuse report counts keyed by the truncated category hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoranetGarAbuseCountV1 {
     /// First eight bytes of the BLAKE3 hash for the GAR abuse category label.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub category_hash: [u8; 8],
     /// Number of reports recorded for the category within the bucket.
     pub count: u64,
 }
-
 impl SoranetGarAbuseCountV1 {
     /// Construct a new GAR abuse counter entry.
     #[must_use]
@@ -39,18 +35,16 @@ impl SoranetGarAbuseCountV1 {
         }
     }
 }
-
 /// Secret-shared GAR abuse counter contribution emitted by a Prio collector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoranetGarAbuseShareV1 {
     /// First eight bytes of the BLAKE3 hash for the GAR abuse category label.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub category_hash: [u8; 8],
     /// Signed share for the number of reports recorded for the category.
     pub count_share: i64,
 }
-
 impl SoranetGarAbuseShareV1 {
     /// Construct a new GAR abuse share entry.
     #[must_use]
@@ -61,7 +55,6 @@ impl SoranetGarAbuseShareV1 {
         }
     }
 }
-
 /// Relay mode associated with privacy telemetry buckets.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub enum SoranetPrivacyModeV1 {
@@ -72,7 +65,6 @@ pub enum SoranetPrivacyModeV1 {
     /// Exit relay delivering traffic to Torii.
     Exit,
 }
-
 impl SoranetPrivacyModeV1 {
     /// Human-readable label reused across telemetry outputs.
     #[must_use]
@@ -84,20 +76,23 @@ impl SoranetPrivacyModeV1 {
         }
     }
 }
-
 impl core::fmt::Display for SoranetPrivacyModeV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.as_label())
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for SoranetPrivacyModeV1 {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_label(), out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_label(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for SoranetPrivacyModeV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -110,7 +105,6 @@ impl json::JsonDeserialize for SoranetPrivacyModeV1 {
         }
     }
 }
-
 /// Secret-shared Prio contribution covering a privacy telemetry bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -122,7 +116,7 @@ pub struct SoranetPrivacyPrioShareV1 {
     /// Bucket width in seconds.
     pub bucket_duration_secs: u32,
     /// Relay mode represented by this share.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::privacy_mode"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::privacy_mode"))]
     pub mode: SoranetPrivacyModeV1,
     /// Share for successfully established anonymous circuits.
     pub handshake_accept_share: i64,
@@ -164,7 +158,6 @@ pub struct SoranetPrivacyPrioShareV1 {
     /// Collector-level suppression hint; final suppression is computed after shares combine.
     pub suppressed: bool,
 }
-
 impl SoranetPrivacyPrioShareV1 {
     /// Construct a new Prio share with empty histogram and GAR counters.
     #[must_use]
@@ -195,7 +188,6 @@ impl SoranetPrivacyPrioShareV1 {
         }
     }
 }
-
 /// Percentile estimate for RTT observations collected during the bucket window.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -205,7 +197,6 @@ pub struct SoranetLatencyPercentileV1 {
     /// Estimated RTT in milliseconds for the percentile.
     pub value_ms: u64,
 }
-
 impl SoranetLatencyPercentileV1 {
     /// Construct a new percentile entry.
     #[must_use]
@@ -213,7 +204,6 @@ impl SoranetLatencyPercentileV1 {
         Self { label, value_ms }
     }
 }
-
 /// Aggregated metrics for a privacy-preserving `SoraNet` telemetry bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -272,7 +262,6 @@ pub struct SoranetPrivacyBucketMetricsV1 {
     #[norito(default)]
     pub suppression_reason: Option<SoranetPrivacySuppressionReasonV1>,
 }
-
 impl SoranetPrivacyBucketMetricsV1 {
     /// Construct an empty bucket flagged as suppressed.
     #[must_use]
@@ -288,7 +277,6 @@ impl SoranetPrivacyBucketMetricsV1 {
             SoranetPrivacySuppressionReasonV1::InsufficientContributors,
         )
     }
-
     /// Construct an empty bucket flagged as suppressed with an explicit reason.
     #[must_use]
     pub fn suppressed_with_reason(
@@ -323,13 +311,11 @@ impl SoranetPrivacyBucketMetricsV1 {
             suppression_reason: Some(reason),
         }
     }
-
     /// Returns `true` when the bucket is marked as suppressed.
     #[must_use]
     pub const fn is_suppressed(&self) -> bool {
         self.suppressed
     }
-
     /// Returns the total number of handshake events recorded within the bucket.
     #[must_use]
     pub fn handshake_events_total(&self) -> u64 {
@@ -340,7 +326,6 @@ impl SoranetPrivacyBucketMetricsV1 {
             .saturating_add(self.handshake_other_failure_total)
     }
 }
-
 /// Enumerates the reasons a bucket may be suppressed.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub enum SoranetPrivacySuppressionReasonV1 {
@@ -353,7 +338,6 @@ pub enum SoranetPrivacySuppressionReasonV1 {
     /// The bucket exceeded the force-flush window without reaching the threshold.
     ForcedFlushWindowElapsed,
 }
-
 impl SoranetPrivacySuppressionReasonV1 {
     /// Stable label used across telemetry exports and dashboards.
     #[must_use]
@@ -366,14 +350,18 @@ impl SoranetPrivacySuppressionReasonV1 {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SoranetPrivacySuppressionReasonV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_label(), out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_label(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SoranetPrivacySuppressionReasonV1 {
     fn json_deserialize(
@@ -389,7 +377,6 @@ impl norito::json::JsonDeserialize for SoranetPrivacySuppressionReasonV1 {
         }
     }
 }
-
 /// Privacy-preserving telemetry event ingested by the secure aggregator.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -401,7 +388,6 @@ pub struct SoranetPrivacyEventV1 {
     /// Event payload describing the observation.
     pub kind: SoranetPrivacyEventKindV1,
 }
-
 /// Enumeration of privacy telemetry event kinds.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -423,7 +409,6 @@ pub enum SoranetPrivacyEventKindV1 {
     /// GAR abuse report categorised under a hashed label.
     GarAbuseCategory(SoranetPrivacyEventGarAbuseCategoryV1),
 }
-
 /// Payload describing a successful anonymous circuit establishment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -435,7 +420,6 @@ pub struct SoranetPrivacyEventHandshakeSuccessV1 {
     #[norito(default)]
     pub active_circuits_after: Option<u64>,
 }
-
 /// Payload describing a failed handshake event. This struct is intentionally
 /// `Clone`-only because the detail slug remains an owned `String`.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -450,7 +434,6 @@ pub struct SoranetPrivacyEventHandshakeFailureV1 {
     #[norito(default)]
     pub rtt_ms: Option<u64>,
 }
-
 /// Payload describing a throttling decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -458,7 +441,6 @@ pub struct SoranetPrivacyEventThrottleV1 {
     /// Scope of the throttle.
     pub scope: SoranetPrivacyThrottleScopeV1,
 }
-
 /// Payload describing an active circuits sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -466,7 +448,6 @@ pub struct SoranetPrivacyEventActiveSampleV1 {
     /// Number of active circuits observed.
     pub active_circuits: u64,
 }
-
 /// Payload describing a verified bandwidth contribution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -474,7 +455,6 @@ pub struct SoranetPrivacyEventVerifiedBytesV1 {
     /// Total verified bytes relayed during the observation window.
     pub bytes: u128,
 }
-
 /// Payload describing a GAR abuse category report.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -482,7 +462,6 @@ pub struct SoranetPrivacyEventGarAbuseCategoryV1 {
     /// Raw GAR category label (hashed before aggregation).
     pub label: String,
 }
-
 /// Handshake failure classification surfaced by telemetry events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub enum SoranetPrivacyHandshakeFailureV1 {
@@ -495,7 +474,6 @@ pub enum SoranetPrivacyHandshakeFailureV1 {
     /// Any other failure category.
     Other,
 }
-
 /// Classification for `PoW` validation failures to aid telemetry and dashboards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub enum SoranetPowFailureReasonV1 {
@@ -524,7 +502,6 @@ pub enum SoranetPowFailureReasonV1 {
     /// Revocation store was unavailable or rejected persistence.
     StoreError,
 }
-
 impl SoranetPowFailureReasonV1 {
     /// Stable label used across telemetry exports and dashboards.
     #[must_use]
@@ -545,14 +522,18 @@ impl SoranetPowFailureReasonV1 {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SoranetPowFailureReasonV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_label(), out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_label(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SoranetPowFailureReasonV1 {
     fn json_deserialize(
@@ -576,7 +557,6 @@ impl norito::json::JsonDeserialize for SoranetPowFailureReasonV1 {
         }
     }
 }
-
 /// Count of `PoW` validation failures grouped by reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -586,7 +566,6 @@ pub struct SoranetPowFailureCountV1 {
     /// Number of failures attributed to this reason.
     pub count: u64,
 }
-
 /// Throttle scopes surfaced by telemetry events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub enum SoranetPrivacyThrottleScopeV1 {
@@ -603,7 +582,6 @@ pub enum SoranetPrivacyThrottleScopeV1 {
     /// Descriptor replay protection rejected the handshake.
     DescriptorReplay,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SoranetPrivacyThrottleScopeV1 {
     fn write_json(&self, out: &mut String) {
@@ -617,8 +595,21 @@ impl norito::json::FastJsonWrite for SoranetPrivacyThrottleScopeV1 {
         };
         norito::json::write_json_string(label, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            Self::Congestion => "congestion",
+            Self::Cooldown => "cooldown",
+            Self::Emergency => "emergency",
+            Self::RemoteQuota => "remote_quota",
+            Self::DescriptorQuota => "descriptor_quota",
+            Self::DescriptorReplay => "descriptor_replay",
+        };
+        norito::json::write_json_string_to(label, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SoranetPrivacyThrottleScopeV1 {
     fn json_deserialize(
@@ -636,7 +627,6 @@ impl norito::json::JsonDeserialize for SoranetPrivacyThrottleScopeV1 {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SoranetPrivacyHandshakeFailureV1 {
     fn write_json(&self, out: &mut String) {
@@ -648,8 +638,19 @@ impl norito::json::FastJsonWrite for SoranetPrivacyHandshakeFailureV1 {
         };
         norito::json::write_json_string(label, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            Self::Pow => "pow",
+            Self::Timeout => "timeout",
+            Self::Downgrade => "downgrade",
+            Self::Other => "other",
+        };
+        norito::json::write_json_string_to(label, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SoranetPrivacyHandshakeFailureV1 {
     fn json_deserialize(
@@ -663,5 +664,28 @@ impl norito::json::JsonDeserialize for SoranetPrivacyHandshakeFailureV1 {
             "other" => Ok(Self::Other),
             other => Err(norito::json::Error::unknown_field(other)),
         }
+    }
+}
+#[cfg(all(test, feature = "json"))]
+mod checked_json_tests {
+    use super::*;
+    fn assert_exact<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+    #[test]
+    fn privacy_metric_scalar_families_have_exact_checked_json() {
+        assert_exact(&SoranetPrivacyModeV1::Middle);
+        assert_exact(&SoranetPrivacySuppressionReasonV1::CollectorWindowElapsed);
+        assert_exact(&SoranetPowFailureReasonV1::SignatureInvalid);
+        assert_exact(&SoranetPrivacyThrottleScopeV1::DescriptorReplay);
+        assert_exact(&SoranetPrivacyHandshakeFailureV1::Downgrade);
     }
 }

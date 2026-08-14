@@ -6,17 +6,14 @@
 //! the test suite without depending on external CLI tools. It reproduces the
 //! curve parameters, the ZA computation (SM3), and the SM2 verification steps.
 //! This code is **not** constant‑time and is intended for regression testing only.
-
-#[cfg(feature = "sm")]
-use std::fmt::Write as _;
-
 #[cfg(feature = "sm")]
 use hex::FromHex;
 #[cfg(feature = "sm")]
 use num_bigint::BigUint;
 #[cfg(feature = "sm")]
 use sm3::{Digest, Sm3};
-
+#[cfg(feature = "sm")]
+use std::fmt::Write as _;
 #[cfg(feature = "sm")]
 #[derive(Clone, Debug)]
 struct Point {
@@ -24,17 +21,14 @@ struct Point {
     y: BigUint,
     infinity: bool,
 }
-
 #[cfg(feature = "sm")]
 fn bu(hex_: &str) -> BigUint {
     BigUint::from_bytes_be(&Vec::from_hex(hex_).expect("hex to bytes"))
 }
-
 #[cfg(feature = "sm")]
 fn be(bytes: &[u8]) -> BigUint {
     BigUint::from_bytes_be(bytes)
 }
-
 #[cfg(feature = "sm")]
 fn to_fixed_32(x: &BigUint) -> [u8; 32] {
     let v = x.to_bytes_be();
@@ -43,7 +37,6 @@ fn to_fixed_32(x: &BigUint) -> [u8; 32] {
     out[32 - v.len()..].copy_from_slice(&v);
     out
 }
-
 // Annex D Example 1 (older Fp-256 parameters, see GM/T 0003-2012).
 #[cfg(feature = "sm")]
 lazy_static::lazy_static! {
@@ -57,28 +50,23 @@ lazy_static::lazy_static! {
     static ref GY: BigUint = bu("0680512BCBB42C07D47349D2153B70C4E5D7FDFCBFA36EA1A85841B9E46E09A2");
     static ref G:  Point   = Point { x: GX.clone(), y: GY.clone(), infinity: false };
 }
-
 #[cfg(feature = "sm")]
 fn mod_add(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     (a + b) % m
 }
-
 #[cfg(feature = "sm")]
 fn mod_sub(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     if a >= b { (a - b) % m } else { (a + m - b) % m }
 }
-
 #[cfg(feature = "sm")]
 fn mod_mul(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     (a * b) % m
 }
-
 #[cfg(feature = "sm")]
 fn mod_inv(a: &BigUint, m: &BigUint) -> BigUint {
     // Since p is prime, we can use Fermat's little theorem.
     a.modpow(&(m - BigUint::from(2u32)), m)
 }
-
 #[cfg(feature = "sm")]
 fn is_on_curve(p: &Point) -> bool {
     if p.infinity {
@@ -90,7 +78,6 @@ fn is_on_curve(p: &Point) -> bool {
     let rhs = mod_add(&mod_add(&x3, &mod_mul(&A, &p.x, &P), &P), &B, &P);
     lhs == rhs
 }
-
 #[cfg(feature = "sm")]
 fn point_add(p: &Point, q: &Point) -> Point {
     if p.infinity {
@@ -99,7 +86,6 @@ fn point_add(p: &Point, q: &Point) -> Point {
     if q.infinity {
         return p.clone();
     }
-
     if p.x == q.x {
         let y_sum = mod_add(&p.y, &q.y, &P);
         if y_sum == *ZERO {
@@ -122,7 +108,6 @@ fn point_add(p: &Point, q: &Point) -> Point {
             infinity: false,
         };
     }
-
     let slope_num = mod_sub(&q.y, &p.y, &P);
     let slope_den = mod_inv(&mod_sub(&q.x, &p.x, &P), &P);
     let slope = mod_mul(&slope_num, &slope_den, &P);
@@ -134,7 +119,6 @@ fn point_add(p: &Point, q: &Point) -> Point {
         infinity: false,
     }
 }
-
 #[cfg(feature = "sm")]
 fn point_mul(k: &BigUint, p: &Point) -> Point {
     let mut n = k.clone();
@@ -153,7 +137,6 @@ fn point_mul(k: &BigUint, p: &Point) -> Point {
     }
     acc
 }
-
 #[cfg(feature = "sm")]
 fn compute_za(id: &[u8], pub_x: &BigUint, pub_y: &BigUint) -> [u8; 32] {
     let mut z = Sm3::new();
@@ -163,25 +146,21 @@ fn compute_za(id: &[u8], pub_x: &BigUint, pub_y: &BigUint) -> [u8; 32] {
         .to_be_bytes();
     z.update(entla);
     z.update(id);
-
     z.update(to_fixed_32(&A));
     z.update(to_fixed_32(&B));
     z.update(to_fixed_32(&GX));
     z.update(to_fixed_32(&GY));
     z.update(to_fixed_32(pub_x));
     z.update(to_fixed_32(pub_y));
-
     let out = z.finalize();
     let mut za = [0u8; 32];
     za.copy_from_slice(&out);
     za
 }
-
 #[cfg(feature = "sm")]
 fn verify_annex(distid: &[u8], message: &[u8], public_key_sec1: &[u8], sig_rs: &[u8]) -> bool {
     assert!(public_key_sec1.len() == 65 && public_key_sec1[0] == 0x04);
     assert!(sig_rs.len() == 64);
-
     let pub_key_x = be(&public_key_sec1[1..33]);
     let pub_key_y = be(&public_key_sec1[33..65]);
     let public_point = Point {
@@ -192,54 +171,44 @@ fn verify_annex(distid: &[u8], message: &[u8], public_key_sec1: &[u8], sig_rs: &
     if !is_on_curve(&public_point) {
         return false;
     }
-
     let za = compute_za(distid, &pub_key_x, &pub_key_y);
     let mut message_hasher = Sm3::new();
     message_hasher.update(za.as_slice());
     message_hasher.update(message);
     let e_digest = be(&message_hasher.finalize());
-
     let sig_r = be(&sig_rs[..32]);
     let sig_s_scalar = be(&sig_rs[32..]);
     if sig_r == *ZERO || sig_r >= *N || sig_s_scalar == *ZERO || sig_s_scalar >= *N {
         return false;
     }
-
     let r_plus_s = (&sig_r + &sig_s_scalar) % &*N;
     if r_plus_s == *ZERO {
         return false;
     }
-
     let sig_s_times_g = point_mul(&sig_s_scalar, &G);
     let r_plus_s_times_public = point_mul(&r_plus_s, &public_point);
     let combined = point_add(&sig_s_times_g, &r_plus_s_times_public);
     if combined.infinity {
         return false;
     }
-
     let expected_r = (e_digest + &combined.x) % &*N;
     expected_r == sig_r
 }
-
 #[cfg(feature = "sm")]
 #[test]
 fn annex_example_1_verifies() {
     let distid = b"ALICE123@YAHOO.COM";
     let message = b"message digest";
-
     // Public key (uncompressed SEC1).
     let pubkey =
         Vec::from_hex("040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857")
             .expect("public key hex");
-
     // Signature r||s.
     let sig =
         Vec::from_hex("40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7")
             .expect("signature hex");
-
     assert!(verify_annex(distid, message, &pubkey, &sig));
 }
-
 #[cfg(feature = "sm")]
 #[test]
 fn annex_example_1_za_and_e_match_fixture() {
@@ -248,10 +217,8 @@ fn annex_example_1_za_and_e_match_fixture() {
     let pubkey =
         Vec::from_hex("040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857")
             .expect("public key hex");
-
     let pub_key_x = be(&pubkey[1..33]);
     let pub_key_y = be(&pubkey[33..65]);
-
     let za = compute_za(distid, &pub_key_x, &pub_key_y);
     let mut za_hex = String::with_capacity(za.len() * 2);
     for byte in &za {
@@ -261,7 +228,6 @@ fn annex_example_1_za_and_e_match_fixture() {
         za_hex, "F4A38489E32B45B6F876E3AC2168CA392362DC8F23459C1D1146FC3DBFB7BC9A",
         "ZA must match Annex D Example 1 fixture"
     );
-
     let mut message_hasher = Sm3::new();
     message_hasher.update(za.as_slice());
     message_hasher.update(message);

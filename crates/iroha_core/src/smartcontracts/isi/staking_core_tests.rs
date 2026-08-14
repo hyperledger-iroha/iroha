@@ -1,5 +1,4 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -12,19 +11,16 @@ fn checked_keypair_helpers_preserve_requested_algorithm() {
         Algorithm::BlsNormal
     );
 }
-
 #[test]
 fn staking_amount_boundary_rejects_negative_and_zero_values() {
     assert!(
         Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err(),
         "negative signed values must not enter the nominal stake domain"
     );
-
     let error = ensure_positive_amount(&Quantity::zero(), "stake amount")
         .expect_err("zero stake amount must be rejected");
     assert!(matches!(error, Error::InvariantViolation(_)));
 }
-
 fn new_block() -> crate::block::CommittedBlock {
     let (_leader_public_key, leader_private_key) = checked_keypair().into_parts();
     ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -33,17 +29,14 @@ fn new_block() -> crate::block::CommittedBlock {
     .commit_unchecked()
     .unpack(|_| {})
 }
-
 fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
     state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
 }
-
 fn block_header_with_height(height: u64) -> iroha_data_model::block::BlockHeader {
     let mut header = new_block().as_ref().header();
     header.set_height(NonZeroU64::new(height).expect("non-zero height"));
     header
 }
-
 fn new_block_with_height(height: u64) -> crate::block::CommittedBlock {
     let (_leader_public_key, leader_private_key) = checked_keypair().into_parts();
     ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -52,7 +45,6 @@ fn new_block_with_height(height: u64) -> crate::block::CommittedBlock {
     .commit_unchecked()
     .unpack(|_| {})
 }
-
 fn new_block_with_height_and_time(
     height: u64,
     creation_time_ms: u64,
@@ -65,12 +57,10 @@ fn new_block_with_height_and_time(
     .commit_unchecked()
     .unpack(|_| {})
 }
-
 fn record_block_commit(state_block: &mut StateBlock<'_>, block: &crate::block::CommittedBlock) {
     let topology = state_block.commit_topology.get().clone();
     let _ = state_block.apply_without_execution(block, topology);
 }
-
 fn setup_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -85,7 +75,6 @@ fn setup_state() -> State {
         .expect("staking test lane catalog should be valid");
     state
 }
-
 fn staking_test_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(256).expect("non-zero lane count");
     let lanes = (0..lane_count.get())
@@ -105,13 +94,11 @@ fn staking_test_lane_catalog() -> LaneCatalog {
         .collect();
     LaneCatalog::new(lane_count, lanes).expect("valid staking test lane catalog")
 }
-
 fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog: LaneCatalog) {
     stx.nexus.lane_catalog = lane_catalog;
     stx.nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&stx.nexus.lane_catalog);
 }
-
 fn register_peer_for_account(
     stx: &mut StateTransaction<'_, '_>,
     account: &AccountId,
@@ -121,7 +108,6 @@ fn register_peer_for_account(
     seed_validator_consensus_key(stx, &peer, ConsensusKeyStatus::Active);
     peer
 }
-
 fn validator_peer_id(account: &AccountId) -> crate::PeerId {
     crate::PeerId::from(
         account
@@ -130,7 +116,6 @@ fn validator_peer_id(account: &AccountId) -> crate::PeerId {
             .clone(),
     )
 }
-
 fn seed_validator_consensus_key(
     stx: &mut StateTransaction<'_, '_>,
     peer: &crate::PeerId,
@@ -165,7 +150,6 @@ fn seed_validator_consensus_key(
         stx.world.consensus_keys_by_pk.insert(pk, by_pk);
     }
 }
-
 fn seed_validator_consensus_key_with_heights(
     stx: &mut StateTransaction<'_, '_>,
     peer: &crate::PeerId,
@@ -202,7 +186,6 @@ fn seed_validator_consensus_key_with_heights(
         stx.world.consensus_keys_by_pk.insert(key_label, by_pk);
     }
 }
-
 fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
     assert!(
         epoch_length_blocks >= 3,
@@ -224,7 +207,6 @@ fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
     }
     wb.commit();
 }
-
 fn configure_reward_fixture(
     stx: &mut StateTransaction<'_, '_>,
     lane_id: LaneId,
@@ -242,7 +224,6 @@ fn configure_reward_fixture(
     Register::account(Account::new(validator.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
-
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -268,7 +249,6 @@ fn configure_reward_fixture(
     Mint::asset_quantity(mint_amount, validator_asset.clone())
         .execute(&ALICE_ID, stx)
         .unwrap();
-
     stx.nexus.enabled = true;
     stx.nexus.fees.fee_sink_account_id = sink.to_string();
     stx.nexus.fees.fee_asset_id = asset_def_id.to_string();
@@ -302,10 +282,8 @@ fn configure_reward_fixture(
     }
     .execute(&validator, stx)
     .expect("register validator for rewards");
-
     (sink, validator, reward_asset, asset_def_id)
 }
-
 fn prepare_accounts(
     stx: &mut StateTransaction<'_, '_>,
 ) -> (AccountId, AccountId, AccountId, AssetDefinitionId) {
@@ -340,7 +318,6 @@ fn prepare_accounts(
     register_peer_for_account(stx, &validator);
     register_peer_for_account(stx, &delegator);
     register_peer_for_account(stx, &escrow);
-
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("nexus", "universal").unwrap(),
@@ -365,7 +342,6 @@ fn prepare_accounts(
     Mint::asset_quantity(10_000u32, delegator_asset)
         .execute(&ALICE_ID, stx)
         .unwrap();
-
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
     stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = escrow.to_string();
@@ -373,10 +349,8 @@ fn prepare_accounts(
     stx.commit_topology
         .get_mut()
         .extend(stx.world.peers.iter().cloned());
-
     (validator, delegator, escrow, asset_def_id)
 }
-
 fn insert_validator_record_for_key(
     stx: &mut StateTransaction<'_, '_>,
     key_lane: LaneId,

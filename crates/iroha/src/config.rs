@@ -1,12 +1,9 @@
 //! Module for client-related configuration and structs
-
-use core::str::FromStr;
-use std::{
-    env,
-    path::{Path, PathBuf},
-    time::Duration,
+use crate::{
+    crypto::KeyPair,
+    data_model::{ChainId, NetworkId, prelude::*},
 };
-
+use core::str::FromStr;
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
@@ -16,15 +13,14 @@ use iroha_primitives::small::SmallStr;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 /// Re-exported `SoraNet` anonymity policy for client configuration.
 pub use sorafs_orchestrator::AnonymityPolicy;
-use url::Url;
-
-use crate::{
-    crypto::KeyPair,
-    data_model::{ChainId, NetworkId, prelude::*},
+use std::{
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
 };
-
+use url::Url;
 mod user;
-
+use crate::secrecy::SecretString;
 pub use user::{
     MusubiFetch as MusubiFetchConfig,
     MusubiFetchProviderGateway as MusubiFetchProviderGatewayConfig,
@@ -32,11 +28,7 @@ pub use user::{
     MusubiPublicationProviderGateway as MusubiPublicationProviderGatewayConfig, ParseError,
     Root as UserConfig,
 };
-
-use crate::secrecy::SecretString;
-
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
-
 /// Default time-to-live for transactions submitted via the client API.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
 /// Mandatory lifetime of one signed query request.
@@ -66,14 +58,11 @@ pub fn default_connect_queue_root() -> PathBuf {
     base.push("connect");
     base
 }
-
 /// Valid web auth login string. See [`WebLogin::from_str`]
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
 pub struct WebLogin(SmallStr);
-
 impl FromStr for WebLogin {
     type Err = eyre::ErrReport;
-
     /// Validates that the string is a valid web login
     ///
     /// # Errors
@@ -82,31 +71,26 @@ impl FromStr for WebLogin {
         if login.contains(':') {
             eyre::bail!("The `:` character, in `{login}` is not allowed");
         }
-
         Ok(Self(SmallStr::from_str(login)))
     }
 }
-
 impl WebLogin {
     /// Return the underlying login as a string slice.
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
     }
 }
-
 impl JsonSerialize for WebLogin {
     fn json_serialize(&self, out: &mut String) {
         self.as_str().json_serialize(out);
     }
 }
-
 impl JsonDeserialize for WebLogin {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let raw = parser.parse_string()?;
         Self::from_str(&raw).map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 /// Basic Authentication credentials
 #[derive(Clone, Debug)]
 pub struct BasicAuth {
@@ -115,7 +99,6 @@ pub struct BasicAuth {
     /// Password for Basic Authentication
     pub password: SecretString,
 }
-
 impl JsonSerialize for BasicAuth {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -127,7 +110,6 @@ impl JsonSerialize for BasicAuth {
         out.push('}');
     }
 }
-
 impl JsonDeserialize for BasicAuth {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut map = json::MapVisitor::new(parser)?;
@@ -157,7 +139,6 @@ impl JsonDeserialize for BasicAuth {
         })
     }
 }
-
 /// Complete client configuration.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -194,12 +175,10 @@ pub struct Config {
     /// Configured rollout phase for staged PQ activation.
     pub sorafs_rollout_phase: SorafsRolloutPhase,
 }
-
 /// An error type for [`Config::load`]
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 #[error("Failed to load configuration")]
 pub struct LoadError;
-
 /// Invalid signer-free account network context from a client configuration.
 #[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AccountChainDiscriminantError {
@@ -213,7 +192,6 @@ pub enum AccountChainDiscriminantError {
     #[error("account chain discriminant must be nonzero")]
     Zero,
 }
-
 /// Resolve a public account profile and optional explicit I105 chain discriminant.
 ///
 /// This helper does not parse or construct an account or key pair, so signer-free
@@ -241,7 +219,6 @@ pub fn resolve_account_chain_discriminant(
     }
     Ok(discriminant)
 }
-
 /// Where to load configuration from
 pub enum LoadPath<P> {
     /// Path specified explicitly, therefore, loading will fail if the file is not found
@@ -249,7 +226,6 @@ pub enum LoadPath<P> {
     /// Using the default path, therefore, loading will not fail if the file is not found
     Default(P),
 }
-
 impl Config {
     /// Load one required client configuration file without consulting process environment.
     ///
@@ -271,7 +247,6 @@ impl Config {
             .change_context(LoadError)?;
         Ok(config)
     }
-
     /// Load a required platform client file and return its typed Musubi publication subtree.
     ///
     /// This path does not consult environment variables. Service URLs remain encapsulated in the
@@ -286,7 +261,6 @@ impl Config {
         let toml_source = TomlSource::from_file(path).change_context(LoadError)?;
         Self::load_source_with_musubi_publication(toml_source)
     }
-
     /// Parse an already-read client TOML source and return its Musubi publication subtree.
     ///
     /// Security-sensitive callers use this entry point after opening a configuration file with
@@ -308,7 +282,6 @@ impl Config {
             table,
         ))
     }
-
     fn load_source_with_musubi_publication(
         toml_source: TomlSource,
     ) -> ReportResult<(Self, MusubiPublicationConfig), LoadError> {
@@ -320,7 +293,6 @@ impl Config {
             .parse_with_musubi()
             .change_context(LoadError)?)
     }
-
     /// Loads configuration from a file
     ///
     /// # Errors
@@ -329,7 +301,6 @@ impl Config {
     pub fn load(path: LoadPath<impl AsRef<Path>>) -> ReportResult<Self, LoadError> {
         Self::load_with_env(path, Box::new(iroha_config_base::env::std_env))
     }
-
     fn load_with_env(
         path: LoadPath<impl AsRef<Path>>,
         env: impl ReadEnv + 'static,
@@ -351,7 +322,6 @@ impl Config {
                 Err(err) => Err(err).change_context(LoadError)?,
             },
         };
-
         let config = toml_source
             .map_or_else(ConfigReader::new, |x| {
                 ConfigReader::new().with_toml_source(x)
@@ -364,55 +334,44 @@ impl Config {
         Ok(config)
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, io::Write};
-
+    use super::*;
     use assertables::assert_contains;
     use iroha_config_base::env::MockEnv;
     use iroha_crypto::ExposedPrivateKey;
-
-    use super::*;
-
+    use std::{collections::HashSet, io::Write};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked config fixture keypair")
     }
-
     #[test]
     fn web_login_ok() {
         let _ok: WebLogin = "alice".parse().expect("input is valid");
     }
-
     #[test]
     fn web_login_bad() {
         let _err = "alice:wonderland"
             .parse::<WebLogin>()
             .expect_err("input has `:`");
     }
-
     fn config_sample() -> toml::Table {
         toml::toml! {
             chain = "00000000-0000-0000-0000-000000000000"
             network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             torii_url = "http://127.0.0.1:8080/"
-
             [basic_auth]
             web_login = "mad_hatter"
             password = "ilovetea"
-
             [account]
             domain = "wonderland.universal"
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-
             [transaction]
             time_to_live_ms = 100_000
             status_timeout_ms = 100_000
             nonce = false
         }
     }
-
     #[test]
     fn parse_full_toml_config() {
         ConfigReader::new()
@@ -420,7 +379,6 @@ mod tests {
             .read_and_complete::<user::Root>()
             .unwrap();
     }
-
     #[test]
     fn account_private_key_file_populates_signer() {
         let mut table = config_sample();
@@ -439,20 +397,17 @@ mod tests {
             "private_key_file".into(),
             toml::Value::String(key_file.path().to_string_lossy().into_owned()),
         );
-
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<user::Root>()
             .expect("file-backed client config should complete")
             .parse()
             .expect("file-backed client config should parse");
-
         assert_eq!(
             ExposedPrivateKey(config.key_pair.private_key().clone()).to_string(),
             private_key
         );
     }
-
     #[test]
     fn account_private_key_sources_are_mutually_exclusive() {
         let mut table = config_sample();
@@ -465,7 +420,6 @@ mod tests {
             "private_key_file".into(),
             toml::Value::String(key_file.path().to_string_lossy().into_owned()),
         );
-
         let error = ConfigReader::new()
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<user::Root>()
@@ -477,7 +431,6 @@ mod tests {
             "account.private_key and account.private_key_file are mutually exclusive"
         );
     }
-
     #[test]
     fn torii_url_scheme_support() {
         fn with_scheme(scheme: &str) -> ReportResult<Config, user::ParseError> {
@@ -491,12 +444,10 @@ mod tests {
                 .unwrap()
                 .parse()
         }
-
         let _ = with_scheme("http").expect("should be fine");
         let _ = with_scheme("https").expect("should be fine");
         let _ = with_scheme("ws").expect_err("not supported");
     }
-
     #[test]
     fn torii_url_ensure_trailing_slash() {
         let config = ConfigReader::new()
@@ -506,46 +457,36 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-
         assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1/peer-1/");
     }
-
     #[test]
     fn invalid_toml_file_is_handled_properly() {
         use std::io::Write;
-
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(b"not a valid toml").unwrap();
-
         let err =
             Config::load(LoadPath::Explicit(file.path())).expect_err("should fail on toml parsing");
-
         assert_contains!(
             format!("{err:#?}"),
             "Error while deserializing file contents as TOML"
         );
     }
-
     #[test]
     fn reads_default_path() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(toml::to_string(&config_sample()).unwrap().as_bytes())
             .unwrap();
-
         let config = Config::load(LoadPath::Default(file.path())).unwrap();
-
         assert_eq!(
             config.account.expect_single_signatory().to_string(),
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
         );
     }
-
     #[test]
     fn load_file_requires_and_parses_the_selected_file() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(toml::to_string(&config_sample()).unwrap().as_bytes())
             .unwrap();
-
         let config = Config::load_file(file.path()).expect("load explicit file without fallback");
         assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
         assert!(
@@ -553,7 +494,6 @@ mod tests {
             "the selected file is mandatory"
         );
     }
-
     #[test]
     fn load_bytes_with_musubi_publication_never_reopens_path() {
         let temporary = tempfile::tempdir().expect("temporary directory");
@@ -562,7 +502,6 @@ mod tests {
         let (config, publication) =
             Config::load_bytes_with_musubi_publication(&path, bytes.as_bytes())
                 .expect("parse supplied client bytes");
-
         assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
         assert!(publication.seed_ingress_url.is_none());
         assert!(
@@ -570,7 +509,6 @@ mod tests {
             "parsing an already-read source must not create or reopen its provenance path"
         );
     }
-
     #[test]
     fn signer_free_chain_discriminant_resolution_matches_profiles() {
         assert_eq!(
@@ -590,7 +528,6 @@ mod tests {
             Err(AccountChainDiscriminantError::Zero)
         );
     }
-
     #[test]
     fn full_env_fallback() {
         let key = checked_random_keypair();
@@ -608,10 +545,8 @@ mod tests {
                 ExposedPrivateKey(key.private_key().clone()).to_string(),
             )
             .set("ACCOUNT_PUBLIC_KEY", key.public_key().to_string());
-
         let _config =
             Config::load_with_env(LoadPath::Default("non_existing_path"), env.clone()).unwrap();
-
         assert_eq!(env.unvisited(), HashSet::new());
         assert_eq!(env.unknown(), HashSet::new());
     }

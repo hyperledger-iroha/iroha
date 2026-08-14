@@ -104,6 +104,20 @@ The flow has two phases:
    deployment identity, trusted Ed25519 signature, immediately preceding
    sequence, and earlier timestamp.
 
+The V1 external-software-signer audit journal is immutable and has fixed
+lifetime retention bounds: at most 65,536 records, at most 32 KiB per canonical
+record, and at most 64 MiB (67,108,864 bytes) across all final and pending
+record files. Startup inventories file names and sizes with constant auxiliary
+memory, requires the final names to be the exact contiguous sequence `1..=N`
+and any pending file to be exactly `N+1`, then validates and authenticates one
+record at a time in sequence order. Only the bounded operation-id replay
+indexes, including committed signatures needed for exact replay, survive
+recovery; decoded record objects and path lists do not. Append encodes once and
+checks both lifetime bounds before creating the pending file. Reaching either
+bound fails closed with journal capacity exhaustion: the signer never truncates
+or evicts audit history in place. Operators must commission and independently
+approve a successor signer before the active journal reaches a bound.
+
 The nine-to-17 mapping is a hard-cut contract:
 
 | Prerequisite | Exact ordered readiness gates |

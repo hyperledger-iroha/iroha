@@ -1,7 +1,6 @@
 // Capacity snapshot JSON projection regression tests.
 //
 // Included by `advert_tests` to preserve the exact libtest path.
-
 #[test]
 fn snapshot_to_json_renders_counts() {
     let declaration = RegistryDeclaration {

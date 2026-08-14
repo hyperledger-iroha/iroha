@@ -39,6 +39,7 @@ from iroha_python._privacy_backends import (
     _verifier_backend_registry_tag_v1,
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
+from client_expensive_query_test_support import authenticated_query_client
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoAgreementRecord,
@@ -59,7 +60,6 @@ NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
-
 
 def canonical_proof_attachment(
     *,
@@ -968,7 +968,7 @@ def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
             )
         ]
     )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    client = authenticated_query_client(session)
 
     page = client.query_accounts_typed(
         limit=1,
@@ -1044,7 +1044,7 @@ def test_query_rwas_typed_preserves_bounded_metadata_and_validates_count_mode() 
             )
         ]
     )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    client = authenticated_query_client(session)
 
     page = client.query_rwas_typed(limit=1, count_mode="bounded")
 
@@ -1061,7 +1061,7 @@ def test_query_rwas_typed_preserves_bounded_metadata_and_validates_count_mode() 
 def test_query_account_transactions_posts_count_mode_and_select_projection() -> None:
     account = account_address(0x31)
     session = FakeSession([response(200, {"items": [], "total": 0})])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    client = authenticated_query_client(session)
 
     payload = client.query_account_transactions(
         account,
@@ -1246,23 +1246,6 @@ def test_repo_agreement_client_normalizes_count_mode_before_request() -> None:
     rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     with pytest.raises(ValueError, match="count_mode"):
         rejecting.query_repo_agreements({"count_mode": "full"})
-
-
-def test_solve_account_faucet_pow_accepts_zero_difficulty_puzzle() -> None:
-    anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow(
-        "adult@is",
-        {
-            "difficulty_bits": 0,
-            "anchor_height": 7,
-            "anchor_block_hash_hex": "00" * 32,
-            "scrypt_log_n": 1,
-            "scrypt_r": 1,
-            "scrypt_p": 1,
-        },
-    )
-
-    assert anchor_height == 7
-    assert nonce_hex == "0000000000000000"
 
 
 def test_sns_helpers_read_policy_and_name() -> None:

@@ -1,13 +1,10 @@
 //! PDP/PoTR simulation harness shared across integration tests and tooling.
-use std::time::Duration;
-
 use norito::json::{Map, Value};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-
+use std::time::Duration;
 /// Deterministic seed used for standard reports.
 pub const DEFAULT_SEED: u64 = 0x5eed;
-
 /// Configuration knobs for the PDP/PoTR simulator.
 #[derive(Clone, Copy, Debug)]
 pub struct SimulationConfig {
@@ -40,7 +37,6 @@ pub struct SimulationConfig {
     /// Maximum repairs that can be completed per epoch.
     pub repair_capacity_per_epoch: usize,
 }
-
 impl SimulationConfig {
     /// Validates invariants required by the simulator.
     pub fn validate(&self) {
@@ -76,7 +72,6 @@ impl SimulationConfig {
             "repair capacity must be > 0"
         );
     }
-
     fn json_value(self) -> Value {
         let interval_ms = u64::try_from(self.challenge_interval.as_millis()).unwrap_or(u64::MAX);
         json_object(vec![
@@ -121,7 +116,6 @@ impl SimulationConfig {
         ])
     }
 }
-
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
@@ -142,7 +136,6 @@ impl Default for SimulationConfig {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct NodeState {
     _id: usize,
@@ -150,7 +143,6 @@ struct NodeState {
     adversarial: bool,
     potr_late_epochs: usize,
 }
-
 /// Per-challenge statistics.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChallengeStats {
@@ -165,13 +157,11 @@ pub struct ChallengeStats {
     detection_latency_sum_epochs: u64,
     detection_latency_samples: u64,
 }
-
 impl ChallengeStats {
     /// Records a successful challenge outcome.
     pub fn record_success(&mut self) {
         self.total += 1;
     }
-
     /// Records a failure outcome along with whether it was detected and the latency.
     pub fn record_failure(&mut self, detected: bool, latency_epochs: u64) {
         self.total += 1;
@@ -184,7 +174,6 @@ impl ChallengeStats {
             self.undetected += 1;
         }
     }
-
     /// Fraction of failures that were detected.
     #[allow(clippy::cast_precision_loss)]
     pub fn detection_rate(&self) -> f64 {
@@ -193,7 +182,6 @@ impl ChallengeStats {
         }
         self.detected as f64 / self.failures as f64
     }
-
     /// Mean number of epochs required to detect failures.
     #[allow(clippy::cast_precision_loss)]
     pub fn mean_detection_latency_epochs(&self) -> f64 {
@@ -202,7 +190,6 @@ impl ChallengeStats {
         }
         self.detection_latency_sum_epochs as f64 / self.detection_latency_samples as f64
     }
-
     fn merge(&mut self, other: &Self) {
         self.total += other.total;
         self.failures += other.failures;
@@ -211,7 +198,6 @@ impl ChallengeStats {
         self.detection_latency_sum_epochs += other.detection_latency_sum_epochs;
         self.detection_latency_samples += other.detection_latency_samples;
     }
-
     fn json_value(&self) -> Value {
         json_object(vec![
             ("total", Value::from(self.total)),
@@ -226,7 +212,6 @@ impl ChallengeStats {
         ])
     }
 }
-
 /// `QoS` snapshot for a single epoch.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EpochQosSnapshot {
@@ -239,7 +224,6 @@ pub struct EpochQosSnapshot {
     /// Number of repair operations executed in the epoch.
     pub repair_events: usize,
 }
-
 impl EpochQosSnapshot {
     #[allow(clippy::cast_precision_loss)]
     fn from_samples(samples: &[u64], peak: usize, repair_events: usize) -> Self {
@@ -256,7 +240,6 @@ impl EpochQosSnapshot {
             repair_events,
         }
     }
-
     fn json_value(&self) -> Value {
         json_object(vec![
             ("mean_response_ms", Value::from(self.mean_response_ms)),
@@ -266,7 +249,6 @@ impl EpochQosSnapshot {
         ])
     }
 }
-
 /// Aggregated `QoS` statistics across all epochs.
 #[derive(Clone, Debug, Default)]
 pub struct AggregateQosStats {
@@ -277,18 +259,15 @@ pub struct AggregateQosStats {
     /// Total number of repair operations performed across all epochs.
     pub total_repair_events: usize,
 }
-
 impl AggregateQosStats {
     fn absorb_samples(&mut self, mut samples: Vec<u64>) {
         self.total_response_ms += samples.iter().map(|value| u128::from(*value)).sum::<u128>();
         self.response_samples_ms.append(&mut samples);
     }
-
     fn record_repair_metrics(&mut self, peak: usize, repairs: usize) {
         self.repair_queue_peak = self.repair_queue_peak.max(peak);
         self.total_repair_events += repairs;
     }
-
     /// Mean latency across every recorded `QoS` sample.
     #[allow(clippy::cast_precision_loss)]
     pub fn mean_response_ms(&self) -> f64 {
@@ -297,12 +276,10 @@ impl AggregateQosStats {
         }
         self.total_response_ms as f64 / self.response_samples_ms.len() as f64
     }
-
     /// 95th percentile latency aggregate for all epochs.
     pub fn p95_response_ms(&self) -> f64 {
         percentile(&self.response_samples_ms, 0.95)
     }
-
     fn json_value(&self) -> Value {
         json_object(vec![
             ("mean_response_ms", Value::from(self.mean_response_ms())),
@@ -312,7 +289,6 @@ impl AggregateQosStats {
         ])
     }
 }
-
 /// Per-epoch statistics captured by the simulator.
 #[derive(Clone, Debug)]
 pub struct EpochStats {
@@ -329,7 +305,6 @@ pub struct EpochStats {
     /// Total number of failures that were successfully detected.
     pub detected_failures: usize,
 }
-
 impl EpochStats {
     fn json_value(&self) -> Value {
         let regions = Value::Array(
@@ -348,7 +323,6 @@ impl EpochStats {
         ])
     }
 }
-
 /// Aggregate statistics returned after running the simulator.
 #[derive(Clone, Debug, Default)]
 pub struct SimulationStats {
@@ -363,18 +337,15 @@ pub struct SimulationStats {
     /// Aggregated `QoS` statistics across all epochs.
     pub qos: AggregateQosStats,
 }
-
 impl SimulationStats {
     /// Overall PDP detection rate across the entire simulation.
     pub fn pdp_detection_rate(&self) -> f64 {
         self.aggregate_pdp.detection_rate()
     }
-
     /// Overall `PoTR` detection rate across the entire simulation.
     pub fn potr_detection_rate(&self) -> f64 {
         self.aggregate_potr.detection_rate()
     }
-
     /// Emit a machine-readable JSON summary for dashboards and docs.
     pub fn json_summary(&self) -> Value {
         let epochs = self
@@ -394,13 +365,11 @@ impl SimulationStats {
         ])
     }
 }
-
 struct SimulationHarness {
     config: SimulationConfig,
     nodes: Vec<NodeState>,
     repair_backlog: usize,
 }
-
 impl SimulationHarness {
     fn new(config: SimulationConfig) -> Self {
         config.validate();
@@ -419,14 +388,12 @@ impl SimulationHarness {
             repair_backlog: 0,
         }
     }
-
     fn run(&mut self, seed: u64) -> SimulationStats {
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let mut stats = SimulationStats {
             config: self.config,
             ..SimulationStats::default()
         };
-
         for epoch_idx in 0..self.config.epochs {
             let (mut epoch_stats, response_samples) = self.simulate_epoch(epoch_idx, &mut rng);
             stats.aggregate_pdp.merge(&epoch_stats.pdp);
@@ -439,10 +406,8 @@ impl SimulationHarness {
             epoch_stats.detected_failures = epoch_stats.pdp.detected + epoch_stats.potr.detected;
             stats.epochs.push(epoch_stats);
         }
-
         stats
     }
-
     fn simulate_epoch(&mut self, epoch_idx: usize, rng: &mut ChaCha8Rng) -> (EpochStats, Vec<u64>) {
         let partition_regions = self.sample_partition_regions(rng);
         let mut epoch_stats = EpochStats {
@@ -456,7 +421,6 @@ impl SimulationHarness {
         let mut response_samples = Vec::new();
         let mut epoch_repair_peak = self.repair_backlog;
         let mut epoch_repairs = 0;
-
         for _ in 0..self.config.pdp_challenges_per_epoch {
             self.simulate_pdp_challenge(
                 &partition_regions,
@@ -467,7 +431,6 @@ impl SimulationHarness {
                 &mut epoch_repairs,
             );
         }
-
         for _ in 0..self.config.potr_windows_per_epoch {
             self.simulate_potr_window(
                 &partition_regions,
@@ -478,16 +441,12 @@ impl SimulationHarness {
                 &mut epoch_repairs,
             );
         }
-
         epoch_repairs += self.drain_repairs();
         epoch_repair_peak = epoch_repair_peak.max(self.repair_backlog);
-
         epoch_stats.qos =
             EpochQosSnapshot::from_samples(&response_samples, epoch_repair_peak, epoch_repairs);
-
         (epoch_stats, response_samples)
     }
-
     fn simulate_pdp_challenge(
         &mut self,
         partition_regions: &[usize],
@@ -502,7 +461,6 @@ impl SimulationHarness {
         let partitioned = Self::node_partitioned(node, partition_regions);
         let latency_ms = self.sample_latency_ms(rng);
         response_samples.push(latency_ms);
-
         let failure = self.challenge_fails(node, partitioned, rng);
         if failure {
             let detected = self.detect_failure(partitioned, rng);
@@ -516,7 +474,6 @@ impl SimulationHarness {
             epoch_stats.pdp.record_success();
         }
     }
-
     fn simulate_potr_window(
         &mut self,
         partition_regions: &[usize],
@@ -556,7 +513,6 @@ impl SimulationHarness {
             }
         }
     }
-
     fn sample_partition_regions(&self, rng: &mut ChaCha8Rng) -> Vec<usize> {
         if rng.random::<f64>() >= self.config.partition_probability {
             return Vec::new();
@@ -572,11 +528,9 @@ impl SimulationHarness {
         regions.sort_unstable();
         regions
     }
-
     fn node_partitioned(node: &NodeState, partition_regions: &[usize]) -> bool {
         partition_regions.binary_search(&node.region).is_ok()
     }
-
     fn challenge_fails(
         &self,
         node: &NodeState,
@@ -593,7 +547,6 @@ impl SimulationHarness {
         };
         rng.random::<f64>() < base
     }
-
     fn potr_fails(&self, node: &NodeState, partition_active: bool, rng: &mut ChaCha8Rng) -> bool {
         if partition_active {
             return true;
@@ -604,18 +557,15 @@ impl SimulationHarness {
             rng.random::<f64>() < self.config.honest_network_failure_probability
         }
     }
-
     fn detect_failure(&self, partitioned: bool, rng: &mut ChaCha8Rng) -> bool {
         partitioned || rng.random::<f64>() < self.config.detection_bias_no_partition
     }
-
     fn sample_latency_ms(&self, rng: &mut ChaCha8Rng) -> u64 {
         let base = i64::try_from(self.config.challenge_interval.as_millis()).unwrap_or(i64::MAX);
         let jitter = rng.random_range(-50..=75);
         let adjusted = base.saturating_add(jitter).max(1);
         u64::try_from(adjusted).unwrap_or(1)
     }
-
     fn drain_repairs(&mut self) -> usize {
         let repaired = self
             .repair_backlog
@@ -624,7 +574,6 @@ impl SimulationHarness {
         repaired
     }
 }
-
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -639,12 +588,10 @@ fn percentile(samples: &[u64], target: f64) -> f64 {
     let rank = ((values.len() as f64 - 1.0) * target).round() as usize;
     values[rank] as f64
 }
-
 /// Run the simulator with the provided configuration and random seed.
 pub fn run_simulation(config: SimulationConfig, seed: u64) -> SimulationStats {
     SimulationHarness::new(config).run(seed)
 }
-
 fn json_object(entries: Vec<(&str, Value)>) -> Value {
     let mut map = Map::new();
     for (key, value) in entries {
@@ -652,11 +599,9 @@ fn json_object(entries: Vec<(&str, Value)>) -> Value {
     }
     Value::Object(map)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn json_summary_contains_expected_fields() {
         let stats = run_simulation(SimulationConfig::default(), DEFAULT_SEED);
@@ -672,7 +617,6 @@ mod tests {
             stats.config.epochs
         );
     }
-
     #[test]
     fn potr_window_detects_after_threshold() {
         let config = SimulationConfig {
@@ -687,7 +631,6 @@ mod tests {
             detection_bias_no_partition: 0.0,
             ..SimulationConfig::default()
         };
-
         let mut harness = SimulationHarness::new(config);
         let mut rng = ChaCha8Rng::seed_from_u64(DEFAULT_SEED);
         let mut epoch_stats = EpochStats {
@@ -701,7 +644,6 @@ mod tests {
         let mut response_samples = Vec::new();
         let mut epoch_repair_peak = 0;
         let mut epoch_repairs = 0;
-
         harness.simulate_potr_window(
             &[],
             &mut rng,
@@ -711,7 +653,6 @@ mod tests {
             &mut epoch_repairs,
         );
         assert_eq!(epoch_stats.potr.detected, 0);
-
         harness.simulate_potr_window(
             &[],
             &mut rng,
@@ -720,7 +661,6 @@ mod tests {
             &mut epoch_repair_peak,
             &mut epoch_repairs,
         );
-
         assert_eq!(epoch_stats.potr.detected, config.nodes);
         assert_eq!(harness.repair_backlog, config.nodes);
         assert_eq!(epoch_repairs, config.nodes);

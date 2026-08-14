@@ -1,12 +1,10 @@
 // Chain-authoritative PoR coordinator implementation.
-
 impl PorCoordinator {
     /// Construct an empty coordinator.
     #[must_use]
     pub fn new() -> Self {
         Self::with_record_limit(MAX_POR_COORDINATOR_RECORDS)
     }
-
     /// Construct an empty coordinator with the exact shared configured limit.
     #[must_use]
     pub(crate) fn with_record_limit(record_limit: usize) -> Self {
@@ -30,7 +28,6 @@ impl PorCoordinator {
             status_page_projection_lookups: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
-
     /// Construct a coordinator backed by on-disk persistence.
     ///
     /// # Errors
@@ -40,7 +37,6 @@ impl PorCoordinator {
     pub fn with_persistence<P: Into<PathBuf>>(path: P) -> Result<Self, PorPersistenceError> {
         Self::with_persistence_and_record_limit(path, MAX_POR_COORDINATOR_RECORDS)
     }
-
     /// Load durable report state with the exact shared configured record limit.
     pub(crate) fn with_persistence_and_record_limit<P: Into<PathBuf>>(
         path: P,
@@ -90,7 +86,6 @@ impl PorCoordinator {
             status_page_projection_lookups: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
-
     #[cfg(test)]
     fn next_status_generation(&self) -> Result<u64, PorCoordinatorError> {
         self.status_indexes
@@ -99,21 +94,18 @@ impl PorCoordinator {
             .checked_add(1)
             .ok_or(PorCoordinatorError::StatusGenerationExhausted)
     }
-
     fn ensure_persistence_healthy(&self) -> Result<(), PorCoordinatorError> {
         if let Some(reason) = self.persistence_fault.read().clone() {
             return Err(PorCoordinatorError::PersistenceFaultLatched { reason });
         }
         Ok(())
     }
-
     fn require_authoritative_projection(
         &self,
     ) -> Result<MappedRwLockReadGuard<'_, AuthoritativePorProjectionV1>, PorCoordinatorError> {
         RwLockReadGuard::try_map(self.authoritative_projection.read(), Option::as_ref)
             .map_err(|_| PorCoordinatorError::AuthoritativeProjectionUnavailable)
     }
-
     fn commit_uncertain_reason(error: &PorCoordinatorError) -> Option<&str> {
         match error {
             PorCoordinatorError::Persistence(PorPersistenceError::CommitUncertain(reason)) => {
@@ -122,7 +114,6 @@ impl PorCoordinator {
             _ => None,
         }
     }
-
     fn latch_commit_uncertain(&self, error: &PorCoordinatorError) {
         let Some(reason) = Self::commit_uncertain_reason(error) else {
             return;
@@ -132,7 +123,6 @@ impl PorCoordinator {
             *fault = Some(reason.to_owned());
         }
     }
-
     #[cfg(test)]
     fn inject_persistence_commit_uncertain_once(&self) {
         self.persistence
@@ -141,12 +131,10 @@ impl PorCoordinator {
             .fail_after_publication_once
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
-
     /// Serialize node-authoritative mutation and projection refresh.
     pub(crate) async fn lock_pipeline(&self) -> tokio::sync::OwnedMutexGuard<()> {
         Arc::clone(&self.pipeline_lock).lock_owned().await
     }
-
     /// Atomically replace the Torii status projection from the authoritative
     /// storage-node checkpoint.
     ///
@@ -188,7 +176,6 @@ impl PorCoordinator {
                 ),
             ));
         }
-
         let mut statuses = BTreeMap::new();
         let mut previous = None;
         let mut forced = HashMap::<[u8; 32], BTreeMap<u64, usize>>::new();
@@ -222,7 +209,6 @@ impl PorCoordinator {
             indexes,
             forced_providers: forced,
         };
-
         let mut installed = self.authoritative_projection.write();
         if let Some(current) = installed.as_ref() {
             match snapshot.generation.cmp(&current.indexes.generation) {
@@ -248,7 +234,6 @@ impl PorCoordinator {
         self.records.clear();
         Ok(())
     }
-
     /// Apply one exact node-authoritative lifecycle update in logarithmic time.
     ///
     /// The currently installed generation must either equal the update
@@ -269,7 +254,6 @@ impl PorCoordinator {
                 .err()
                 .map(|error| error.to_string())
         };
-
         let _mutation = self.mutation_lock.lock();
         let mut installed = self.authoritative_projection.write();
         if let Some(reason) = validation_error {
@@ -331,7 +315,6 @@ impl PorCoordinator {
                     update.generation
                 ));
             }
-
             for removed in &update.removed_challenge_ids {
                 let status = current.statuses.get(removed).ok_or_else(|| {
                     "status update removes an identity absent from the installed checkpoint"
@@ -346,7 +329,6 @@ impl PorCoordinator {
                     );
                 }
             }
-
             let action = if let Some(previous) = current.statuses.get(&challenge_id) {
                 if !update.removed_challenge_ids.is_empty() {
                     return Err(
@@ -415,7 +397,6 @@ impl PorCoordinator {
                 return Err(PorCoordinatorError::InvalidAuthoritativeProjection(reason));
             }
         };
-
         let projection = installed
             .as_mut()
             .expect("installed projection was checked before mutation");
@@ -443,13 +424,11 @@ impl PorCoordinator {
         insert_forced_status(&mut projection.forced_providers, &update.status);
         Ok(())
     }
-
     /// Drop the rebuildable projection after an uncertain node mutation.
     pub(crate) fn invalidate_authoritative_projection(&self) {
         let _mutation = self.mutation_lock.lock();
         *self.authoritative_projection.write() = None;
     }
-
     /// Remove retired lifecycle records from coordinator persistence while
     /// retaining any exact weekly-report publication state.
     ///
@@ -466,7 +445,6 @@ impl PorCoordinator {
         }
         self.persist()
     }
-
     /// Record a governance-issued challenge.
     ///
     /// # Errors
@@ -529,7 +507,6 @@ impl PorCoordinator {
             .commit_insert(&status, next_status_generation);
         Ok(())
     }
-
     /// Record a provider proof submission.
     ///
     /// # Errors
@@ -622,7 +599,6 @@ impl PorCoordinator {
         );
         Ok(())
     }
-
     /// Roll back a just-recorded challenge after the node-side commit failed.
     #[cfg(test)]
     pub(crate) fn rollback_challenge(
@@ -673,7 +649,6 @@ impl PorCoordinator {
             .commit_remove(&record.to_status(), next_status_generation);
         Ok(())
     }
-
     /// Roll back a just-recorded proof after the node-side commit failed.
     #[cfg(test)]
     pub(crate) fn rollback_proof(
@@ -730,7 +705,6 @@ impl PorCoordinator {
         );
         Ok(())
     }
-
     /// Roll back a just-recorded verdict after the node-side commit failed.
     #[cfg(test)]
     pub(crate) fn rollback_verdict(
@@ -791,7 +765,6 @@ impl PorCoordinator {
         );
         Ok(())
     }
-
     /// Validate a governance verdict against the current coordinator record.
     ///
     /// # Errors
@@ -838,7 +811,6 @@ impl PorCoordinator {
         entry.validate_verdict_transition(verdict)?;
         Ok(PorCoordinatorVerdictOutcome::Inserted)
     }
-
     /// Commit a previously validated audit verdict.
     ///
     /// Exact replays return [`PorCoordinatorVerdictOutcome::Existing`].
@@ -913,7 +885,6 @@ impl PorCoordinator {
         );
         Ok(PorCoordinatorVerdictOutcome::Inserted)
     }
-
     /// Return one indexed, record-and-byte-bounded status page.
     ///
     /// # Errors
@@ -960,7 +931,6 @@ impl PorCoordinator {
             }
         }
         let after = after_anchor.map(PorStatusCursorAnchor::status_order_key);
-
         let candidates = self.smallest_status_index(&indexes, filter);
         if let Some(after) = after
             && !candidates.is_some_and(|candidates| candidates.contains(&after))
@@ -993,7 +963,6 @@ impl PorCoordinator {
         }
         page.finish()
     }
-
     #[cfg(test)]
     fn query_statuses(
         &self,
@@ -1028,7 +997,6 @@ impl PorCoordinator {
             .expect("test PoR status page is valid")
             .statuses
     }
-
     /// Return one indexed bounded page of an optional inclusive epoch range.
     ///
     /// This replaces the retired synchronous full-history export. Epoch-range
@@ -1049,7 +1017,6 @@ impl PorCoordinator {
             let (start, end) = range.expect("checked Some epoch range");
             return Err(PorCoordinatorError::InvalidEpochRange { start, end });
         }
-
         let _mutation = self.mutation_lock.lock();
         self.ensure_persistence_healthy()?;
         let authoritative_guard = self.authoritative_projection.read();
@@ -1096,7 +1063,6 @@ impl PorCoordinator {
                 });
             }
         }
-
         let mut page = PorStatusPageAccumulator::new(indexes.generation, selection_digest, limits);
         match range {
             None => {
@@ -1148,7 +1114,6 @@ impl PorCoordinator {
                 }
             }
         }
-
         Ok(PorStatusExportPageV1 {
             version: POR_STATUS_EXPORT_PAGE_VERSION_V1,
             start_epoch: range.map(|(start, _)| start),
@@ -1156,7 +1121,6 @@ impl PorCoordinator {
             page: page.finish()?,
         })
     }
-
     fn validate_page_cursor(
         &self,
         cursor: PorStatusPageCursor,
@@ -1189,7 +1153,6 @@ impl PorCoordinator {
             }
         }
     }
-
     fn smallest_status_index<'a>(
         &self,
         indexes: &'a PorStatusIndexes,
@@ -1214,7 +1177,6 @@ impl PorCoordinator {
         }
         Some(selected)
     }
-
     fn status_for_indexed_id(
         &self,
         authoritative: Option<&AuthoritativePorProjectionV1>,
@@ -1235,7 +1197,6 @@ impl PorCoordinator {
             .map(|record| record.to_status())
             .ok_or(PorCoordinatorError::StatusIndexCorrupt { challenge_id })
     }
-
     /// Generate a weekly report for the supplied ISO week.
     ///
     /// # Errors
@@ -1260,7 +1221,6 @@ impl PorCoordinator {
         drop(authoritative);
         self.weekly_report_at(cycle, generated_at)
     }
-
     /// Prepare and durably retain the exact report bytes before publication.
     ///
     /// Exact retries for the same cycle return the retained report even if
@@ -1297,7 +1257,6 @@ impl PorCoordinator {
                 });
             }
         }
-
         let cycle = self
             .prepared_weekly_report
             .read()
@@ -1335,7 +1294,6 @@ impl PorCoordinator {
         }
         Ok(prepared_report)
     }
-
     /// Persist the publication acknowledgement for an exact prepared report.
     fn mark_weekly_report_published(
         &self,
@@ -1372,7 +1330,6 @@ impl PorCoordinator {
         }
         Ok(())
     }
-
     fn weekly_report_at(
         &self,
         cycle: PorReportIsoWeek,
@@ -1418,7 +1375,6 @@ impl PorCoordinator {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             statuses.push(self.status_for_indexed_id(authoritative, challenge_id)?);
         }
-
         let challenges_total = statuses.len() as u32;
         let challenges_verified = statuses
             .iter()
@@ -1434,7 +1390,6 @@ impl PorCoordinator {
             })
             .count() as u32;
         let forced_challenges = statuses.iter().filter(|s| s.forced).count() as u32;
-
         let mut provider_map: BTreeMap<[u8; 32], ProviderStats> = BTreeMap::new();
         for status in &statuses {
             let entry = provider_map.entry(status.provider_id).or_default();
@@ -1453,7 +1408,6 @@ impl PorCoordinator {
                 PorChallengeOutcome::AwaitingProof | PorChallengeOutcome::ProofSubmitted => {}
             }
         }
-
         let providers_missing_vrf = provider_map
             .iter()
             .filter(|(_, stats)| stats.forced > 0)
@@ -1466,7 +1420,6 @@ impl PorCoordinator {
                     .all(|provider| projection.forced_providers.contains_key(provider))
             );
         }
-
         let mut top_offenders: Vec<PorProviderSummaryV1> = provider_map
             .iter()
             .filter_map(|(provider_id, stats)| {
@@ -1499,7 +1452,6 @@ impl PorCoordinator {
                 })
             })
             .collect();
-
         top_offenders.sort_by(|left, right| match right.failures.cmp(&left.failures) {
             Ordering::Equal => match right.forced.cmp(&left.forced) {
                 Ordering::Equal => left.provider_id.cmp(&right.provider_id),
@@ -1510,7 +1462,6 @@ impl PorCoordinator {
         if top_offenders.len() > 10 {
             top_offenders.truncate(10);
         }
-
         let report = PorWeeklyReportV1 {
             version: POR_WEEKLY_REPORT_VERSION_V1,
             cycle,
@@ -1533,7 +1484,6 @@ impl PorCoordinator {
             .map_err(PorCoordinatorError::InvalidWeeklyReport)?;
         Ok(report)
     }
-
     /// Persist coordinator state to the configured backing store, if present.
     ///
     /// # Errors
@@ -1550,7 +1500,6 @@ impl PorCoordinator {
         );
         self.persist_with_status_generation(status_generation)
     }
-
     /// Persist coordinator state with the generation that will be published
     /// with the corresponding status indexes.
     fn persist_with_status_generation(
@@ -1584,7 +1533,6 @@ impl PorCoordinator {
                     .challenge_id
                     .cmp(&right.challenge.challenge_id)
             });
-
             #[cfg(test)]
             let forced_guard = self.forced_providers.read();
             #[cfg(test)]
@@ -1596,7 +1544,6 @@ impl PorCoordinator {
             forced.sort_by(|left, right| left.0.cmp(&right.0));
             #[cfg(test)]
             drop(forced_guard);
-
             #[cfg(test)]
             let prepared_weekly_report = self.prepared_weekly_report.read().clone();
             #[cfg(test)]
@@ -1609,13 +1556,11 @@ impl PorCoordinator {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn track_forced(&self, provider_id: &[u8; 32], epoch: u64) {
         let mut guard = self.forced_providers.write();
         guard.entry(*provider_id).or_default().insert(epoch);
     }
-
     #[cfg(test)]
     fn untrack_forced(&self, provider_id: &[u8; 32], epoch: u64) {
         let mut guard = self.forced_providers.write();

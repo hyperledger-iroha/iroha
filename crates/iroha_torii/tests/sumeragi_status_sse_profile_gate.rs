@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Profile gate test for `/v1/sumeragi/status/sse`.
 #![cfg(feature = "telemetry")]
-
-use std::sync::Arc;
-
 use axum::http::Request;
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
@@ -15,12 +12,11 @@ use iroha_core::{
 };
 use iroha_data_model::ChainId;
 use iroha_torii::{MaybeTelemetry, Torii};
+use std::sync::Arc;
 use tower::ServiceExt as _;
-
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
-
 fn build_torii(profile: TelemetryProfile) -> Torii {
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -38,9 +34,7 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
         events_sender,
     ));
     let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-
     let telemetry = MaybeTelemetry::for_tests().map_gate(profile);
-
     Torii::new_with_handle(
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
@@ -57,7 +51,6 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
         telemetry,
     )
 }
-
 #[tokio::test]
 async fn status_sse_allowed_under_extended_profile() {
     let torii = build_torii(TelemetryProfile::Extended);
@@ -71,9 +64,7 @@ async fn status_sse_allowed_under_extended_profile() {
         )
         .await
         .unwrap();
-
     assert_eq!(resp.status(), StatusCode::OK);
-
     let ct = resp
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -81,7 +72,6 @@ async fn status_sse_allowed_under_extended_profile() {
         .unwrap_or("");
     assert!(ct.contains("text/event-stream"));
 }
-
 #[tokio::test]
 async fn status_sse_restricted_under_operator_profile() {
     let torii = build_torii(TelemetryProfile::Operator);
@@ -95,6 +85,5 @@ async fn status_sse_restricted_under_operator_profile() {
         )
         .await
         .unwrap();
-
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

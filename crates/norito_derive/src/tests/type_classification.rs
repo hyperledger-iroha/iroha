@@ -1,7 +1,5 @@
 //! Self-delimiting type-classification tests.
-
 use super::*;
-
 #[test]
 fn allowlisted_types_are_self_delimiting() {
     let ok_types: Vec<syn::Type> = vec![
@@ -19,12 +17,10 @@ fn allowlisted_types_are_self_delimiting() {
         syn::parse_quote!(Option<u32>),
         syn::parse_quote!(Result<u8, u8>),
     ];
-
     for ty in ok_types {
         assert!(is_self_delimiting(&ty), "expected self-delimiting: {ty:?}");
     }
 }
-
 #[test]
 fn non_allowlisted_types_are_not_self_delimiting() {
     let bad_types: Vec<syn::Type> = vec![
@@ -38,7 +34,6 @@ fn non_allowlisted_types_are_not_self_delimiting() {
         syn::parse_quote!(ConstString),
         syn::parse_quote!(ViewChangeProofPayload),
     ];
-
     for ty in bad_types {
         assert!(
             !is_self_delimiting(&ty),

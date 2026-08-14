@@ -13,7 +13,6 @@ fn restart_publishes_complete_carrier_temp_for_durable_block() {
     let temp_path = path.with_extension("norito.tmp");
     fs::rename(&path, &temp_path).expect("simulate crash before carrier rename");
     drop(kura);
-
     let (reopened, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover carrier temp");
     assert!(path.exists());
@@ -26,7 +25,6 @@ fn restart_publishes_complete_carrier_temp_for_durable_block() {
         Some(carrier_hash)
     );
 }
-
 #[test]
 fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
     for boundary in ["log", "carrier", "carrier_temp"] {
@@ -52,7 +50,6 @@ fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
             .expect("stage complete carrier temporary");
         }
         drop(kura);
-
         let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
             .unwrap_or_else(|err| panic!("recover {boundary} boundary: {err}"));
         assert!(
@@ -72,7 +69,6 @@ fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
         assert_eq!(reopened.blocks_count(), 1, "genesis remains durable");
     }
 }
-
 #[test]
 fn restart_rejects_torn_or_noncanonical_carrier_temporary() {
     for bytes in [vec![0xAA, 0xBB], vec![0; MERGE_CARRIER_MAX_BYTES + 1]] {
@@ -90,14 +86,12 @@ fn restart_rejects_torn_or_noncanonical_carrier_temporary() {
         )
         .expect("write malformed carrier temporary");
         drop(kura);
-
         assert!(
             Kura::new(&config, &RuntimeLaneConfig::default()).is_err(),
             "malformed carrier temporary must fail closed"
         );
     }
 }
-
 #[test]
 fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
     #[derive(Clone, Copy)]
@@ -106,7 +100,6 @@ fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
         Parent,
         View,
     }
-
     for (drift, label) in [
         (Drift::Height, "height"),
         (Drift::Parent, "parent"),
@@ -118,7 +111,6 @@ fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
         let mut entry = sample_merge_entry(1);
         let carrier = next_merge_carrier(&mut blocks, &mut entry);
         kura.store_block(parent).expect("store carrier parent");
-
         match drift {
             Drift::Height => {
                 entry.merge_qc.carrier_height = entry.merge_qc.carrier_height.saturating_add(1);
@@ -131,7 +123,6 @@ fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
                 entry.merge_qc.view = entry.merge_qc.view.saturating_add(1);
             }
         }
-
         let mut carrier = carrier.as_ref().clone();
         let execution_context = carrier
             .execution_context()
@@ -143,7 +134,6 @@ fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
         let error = kura
             .store_block_with_merge_entry(Arc::new(carrier), &entry)
             .expect_err("carrier-round drift must fail closed");
-
         assert!(
             matches!(
                 &error,
@@ -169,7 +159,6 @@ fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
         );
     }
 }
-
 #[test]
 fn store_block_with_merge_entry_preflights_sparse_carrier_conflicts_before_block_commit() {
     let kura = Kura::blank_kura_for_testing();
@@ -184,14 +173,12 @@ fn store_block_with_merge_entry_preflights_sparse_carrier_conflicts_before_block
         block_height: block.header().height().get(),
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting carrier block")),
     };
-
     kura.store_block(parent).expect("store carrier parent");
     {
         let _guard = kura.merge_carrier_lock.lock();
         kura.write_merge_carrier_record_unlocked(conflicting)
             .expect("seed conflicting sparse carrier record");
     }
-
     let error = kura
         .store_block_with_merge_entry(block, &entry)
         .expect_err("sparse carrier conflict must fail before the block commit point");

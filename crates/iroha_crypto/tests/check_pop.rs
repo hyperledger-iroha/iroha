@@ -1,11 +1,8 @@
 //! Test `PoP` verification.
 //! Requires `--features bls`.
-
 #![cfg(feature = "bls")]
-
 use iroha_crypto::{PublicKey, bls_normal_pop_verify};
 use std::str::FromStr;
-
 #[test]
 fn check_all_pops() {
     let peers = [
@@ -26,7 +23,6 @@ fn check_all_pops() {
             "ab81a6465485581900f96925840fccd9345010f8ece130a4a547af2ceea1ed9fabe9c1fbd1d15be3378a777269673d000dc6a7fd37d7d2d3cf75ea8c9ba27ada8e5c2b95629b3fac7f05059f99609c389f49d335a083c050ad4cb3bf8a2bb3db",
         ),
     ];
-
     for (i, (pub_hex, pop_hex)) in peers.iter().enumerate() {
         let pub_key = PublicKey::from_str(pub_hex).expect("parse pub");
         let pop = hex::decode(pop_hex).expect("parse pop");

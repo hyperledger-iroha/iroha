@@ -1,5 +1,4 @@
 //! Governance deployment CLI helpers.
-
 use super::shared::{
     parse_governance_proposal_id_v1, print_with_summary, resolve_contract_address_target,
 };
@@ -14,7 +13,6 @@ use iroha::data_model::{
     name::Name,
     parameter::{CustomParameterId, Parameter, custom::CustomParameter},
 };
-
 #[derive(clap::Args, Debug)]
 pub struct ProposeDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]
@@ -37,7 +35,6 @@ pub struct ProposeDeployArgs {
     #[arg(long, value_name = "MODE", value_parser = ["Zk", "Plain"])]
     pub mode: Option<String>,
 }
-
 impl Run for ProposeDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -114,7 +111,6 @@ impl Run for ProposeDeployArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct FinalizeArgs {
     /// Referendum id (the exact lowercase proposal fingerprint)
@@ -132,7 +128,6 @@ pub struct FinalizeArgs {
     )]
     pub proposal_id: String,
 }
-
 fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
     let referendum_id = parse_governance_proposal_id_v1(&args.referendum_id)
         .map_err(|message| eyre!("invalid referendum_id: {message}"))?;
@@ -146,7 +141,6 @@ fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
         ("proposal_id", json_value(&proposal_id)?),
     ])
 }
-
 impl Run for FinalizeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -167,7 +161,6 @@ impl Run for FinalizeArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct EnactArgs {
     /// Proposal id (hex 64)
@@ -181,11 +174,9 @@ pub struct EnactArgs {
     #[arg(long)]
     pub apply: bool,
 }
-
 fn build_enact_body(args: &EnactArgs) -> Result<norito::json::Value> {
     json_object(vec![("proposal_id", json_value(&args.proposal_id)?)])
 }
-
 fn decode_enact_instructions(
     response: &norito::json::Value,
     expected_proposal_id: &str,
@@ -223,7 +214,6 @@ fn decode_enact_instructions(
     }
     Ok(vec![instruction])
 }
-
 fn finish_enact<C: RunContext>(
     context: &mut C,
     proposal_id: &str,
@@ -247,7 +237,6 @@ fn finish_enact<C: RunContext>(
     ));
     print_with_summary(context, summary, value)
 }
-
 impl Run for EnactArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -256,14 +245,12 @@ impl Run for EnactArgs {
         finish_enact(context, &self.proposal_id, self.apply, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProtectedSetArgs {
     /// Comma-separated namespaces (e.g., apps,system)
     #[arg(long)]
     pub namespaces: String,
 }
-
 impl Run for ProtectedSetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         // Build a SetParameter(Custom) instruction for gov_protected_namespaces
@@ -301,14 +288,12 @@ impl Run for ProtectedSetArgs {
         print_with_summary(context, summary, &out)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProtectedApplyArgs {
     /// Comma-separated namespaces (e.g., apps,system)
     #[arg(long)]
     pub namespaces: String,
 }
-
 impl Run for ProtectedApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -331,10 +316,8 @@ impl Run for ProtectedApplyArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProtectedGetArgs {}
-
 impl Run for ProtectedGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -351,7 +334,6 @@ impl Run for ProtectedGetArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct DeployMetaArgs {
     #[arg(long, conflicts_with = "contract_alias")]
@@ -362,7 +344,6 @@ pub struct DeployMetaArgs {
     #[arg(long = "approver", value_name = "ACCOUNT")]
     pub approvers: Vec<String>,
 }
-
 impl Run for DeployMetaArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -372,7 +353,6 @@ impl Run for DeployMetaArgs {
             self.contract_alias.as_deref(),
         )?;
         let mut pairs = vec![("gov_contract_address", json_value(&contract_address)?)];
-
         if !self.approvers.is_empty() {
             let mut accounts = Vec::with_capacity(self.approvers.len());
             for (idx, raw) in self.approvers.iter().enumerate() {
@@ -386,13 +366,11 @@ impl Run for DeployMetaArgs {
             }
             pairs.push(("gov_manifest_approvers", json_array(accounts)?));
         }
-
         let obj = json_object(pairs)?;
         context.print_data(&obj)?;
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,14 +387,12 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::JsonSerialize;
     use url::Url;
-
     struct TestContext {
         cfg: Config,
         printed: Vec<norito::json::Value>,
         submitted: Option<Vec<InstructionBox>>,
         i18n: Localizer,
     }
-
     impl TestContext {
         fn new() -> Self {
             let key_pair = fixture_key_pair(vec![0xA5; 32]);
@@ -451,12 +427,10 @@ mod tests {
             }
         }
     }
-
     fn fixture_key_pair(seed: Vec<u8>) -> KeyPair {
         KeyPair::try_from_seed(seed, Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(
@@ -468,28 +442,22 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
@@ -497,11 +465,9 @@ mod tests {
             self.printed.push(norito::json::to_value(data)?);
             Ok(())
         }
-
         fn println(&mut self, _data: impl std::fmt::Display) -> Result<()> {
             Ok(())
         }
-
         fn submit_with_metadata(
             &mut self,
             instructions: impl Into<Executable>,
@@ -510,7 +476,6 @@ mod tests {
         ) -> Result<()> {
             self.submit(instructions)
         }
-
         fn submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {
             match instructions.into() {
                 Executable::Instructions(list) => {
@@ -532,7 +497,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn deploy_meta_args_outputs_expected_keys() {
         let mut ctx = TestContext::new();
@@ -552,7 +516,6 @@ mod tests {
         );
         assert!(value.get("gov_manifest_approvers").is_none());
     }
-
     #[test]
     fn deploy_meta_args_accepts_manifest_approvers() {
         let mut ctx = TestContext::new();
@@ -577,7 +540,6 @@ mod tests {
             .collect();
         assert_eq!(collected, vec![validator, bob]);
     }
-
     #[test]
     fn deploy_meta_args_rejects_invalid_approver() {
         let mut ctx = TestContext::new();
@@ -596,7 +558,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn deploy_meta_args_rejects_legacy_approver_with_domain_suffix() {
         let mut ctx = TestContext::new();
@@ -615,7 +576,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn finalize_body_shape() {
         let proposal_id = "aa".repeat(32);
@@ -629,7 +589,6 @@ mod tests {
         assert_eq!(v["referendum_id"].as_str(), Some(proposal_id.as_str()));
         assert_eq!(v["proposal_id"].as_str(), Some(proposal_id.as_str()));
     }
-
     #[test]
     fn finalize_body_rejects_noncanonical_or_mismatched_ids() {
         for args in [
@@ -646,7 +605,6 @@ mod tests {
                 build_finalize_body(&args).expect_err("invalid finalization ids must fail locally");
         }
     }
-
     #[test]
     fn enact_body_matches_strict_torii_dto() {
         let args = EnactArgs {
@@ -663,10 +621,8 @@ mod tests {
         assert!(object.get("preimage_hash").is_none());
         assert!(object.get("window").is_none());
     }
-
     fn enact_draft_response(proposal_id: [u8; 32]) -> norito::json::Value {
         use iroha::data_model::isi::{Instruction, frame_instruction_payload};
-
         let instruction: InstructionBox = iroha::data_model::isi::governance::EnactReferendum {
             referendum_id: proposal_id,
             preimage_hash: proposal_id,
@@ -695,7 +651,6 @@ mod tests {
         ])
         .expect("build enact draft response")
     }
-
     #[test]
     fn enact_defaults_to_draft_only() {
         let proposal_id = [0xAB; 32];
@@ -706,7 +661,6 @@ mod tests {
         assert!(context.submitted.is_none());
         assert_eq!(context.printed.len(), 1);
     }
-
     #[test]
     fn enact_apply_decodes_and_submits_the_exact_native_instruction() {
         let proposal_id = [0xAC; 32];
@@ -723,7 +677,6 @@ mod tests {
         assert_eq!(enactment.referendum_id, proposal_id);
         assert!(context.printed.is_empty());
     }
-
     fn sample_account_string(name: &str) -> String {
         let mut hasher = Blake3Hasher::new();
         hasher.update(b"gov-deploy-account");

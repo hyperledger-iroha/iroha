@@ -1,15 +1,11 @@
 //! Validation and execution logic of instructions for multisig transactions
-
-use std::collections::BTreeSet;
-
-use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
-
 use super::*;
 use crate::{
     data_model::{Level, query::error::FindError},
     smart_contract::DebugExpectExt as _,
 };
-
+use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
+use std::collections::BTreeSet;
 fn proposer_is_authorized(
     multisig_account: &AccountId,
     proposer: &AccountId,
@@ -22,7 +18,6 @@ fn proposer_is_authorized(
         || proposer == multisig_account
         || spec.signatories.contains_key(proposer)
 }
-
 fn approver_is_authorized(
     multisig_account: &AccountId,
     approver: &AccountId,
@@ -31,11 +26,9 @@ fn approver_is_authorized(
 ) -> bool {
     has_multisig_role || approver == multisig_account || spec.signatories.contains_key(approver)
 }
-
 fn canceler_is_authorized(multisig_account: &AccountId, canceler: &AccountId) -> bool {
     canceler.subject_id() == multisig_account.subject_id()
 }
-
 impl VisitExecute for MultisigPropose {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         let host = executor.host();
@@ -65,11 +58,9 @@ impl VisitExecute for MultisigPropose {
         let has_not_longer_ttl = self
             .transaction_ttl_ms
             .is_none_or(|override_ttl_ms| override_ttl_ms <= multisig_spec.transaction_ttl_ms);
-
         if !has_not_longer_ttl {
             deny!(executor, "ttl violates the restriction");
         }
-
         if !proposer_is_authorized(
             &multisig_account,
             &proposer,
@@ -79,7 +70,6 @@ impl VisitExecute for MultisigPropose {
         ) {
             deny!(executor, "not qualified to propose multisig");
         }
-
         match proposal_value(&multisig_account, instructions_hash, executor) {
             Ok(existing) if now_ms(executor) < existing.expires_at_ms => {
                 deny!(executor, "multisig proposal duplicates")
@@ -91,13 +81,11 @@ impl VisitExecute for MultisigPropose {
             Err(err) => deny!(executor, err),
         }
     }
-
     fn execute<V: Execute + Visit + ?Sized>(self, executor: &mut V) -> Result<(), ValidationFail> {
         let proposer = executor.context().authority.clone();
         let multisig_account = self.account;
         let instructions_hash = HashOf::new(&self.instructions);
         let spec = multisig_spec(&multisig_account, executor)?;
-
         let now_ms = now_ms(executor);
         if proposal_value(&multisig_account, instructions_hash, executor).is_ok() {
             prune_expired(multisig_account.clone(), instructions_hash, executor)?;
@@ -113,7 +101,6 @@ impl VisitExecute for MultisigPropose {
             BTreeSet::from([proposer]),
             None,
         );
-
         let approve_me = MultisigApprove::new(multisig_account.clone(), instructions_hash);
         // Recursively deploy multisig authentication down to the personal leaf signatories
         for signatory in spec.signatories.keys().cloned() {
@@ -127,20 +114,16 @@ impl VisitExecute for MultisigPropose {
                 )?;
             }
         }
-
         // Authorize as the multisig account
         executor.context_mut().authority = multisig_account.clone();
-
         visit_seq!(executor.visit_set_account_key_value(&SetKeyValue::account(
             multisig_account,
             proposal_key(&instructions_hash),
             proposal_value,
         )));
-
         Ok(())
     }
 }
-
 fn deploy_relayer<V: Execute + Visit + ?Sized>(
     relayer: AccountId,
     relay: MultisigApprove,
@@ -151,10 +134,8 @@ fn deploy_relayer<V: Execute + Visit + ?Sized>(
     let spec = multisig_spec(&relayer, executor)?;
     let relay_expires_at_ms =
         capped_relay_expiry(now_ms, parent_expires_at_ms, spec.transaction_ttl_ms.get());
-
     let relay_hash = HashOf::new(&vec![relay.clone().into()]);
     let sub_relay = MultisigApprove::new(relayer.clone(), relay_hash);
-
     for signatory in spec.signatories.keys().cloned() {
         if is_multisig(&signatory, executor)? {
             deploy_relayer(
@@ -166,10 +147,8 @@ fn deploy_relayer<V: Execute + Visit + ?Sized>(
             )?;
         }
     }
-
     // Authorize as the relayer account
     executor.context_mut().authority = relayer.clone();
-
     let relay_value = MultisigProposalValue::new(
         vec![relay.into()],
         now_ms,
@@ -182,15 +161,12 @@ fn deploy_relayer<V: Execute + Visit + ?Sized>(
         proposal_key(&relay_hash),
         relay_value,
     )));
-
     Ok(())
 }
-
 fn capped_relay_expiry(now_ms: u64, parent_expires_at_ms: u64, relayer_ttl_ms: u64) -> u64 {
     let local_expiry = now_ms.saturating_add(relayer_ttl_ms);
     local_expiry.min(parent_expires_at_ms)
 }
-
 fn proposal_value<V: Execute + Visit + ?Sized>(
     multisig_account: &AccountId,
     instructions_hash: HashOf<Vec<InstructionBox>>,
@@ -201,7 +177,6 @@ fn proposal_value<V: Execute + Visit + ?Sized>(
         .try_into_any_norito()
         .map_err(metadata_conversion_error)
 }
-
 fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> u64 {
     executor
         .context()
@@ -211,24 +186,20 @@ fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> u64 {
         .try_into()
         .dbg_expect("shouldn't overflow within 584942417 years")
 }
-
 fn ensure_multisig_account_spec_is_actionable(spec: &MultisigSpec) -> Result<(), ValidationFail> {
     if spec.signatories.is_empty() {
         return Err(ValidationFail::NotPermitted(
             "multisig spec must include at least one signatory".to_owned(),
         ));
     }
-
     Ok(())
 }
-
 impl VisitExecute for MultisigApprove {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         let approver = executor.context().authority.clone();
         let multisig_account = self.account.clone();
         let host = executor.host();
         let instructions_hash = self.instructions_hash;
-
         let spec = match multisig_spec(&multisig_account, executor) {
             Ok(spec) => spec,
             Err(err) => deny!(executor, err),
@@ -246,29 +217,23 @@ impl VisitExecute for MultisigApprove {
                     .any(|role| role == multisig_role_for(home_domain.as_ref(), &multisig_account))
             })
             .unwrap_or(false);
-
         if !approver_is_authorized(&multisig_account, &approver, &spec, has_multisig_role) {
             deny!(executor, "not qualified to approve multisig");
         }
-
         if let Err(err) = ensure_multisig_account_spec_is_actionable(&spec) {
             deny!(executor, err);
         }
-
         if let Err(err) = proposal_value(&multisig_account, instructions_hash, executor) {
             deny!(executor, err)
         }
     }
-
     fn execute<V: Execute + Visit + ?Sized>(self, executor: &mut V) -> Result<(), ValidationFail> {
         let approver = executor.context().authority.clone();
         let multisig_account = self.account;
         let instructions_hash = self.instructions_hash;
-
         // Check if the proposal is expired
         // Authorize as the multisig account
         prune_expired(multisig_account.clone(), instructions_hash, executor)?;
-
         let Ok(mut proposal_value) = proposal_value(&multisig_account, instructions_hash, executor)
         else {
             // The proposal is pruned
@@ -286,17 +251,14 @@ impl VisitExecute for MultisigApprove {
             // The relaying approval already has executed
             return Ok(());
         }
-
         let spec = multisig_spec(&multisig_account, executor)?;
         ensure_multisig_account_spec_is_actionable(&spec)?;
-
         proposal_value.approvals.insert(approver);
         visit_seq!(executor.visit_set_account_key_value(&SetKeyValue::account(
             multisig_account.clone(),
             proposal_key(&instructions_hash),
             proposal_value.clone(),
         )));
-
         let is_authenticated = u16::from(spec.quorum)
             <= spec
                 .signatories
@@ -304,7 +266,6 @@ impl VisitExecute for MultisigApprove {
                 .filter(|(id, _)| proposal_value.approvals.contains(id))
                 .map(|(_, weight)| u16::from(weight))
                 .sum();
-
         if is_authenticated {
             match proposal_value.is_relayed {
                 None => {
@@ -322,48 +283,39 @@ impl VisitExecute for MultisigApprove {
                 }
                 _ => unreachable!(),
             }
-
             for instruction in proposal_value.instructions {
                 visit_seq!(executor.visit_instruction(&instruction));
             }
         }
-
         Ok(())
     }
 }
-
 impl VisitExecute for MultisigCancel {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         let canceler = executor.context().authority.clone();
         let multisig_account = self.account.clone();
         let instructions_hash = self.instructions_hash;
-
         let spec = match multisig_spec(&multisig_account, executor) {
             Ok(spec) => spec,
             Err(err) => deny!(executor, err),
         };
-
         if !canceler_is_authorized(&multisig_account, &canceler) {
             deny!(
                 executor,
                 "multisig cancel must execute as the multisig account"
             );
         }
-
         if let Err(err) = ensure_multisig_account_spec_is_actionable(&spec) {
             deny!(executor, err);
         }
-
         if let Err(err) = proposal_value(&multisig_account, instructions_hash, executor) {
             deny!(executor, err);
         }
     }
-
     fn execute<V: Execute + Visit + ?Sized>(self, executor: &mut V) -> Result<(), ValidationFail> {
         let canceler = executor.context().authority.clone();
         let multisig_account = self.account;
         let instructions_hash = self.instructions_hash;
-
         let spec = multisig_spec(&multisig_account, executor)?;
         if !canceler_is_authorized(&multisig_account, &canceler) {
             return Err(ValidationFail::NotPermitted(
@@ -371,20 +323,16 @@ impl VisitExecute for MultisigCancel {
             ));
         }
         ensure_multisig_account_spec_is_actionable(&spec)?;
-
         prune_expired(multisig_account.clone(), instructions_hash, executor)?;
-
         let proposal_value = proposal_value(&multisig_account, instructions_hash, executor)?;
         if let Some(true) = proposal_value.is_relayed {
             return Err(ValidationFail::NotPermitted(
                 "cannot cancel an executed relayed approval".to_owned(),
             ));
         }
-
         prune_down(multisig_account, instructions_hash, executor)
     }
 }
-
 /// Remove an expired proposal and relevant entries, switching the executor authority to this multisig account
 fn prune_expired<V: Execute + Visit + ?Sized>(
     multisig_account: AccountId,
@@ -392,13 +340,11 @@ fn prune_expired<V: Execute + Visit + ?Sized>(
     executor: &mut V,
 ) -> Result<(), ValidationFail> {
     let proposal_value = proposal_value(&multisig_account, instructions_hash, executor)?;
-
     if now_ms(executor) < proposal_value.expires_at_ms {
         // Authorize as the multisig account
         executor.context_mut().authority = multisig_account.clone();
         return Ok(());
     }
-
     // Go upstream to the root through approvals
     for instruction in proposal_value.instructions {
         if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>()
@@ -407,11 +353,9 @@ fn prune_expired<V: Execute + Visit + ?Sized>(
             return prune_expired(approve.account, approve.instructions_hash, executor);
         }
     }
-
     // Go downstream, cleaning up relayers
     prune_down(multisig_account, instructions_hash, executor)
 }
-
 /// Remove an proposal and relevant entries, switching the executor authority to this multisig account
 fn prune_down<V: Execute + Visit + ?Sized>(
     multisig_account: AccountId,
@@ -419,17 +363,14 @@ fn prune_down<V: Execute + Visit + ?Sized>(
     executor: &mut V,
 ) -> Result<(), ValidationFail> {
     let spec = multisig_spec(&multisig_account, executor)?;
-
     // Authorize as the multisig account
     executor.context_mut().authority = multisig_account.clone();
-
     visit_seq!(
         executor.visit_remove_account_key_value(&RemoveKeyValue::account(
             multisig_account.clone(),
             proposal_key(&instructions_hash),
         ))
     );
-
     for signatory in spec.signatories.keys().cloned() {
         let relay_hash = {
             let relay = MultisigApprove::new(multisig_account.clone(), instructions_hash);
@@ -439,34 +380,26 @@ fn prune_down<V: Execute + Visit + ?Sized>(
             prune_down(signatory, relay_hash, executor)?
         }
     }
-
     // Restore the authority
     executor.context_mut().authority = multisig_account;
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::num::{NonZeroU16, NonZeroU64};
-    use std::collections::BTreeMap;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
     use iroha_smart_contract::data_model::{account::AccountId, domain::DomainId};
-
-    use super::*;
-
+    use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn account(seed: u8, _domain: &DomainId) -> AccountId {
         let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
@@ -475,7 +408,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     fn sample_spec(_domain: &DomainId, signer: &AccountId) -> MultisigSpec {
         MultisigSpec::new(
             BTreeMap::from([(signer.clone(), 1)]),
@@ -483,7 +415,6 @@ mod tests {
             NonZeroU64::new(1).expect("nonzero ttl"),
         )
     }
-
     #[test]
     fn proposer_authorized_by_signatory_or_self() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
@@ -491,7 +422,6 @@ mod tests {
         let multisig = account(2, &domain);
         let other = account(3, &domain);
         let spec = sample_spec(&domain, &signer);
-
         assert!(
             proposer_is_authorized(&multisig, &signer, &spec, false, false),
             "signatory should be authorized"
@@ -513,7 +443,6 @@ mod tests {
             "role-based authorization should allow proposer"
         );
     }
-
     #[test]
     fn approver_authorized_by_signatory_or_self() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
@@ -521,7 +450,6 @@ mod tests {
         let multisig = account(5, &domain);
         let other = account(6, &domain);
         let spec = sample_spec(&domain, &signer);
-
         assert!(
             approver_is_authorized(&multisig, &signer, &spec, false),
             "signatory should be authorized"
@@ -539,14 +467,12 @@ mod tests {
             "role-based authorization should allow approver"
         );
     }
-
     #[test]
     fn canceler_must_be_the_multisig_subject() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let multisig = account(10, &domain);
         let same_subject = multisig.clone();
         let other = account(11, &domain);
-
         assert!(
             canceler_is_authorized(&multisig, &same_subject),
             "the multisig account itself should be allowed to execute cancel"
@@ -556,7 +482,6 @@ mod tests {
             "signers must not be able to execute cancel directly outside multisig"
         );
     }
-
     #[test]
     fn canonical_policy_derived_multisig_account_is_allowed() {
         let domain: DomainId = DomainId::try_new("derived", "universal").expect("valid domain");
@@ -571,7 +496,6 @@ mod tests {
         )
         .expect("valid policy");
         let multisig_account = AccountId::new_multisig(policy);
-
         assert!(
             matches!(
                 multisig_account.controller(),
@@ -582,7 +506,6 @@ mod tests {
         ensure_multisig_account_spec_is_actionable(&spec)
             .expect("canonical policy-derived multisig account should be allowed");
     }
-
     #[test]
     fn empty_multisig_spec_is_rejected() {
         let spec = MultisigSpec::new(
@@ -590,7 +513,6 @@ mod tests {
             NonZeroU16::new(1).expect("nonzero quorum"),
             NonZeroU64::new(1).expect("nonzero ttl"),
         );
-
         let err = ensure_multisig_account_spec_is_actionable(&spec)
             .expect_err("empty multisig spec should be rejected");
         match &err {

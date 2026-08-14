@@ -4,8 +4,6 @@
     feature = "halo2-dev-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
-use std::{sync::Arc, time::Duration};
-
 use axum::{extract::State, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -26,12 +24,11 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use iroha_torii::{NoritoJson, ZkVoteGetTallyRequestDto, handle_v1_zk_vote_tally};
 use nonzero_ext::nonzero;
-
+use std::{sync::Arc, time::Duration};
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const TALLY_FIXTURE_BACKEND: &str = "halo2/ipa";
 const TALLY_FIXTURE_CIRCUIT_ID: &str = "halo2/ipa:tiny-add2inst-public";
-
 #[tokio::test]
 async fn vote_tally_handler_returns_finalized_tally() {
     // Build minimal state
@@ -41,7 +38,6 @@ async fn vote_tally_handler_returns_finalized_tally() {
     core_state.zk.halo2.enabled = true;
     core_state.zk.verify_timeout = Duration::ZERO;
     let state = Arc::new(core_state);
-
     // Seed one finalized election via ISIs
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -176,7 +172,6 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .unwrap();
     stx.apply();
     block.commit().expect("commit block");
-
     let expected_view = state.view();
     let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
     let expected_hash = expected_view
@@ -184,7 +179,6 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .map(|hash| hex::encode(hash.as_ref()))
         .expect("committed block hash");
     drop(expected_view);
-
     // Call Torii handler directly
     let req = ZkVoteGetTallyRequestDto {
         election_id: eid.clone(),
@@ -222,7 +216,6 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .unwrap_or_default();
     let ints: Vec<u64> = tally.into_iter().filter_map(|x| x.as_u64()).collect();
     assert_eq!(ints, vec![5, 8]);
-
     let norito_response = handle_v1_zk_vote_tally(
         State(state),
         Some(http::HeaderValue::from_static("application/x-norito")),

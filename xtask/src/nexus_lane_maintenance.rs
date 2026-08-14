@@ -2,25 +2,21 @@
 //!
 //! Surveys Kura lane segments and optionally archives retired lanes so auditors
 //! can keep disk usage and evidence bundles tidy.
-
+use eyre::{Context, Result};
+use iroha_config::parameters::actual::LaneConfig;
+use norito::{derive::JsonSerialize, json};
 use std::{
     collections::BTreeSet,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
-
-use eyre::{Context, Result};
-use iroha_config::parameters::actual::LaneConfig;
-use norito::{derive::JsonSerialize, json};
-
 #[derive(Debug, Clone)]
 pub struct LaneMaintenanceOptions {
     pub config_path: PathBuf,
     pub json_output: PathBuf,
     pub compact_retired: bool,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct LaneMaintenanceReport {
     pub store_root: String,
@@ -28,7 +24,6 @@ pub struct LaneMaintenanceReport {
     pub retired: Vec<RetiredSegment>,
     pub compacted: Vec<CompactionAction>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct LaneStorageEntry {
     pub lane_id: u32,
@@ -38,7 +33,6 @@ pub struct LaneStorageEntry {
     pub blocks: PathReport,
     pub merge_log: PathReport,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct PathReport {
     pub path: String,
@@ -46,26 +40,22 @@ pub struct PathReport {
     pub kind: &'static str,
     pub size_bytes: u64,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct RetiredSegment {
     pub path: String,
     pub kind: &'static str,
     pub size_bytes: u64,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct CompactionAction {
     pub from: String,
     pub to: String,
 }
-
 pub fn run(options: LaneMaintenanceOptions) -> Result<LaneMaintenanceReport> {
     let cfg = super::load_actual_config(&options.config_path)?;
     let store_root = cfg.kura.store_dir.resolve_relative_path();
     let lane_cfg = cfg.nexus.lane_config.clone();
     let report = inspect_lanes(&store_root, &lane_cfg, options.compact_retired)?;
-
     let rendered_value = json::to_value(&report)?;
     let rendered = format!("{}\n", json::to_string_pretty(&rendered_value)?);
     if options.json_output == Path::new("-") {
@@ -83,10 +73,8 @@ pub fn run(options: LaneMaintenanceOptions) -> Result<LaneMaintenanceReport> {
             )
         })?;
     }
-
     Ok(report)
 }
-
 fn inspect_lanes(
     store_root: &Path,
     lanes: &LaneConfig,
@@ -94,11 +82,9 @@ fn inspect_lanes(
 ) -> Result<LaneMaintenanceReport> {
     let blocks_root = store_root.join("blocks");
     let merge_root = store_root.join("merge_ledger");
-
     let mut active_entries = Vec::new();
     let mut active_blocks = BTreeSet::new();
     let mut active_merges = BTreeSet::new();
-
     for entry in lanes.entries() {
         active_blocks.insert(entry.kura_segment.clone());
         active_merges.insert(format!("{}.log", entry.merge_segment));
@@ -111,11 +97,9 @@ fn inspect_lanes(
             merge_log: PathReport::from_path(entry.merge_log_path(store_root), "merge_log"),
         });
     }
-
     let mut retired = Vec::new();
     retired.extend(retired_blocks(&blocks_root, &active_blocks)?);
     retired.extend(retired_merges(&merge_root, &active_merges)?);
-
     let mut compacted = Vec::new();
     if compact_retired && !retired.is_empty() {
         compacted.extend(compact_retired_segments(
@@ -123,7 +107,6 @@ fn inspect_lanes(
             retired.iter().map(|seg| seg.path.clone()),
         )?);
     }
-
     Ok(LaneMaintenanceReport {
         store_root: store_root.display().to_string(),
         active: active_entries,
@@ -131,13 +114,11 @@ fn inspect_lanes(
         compacted,
     })
 }
-
 fn retired_blocks(root: &Path, active: &BTreeSet<String>) -> Result<Vec<RetiredSegment>> {
     let mut retired = Vec::new();
     if !root.exists() {
         return Ok(retired);
     }
-
     for entry in fs::read_dir(root).wrap_err("failed to read Kura blocks directory")? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
@@ -153,13 +134,11 @@ fn retired_blocks(root: &Path, active: &BTreeSet<String>) -> Result<Vec<RetiredS
     }
     Ok(retired)
 }
-
 fn retired_merges(root: &Path, active: &BTreeSet<String>) -> Result<Vec<RetiredSegment>> {
     let mut retired = Vec::new();
     if !root.exists() {
         return Ok(retired);
     }
-
     for entry in fs::read_dir(root).wrap_err("failed to read Kura merge_ledger directory")? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
@@ -175,7 +154,6 @@ fn retired_merges(root: &Path, active: &BTreeSet<String>) -> Result<Vec<RetiredS
     }
     Ok(retired)
 }
-
 fn compact_retired_segments(
     store_root: &Path,
     retired_paths: impl IntoIterator<Item = String>,
@@ -188,7 +166,6 @@ fn compact_retired_segments(
         .wrap_err_with(|| format!("failed to create {}", retired_blocks.display()))?;
     fs::create_dir_all(&retired_merges)
         .wrap_err_with(|| format!("failed to create {}", retired_merges.display()))?;
-
     for raw_path in retired_paths {
         let source = PathBuf::from(&raw_path);
         let file_name = source
@@ -213,16 +190,13 @@ fn compact_retired_segments(
             to: dest.display().to_string(),
         });
     }
-
     Ok(actions)
 }
-
 fn unique_archive_path(root: &Path, file_name: &OsString) -> PathBuf {
     let mut candidate = root.join(file_name);
     if !candidate.exists() {
         return candidate;
     }
-
     let base = file_name.to_string_lossy();
     let (stem, ext) = split_stem_ext(&base);
     let mut counter = 1u32;
@@ -238,7 +212,6 @@ fn unique_archive_path(root: &Path, file_name: &OsString) -> PathBuf {
         counter = counter.saturating_add(1);
     }
 }
-
 fn split_stem_ext(name: &str) -> (&str, Option<&str>) {
     if let Some(idx) = name.rfind('.') {
         let (stem, ext) = name.split_at(idx);
@@ -247,7 +220,6 @@ fn split_stem_ext(name: &str) -> (&str, Option<&str>) {
         (name, None)
     }
 }
-
 impl PathReport {
     fn from_path(path: PathBuf, kind: &'static str) -> Self {
         let exists = path.exists();
@@ -260,7 +232,6 @@ impl PathReport {
         }
     }
 }
-
 fn byte_len(path: &Path) -> Result<u64> {
     if !path.exists() {
         return Ok(0);
@@ -279,16 +250,12 @@ fn byte_len(path: &Path) -> Result<u64> {
     }
     Ok(0)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
-    use tempfile::tempdir;
-
     use super::*;
-
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
+    use std::num::NonZeroU32;
+    use tempfile::tempdir;
     fn lane_cfg() -> LaneConfig {
         let lane_count = NonZeroU32::new(3).expect("non-zero lane count");
         let lane0 = LaneMetadata::default();
@@ -305,7 +272,6 @@ mod tests {
         let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1, lane2]).expect("catalog");
         LaneConfig::from_catalog(&catalog)
     }
-
     #[test]
     fn reports_active_and_retired_segments() {
         let lanes = lane_cfg();
@@ -313,26 +279,22 @@ mod tests {
         let store = temp.path();
         let lane0 = lanes.entry(LaneId::from(0)).expect("lane 0");
         let lane1 = lanes.entry(LaneId::from(1)).expect("lane 1");
-
         fs::create_dir_all(lane0.blocks_dir(store)).expect("lane0 blocks");
         fs::create_dir_all(lane1.blocks_dir(store)).expect("lane1 blocks");
         let merge0 = lane0.merge_log_path(store);
         fs::create_dir_all(merge0.parent().unwrap()).expect("merge dir");
         fs::write(&merge0, b"merge0").expect("merge log");
-
         let retired_blocks = store.join("blocks").join("lane_999_old");
         fs::create_dir_all(&retired_blocks).expect("retired blocks");
         let retired_merge = store.join("merge_ledger").join("lane_999_old_merge.log");
         fs::create_dir_all(retired_merge.parent().unwrap()).expect("retired merge dir");
         fs::write(&retired_merge, b"old").expect("retired merge log");
-
         let report = inspect_lanes(store, &lanes, false).expect("report");
         assert_eq!(report.active.len(), 3);
         assert_eq!(report.retired.len(), 2);
         assert!(report.compacted.is_empty());
         assert_eq!(report.store_root, store.display().to_string());
     }
-
     #[test]
     fn compacts_retired_segments_into_archive() {
         let lanes = lane_cfg();
@@ -343,7 +305,6 @@ mod tests {
         let retired_merge = store.join("merge_ledger").join("lane_010_old_merge.log");
         fs::create_dir_all(retired_merge.parent().unwrap()).expect("merge dir");
         fs::write(&retired_merge, b"old").expect("retired merge log");
-
         let report = inspect_lanes(store, &lanes, true).expect("report");
         assert_eq!(report.retired.len(), 2);
         assert_eq!(report.compacted.len(), 2);

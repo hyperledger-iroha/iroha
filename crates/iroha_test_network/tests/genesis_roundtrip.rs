@@ -1,6 +1,4 @@
 use core::iter::FromIterator;
-use std::{collections::HashSet, time::Duration};
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     block::decode_framed_signed_block,
@@ -11,16 +9,14 @@ use iroha_data_model::{
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
 use nonzero_ext::nonzero;
-
+use std::{collections::HashSet, time::Duration};
 fn checked_bls_fixture_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("checked genesis roundtrip BLS fixture key generation")
 }
-
 #[test]
 fn genesis_roundtrip_fixture_uses_checked_bls_key_generation() {
     let bls = checked_bls_fixture_keypair();
-
     assert_eq!(
         bls.public_key()
             .try_algorithm()
@@ -28,7 +24,6 @@ fn genesis_roundtrip_fixture_uses_checked_bls_key_generation() {
         Algorithm::BlsNormal,
     );
 }
-
 #[test]
 fn genesis_roundtrip_decode() {
     init_instruction_registry();
@@ -46,7 +41,6 @@ fn genesis_roundtrip_decode() {
         .unwrap_or_else(|err| panic!("encode genesis wire: {err:?}"));
     decode_framed_signed_block(&wire).unwrap_or_else(|err| panic!("decode genesis: {err:?}"));
 }
-
 #[test]
 fn network_genesis_roundtrip_preserves_signed_header_hash() {
     init_instruction_registry();
@@ -67,7 +61,6 @@ fn network_genesis_roundtrip_preserves_signed_header_hash() {
         .unwrap_or_else(|err| panic!("encode network genesis wire: {err:?}"));
     let decoded = decode_framed_signed_block(&wire)
         .unwrap_or_else(|err| panic!("decode network genesis: {err:?}"));
-
     assert_eq!(
         decoded.header(),
         genesis.0.header(),
@@ -79,7 +72,6 @@ fn network_genesis_roundtrip_preserves_signed_header_hash() {
         "canonical genesis wire must preserve the configured trust-anchor hash",
     );
 }
-
 #[test]
 fn genesis_transactions_are_unique() {
     init_instruction_registry();

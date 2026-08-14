@@ -13,19 +13,6 @@
 //! content-addressed blobs before a small predecessor-linked head is advanced.
 //! This separation makes a lost provider response safely recoverable without
 //! putting private journal DTOs in the public provider contract.
-
-use std::{
-    fmt,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
-use iroha_config::parameters::is_production_runtime_handle;
-use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-use tokio::sync::Mutex;
-
 use crate::provider_attestation_journal::{
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
     MusubiProviderAttestationJournalPolicyV1,
@@ -33,7 +20,16 @@ use crate::provider_attestation_journal::{
     validate_musubi_provider_attestation_journal_checkpoint_metadata_v1,
 };
 use crate::provider_ingest_runtime::ProviderIngestFutureV1;
-
+use iroha_config::parameters::is_production_runtime_handle;
+use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use thiserror::Error;
+use tokio::sync::Mutex;
 const CLOCK_SCOPE_DOMAIN_V1: &[u8] = b"sorafs.musubi.provider-attestation.clock-scope.v1\0";
 const CLOCK_RECORD_DOMAIN_V1: &[u8] = b"sorafs.musubi.provider-attestation.clock-record.v1\0";
 const JOURNAL_CHECKPOINT_SCOPE_DOMAIN_V1: &[u8] =
@@ -52,14 +48,12 @@ pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1: u64 =
     2 * MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1 as u64;
 /// Maximum age of a V1 orphan blob before authenticated collection is required.
 pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
-
 /// Exact chain incarnation and provider whose journal consumes the clock.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationClockScopeV1 {
     network_id: NetworkId,
     provider_id: ProviderId,
 }
-
 impl MusubiProviderAttestationClockScopeV1 {
     /// Construct a non-inert journal clock scope.
     ///
@@ -77,26 +71,22 @@ impl MusubiProviderAttestationClockScopeV1 {
         scope.validate()?;
         Ok(scope)
     }
-
     /// Borrow the exact deployment identity.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Return the exact provider identity.
     #[must_use]
     pub const fn provider_id(&self) -> ProviderId {
         self.provider_id
     }
-
     fn validate(&self) -> Result<(), MusubiProviderAttestationClockErrorV1> {
         if self.network_id.as_bytes()[31] & 1 != 1 || *self.provider_id.as_bytes() == [0; 32] {
             return Err(MusubiProviderAttestationClockErrorV1::InvalidScope);
         }
         Ok(())
     }
-
     /// Return the non-secret canonical scope commitment.
     ///
     /// # Errors
@@ -109,7 +99,6 @@ impl MusubiProviderAttestationClockScopeV1 {
             .ok_or(MusubiProviderAttestationClockErrorV1::InvalidScope)
     }
 }
-
 /// Exact deployment and journal-policy scope of one sealed checkpoint chain.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationJournalCheckpointScopeV1 {
@@ -117,7 +106,6 @@ pub struct MusubiProviderAttestationJournalCheckpointScopeV1 {
     provider_id: ProviderId,
     journal_policy_digest: [u8; 32],
 }
-
 impl MusubiProviderAttestationJournalCheckpointScopeV1 {
     /// Construct a non-inert checkpoint-seal scope.
     ///
@@ -141,25 +129,21 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
         scope.validate()?;
         Ok(scope)
     }
-
     /// Borrow the exact deployment identity.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Return the exact provider identity.
     #[must_use]
     pub const fn provider_id(&self) -> ProviderId {
         self.provider_id
     }
-
     /// Return the canonical journal-policy digest.
     #[must_use]
     pub const fn journal_policy_digest(&self) -> [u8; 32] {
         self.journal_policy_digest
     }
-
     /// Validate the decoded scope shape.
     ///
     /// # Errors
@@ -175,7 +159,6 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
         }
         Ok(())
     }
-
     /// Return the canonical domain-separated scope commitment.
     ///
     /// # Errors
@@ -190,7 +173,6 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
             .ok_or(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidScope)
     }
 }
-
 /// Exact private-journal checkpoint identity committed by one sealed head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationJournalCheckpointHeadV1 {
@@ -198,7 +180,6 @@ pub struct MusubiProviderAttestationJournalCheckpointHeadV1 {
     checkpoint_revision: [u8; 32],
     last_observed_unix_ms: u64,
 }
-
 impl MusubiProviderAttestationJournalCheckpointHeadV1 {
     /// Construct one non-inert checkpoint head.
     ///
@@ -219,25 +200,21 @@ impl MusubiProviderAttestationJournalCheckpointHeadV1 {
         head.validate()?;
         Ok(head)
     }
-
     /// Return the journal checkpoint sequence.
     #[must_use]
     pub const fn checkpoint_sequence(self) -> u64 {
         self.checkpoint_sequence
     }
-
     /// Return the content-addressed checkpoint revision.
     #[must_use]
     pub const fn checkpoint_revision(self) -> [u8; 32] {
         self.checkpoint_revision
     }
-
     /// Return the greatest UNIX millisecond observed by the journal.
     #[must_use]
     pub const fn last_observed_unix_ms(self) -> u64 {
         self.last_observed_unix_ms
     }
-
     /// Validate the decoded V1 head shape.
     ///
     /// # Errors
@@ -250,7 +227,6 @@ impl MusubiProviderAttestationJournalCheckpointHeadV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct JournalCheckpointHeadRecordMaterialV1 {
     version: u8,
@@ -259,14 +235,12 @@ struct JournalCheckpointHeadRecordMaterialV1 {
     predecessor_record_digest: Option<[u8; 32]>,
     head: Option<MusubiProviderAttestationJournalCheckpointHeadV1>,
 }
-
 /// Canonical predecessor-linked record in the checkpoint-head namespace.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
     material: JournalCheckpointHeadRecordMaterialV1,
     record_digest: [u8; 32],
 }
-
 impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
     /// Construct the explicit one-time empty H0 record.
     ///
@@ -282,7 +256,6 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
     ) -> Result<Self, MusubiProviderAttestationJournalCheckpointSealErrorV1> {
         Self::new(scope_digest, 1, None, None)
     }
-
     /// Construct the unique next record after `previous`.
     ///
     /// # Errors
@@ -329,7 +302,6 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
         next.validate_successor_of(previous)?;
         Ok(next)
     }
-
     fn new(
         scope_digest: [u8; 32],
         generation: u64,
@@ -352,7 +324,6 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
         record.validate(scope_digest)?;
         Ok(record)
     }
-
     /// Validate the decoded V1 record against the exact scope commitment.
     ///
     /// # Errors
@@ -389,7 +360,6 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
         }
         Ok(())
     }
-
     /// Validate this record as the exact next record after `previous`.
     ///
     /// # Errors
@@ -433,44 +403,37 @@ impl MusubiProviderAttestationJournalCheckpointHeadRecordV1 {
         }
         Ok(())
     }
-
     /// Return the checkpoint-seal record generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.material.generation
     }
-
     /// Return the fixed checkpoint-head record version.
     #[must_use]
     pub const fn version(&self) -> u8 {
         self.material.version
     }
-
     /// Return the exact checkpoint-seal scope commitment.
     #[must_use]
     pub const fn scope_digest(&self) -> [u8; 32] {
         self.material.scope_digest
     }
-
     /// Return the previous record digest, absent only at explicit bootstrap.
     #[must_use]
     pub const fn predecessor_record_digest(&self) -> Option<[u8; 32]> {
         self.material.predecessor_record_digest
     }
-
     /// Return the exact checkpoint head, absent only for the empty H0 record.
     #[must_use]
     pub const fn head(&self) -> Option<MusubiProviderAttestationJournalCheckpointHeadV1> {
         self.material.head
     }
-
     /// Return the record's canonical domain-separated digest.
     #[must_use]
     pub const fn record_digest(&self) -> [u8; 32] {
         self.record_digest
     }
 }
-
 /// Payload-free public qualification of one external journal durability seal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MusubiProviderAttestationClockSealQualificationV1 {
@@ -481,7 +444,6 @@ pub struct MusubiProviderAttestationClockSealQualificationV1 {
     orphan_blob_bytes_max: u64,
     orphan_blob_age_max_ms: u64,
 }
-
 impl MusubiProviderAttestationClockSealQualificationV1 {
     /// Construct a V1 combined clock/checkpoint seal qualification.
     #[must_use]
@@ -495,37 +457,31 @@ impl MusubiProviderAttestationClockSealQualificationV1 {
             orphan_blob_age_max_ms: MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1,
         }
     }
-
     /// Return the adapter-local qualification revision.
     #[must_use]
     pub const fn adapter_revision(self) -> u64 {
         self.adapter_revision
     }
-
     /// Return the configured combined durability-seal policy digest.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Return the fixed maximum count of unreferenced candidate blobs.
     #[must_use]
     pub const fn orphan_blob_count_max(self) -> u32 {
         self.orphan_blob_count_max
     }
-
     /// Return the fixed maximum aggregate bytes of unreferenced candidate blobs.
     #[must_use]
     pub const fn orphan_blob_bytes_max(self) -> u64 {
         self.orphan_blob_bytes_max
     }
-
     /// Return the fixed maximum orphan age before authenticated collection.
     #[must_use]
     pub const fn orphan_blob_age_max_ms(self) -> u64 {
         self.orphan_blob_age_max_ms
     }
-
     fn validate(self) -> Result<(), MusubiProviderAttestationClockErrorV1> {
         if self.version != CLOCK_SEAL_QUALIFICATION_VERSION_V1
             || self.adapter_revision == 0
@@ -539,14 +495,12 @@ impl MusubiProviderAttestationClockSealQualificationV1 {
         Ok(())
     }
 }
-
 /// Expected stable identity and qualification of the injected durability seal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationClockSealBindingV1 {
     runtime_handle: String,
     qualification: MusubiProviderAttestationClockSealQualificationV1,
 }
-
 impl MusubiProviderAttestationClockSealBindingV1 {
     /// Construct a credential-free production durability-seal binding.
     ///
@@ -567,20 +521,17 @@ impl MusubiProviderAttestationClockSealBindingV1 {
             qualification,
         })
     }
-
     /// Borrow the credential-free runtime handle.
     #[must_use]
     pub fn runtime_handle(&self) -> &str {
         &self.runtime_handle
     }
-
     /// Return the exact expected qualification.
     #[must_use]
     pub const fn qualification(&self) -> MusubiProviderAttestationClockSealQualificationV1 {
         self.qualification
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ClockRecordMaterialV1 {
     version: u8,
@@ -589,14 +540,12 @@ struct ClockRecordMaterialV1 {
     predecessor_digest: Option<[u8; 32]>,
     floor_unix_ms: u64,
 }
-
 /// Canonical payload-free record held by the external monotonic seal.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationClockSealRecordV1 {
     material: ClockRecordMaterialV1,
     record_digest: [u8; 32],
 }
-
 impl MusubiProviderAttestationClockSealRecordV1 {
     fn initial(
         scope_digest: [u8; 32],
@@ -604,7 +553,6 @@ impl MusubiProviderAttestationClockSealRecordV1 {
     ) -> Result<Self, MusubiProviderAttestationClockErrorV1> {
         Self::new(scope_digest, 1, None, floor_unix_ms)
     }
-
     fn successor(
         previous: &Self,
         floor_unix_ms: u64,
@@ -624,7 +572,6 @@ impl MusubiProviderAttestationClockSealRecordV1 {
             floor_unix_ms,
         )
     }
-
     fn new(
         scope_digest: [u8; 32],
         generation: u64,
@@ -647,7 +594,6 @@ impl MusubiProviderAttestationClockSealRecordV1 {
         record.validate(scope_digest)?;
         Ok(record)
     }
-
     fn validate(
         &self,
         expected_scope_digest: [u8; 32],
@@ -671,32 +617,27 @@ impl MusubiProviderAttestationClockSealRecordV1 {
         }
         Ok(())
     }
-
     /// Return the monotonic record generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.material.generation
     }
-
     /// Return the previous record digest, if this is not the initial record.
     #[must_use]
     pub const fn predecessor_digest(&self) -> Option<[u8; 32]> {
         self.material.predecessor_digest
     }
-
     /// Return the durably sealed UNIX-millisecond floor.
     #[must_use]
     pub const fn floor_unix_ms(&self) -> u64 {
         self.material.floor_unix_ms
     }
-
     /// Return the record's canonical domain-separated digest.
     #[must_use]
     pub const fn record_digest(&self) -> [u8; 32] {
         self.record_digest
     }
 }
-
 /// Bounded external failure from the deployment monotonic seal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationClockSealErrorV1 {
@@ -710,7 +651,6 @@ pub enum MusubiProviderAttestationClockSealErrorV1 {
     #[error("Musubi provider-attestation clock seal outcome is ambiguous")]
     Ambiguous,
 }
-
 /// Stable failure from the sealed journal-checkpoint protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationJournalCheckpointSealErrorV1 {
@@ -760,7 +700,6 @@ pub enum MusubiProviderAttestationJournalCheckpointSealErrorV1 {
     #[error("Musubi provider-attestation journal checkpoint counter overflowed")]
     ArithmeticOverflow,
 }
-
 /// Deployment boundary for rollback-resistant journal clock and checkpoint state.
 ///
 /// Implementations must provide authenticated, linearizable compare-and-swap
@@ -792,7 +731,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     /// This getter must be a bounded, non-blocking local snapshot; external
     /// I/O belongs only in the timed load/CAS futures below.
     fn runtime_handle(&self) -> &str;
-
     /// Return the live payload-free adapter qualification.
     ///
     /// This getter must be a bounded, non-blocking local snapshot; callers
@@ -803,7 +741,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
         MusubiProviderAttestationClockSealQualificationV1,
         MusubiProviderAttestationClockSealErrorV1,
     >;
-
     /// Load the exact authoritative record for one scope, if initialized.
     fn load_latest<'a>(
         &'a self,
@@ -815,7 +752,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
             MusubiProviderAttestationClockSealErrorV1,
         >,
     >;
-
     /// Install `next` only when the authoritative digest equals `expected`.
     fn compare_and_swap<'a>(
         &'a self,
@@ -823,7 +759,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
         expected: Option<[u8; 32]>,
         next: &'a MusubiProviderAttestationClockSealRecordV1,
     ) -> ProviderIngestFutureV1<'a, Result<(), MusubiProviderAttestationClockSealErrorV1>>;
-
     /// Durably store one immutable content-addressed journal checkpoint blob.
     ///
     /// The default rejects the operation so existing clock-only providers fail
@@ -836,7 +771,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     ) -> ProviderIngestFutureV1<'a, Result<(), MusubiProviderAttestationClockSealErrorV1>> {
         Box::pin(async { Err(MusubiProviderAttestationClockSealErrorV1::Rejected) })
     }
-
     /// Load one exact immutable journal checkpoint blob by its revision.
     ///
     /// The default rejects the operation so existing clock-only providers fail
@@ -851,7 +785,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     > {
         Box::pin(async { Err(MusubiProviderAttestationClockSealErrorV1::Rejected) })
     }
-
     /// Load the exact authoritative checkpoint-head record for one scope.
     ///
     /// This is a separate namespace from [`Self::load_latest`]. The default
@@ -868,7 +801,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     > {
         Box::pin(async { Err(MusubiProviderAttestationClockSealErrorV1::Rejected) })
     }
-
     /// Load one retained checkpoint-head record by its exact record digest.
     ///
     /// The provider must retain the latest record and its exact direct
@@ -888,7 +820,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     > {
         Box::pin(async { Err(MusubiProviderAttestationClockSealErrorV1::Rejected) })
     }
-
     /// Install `next` only when the checkpoint-head digest equals `expected`.
     ///
     /// This is a separate namespace from [`Self::compare_and_swap`]. The
@@ -905,7 +836,6 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
         Box::pin(async { Err(MusubiProviderAttestationClockSealErrorV1::Rejected) })
     }
 }
-
 /// Derive the existing journal checkpoint revision for bounded blob bytes.
 ///
 /// This exposes only the content-addressed identity already used by the
@@ -929,7 +859,6 @@ pub fn musubi_provider_attestation_journal_checkpoint_blob_revision_v1(
     }
     Ok(revision)
 }
-
 /// Explicitly initialize the absent checkpoint-head namespace with empty H0.
 ///
 /// Exact H0 readback resolves a lost compare-and-swap response and makes an
@@ -968,7 +897,6 @@ pub(crate) async fn initialize_musubi_provider_attestation_journal_checkpoint_se
     let _ = load_checkpoint_clock_floor(scope, seal_binding, seal).await?;
     Ok(committed)
 }
-
 /// Seal one exact canonical journal checkpoint after `expected`.
 ///
 /// The immutable blob is durably installed and read back before the separate
@@ -1002,7 +930,6 @@ pub(crate) async fn seal_musubi_provider_attestation_journal_checkpoint_v1(
     if head.last_observed_unix_ms() > clock_floor {
         return Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidHead);
     }
-
     let current = load_checkpoint_head_authoritative(scope_digest, seal_binding, seal)
         .await?
         .ok_or(MusubiProviderAttestationJournalCheckpointSealErrorV1::Uninitialized)?;
@@ -1026,7 +953,6 @@ pub(crate) async fn seal_musubi_provider_attestation_journal_checkpoint_v1(
     }
     validate_authoritative_checkpoint_record_blob(scope, policy, &current, seal_binding, seal)
         .await?;
-
     put_checkpoint_blob_and_readback(
         scope_digest,
         head.checkpoint_revision(),
@@ -1049,7 +975,6 @@ pub(crate) async fn seal_musubi_provider_attestation_journal_checkpoint_v1(
     }
     Ok(committed)
 }
-
 /// Open the externally authoritative H0/head and its exact immutable blob.
 ///
 /// Empty H0 returns `None` bytes. A nonempty head returns the canonical bytes
@@ -1101,7 +1026,6 @@ pub(crate) async fn load_musubi_provider_attestation_journal_checkpoint_v1(
     ensure_checkpoint_head_unchanged(scope_digest, &record, seal_binding, seal).await?;
     Ok((record, Some(checkpoint_blob)))
 }
-
 async fn validate_authoritative_checkpoint_record_blob(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1122,7 +1046,6 @@ async fn validate_authoritative_checkpoint_record_blob(
     .ok_or(MusubiProviderAttestationJournalCheckpointSealErrorV1::MissingBlob)?;
     validate_checkpoint_blob(scope, policy, head, &blob)
 }
-
 async fn ensure_checkpoint_head_unchanged(
     scope_digest: [u8; 32],
     expected: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
@@ -1143,7 +1066,6 @@ async fn ensure_checkpoint_head_unchanged(
     }
     Ok(())
 }
-
 fn validate_checkpoint_scope_policy(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1157,7 +1079,6 @@ fn validate_checkpoint_scope_policy(
     }
     scope.scope_digest()
 }
-
 fn validate_checkpoint_blob(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,
@@ -1185,7 +1106,6 @@ fn validate_checkpoint_blob(
     }
     Ok(())
 }
-
 async fn load_checkpoint_clock_floor(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1203,7 +1123,6 @@ async fn load_checkpoint_clock_floor(
         .ok_or(MusubiProviderAttestationJournalCheckpointSealErrorV1::Uninitialized)?;
     Ok(record.floor_unix_ms())
 }
-
 async fn put_checkpoint_blob_and_readback(
     scope_digest: [u8; 32],
     checkpoint_revision: [u8; 32],
@@ -1252,7 +1171,6 @@ async fn put_checkpoint_blob_and_readback(
         }
     }
 }
-
 async fn load_checkpoint_blob_authoritative(
     scope_digest: [u8; 32],
     checkpoint_revision: [u8; 32],
@@ -1280,7 +1198,6 @@ async fn load_checkpoint_blob_authoritative(
     }
     Ok(loaded)
 }
-
 async fn load_checkpoint_head_authoritative(
     scope_digest: [u8; 32],
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1306,7 +1223,6 @@ async fn load_checkpoint_head_authoritative(
     }
     Ok(loaded)
 }
-
 async fn load_checkpoint_head_record_authoritative(
     scope_digest: [u8; 32],
     record_digest: [u8; 32],
@@ -1336,7 +1252,6 @@ async fn load_checkpoint_head_record_authoritative(
     }
     Ok(loaded)
 }
-
 async fn commit_checkpoint_head_and_readback(
     scope_digest: [u8; 32],
     seal_binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1427,7 +1342,6 @@ async fn commit_checkpoint_head_and_readback(
         }
     }
 }
-
 fn classify_checkpoint_head_change(
     expected: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
     authoritative: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
@@ -1440,7 +1354,6 @@ fn classify_checkpoint_head_change(
         MusubiProviderAttestationJournalCheckpointSealErrorV1::Rollback
     }
 }
-
 fn mutation_outcome_is_ambiguous(
     outcome: &Result<(), MusubiProviderAttestationClockSealErrorV1>,
 ) -> bool {
@@ -1449,14 +1362,12 @@ fn mutation_outcome_is_ambiguous(
         Err(MusubiProviderAttestationClockSealErrorV1::Ambiguous)
     )
 }
-
 fn qualify_checkpoint_seal(
     expected: &MusubiProviderAttestationClockSealBindingV1,
     seal: &dyn MusubiProviderAttestationClockSealV1,
 ) -> Result<(), MusubiProviderAttestationJournalCheckpointSealErrorV1> {
     qualify_seal(expected, seal).map_err(map_clock_checkpoint_error)
 }
-
 fn map_checkpoint_seal_error(
     error: MusubiProviderAttestationClockSealErrorV1,
 ) -> MusubiProviderAttestationJournalCheckpointSealErrorV1 {
@@ -1472,7 +1383,6 @@ fn map_checkpoint_seal_error(
         }
     }
 }
-
 fn map_clock_checkpoint_error(
     error: MusubiProviderAttestationClockErrorV1,
 ) -> MusubiProviderAttestationJournalCheckpointSealErrorV1 {
@@ -1507,7 +1417,6 @@ fn map_clock_checkpoint_error(
         }
     }
 }
-
 /// Stable failure from the qualified journal clock boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MusubiProviderAttestationClockErrorV1 {
@@ -1542,7 +1451,6 @@ pub enum MusubiProviderAttestationClockErrorV1 {
     #[error("Musubi provider-attestation clock counter overflowed")]
     ArithmeticOverflow,
 }
-
 /// UNIX clock whose every returned value is committed by a qualified seal.
 ///
 /// Construction samples no caller-provided timestamp. Tests exercise the same
@@ -1558,7 +1466,6 @@ pub struct MusubiProviderAttestationSealedUnixClockV1 {
     seal: Arc<dyn MusubiProviderAttestationClockSealV1>,
     state: Mutex<MusubiProviderAttestationClockSealRecordV1>,
 }
-
 impl fmt::Debug for MusubiProviderAttestationSealedUnixClockV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1568,7 +1475,6 @@ impl fmt::Debug for MusubiProviderAttestationSealedUnixClockV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiProviderAttestationSealedUnixClockV1 {
     /// Explicitly initialize an absent external monotonic seal.
     ///
@@ -1584,7 +1490,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         let sampled = system_unix_ms()?;
         Self::open_inner(scope, seal_binding, seal, true, sampled).await
     }
-
     /// Open an existing external monotonic seal and advance it to host time.
     ///
     /// # Errors
@@ -1599,7 +1504,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         let sampled = system_unix_ms()?;
         Self::open_inner(scope, seal_binding, seal, false, sampled).await
     }
-
     async fn open_inner(
         scope: MusubiProviderAttestationClockScopeV1,
         seal_binding: MusubiProviderAttestationClockSealBindingV1,
@@ -1656,7 +1560,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
             state: Mutex::new(record),
         })
     }
-
     /// Sample host UNIX time and return it only after exact sealed readback.
     ///
     /// # Errors
@@ -1667,7 +1570,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         let sampled = system_unix_ms()?;
         self.advance_to(sampled).await
     }
-
     async fn advance_to(&self, sampled: u64) -> Result<u64, MusubiProviderAttestationClockErrorV1> {
         let mut retained = self.state.lock().await;
         qualify_seal(&self.seal_binding, self.seal.as_ref())?;
@@ -1704,12 +1606,10 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         qualify_seal(&self.seal_binding, self.seal.as_ref())?;
         Ok(sampled)
     }
-
     /// Return the currently retained sealed floor after serializing with a sample.
     pub async fn durable_floor_unix_ms(&self) -> u64 {
         self.state.lock().await.floor_unix_ms()
     }
-
     /// Return the non-secret network/provider scope commitment.
     ///
     /// A deployment constructor can compare this value with the independently
@@ -1718,7 +1618,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
     pub const fn scope_digest(&self) -> [u8; 32] {
         self.scope_digest
     }
-
     pub(crate) async fn initialize_journal_checkpoint_seal(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1734,7 +1633,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         )
         .await
     }
-
     pub(crate) async fn load_journal_checkpoint(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1755,7 +1653,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         )
         .await
     }
-
     pub(crate) async fn seal_journal_checkpoint(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1779,7 +1676,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         )
         .await
     }
-
     pub(crate) async fn load_journal_checkpoint_direct_predecessor(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1826,7 +1722,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         }
         Ok((predecessor, Some(blob)))
     }
-
     fn validate_journal_checkpoint_scope_binding(
         &self,
         scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
@@ -1845,7 +1740,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
         }
         Ok(())
     }
-
     #[cfg(test)]
     async fn initialize_at(
         scope: MusubiProviderAttestationClockScopeV1,
@@ -1855,7 +1749,6 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
     ) -> Result<Self, MusubiProviderAttestationClockErrorV1> {
         Self::open_inner(scope, seal_binding, seal, true, sampled).await
     }
-
     #[cfg(test)]
     async fn open_at(
         scope: MusubiProviderAttestationClockScopeV1,
@@ -1865,13 +1758,11 @@ impl MusubiProviderAttestationSealedUnixClockV1 {
     ) -> Result<Self, MusubiProviderAttestationClockErrorV1> {
         Self::open_inner(scope, seal_binding, seal, false, sampled).await
     }
-
     #[cfg(test)]
     async fn now_at(&self, sampled: u64) -> Result<u64, MusubiProviderAttestationClockErrorV1> {
         self.advance_to(sampled).await
     }
 }
-
 fn qualify_seal(
     expected: &MusubiProviderAttestationClockSealBindingV1,
     seal: &dyn MusubiProviderAttestationClockSealV1,
@@ -1891,7 +1782,6 @@ fn qualify_seal(
     }
     Ok(())
 }
-
 async fn load_authoritative(
     scope_digest: [u8; 32],
     binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1912,7 +1802,6 @@ async fn load_authoritative(
     }
     Ok(loaded)
 }
-
 async fn commit_and_readback(
     scope_digest: [u8; 32],
     binding: &MusubiProviderAttestationClockSealBindingV1,
@@ -1972,7 +1861,6 @@ async fn commit_and_readback(
         }
     }
 }
-
 fn classify_record_change(
     retained: &MusubiProviderAttestationClockSealRecordV1,
     authoritative: &MusubiProviderAttestationClockSealRecordV1,
@@ -1987,7 +1875,6 @@ fn classify_record_change(
         MusubiProviderAttestationClockErrorV1::SealRejected
     }
 }
-
 fn is_exact_successor(
     retained: &MusubiProviderAttestationClockSealRecordV1,
     authoritative: &MusubiProviderAttestationClockSealRecordV1,
@@ -1996,7 +1883,6 @@ fn is_exact_successor(
         && authoritative.predecessor_digest() == Some(retained.record_digest())
         && authoritative.floor_unix_ms() >= retained.floor_unix_ms()
 }
-
 fn map_seal_error(
     error: MusubiProviderAttestationClockSealErrorV1,
 ) -> MusubiProviderAttestationClockErrorV1 {
@@ -2012,7 +1898,6 @@ fn map_seal_error(
         }
     }
 }
-
 fn system_unix_ms() -> Result<u64, MusubiProviderAttestationClockErrorV1> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2022,7 +1907,6 @@ fn system_unix_ms() -> Result<u64, MusubiProviderAttestationClockErrorV1> {
         .filter(|value| *value != 0)
         .ok_or(MusubiProviderAttestationClockErrorV1::ArithmeticOverflow)
 }
-
 fn domain_hash_norito<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -2038,9 +1922,12 @@ fn domain_hash_norito<T: norito::core::NoritoSerialize>(
     let digest = *hasher.finalize().as_bytes();
     (digest != [0; 32]).then_some(digest)
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::provider_attestation_journal::musubi_provider_attestation_journal_test_checkpoint_bytes_v1;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
     use std::{
         collections::BTreeMap,
         sync::{
@@ -2048,14 +1935,7 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
-
-    use super::*;
-    use crate::provider_attestation_journal::musubi_provider_attestation_journal_test_checkpoint_bytes_v1;
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::BlockHeader;
-
     const HANDLE: &str = "hsm://musubi/provider-attestation-clock/seal";
-
     #[derive(Debug)]
     struct TestSeal {
         qualification: StdMutex<MusubiProviderAttestationClockSealQualificationV1>,
@@ -2084,7 +1964,6 @@ mod tests {
             StdMutex<Option<MusubiProviderAttestationJournalCheckpointHeadRecordV1>>,
         drift_after_checkpoint_blob_put: AtomicBool,
     }
-
     impl TestSeal {
         fn new() -> Self {
             Self {
@@ -2109,7 +1988,6 @@ mod tests {
                 drift_after_checkpoint_blob_put: AtomicBool::new(false),
             }
         }
-
         fn binding(&self) -> MusubiProviderAttestationClockSealBindingV1 {
             MusubiProviderAttestationClockSealBindingV1::try_new(
                 HANDLE,
@@ -2117,48 +1995,39 @@ mod tests {
             )
             .expect("test binding")
         }
-
         fn replace_record(&self, record: Option<MusubiProviderAttestationClockSealRecordV1>) {
             *self.record.lock().expect("record lock") = record;
         }
-
         fn fail_next_cas(&self, error: MusubiProviderAttestationClockSealErrorV1) {
             *self.next_cas_error.lock().expect("CAS error lock") = Some(error);
         }
-
         fn make_next_clock_cas_readback_unavailable(&self) {
             self.clock_cas_readback_unavailable
                 .store(true, Ordering::SeqCst);
         }
-
         fn pause_after_next_clock_cas(&self) {
             self.pause_after_clock_cas.store(true, Ordering::SeqCst);
         }
-
         fn fail_next_checkpoint_blob_put(&self, error: MusubiProviderAttestationClockSealErrorV1) {
             *self
                 .next_checkpoint_blob_put_error
                 .lock()
                 .expect("checkpoint blob put error lock") = Some(error);
         }
-
         fn make_next_checkpoint_blob_put_readback_unavailable(&self) {
             self.checkpoint_blob_put_readback_unavailable
                 .store(true, Ordering::SeqCst);
         }
-
         fn fail_next_checkpoint_head_cas(&self, error: MusubiProviderAttestationClockSealErrorV1) {
             *self
                 .next_checkpoint_head_cas_error
                 .lock()
                 .expect("checkpoint-head CAS error lock") = Some(error);
         }
-
         fn make_next_checkpoint_head_cas_readback_unavailable(&self) {
             self.checkpoint_head_cas_readback_unavailable
                 .store(true, Ordering::SeqCst);
         }
-
         fn substitute_next_checkpoint_head(
             &self,
             record: MusubiProviderAttestationJournalCheckpointHeadRecordV1,
@@ -2168,7 +2037,6 @@ mod tests {
                 .lock()
                 .expect("checkpoint-head substitute lock") = Some(record);
         }
-
         fn remove_checkpoint_blob(&self, scope_digest: [u8; 32], revision: [u8; 32]) {
             self.checkpoint_blobs
                 .lock()
@@ -2176,12 +2044,10 @@ mod tests {
                 .remove(&(scope_digest, revision));
         }
     }
-
     impl MusubiProviderAttestationClockSealV1 for TestSeal {
         fn runtime_handle(&self) -> &str {
             HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2190,7 +2056,6 @@ mod tests {
         > {
             Ok(*self.qualification.lock().expect("qualification lock"))
         }
-
         fn load_latest<'a>(
             &'a self,
             _scope_digest: [u8; 32],
@@ -2208,7 +2073,6 @@ mod tests {
                 Ok(self.record.lock().expect("record lock").clone())
             })
         }
-
         fn compare_and_swap<'a>(
             &'a self,
             _scope_digest: [u8; 32],
@@ -2241,7 +2105,6 @@ mod tests {
                 error.map_or(Ok(()), Err)
             })
         }
-
         fn put_journal_checkpoint_blob<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2299,7 +2162,6 @@ mod tests {
                 error.map_or(Ok(()), Err)
             })
         }
-
         fn load_journal_checkpoint_blob<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2325,7 +2187,6 @@ mod tests {
                     .cloned())
             })
         }
-
         fn load_journal_checkpoint_head<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2353,7 +2214,6 @@ mod tests {
                     .cloned())
             })
         }
-
         fn load_journal_checkpoint_head_record<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2374,7 +2234,6 @@ mod tests {
                     .cloned())
             })
         }
-
         fn compare_and_swap_journal_checkpoint_head<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2440,13 +2299,11 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug)]
     struct DriftingHandleSeal {
         inner: TestSeal,
         handle_calls: AtomicUsize,
     }
-
     impl MusubiProviderAttestationClockSealV1 for DriftingHandleSeal {
         fn runtime_handle(&self) -> &str {
             if self.handle_calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -2455,7 +2312,6 @@ mod tests {
                 "hsm://musubi/provider-attestation-clock/substituted"
             }
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2464,7 +2320,6 @@ mod tests {
         > {
             self.inner.qualification()
         }
-
         fn load_latest<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2477,7 +2332,6 @@ mod tests {
         > {
             self.inner.load_latest(scope_digest)
         }
-
         fn compare_and_swap<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -2488,11 +2342,9 @@ mod tests {
             self.inner.compare_and_swap(scope_digest, expected, next)
         }
     }
-
     fn qualification() -> MusubiProviderAttestationClockSealQualificationV1 {
         MusubiProviderAttestationClockSealQualificationV1::new(1, [0xA5; 32])
     }
-
     #[test]
     fn qualification_binds_fixed_orphan_retention_limits() {
         let exact = qualification();
@@ -2509,7 +2361,6 @@ mod tests {
             MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1
         );
         assert!(exact.validate().is_ok());
-
         let mut substituted = exact;
         substituted.orphan_blob_count_max = substituted.orphan_blob_count_max.saturating_add(1);
         assert_eq!(
@@ -2529,7 +2380,6 @@ mod tests {
             Err(MusubiProviderAttestationClockErrorV1::InvalidSealBinding)
         );
     }
-
     fn scope(seed: u8) -> MusubiProviderAttestationClockScopeV1 {
         MusubiProviderAttestationClockScopeV1::try_new(
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -2539,7 +2389,6 @@ mod tests {
         )
         .expect("valid test scope")
     }
-
     fn checkpoint_scope(seed: u8) -> MusubiProviderAttestationJournalCheckpointScopeV1 {
         let clock_scope = scope(seed);
         MusubiProviderAttestationJournalCheckpointScopeV1::try_new(
@@ -2551,7 +2400,6 @@ mod tests {
         )
         .expect("valid checkpoint scope")
     }
-
     async fn initialized_checkpoint_seal(
         seed: u8,
     ) -> (
@@ -2580,7 +2428,6 @@ mod tests {
         .expect("initialize empty checkpoint H0");
         (seal, binding, checkpoint_scope, h0)
     }
-
     fn checkpoint_head(
         checkpoint_sequence: u64,
         last_observed_unix_ms: u64,
@@ -2594,7 +2441,6 @@ mod tests {
         )
         .expect("checkpoint head")
     }
-
     #[test]
     fn checkpoint_commitments_and_bytes_ignore_ambient_norito_flags() {
         let policy = MusubiProviderAttestationJournalPolicyV1::default();
@@ -2608,7 +2454,6 @@ mod tests {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-
         assert_eq!(
             checkpoint_scope
                 .scope_digest()
@@ -2624,7 +2469,6 @@ mod tests {
             expected_checkpoint
         );
     }
-
     #[test]
     fn checkpoint_h0_and_successors_enforce_exact_lineage() {
         let scope_digest = checkpoint_scope(0x31)
@@ -2637,7 +2481,6 @@ mod tests {
         assert_eq!(h0.scope_digest(), scope_digest);
         assert_eq!(h0.predecessor_record_digest(), None);
         assert_eq!(h0.head(), None);
-
         let first = MusubiProviderAttestationJournalCheckpointHeadRecordV1::successor(
             &h0,
             MusubiProviderAttestationJournalCheckpointHeadV1::try_new(1, [0x11; 32], 0)
@@ -2649,7 +2492,6 @@ mod tests {
         first
             .validate_successor_of(&h0)
             .expect("exact H0 successor");
-
         let second = MusubiProviderAttestationJournalCheckpointHeadRecordV1::successor(
             &first,
             MusubiProviderAttestationJournalCheckpointHeadV1::try_new(2, [0x22; 32], 10)
@@ -2660,7 +2502,6 @@ mod tests {
         second
             .validate_successor_of(&first)
             .expect("exact second successor");
-
         for invalid_head in [
             MusubiProviderAttestationJournalCheckpointHeadV1::try_new(3, [0x33; 32], 10)
                 .expect("skipped-sequence head"),
@@ -2684,7 +2525,6 @@ mod tests {
             regressing,
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidLineage)
         );
-
         assert_eq!(
             MusubiProviderAttestationJournalCheckpointHeadRecordV1::new(
                 scope_digest,
@@ -2724,7 +2564,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::ArithmeticOverflow)
         );
     }
-
     #[test]
     fn checkpoint_head_change_classification_distinguishes_concurrency_and_integrity() {
         let scope_digest = checkpoint_scope(0x3A)
@@ -2750,7 +2589,6 @@ mod tests {
                 .expect("second head"),
         )
         .expect("second record");
-
         assert_eq!(
             classify_checkpoint_head_change(&h0, &second),
             MusubiProviderAttestationJournalCheckpointSealErrorV1::SealUnavailable,
@@ -2765,7 +2603,6 @@ mod tests {
             MusubiProviderAttestationJournalCheckpointSealErrorV1::Rollback
         );
     }
-
     #[tokio::test]
     async fn checkpoint_scope_and_policy_substitution_fail_closed() {
         let (seal, binding, checkpoint_scope, h0) = initialized_checkpoint_seal(0x32).await;
@@ -2786,7 +2623,6 @@ mod tests {
             .await,
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidScope)
         );
-
         let foreign_scope = MusubiProviderAttestationJournalCheckpointScopeV1::try_new(
             *checkpoint_scope.network_id(),
             checkpoint_scope.provider_id(),
@@ -2798,7 +2634,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidRecord)
         );
     }
-
     #[tokio::test]
     async fn checkpoint_blob_digest_and_metadata_mismatch_fail_before_storage() {
         let (seal, binding, checkpoint_scope, h0) = initialized_checkpoint_seal(0x33).await;
@@ -2820,7 +2655,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidBlob)
         );
         assert!(seal.checkpoint_blobs.lock().expect("blob lock").is_empty());
-
         let wrong_metadata = checkpoint_head(1, 1, &blob);
         assert_eq!(
             seal_musubi_provider_attestation_journal_checkpoint_v1(
@@ -2836,7 +2670,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidBlob)
         );
     }
-
     #[tokio::test]
     async fn checkpoint_head_lost_cas_response_resolves_by_exact_readback() {
         let (seal, binding, checkpoint_scope, h0) = initialized_checkpoint_seal(0x34).await;
@@ -2856,7 +2689,6 @@ mod tests {
         .expect("exact readback resolves lost head-CAS response");
         assert_eq!(committed.generation(), 2);
         assert_eq!(committed.head(), Some(head));
-
         let retried = seal_musubi_provider_attestation_journal_checkpoint_v1(
             &checkpoint_scope,
             MusubiProviderAttestationJournalPolicyV1::default(),
@@ -2870,7 +2702,6 @@ mod tests {
         .expect("identical stale-predecessor retry is idempotent");
         assert_eq!(retried, committed);
     }
-
     #[tokio::test]
     async fn checkpoint_mutation_ambiguity_survives_unavailable_resolution_readback() {
         let (blob_seal, blob_binding, blob_scope, blob_h0) =
@@ -2893,7 +2724,6 @@ mod tests {
             .await,
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::SealAmbiguous)
         );
-
         let (head_seal, head_binding, head_scope, head_h0) =
             initialized_checkpoint_seal(0x3C).await;
         let head_blob = musubi_provider_attestation_journal_test_checkpoint_bytes_v1(1, 100);
@@ -2915,7 +2745,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::SealAmbiguous)
         );
     }
-
     #[tokio::test]
     async fn checkpoint_head_same_predecessor_fork_is_rejected() {
         let (seal, binding, checkpoint_scope, h0) = initialized_checkpoint_seal(0x35).await;
@@ -2943,7 +2772,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::Fork)
         );
     }
-
     #[tokio::test]
     async fn checkpoint_open_rejects_missing_current_blob() {
         let (seal, binding, checkpoint_scope, h0) = initialized_checkpoint_seal(0x36).await;
@@ -2978,7 +2806,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::MissingBlob)
         );
     }
-
     #[tokio::test]
     async fn checkpoint_effect_qualification_drift_fails_closed() {
         let (seal, binding, checkpoint_scope, h0) = initialized_checkpoint_seal(0x37).await;
@@ -3000,7 +2827,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalCheckpointSealErrorV1::InvalidSealBinding)
         );
     }
-
     #[tokio::test]
     async fn initialization_restart_and_advancement_are_exactly_sealed() {
         let seal = Arc::new(TestSeal::new());
@@ -3023,7 +2849,6 @@ mod tests {
             .expect("sealed record");
         assert_eq!(record.generation(), 2);
         assert_eq!(record.floor_unix_ms(), 125);
-
         drop(clock);
         let reopened =
             MusubiProviderAttestationSealedUnixClockV1::open_at(scope(1), binding, seal, 130)
@@ -3031,7 +2856,6 @@ mod tests {
                 .expect("open sealed clock after restart");
         assert_eq!(reopened.durable_floor_unix_ms().await, 130);
     }
-
     #[tokio::test]
     async fn public_clock_path_samples_only_system_unix_time() {
         let seal = Arc::new(TestSeal::new());
@@ -3047,13 +2871,11 @@ mod tests {
         assert_ne!(initialized_floor, 0);
         assert!(clock.now_unix_ms().await.expect("sample system time") >= initialized_floor);
         drop(clock);
-
         let reopened = MusubiProviderAttestationSealedUnixClockV1::open(scope(6), binding, seal)
             .await
             .expect("restart from system UNIX time");
         assert!(reopened.durable_floor_unix_ms().await >= initialized_floor);
     }
-
     #[tokio::test]
     async fn qualification_rejects_a_handle_that_drifts_within_one_snapshot() {
         let seal = Arc::new(DriftingHandleSeal {
@@ -3062,7 +2884,6 @@ mod tests {
         });
         let binding = MusubiProviderAttestationClockSealBindingV1::try_new(HANDLE, qualification())
             .expect("expected binding");
-
         assert_eq!(
             MusubiProviderAttestationSealedUnixClockV1::initialize_at(
                 scope(9),
@@ -3075,7 +2896,6 @@ mod tests {
             MusubiProviderAttestationClockErrorV1::InvalidSealBinding
         );
     }
-
     #[tokio::test]
     async fn restart_never_reinitializes_missing_or_regressing_state() {
         let seal = Arc::new(TestSeal::new());
@@ -3127,7 +2947,6 @@ mod tests {
             Err(MusubiProviderAttestationClockErrorV1::ClockRollback)
         );
     }
-
     #[tokio::test]
     async fn ambiguous_commit_succeeds_only_after_exact_authoritative_readback() {
         let seal = Arc::new(TestSeal::new());
@@ -3142,7 +2961,6 @@ mod tests {
         .await
         .expect("exact readback resolves lost CAS response");
         assert_eq!(clock.durable_floor_unix_ms().await, 100);
-
         seal.fail_next_cas(MusubiProviderAttestationClockSealErrorV1::Rejected);
         assert_eq!(
             clock.now_at(101).await,
@@ -3150,7 +2968,6 @@ mod tests {
         );
         assert_eq!(clock.durable_floor_unix_ms().await, 100);
     }
-
     #[tokio::test]
     async fn clock_mutation_ambiguity_survives_unavailable_resolution_readback() {
         let seal = Arc::new(TestSeal::new());
@@ -3165,13 +2982,11 @@ mod tests {
         .expect("initialize clock");
         seal.fail_next_cas(MusubiProviderAttestationClockSealErrorV1::Ambiguous);
         seal.make_next_clock_cas_readback_unavailable();
-
         assert_eq!(
             clock.now_at(101).await,
             Err(MusubiProviderAttestationClockErrorV1::SealAmbiguous)
         );
     }
-
     #[tokio::test]
     async fn overlapping_clock_writers_adopt_an_exact_successor_of_their_commit() {
         let seal = Arc::new(TestSeal::new());
@@ -3200,7 +3015,6 @@ mod tests {
             async move { first.now_at(101).await }
         });
         seal.clock_cas_reached.notified().await;
-
         assert_eq!(second.now_at(102).await.expect("overtaking writer"), 102);
         seal.resume_after_clock_cas.notify_one();
         assert_eq!(
@@ -3211,7 +3025,6 @@ mod tests {
         assert_eq!(first.durable_floor_unix_ms().await, 102);
         assert_eq!(second.durable_floor_unix_ms().await, 102);
     }
-
     #[tokio::test]
     async fn farther_ahead_clock_readback_with_regressed_floor_is_rollback() {
         let seal = Arc::new(TestSeal::new());
@@ -3241,14 +3054,12 @@ mod tests {
         seal.clock_cas_reached.notified().await;
         seal.replace_record(Some(substituted));
         seal.resume_after_clock_cas.notify_one();
-
         assert_eq!(
             writer.await.expect("clock writer task"),
             Err(MusubiProviderAttestationClockErrorV1::ClockRollback)
         );
         assert_eq!(clock.durable_floor_unix_ms().await, 100);
     }
-
     #[tokio::test]
     async fn advancement_recovers_exact_successor_committed_before_cancellation() {
         let seal = Arc::new(TestSeal::new());
@@ -3273,7 +3084,6 @@ mod tests {
         // before the clock future could assign the returned record locally.
         seal.replace_record(Some(committed));
         assert_eq!(clock.durable_floor_unix_ms().await, 100);
-
         assert_eq!(clock.now_at(102).await.expect("recover and advance"), 102);
         assert_eq!(clock.durable_floor_unix_ms().await, 102);
         let authoritative = seal
@@ -3285,7 +3095,6 @@ mod tests {
         assert_eq!(authoritative.generation(), 3);
         assert_eq!(authoritative.floor_unix_ms(), 102);
     }
-
     #[tokio::test]
     async fn advancement_treats_unproven_forward_record_as_unavailable() {
         let seal = Arc::new(TestSeal::new());
@@ -3312,7 +3121,6 @@ mod tests {
         )
         .expect("structurally valid substituted record");
         seal.replace_record(Some(substituted));
-
         assert_eq!(
             clock.now_at(102).await,
             Err(MusubiProviderAttestationClockErrorV1::SealUnavailable),
@@ -3320,7 +3128,6 @@ mod tests {
         );
         assert_eq!(clock.durable_floor_unix_ms().await, 100);
     }
-
     #[tokio::test]
     async fn qualification_and_scope_substitution_fail_closed() {
         let seal = Arc::new(TestSeal::new());
@@ -3339,7 +3146,6 @@ mod tests {
             clock.now_at(101).await,
             Err(MusubiProviderAttestationClockErrorV1::InvalidSealBinding)
         );
-
         *seal.qualification.lock().expect("qualification lock") = qualification();
         let foreign = MusubiProviderAttestationClockSealRecordV1::initial(
             scope(5).scope_digest().expect("scope digest"),
@@ -3352,7 +3158,6 @@ mod tests {
             Err(MusubiProviderAttestationClockErrorV1::InvalidSealRecord)
         );
     }
-
     #[test]
     fn public_scope_digest_revalidates_decoded_shape() {
         let mut raw_fixture = scope(9);

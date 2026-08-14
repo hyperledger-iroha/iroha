@@ -1,9 +1,6 @@
 //! Verify that `ProofEvent::{Verified,Rejected}` carry the transaction `call_hash`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-
-use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -15,7 +12,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
-
+use std::{borrow::Cow, sync::Arc};
 #[test]
 fn proof_event_includes_call_hash() {
     // Minimal world
@@ -34,7 +31,6 @@ fn proof_event_includes_call_hash() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     // Build a tx with a VerifyProof instruction for an unsupported real backend.
     let pr = iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![1, 2, 3]);
     let attach = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -51,7 +47,6 @@ fn proof_event_includes_call_hash() {
     .with_instructions([InstructionBox::from(verify)])
     .sign(kp.private_key());
     let tx_call_hash = tx.hash_as_entrypoint();
-
     // Build/commit block and collect events
     let acc_tx = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let new_block = BlockBuilder::new(vec![acc_tx])
@@ -62,7 +57,6 @@ fn proof_event_includes_call_hash() {
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
-
     // Find a Proof::Rejected event and assert call_hash was set
     let mut found = None;
     for ev in events {

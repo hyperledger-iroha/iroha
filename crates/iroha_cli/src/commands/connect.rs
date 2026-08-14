@@ -1,5 +1,4 @@
 //! Connect diagnostics helpers (`iroha connect queue inspect`).
-
 use std::{
     collections::BTreeMap,
     fmt::{self, Write as _},
@@ -7,53 +6,44 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
-
 use base64::Engine as _;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Context, Result, eyre};
 use norito::json;
-
 use crate::{
     CliOutputFormat, Run, RunContext,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
-
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Queue inspection tooling
     #[command(subcommand)]
     Queue(queue::Command),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let connect_root = context.config().connect_queue_root.clone();
         run(self, &connect_root, context)
     }
 }
-
 pub fn run<C: RunContext>(command: Command, connect_root: &Path, context: &mut C) -> Result<()> {
     match command {
         Command::Queue(sub) => queue::run(sub, connect_root, context),
     }
 }
-
 pub mod queue {
     use super::*;
-
     #[derive(Debug, Subcommand)]
     pub enum Command {
         /// Inspect on-disk queue diagnostics for a Connect session
         Inspect(Inspect),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let connect_root = context.config().connect_queue_root.clone();
             run(self, &connect_root, context)
         }
     }
-
     pub fn run<C: RunContext>(
         command: Command,
         connect_root: &Path,
@@ -72,7 +62,6 @@ pub mod queue {
             }
         }
     }
-
     #[derive(Debug, Clone, Args)]
     pub struct Inspect {
         /// Connect session identifier (base64url, no padding). Required unless `--snapshot` is provided.
@@ -93,14 +82,12 @@ pub mod queue {
         #[arg(long, value_enum, default_value = "table")]
         pub format: OutputFormat,
     }
-
     #[derive(Debug, Clone, Copy, ValueEnum)]
     #[value(rename_all = "kebab-case")]
     pub enum OutputFormat {
         Table,
         Json,
     }
-
     fn build_report(args: &Inspect, connect_root: &Path) -> Result<QueueInspectionReport> {
         let snapshot_path = if let Some(path) = &args.snapshot {
             path.clone()
@@ -116,7 +103,6 @@ pub mod queue {
             let session_dir = derive_session_dir(&root, sid)?;
             session_dir.join("state.json")
         };
-
         let snapshot_bytes = fs::read(&snapshot_path)
             .wrap_err_with(|| format!("failed to read snapshot {}", snapshot_path.display()))?;
         let snapshot_value: json::Value =
@@ -131,7 +117,6 @@ pub mod queue {
                 snapshot.schema_version
             ));
         }
-
         let session_dir = snapshot_path
             .parent()
             .map(Path::to_path_buf)
@@ -142,7 +127,6 @@ pub mod queue {
         } else {
             None
         };
-
         Ok(QueueInspectionReport {
             snapshot,
             metrics: metrics_summary,
@@ -150,7 +134,6 @@ pub mod queue {
             state_path: snapshot_path.display().to_string(),
         })
     }
-
     fn render_table(report: &QueueInspectionReport) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "Session: {}", report.snapshot.session_id_base64);
@@ -200,7 +183,6 @@ pub mod queue {
         }
         out
     }
-
     fn read_metrics_summary(path: &Path) -> Result<Option<ConnectQueueMetricsSummary>> {
         if !path.exists() {
             return Ok(None);
@@ -237,7 +219,6 @@ pub mod queue {
         }
         Ok(Some(summary))
     }
-
     fn validate_snapshot_schema_keys(snapshot: &json::Value) -> Result<()> {
         let root = snapshot
             .as_object()
@@ -267,7 +248,6 @@ pub mod queue {
         validate_direction_stats_schema_keys(wallet_to_app, "wallet_to_app")?;
         Ok(())
     }
-
     fn validate_direction_stats_schema_keys(value: &json::Value, label: &str) -> Result<()> {
         let object = value
             .as_object()
@@ -288,7 +268,6 @@ pub mod queue {
         }
         Ok(())
     }
-
     fn validate_metrics_sample_schema_keys(sample: &json::Value) -> Result<()> {
         let object = sample
             .as_object()
@@ -306,13 +285,11 @@ pub mod queue {
         }
         Ok(())
     }
-
     fn derive_session_dir(root: &Path, sid: &str) -> Result<PathBuf> {
         let sid_bytes = decode_session_id(sid)?;
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid_bytes);
         Ok(root.join(encoded))
     }
-
     fn decode_session_id(value: &str) -> Result<Vec<u8>> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -322,7 +299,6 @@ pub mod queue {
             .decode(trimmed)
             .map_err(|err| eyre!("sid must be base64url (no padding): {err}"))
     }
-
     #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
     #[norito(rename_all = "snake_case")]
     pub struct ConnectQueueSnapshot {
@@ -336,7 +312,6 @@ pub mod queue {
         pub app_to_wallet: ConnectQueueDirectionStats,
         pub wallet_to_app: ConnectQueueDirectionStats,
     }
-
     #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
     #[norito(rename_all = "snake_case")]
     pub struct ConnectQueueDirectionStats {
@@ -347,7 +322,6 @@ pub mod queue {
         pub oldest_timestamp_ms: Option<u64>,
         pub newest_timestamp_ms: Option<u64>,
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub enum ConnectQueueState {
         Healthy,
@@ -355,7 +329,6 @@ pub mod queue {
         Quarantined,
         Disabled,
     }
-
     impl fmt::Display for ConnectQueueState {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str(match self {
@@ -366,7 +339,6 @@ pub mod queue {
             })
         }
     }
-
     impl json::JsonSerialize for ConnectQueueState {
         fn json_serialize(&self, out: &mut String) {
             let value = match self {
@@ -378,7 +350,6 @@ pub mod queue {
             json::write_json_string(value, out);
         }
     }
-
     impl json::JsonDeserialize for ConnectQueueState {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let start = parser.position();
@@ -392,7 +363,6 @@ pub mod queue {
             }
         }
     }
-
     fn queue_state_parse_error(parser: &json::Parser<'_>, start: usize) -> json::Error {
         const MSG: &str = "expected \"healthy\", \"throttled\", \"quarantined\", or \"disabled\"";
         let input = parser.input();
@@ -414,7 +384,6 @@ pub mod queue {
             col,
         }
     }
-
     #[derive(Debug, Clone, Default, JsonSerialize, JsonDeserialize)]
     #[norito(rename_all = "snake_case")]
     pub struct ConnectQueueMetricsSummary {
@@ -424,7 +393,6 @@ pub mod queue {
         #[norito(default)]
         pub last_sample_ms: Option<u64>,
     }
-
     impl ConnectQueueMetricsSummary {
         fn record(&mut self, sample: &ConnectQueueMetricsSample) {
             self.samples_total += 1;
@@ -432,7 +400,6 @@ pub mod queue {
             self.last_sample_ms = Some(sample.timestamp_ms);
         }
     }
-
     #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
     #[norito(rename_all = "snake_case")]
     pub struct ConnectQueueMetricsSample {
@@ -442,7 +409,6 @@ pub mod queue {
         pub wallet_to_app_depth: i64,
         pub reason: Option<String>,
     }
-
     #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
     #[norito(rename_all = "snake_case")]
     pub struct QueueInspectionReport {
@@ -452,21 +418,18 @@ pub mod queue {
         pub session_dir: String,
         pub state_path: String,
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use crate::{CliOutputFormat, RunContext};
         use iroha_i18n::{Bundle, Language, Localizer};
         use tempfile::TempDir;
-
         struct TestContext {
             output_format: CliOutputFormat,
             printed: Vec<String>,
             config: iroha::config::Config,
             i18n: Localizer,
         }
-
         impl TestContext {
             fn new(output_format: CliOutputFormat) -> Self {
                 Self {
@@ -477,32 +440,25 @@ pub mod queue {
                 }
             }
         }
-
         impl RunContext for TestContext {
             fn config(&self) -> &iroha::config::Config {
                 &self.config
             }
-
             fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
                 None
             }
-
             fn input_instructions(&self) -> bool {
                 false
             }
-
             fn output_instructions(&self) -> bool {
                 false
             }
-
             fn i18n(&self) -> &Localizer {
                 &self.i18n
             }
-
             fn output_format(&self) -> CliOutputFormat {
                 self.output_format
             }
-
             fn print_data<T>(&mut self, data: &T) -> Result<()>
             where
                 T: json::JsonSerialize + ?Sized,
@@ -511,13 +467,11 @@ pub mod queue {
                 self.printed.push(payload);
                 Ok(())
             }
-
             fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
                 self.printed.push(data.to_string());
                 Ok(())
             }
         }
-
         fn write_snapshot(dir: &TempDir, sid: &str, snapshot: &ConnectQueueSnapshot) -> PathBuf {
             let session_dir = dir.path().join(sid);
             fs::create_dir_all(&session_dir).unwrap();
@@ -527,7 +481,6 @@ pub mod queue {
             fs::write(&path, json).unwrap();
             path
         }
-
         fn sample_snapshot(sid: &str) -> ConnectQueueSnapshot {
             ConnectQueueSnapshot {
                 schema_version: 1,
@@ -555,7 +508,6 @@ pub mod queue {
                 },
             }
         }
-
         #[test]
         fn inspect_reads_snapshot() {
             let tmp = TempDir::new().unwrap();
@@ -573,7 +525,6 @@ pub mod queue {
             assert_eq!(report.snapshot.state, ConnectQueueState::Healthy);
             assert!(render_table(&report).contains("Session: AQID"));
         }
-
         #[test]
         fn inspect_rejects_snapshot_missing_reason_field() {
             let tmp = TempDir::new().unwrap();
@@ -622,7 +573,6 @@ pub mod queue {
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn inspect_rejects_legacy_schema_version_zero() {
             let tmp = TempDir::new().unwrap();
@@ -644,7 +594,6 @@ pub mod queue {
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn inspect_uses_connect_root_when_root_not_provided() {
             let tmp = TempDir::new().unwrap();
@@ -652,7 +601,6 @@ pub mod queue {
             let snapshot = sample_snapshot(sid);
             let expected_state = snapshot.state;
             let state_path = write_snapshot(&tmp, sid, &snapshot);
-
             let args = Inspect {
                 sid: Some(sid.to_string()),
                 snapshot: None,
@@ -665,7 +613,6 @@ pub mod queue {
             assert_eq!(report.state_path, state_path.display().to_string());
             assert!(report.session_dir.ends_with("AQID"));
         }
-
         #[test]
         fn connect_queue_state_json_roundtrip() {
             for state in [
@@ -681,7 +628,6 @@ pub mod queue {
                 assert_eq!(decoded, state);
             }
         }
-
         #[test]
         fn inspect_outputs_json_in_json_mode() {
             let tmp = TempDir::new().unwrap();
@@ -707,7 +653,6 @@ pub mod queue {
                 Some("healthy")
             );
         }
-
         #[test]
         fn decode_session_id_rejects_non_base64url() {
             let err = decode_session_id("plain-text").expect_err("must reject plain text sid");
@@ -717,7 +662,6 @@ pub mod queue {
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn read_metrics_summary_rejects_missing_required_depth_fields() {
             let tmp = TempDir::new().unwrap();

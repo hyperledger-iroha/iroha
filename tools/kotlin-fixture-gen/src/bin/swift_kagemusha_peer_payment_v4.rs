@@ -1,15 +1,4 @@
 //! Generate the canonical ABI-21 Kagemusha peer-payment fixture used by Swift tests.
-
-use std::{
-    env,
-    ffi::OsString,
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    process,
-    sync::atomic::{AtomicU64, Ordering},
-};
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -50,37 +39,40 @@ use iroha_data_model::{
     peer::PeerId,
     proof::{ProofBox, VerifyingKeyId},
 };
-
+use std::{
+    env,
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process,
+    sync::atomic::{AtomicU64, Ordering},
+};
 const HEX_LINE_WIDTH: usize = 64;
 const USAGE: &str = "usage: swift_kagemusha_peer_payment_v4 \
     --recipient-request-hex PATH [--output PATH | --check PATH]";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 #[derive(Debug, PartialEq, Eq)]
 enum OutputMode {
     Stdout,
     Output(PathBuf),
     Check(PathBuf),
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct Cli {
     recipient_request_hex: PathBuf,
     output_mode: OutputMode,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum ParseOutcome {
     Run(Cli),
     Help,
 }
-
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<ParseOutcome, String> {
     let mut recipient_request_hex = None;
     let mut output = None;
     let mut check = None;
     let mut args = args.into_iter();
-
     while let Some(argument) = args.next() {
         let flag = argument
             .to_str()
@@ -88,7 +80,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<ParseOutcome, 
         if matches!(flag, "-h" | "--help") {
             return Ok(ParseOutcome::Help);
         }
-
         let value = match flag {
             "--recipient-request-hex" | "--output" | "--check" => args
                 .next()
@@ -99,7 +90,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<ParseOutcome, 
             return Err(format!("{flag} requires a non-empty path"));
         }
         let path = PathBuf::from(value);
-
         match flag {
             "--recipient-request-hex" => {
                 if recipient_request_hex.replace(path).is_some() {
@@ -119,7 +109,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<ParseOutcome, 
             _ => unreachable!("argument names were validated above"),
         }
     }
-
     if output.is_some() && check.is_some() {
         return Err("--output and --check are mutually exclusive".to_owned());
     }
@@ -131,13 +120,11 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<ParseOutcome, 
         (None, None) => OutputMode::Stdout,
         (Some(_), Some(_)) => unreachable!("mutually exclusive modes were validated above"),
     };
-
     Ok(ParseOutcome::Run(Cli {
         recipient_request_hex,
         output_mode,
     }))
 }
-
 fn render_fixture_hex(bytes: &[u8]) -> String {
     let encoded = hex::encode(bytes);
     let mut rendered = String::with_capacity(encoded.len() + encoded.len() / HEX_LINE_WIDTH + 1);
@@ -147,7 +134,6 @@ fn render_fixture_hex(bytes: &[u8]) -> String {
     }
     rendered
 }
-
 fn ensure_plain_file(path: &Path, purpose: &str) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {purpose} {}: {error}", path.display()))?;
@@ -159,7 +145,6 @@ fn ensure_plain_file(path: &Path, purpose: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn check_output(path: &Path, expected: &[u8]) -> Result<(), String> {
     ensure_plain_file(path, "checked fixture")?;
     let actual = fs::read(path)
@@ -174,7 +159,6 @@ fn check_output(path: &Path, expected: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn write_output_atomically(path: &Path, contents: &[u8]) -> Result<bool, String> {
     let parent = path
         .parent()
@@ -192,7 +176,6 @@ fn write_output_atomically(path: &Path, contents: &[u8]) -> Result<bool, String>
             parent.display()
         ));
     }
-
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -216,7 +199,6 @@ fn write_output_atomically(path: &Path, contents: &[u8]) -> Result<bool, String>
             ));
         }
     }
-
     for _ in 0..128 {
         let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let temporary = parent.join(format!(
@@ -238,7 +220,6 @@ fn write_output_atomically(path: &Path, contents: &[u8]) -> Result<bool, String>
                 ));
             }
         };
-
         let staged = file.write_all(contents).and_then(|()| file.sync_all());
         drop(file);
         if let Err(error) = staged {
@@ -257,13 +238,11 @@ fn write_output_atomically(path: &Path, contents: &[u8]) -> Result<bool, String>
         }
         return Ok(true);
     }
-
     Err(format!(
         "failed to allocate a temporary output beside {}",
         path.display()
     ))
 }
-
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
     let ordinary_writes_root = Hash::new([seed, 3]);
     let topup_anchor_root = Hash::new([seed, 4]);
@@ -278,7 +257,6 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
     )
     .expect("fixture execution commitment must be canonical")
 }
-
 fn finality_evidence(
     network_id: NetworkId,
     asset: &AssetDefinitionId,
@@ -375,7 +353,6 @@ fn finality_evidence(
         topup_finality_proof: proof,
     }
 }
-
 fn membership_path(
     leaf_index: u32,
     root: [u8; 32],
@@ -391,7 +368,6 @@ fn membership_path(
         root,
     }
 }
-
 fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSpendPeerPaymentV4 {
     request
         .validate_public_binding()
@@ -519,7 +495,6 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
         .expect("fixture peer payment must be canonical");
     payment
 }
-
 fn read_recipient_request(path: &Path) -> (Vec<u8>, KagemushaRecipientPaymentRequestV2) {
     let encoded = fs::read_to_string(path).expect("read recipient-request hex fixture");
     let compact = encoded
@@ -536,7 +511,6 @@ fn read_recipient_request(path: &Path) -> (Vec<u8>, KagemushaRecipientPaymentReq
     );
     (canonical, request)
 }
-
 fn run(cli: Cli) -> Result<(), String> {
     let (request_bytes, request) = read_recipient_request(&cli.recipient_request_hex);
     let request_digest = request.digest().expect("derive recipient-request digest");
@@ -546,7 +520,6 @@ fn run(cli: Cli) -> Result<(), String> {
     eprintln!("recipient_request_bytes={}", request_bytes.len());
     eprintln!("recipient_request_digest={}", hex::encode(request_digest));
     eprintln!("payment_archive_bytes={}", bytes.len());
-
     match cli.output_mode {
         OutputMode::Stdout => io::stdout()
             .lock()
@@ -568,7 +541,6 @@ fn run(cli: Cli) -> Result<(), String> {
         }
     }
 }
-
 fn main() {
     let cli = match parse_args(env::args_os().skip(1)) {
         Ok(ParseOutcome::Run(cli)) => cli,
@@ -581,21 +553,17 @@ fn main() {
             process::exit(2);
         }
     };
-
     if let Err(error) = run(cli) {
         eprintln!("error: {error}");
         process::exit(1);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn parse(arguments: &[&str]) -> Result<ParseOutcome, String> {
         parse_args(arguments.iter().map(|argument| OsString::from(*argument)))
     }
-
     #[test]
     fn parses_output_and_check_modes() {
         assert_eq!(
@@ -623,7 +591,6 @@ mod tests {
             }))
         );
     }
-
     #[test]
     fn rejects_ambiguous_or_duplicate_modes() {
         let ambiguous = parse(&[
@@ -636,7 +603,6 @@ mod tests {
         ])
         .expect_err("output and check must be mutually exclusive");
         assert!(ambiguous.contains("mutually exclusive"));
-
         let duplicate = parse(&[
             "--recipient-request-hex",
             "one.hex",
@@ -646,13 +612,11 @@ mod tests {
         .expect_err("the input path must be unique");
         assert!(duplicate.contains("only once"));
     }
-
     #[test]
     fn fixture_rendering_is_lowercase_wrapped_and_newline_terminated() {
         let bytes = (0_u8..33).collect::<Vec<_>>();
         let rendered = render_fixture_hex(&bytes);
         let lines = rendered.lines().collect::<Vec<_>>();
-
         assert_eq!(
             lines.iter().map(|line| line.len()).collect::<Vec<_>>(),
             [64, 2]
@@ -664,7 +628,6 @@ mod tests {
             render_fixture_hex(&(0_u8..33).collect::<Vec<_>>())
         );
     }
-
     #[test]
     fn output_is_exactly_checkable_and_unchanged_writes_are_noops() {
         let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -673,7 +636,6 @@ mod tests {
             process::id()
         ));
         let _ = fs::remove_file(&path);
-
         assert!(write_output_atomically(&path, b"fixture\n").expect("write fixture"));
         assert_eq!(fs::read(&path).expect("read fixture"), b"fixture\n");
         assert!(!write_output_atomically(&path, b"fixture\n").expect("keep identical fixture"));
@@ -683,7 +645,6 @@ mod tests {
                 .expect_err("drift must fail")
                 .contains("differs")
         );
-
         fs::remove_file(path).expect("remove fixture");
     }
 }

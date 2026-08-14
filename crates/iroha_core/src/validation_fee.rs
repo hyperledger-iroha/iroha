@@ -1,7 +1,14 @@
 //! Validator-side enforcement for chain-level validation-fee policy.
-
+use crate::{
+    smartcontracts::isi::triggers::{
+        set::{ExecutableRef, SetReadOnly as _},
+        specialized::LoadedActionTrait as _,
+        trigger_is_enabled,
+    },
+    state::{StateTransaction, WorldReadOnly},
+    tx::TransactionRejectionReason,
+};
 use core::fmt;
-
 use hex;
 use iroha_crypto::{Hash, blake2::Blake2b512};
 #[cfg(test)]
@@ -48,17 +55,6 @@ use ivm::state_value::{
 };
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};
-
-use crate::{
-    smartcontracts::isi::triggers::{
-        set::{ExecutableRef, SetReadOnly as _},
-        specialized::LoadedActionTrait as _,
-        trigger_is_enabled,
-    },
-    state::{StateTransaction, WorldReadOnly},
-    tx::TransactionRejectionReason,
-};
-
 const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
 /// Contract-visible, consensus-owned nominal fee-credit balance.
 ///
@@ -70,7 +66,6 @@ pub(crate) const VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF: &str =
 pub(crate) const VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION: &str =
     "CanInvokeContractEntrypoint";
 pub(crate) const VALIDATION_FEE_POOL_SWAP_ENTRYPOINT: &str = "swap_exact_in_quote_public";
-
 fn enacted_payout_binding_for_contract<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -91,7 +86,6 @@ fn enacted_payout_binding_for_contract<'a>(
                 .then_some(&lifecycle.payout_binding)
         })
 }
-
 /// Whether an enacted payout lifecycle pins this active contract address.
 pub(crate) fn is_enacted_validation_fee_payout_contract(
     state_transaction: &StateTransaction<'_, '_>,
@@ -99,7 +93,6 @@ pub(crate) fn is_enacted_validation_fee_payout_contract(
 ) -> bool {
     enacted_payout_binding_for_contract(state_transaction, contract_address).is_some()
 }
-
 /// Whether an enacted payout lifecycle pins this exact scheduled trigger.
 pub(crate) fn is_enacted_validation_fee_payout_trigger(
     state_transaction: &StateTransaction<'_, '_>,
@@ -125,7 +118,6 @@ pub(crate) fn is_enacted_validation_fee_payout_trigger(
         && invocation.entrypoint == binding.entrypoint.as_ref()
         && trigger_is_enabled(action.metadata())
 }
-
 /// Whether a new scheduled invocation would duplicate an enacted payout path.
 pub(crate) fn is_enacted_validation_fee_payout_invocation(
     state_transaction: &StateTransaction<'_, '_>,
@@ -148,7 +140,6 @@ pub(crate) fn is_enacted_validation_fee_payout_invocation(
         && invocation.entrypoint == binding.entrypoint.as_ref()
         && invocation.arguments.is_none()
 }
-
 fn trigger_id_from_permission(
     permission: &iroha_data_model::permission::Permission,
 ) -> Option<iroha_data_model::trigger::TriggerId> {
@@ -170,7 +161,6 @@ fn trigger_id_from_permission(
         })
         .ok()
 }
-
 /// Whether a permission would delegate control of an enacted payout trigger.
 pub(crate) fn permission_targets_enacted_validation_fee_payout_trigger(
     state_transaction: &StateTransaction<'_, '_>,
@@ -180,7 +170,6 @@ pub(crate) fn permission_targets_enacted_validation_fee_payout_trigger(
         is_enacted_validation_fee_payout_trigger(state_transaction, &trigger_id)
     })
 }
-
 /// Return the sole direct account allowed to hold one of an enacted payout
 /// lifecycle's exact wrapper, pool-selector, or typed asset-effect tokens.
 pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
@@ -237,7 +226,6 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
             (transfer.asset == wrapper_sbd_asset).then(|| binding.pool_vault_account_id.clone())
         })
 }
-
 /// Exact nominal protocol-fee value validated from a signed transaction payload.
 ///
 /// This is an admission fact, not a balance mutation. Callers persist it only after the signed
@@ -249,7 +237,6 @@ pub(crate) struct ValidationFeeCredit {
     asset_scale: u8,
     amount: Quantity,
 }
-
 impl ValidationFeeCredit {
     fn from_policy_minor_units(
         treasury_account_id: AccountId,
@@ -265,7 +252,6 @@ impl ValidationFeeCredit {
         })
     }
 }
-
 fn quantity_from_policy_minor_units(
     minor_units: u64,
     asset_scale: u8,
@@ -283,7 +269,6 @@ fn quantity_from_policy_minor_units(
         )
     })
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ValidationFeeAdmissionError {
     MalformedPolicyRegistryParameter,
@@ -455,7 +440,6 @@ enum ValidationFeeAdmissionError {
         observed_hash_hex: String,
     },
 }
-
 impl fmt::Display for ValidationFeeAdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -780,45 +764,38 @@ impl fmt::Display for ValidationFeeAdmissionError {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FeeInstructionCoordinate {
     instruction_index: usize,
     entry_index: Option<usize>,
 }
-
 impl FeeInstructionCoordinate {
     fn matches<T: TransferLocation>(&self, transfer: &T) -> bool {
         self.instruction_index == transfer.instruction_index()
             && self.entry_index == transfer.entry_index()
     }
 }
-
 trait TransferLocation {
     fn instruction_index(&self) -> usize;
     fn entry_index(&self) -> Option<usize>;
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TransferCollection {
     contexts: Vec<TransferExecutionContext>,
     transfers: Vec<AssetTransferSummary>,
     multisig_fee_markers: Vec<MultisigFeeMarkerSummary>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TransferExecutionContext {
     execution_account_id: AccountId,
     requires_multisig_fee_marker: bool,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MultisigFeeMarkerSummary {
     context_index: usize,
     marker_instruction_index: usize,
     marker: ValidationFeeMultisigMarkerV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AssetTransferSummary {
     context_index: usize,
@@ -829,17 +806,14 @@ struct AssetTransferSummary {
     destination_account_id: AccountId,
     amount: Quantity,
 }
-
 impl TransferLocation for AssetTransferSummary {
     fn instruction_index(&self) -> usize {
         self.instruction_index
     }
-
     fn entry_index(&self) -> Option<usize> {
         self.entry_index
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FeeAssetTransferSummary {
     context_index: usize,
@@ -849,17 +823,14 @@ struct FeeAssetTransferSummary {
     destination_account_id: AccountId,
     amount_minor_units: u64,
 }
-
 impl TransferLocation for FeeAssetTransferSummary {
     fn instruction_index(&self) -> usize {
         self.instruction_index
     }
-
     fn entry_index(&self) -> Option<usize> {
         self.entry_index
     }
 }
-
 pub(crate) fn enforce_validation_fee_admission(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
@@ -870,13 +841,11 @@ pub(crate) fn enforce_validation_fee_admission(
     let Some(policy) = active_policy(state_transaction)? else {
         return Ok(None);
     };
-
     let credited_minor_units = enforce_policy_with_credit(tx, &policy).map_err(|err| {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
             "validation-fee admission rejected transaction: {err}"
         )))
     })?;
-
     let fee_asset_definition_id =
         policy_fee_asset_definition_id(&policy).map_err(admission_rejection)?;
     let collection =
@@ -886,7 +855,6 @@ pub(crate) fn enforce_validation_fee_admission(
         state_transaction.world.account(account).is_ok()
     })
     .map_err(admission_rejection)?;
-
     if credited_minor_units == 0 || !treasury_payout_exemption_enabled(&policy) {
         return Ok(None);
     }
@@ -901,7 +869,6 @@ pub(crate) fn enforce_validation_fee_admission(
         .map_err(admission_rejection)?;
     Ok(Some(credit))
 }
-
 fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
     fn is_control_plane_instruction(instruction: &InstructionBox) -> bool {
         instruction
@@ -929,7 +896,6 @@ fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
                 .downcast_ref::<EnactReferendum>()
                 .is_some()
     }
-
     match tx.instructions() {
         Executable::Instructions(instructions) => {
             !instructions.is_empty() && instructions.iter().all(is_control_plane_instruction)
@@ -946,7 +912,6 @@ fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
         Executable::Ivm(_) | Executable::IvmProved(_) | Executable::ContractCall(_) => false,
     }
 }
-
 /// Reject proof-carrying AXT completions while an active validation-fee policy cannot classify
 /// their DS effects from the signed transaction payload.
 ///
@@ -977,7 +942,6 @@ pub(crate) fn enforce_ivm_proved_completed_axt_admission(
         _ => unreachable!("validation-fee admission rejection must be a validation failure"),
     }
 }
-
 fn reject_ivm_proved_completed_axt_effects(
     completed_envelopes: usize,
 ) -> Result<(), ValidationFeeAdmissionError> {
@@ -988,7 +952,6 @@ fn reject_ivm_proved_completed_axt_effects(
         completed_envelopes,
     })
 }
-
 /// Re-evaluate a stored or derived instruction list against the policy active at execution time.
 ///
 /// Deferred executables do not retain transaction-level fee-coordinate metadata, so each
@@ -1003,11 +966,9 @@ pub(crate) fn enforce_deferred_instruction_list(
     let Some(policy) = active_policy(state_transaction)? else {
         return Ok(());
     };
-
     let credited_minor_units =
         enforce_deferred_policy_with_credit(authority, instructions, &policy)
             .map_err(admission_rejection)?;
-
     let fee_asset_definition_id =
         policy_fee_asset_definition_id(&policy).map_err(admission_rejection)?;
     let mut collection = TransferCollection {
@@ -1024,7 +985,6 @@ pub(crate) fn enforce_deferred_instruction_list(
         state_transaction.world.account(account).is_ok()
     })
     .map_err(admission_rejection)?;
-
     if credited_minor_units > 0 && treasury_payout_exemption_enabled(&policy) {
         let credit = ValidationFeeCredit::from_policy_minor_units(
             policy_treasury_account_id(&policy).map_err(admission_rejection)?,
@@ -1039,7 +999,6 @@ pub(crate) fn enforce_deferred_instruction_list(
     }
     Ok(())
 }
-
 /// Reject policy fee-asset effects derived by opaque deferred VM/contract execution.
 ///
 /// Trigger registration signs the opaque executable, not the concrete event/state-derived
@@ -1050,7 +1009,6 @@ pub(crate) struct OpaqueDeferredRuntimeOrigin<'a> {
     code_bytes: &'a [u8],
     scheduled_time_trigger: bool,
 }
-
 /// Whether validated opaque effects should be atomically applied or discarded
 /// as the bound payout's legitimate empty/insufficient-credit no-op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1058,7 +1016,6 @@ pub(crate) enum OpaqueDeferredValidationOutcome {
     Apply,
     NoOp,
 }
-
 impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
     pub(crate) fn new(
         runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
@@ -1070,7 +1027,6 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
             scheduled_time_trigger: false,
         }
     }
-
     /// Bind opaque execution to a trigger event, admitting the payout exemption
     /// only when consensus invoked the contract from a scheduled Time trigger.
     pub(crate) fn from_trigger_event(
@@ -1084,7 +1040,6 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
             scheduled_time_trigger: matches!(event, iroha_data_model::events::EventBox::Time(_)),
         }
     }
-
     #[cfg(test)]
     fn scheduled_time_trigger(
         runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
@@ -1097,7 +1052,6 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
         }
     }
 }
-
 pub(crate) fn enforce_opaque_deferred_instruction_groups(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     ordered_instructions: &[(AccountId, InstructionBox)],
@@ -1121,7 +1075,6 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             .map(|binding| &binding.treasury_account_id),
     )
     .map_err(admission_rejection)?;
-
     let fee_asset_definition_id =
         policy_fee_asset_definition_id(&policy).map_err(admission_rejection)?;
     let mut visited_proposals = std::collections::BTreeSet::new();
@@ -1151,7 +1104,6 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             state_transaction.world.account(account).is_ok()
         })
         .map_err(admission_rejection)?;
-
         reject_opaque_deferred_approval_effects_with(
             authority,
             instructions,
@@ -1162,7 +1114,6 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         )
         .map_err(admission_rejection)?;
     }
-
     if let Some(binding) = treasury_payout_binding.as_ref() {
         if ordered_instructions.is_empty() && instruction_groups.is_empty() {
             return Ok(OpaqueDeferredValidationOutcome::NoOp);
@@ -1185,7 +1136,6 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     }
     Ok(OpaqueDeferredValidationOutcome::Apply)
 }
-
 fn enforce_opaque_deferred_policy(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     policy: &ValidationFeePolicyV1,
@@ -1196,7 +1146,6 @@ fn enforce_opaque_deferred_policy(
     let allowed_treasury_payout_authority = treasury_payout_authority.filter(|authority| {
         treasury_payout_exemption_enabled(policy) && **authority == policy_treasury
     });
-
     for (authority, instructions) in instruction_groups {
         let allowed_treasury =
             allowed_treasury_payout_authority.filter(|treasury| authority == *treasury);
@@ -1209,7 +1158,6 @@ fn enforce_opaque_deferred_policy(
     }
     Ok(())
 }
-
 fn validate_treasury_payout_effect_plan(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     ordered_instructions: &[(AccountId, InstructionBox)],
@@ -1273,7 +1221,6 @@ fn validate_treasury_payout_effect_plan(
             ));
         }
     }
-
     let sbd_leg = &collection.transfers[0];
     if sbd_leg.asset_definition_id != binding.sbd_asset_id
         || sbd_leg.source_account_id != binding.treasury_account_id
@@ -1284,7 +1231,6 @@ fn validate_treasury_payout_effect_plan(
             "instruction 0 must be the exact bound SBD treasury-to-vault batch",
         ));
     }
-
     let xor_return = &collection.transfers[1];
     if xor_return.asset_definition_id != binding.xor_asset_id
         || xor_return.source_account_id != binding.pool_vault_account_id
@@ -1300,7 +1246,6 @@ fn validate_treasury_payout_effect_plan(
             "the XOR output is outside the signed slippage bounds",
         ));
     }
-
     let recipients = binding.recipients.as_slice();
     let payout0 = amount_out
         .try_mul_decimal(&recipients[0].share)
@@ -1317,7 +1262,6 @@ fn validate_treasury_payout_effect_plan(
         .and_then(|remaining| remaining.checked_sub(&payout2))
         .map_err(|_| ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)?;
     let expected_payouts = [payout0, payout1, payout2, payout3];
-
     for (offset, (recipient, expected_amount)) in
         recipients.iter().zip(expected_payouts.iter()).enumerate()
     {
@@ -1337,7 +1281,6 @@ fn validate_treasury_payout_effect_plan(
     }
     Ok(())
 }
-
 fn reject_opaque_fee_asset_effects(
     authority: &AccountId,
     instructions: &[InstructionBox],
@@ -1381,7 +1324,6 @@ fn reject_opaque_fee_asset_effects(
             },
         );
     }
-
     for instruction in instructions {
         if let Ok(MultisigInstructionBox::Propose(propose)) =
             MultisigInstructionBox::try_from(instruction)
@@ -1393,7 +1335,6 @@ fn reject_opaque_fee_asset_effects(
                 None,
             )?;
         }
-
         let Some(RegisterBox::Trigger(register)) =
             instruction.as_any().downcast_ref::<RegisterBox>()
         else {
@@ -1433,9 +1374,7 @@ fn reject_opaque_fee_asset_effects(
     }
     Ok(())
 }
-
 const MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH: usize = 64;
-
 fn reject_opaque_deferred_approval_effects_with<F>(
     _authority: &AccountId,
     instructions: &[InstructionBox],
@@ -1452,7 +1391,6 @@ where
     if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {
         return Err(ValidationFeeAdmissionError::OpaqueDeferredProposalDepthExceeded);
     }
-
     for instruction in instructions {
         if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
             match multisig {
@@ -1506,7 +1444,6 @@ where
                 | MultisigInstructionBox::InvalidateOutstanding(_) => {}
             }
         }
-
         let Some(RegisterBox::Trigger(register)) =
             instruction.as_any().downcast_ref::<RegisterBox>()
         else {
@@ -1556,7 +1493,6 @@ where
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn enforce_deferred_policy(
     authority: &AccountId,
@@ -1565,7 +1501,6 @@ fn enforce_deferred_policy(
 ) -> Result<(), ValidationFeeAdmissionError> {
     enforce_deferred_policy_with_credit(authority, instructions, policy).map(|_| ())
 }
-
 fn enforce_deferred_policy_with_credit(
     authority: &AccountId,
     instructions: &[InstructionBox],
@@ -1592,7 +1527,6 @@ fn enforce_deferred_policy_with_credit(
         policy,
         &fee_asset_definition_id,
     )?;
-
     let mut credited_minor_units = 0_u64;
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
         let marker_fee_coordinate = multisig_marker_coordinate_for_context(
@@ -1619,7 +1553,6 @@ fn enforce_deferred_policy_with_credit(
     }
     Ok(credited_minor_units)
 }
-
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
@@ -1646,7 +1579,6 @@ fn active_policy(
         validate_registry_entry_governance(entry, state_transaction)
             .map_err(admission_rejection)?;
     }
-
     let current_height = state_transaction.block_height();
     let Some(entry) = registry.scheduled_entry_at_height(current_height) else {
         // The initial Parliament policy is deliberately enacted well before
@@ -1677,10 +1609,8 @@ fn active_policy(
     }
     validate_treasury_payout_contract_subject(&policy, state_transaction)
         .map_err(admission_rejection)?;
-
     Ok(Some(policy))
 }
-
 fn validate_registry_entry_governance(
     entry: &ValidationFeePolicyRegistryEntryV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -1688,7 +1618,6 @@ fn validate_registry_entry_governance(
     use iroha_data_model::governance::types::{
         ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     };
-
     let lifecycle_id = entry
         .payout_lifecycle
         .as_ref()
@@ -1703,7 +1632,6 @@ fn validate_registry_entry_governance(
         &policy_kind,
         state_transaction,
     )?;
-
     match (
         entry.policy.treasury_payout_binding.as_ref(),
         entry.payout_lifecycle.as_ref(),
@@ -1727,14 +1655,12 @@ fn validate_registry_entry_governance(
         )),
     }
 }
-
 fn validate_parliament_authorization(
     authorization: &ValidationFeeParliamentAuthorizationV1,
     exact_kind: &iroha_data_model::governance::types::ProposalKind,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), ValidationFeeAdmissionError> {
     use iroha_data_model::governance::types::ParliamentBody;
-
     if let Some(reason) = authorization.invariant_error() {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             reason.to_owned(),
@@ -1788,7 +1714,6 @@ fn validate_parliament_authorization(
                 .to_owned(),
         ));
     }
-
     const REQUIRED_BODIES: [ParliamentBody; 7] = [
         ParliamentBody::RulesCommittee,
         ParliamentBody::AgendaCouncil,
@@ -1926,7 +1851,6 @@ fn validate_parliament_authorization(
     }
     Ok(())
 }
-
 fn validate_treasury_payout_contract_subject(
     policy: &ValidationFeePolicyV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -2012,7 +1936,6 @@ fn validate_treasury_payout_contract_subject(
     }
     Ok(())
 }
-
 fn verified_opaque_treasury_payout_binding(
     policy: &ValidationFeePolicyV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -2052,7 +1975,6 @@ fn verified_opaque_treasury_payout_binding(
     }
     Ok(Some(binding.clone()))
 }
-
 fn validate_policy_network_id(
     policy: &ValidationFeePolicyV1,
     expected_network_id: &iroha_data_model::NetworkId,
@@ -2065,25 +1987,21 @@ fn validate_policy_network_id(
     }
     Ok(())
 }
-
 fn admission_rejection(error: ValidationFeeAdmissionError) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
         "validation-fee admission rejected transaction: {error}"
     )))
 }
-
 fn policy_fee_asset_definition_id(
     policy: &ValidationFeePolicyV1,
 ) -> Result<AssetDefinitionId, ValidationFeeAdmissionError> {
     Ok(policy.ds_asset_id.clone())
 }
-
 fn policy_treasury_account_id(
     policy: &ValidationFeePolicyV1,
 ) -> Result<AccountId, ValidationFeeAdmissionError> {
     Ok(policy.treasury_account_id.clone())
 }
-
 /// Derive the exact IVM durable-state path used for the consensus-owned fee-credit counter.
 pub(crate) fn validation_fee_credit_state_key_for_address(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -2093,7 +2011,6 @@ pub(crate) fn validation_fee_credit_state_key_for_address(
         VALIDATION_FEE_CREDIT_STATE_LEAF,
     )
 }
-
 fn validation_fee_credit_asset_state_key_for_address(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> StatePath {
@@ -2102,7 +2019,6 @@ fn validation_fee_credit_asset_state_key_for_address(
         VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF,
     )
 }
-
 fn validation_fee_credit_scoped_state_key_for_address(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     leaf: &str,
@@ -2112,7 +2028,6 @@ fn validation_fee_credit_scoped_state_key_for_address(
         .parse()
         .expect("validation-fee credit path must be a valid StatePath")
 }
-
 /// Return whether a durable-state key is the reserved contract-visible fee-credit leaf.
 pub(crate) fn is_validation_fee_credit_state_key(key: &StatePath) -> bool {
     let Some(rest) = key.as_ref().strip_prefix("sc/") else {
@@ -2127,7 +2042,6 @@ pub(crate) fn is_validation_fee_credit_state_key(key: &StatePath) -> bool {
         && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
         && reserved_leaf
 }
-
 fn validation_fee_credit_state_keys(
     state_transaction: &StateTransaction<'_, '_>,
     treasury: &AccountId,
@@ -2147,13 +2061,11 @@ fn validation_fee_credit_state_keys(
         validation_fee_credit_asset_state_key_for_address(&record.contract_address),
     ))
 }
-
 fn validation_fee_credit_state_schema() -> StateValueSchemaV1 {
     StateValueSchemaV1 {
         nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Quantity)],
     }
 }
-
 /// Encode the canonical schema-bound durable value for the validation-fee credit leaf.
 ///
 /// # Errors
@@ -2171,7 +2083,6 @@ pub(crate) fn encode_validation_fee_credit_state_value(
     })
     .map_err(|_| ivm::VMError::NoritoInvalid)
 }
-
 fn decode_validation_fee_credit_state_value(bytes: &[u8]) -> Option<Quantity> {
     if bytes.len() > MAX_STATE_VALUE_RECORD_BYTES {
         return None;
@@ -2189,7 +2100,6 @@ fn decode_validation_fee_credit_state_value(bytes: &[u8]) -> Option<Quantity> {
     };
     ivm::numeric_tlv::decode_quantity_bytes(envelope).ok()
 }
-
 fn validation_fee_credit_asset_spec(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
@@ -2226,7 +2136,6 @@ fn validation_fee_credit_asset_spec(
     }
     Ok(expected)
 }
-
 fn read_validation_fee_credit_balance(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
@@ -2235,7 +2144,6 @@ fn read_validation_fee_credit_balance(
         validation_fee_credit_state_keys(state_transaction, &credit.treasury_account_id)?;
     let value_bytes = state_transaction.world.smart_contract_state.get(&key);
     let binding_bytes = state_transaction.world.smart_contract_state.get(&asset_key);
-
     let (Some(value_bytes), Some(binding_bytes)) = (value_bytes, binding_bytes) else {
         if value_bytes.is_some() || binding_bytes.is_some() {
             return Err(if value_bytes.is_some() {
@@ -2251,7 +2159,6 @@ fn read_validation_fee_credit_balance(
         validation_fee_credit_asset_spec(state_transaction, credit)?;
         return Ok(Quantity::zero());
     };
-
     let value = decode_validation_fee_credit_state_value(value_bytes).ok_or_else(|| {
         ValidationFeeAdmissionError::MalformedCreditBalance {
             state_key: key.to_string(),
@@ -2292,7 +2199,6 @@ fn read_validation_fee_credit_balance(
     }
     Ok(value)
 }
-
 fn ensure_validation_fee_credit_capacity(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
@@ -2306,7 +2212,6 @@ fn ensure_validation_fee_credit_capacity(
     })?;
     Ok(())
 }
-
 /// Persist a previously validated fee credit in the current state transaction.
 ///
 /// The caller must invoke this only after the corresponding signed transaction and its data
@@ -2349,7 +2254,6 @@ pub(crate) fn commit_validation_fee_credit(
         .insert(key, bytes);
     Ok(())
 }
-
 fn consume_validation_fee_credit(
     state_transaction: &mut StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
@@ -2380,7 +2284,6 @@ fn consume_validation_fee_credit(
         .insert(key, bytes);
     Ok(())
 }
-
 #[cfg(test)]
 fn enforce_policy(
     tx: &SignedTransaction,
@@ -2388,7 +2291,6 @@ fn enforce_policy(
 ) -> Result<(), ValidationFeeAdmissionError> {
     enforce_policy_with_credit(tx, policy).map(|_| ())
 }
-
 /// Validate all signed fee coordinates and return only the credit whose transfer executes in the
 /// top-level transaction context. Nested multisig proposal contents are signed but deferred, so
 /// they are deliberately excluded until [`enforce_deferred_policy_with_credit`] runs them.
@@ -2400,7 +2302,6 @@ fn enforce_policy_with_credit(
         ValidationFeeChargingMode::Disabled => return Ok(0),
         ValidationFeeChargingMode::PerQualifyingTransferInstruction => {}
     }
-
     let fee_asset_definition_id = policy_fee_asset_definition_id(policy)?;
     let treasury = policy_treasury_account_id(policy)?;
     let transfer_collection =
@@ -2422,7 +2323,6 @@ fn enforce_policy_with_credit(
         .transpose()?;
     let mut requires_policy_metadata = false;
     let mut credited_minor_units = 0_u64;
-
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
         let transaction_fee_coordinate = if explicit_fee_context_index == Some(context_index) {
             fee_coordinate
@@ -2461,13 +2361,11 @@ fn enforce_policy_with_credit(
             credited_minor_units = validated.credited_minor_units;
         }
     }
-
     if requires_policy_metadata && !metadata_contains_validation_fee {
         validate_policy_metadata(tx.metadata(), policy)?;
     }
     Ok(credited_minor_units)
 }
-
 fn multisig_marker_coordinate_for_context(
     context_index: usize,
     context: &TransferExecutionContext,
@@ -2485,7 +2383,6 @@ fn multisig_marker_coordinate_for_context(
         }
         return Err(ValidationFeeAdmissionError::UnexpectedMultisigFeeMarker { context_index });
     }
-
     let has_fee_asset_effect = fee_asset_transfers
         .iter()
         .any(|transfer| transfer.context_index == context_index);
@@ -2504,7 +2401,6 @@ fn multisig_marker_coordinate_for_context(
             count: context_markers.len(),
         });
     }
-
     let marker = context_markers[0].marker;
     if marker.policy_version != policy.policy_version {
         return Err(
@@ -2547,20 +2443,17 @@ fn multisig_marker_coordinate_for_context(
         entry_index,
     }))
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ValidatedContextFee {
     requires_policy_metadata: bool,
     credited_minor_units: u64,
 }
-
 impl ValidatedContextFee {
     const NONE: Self = Self {
         requires_policy_metadata: false,
         credited_minor_units: 0,
     };
 }
-
 fn enforce_context_policy(
     context_index: usize,
     execution_account_id: &AccountId,
@@ -2584,7 +2477,6 @@ fn enforce_context_policy(
             treasury,
             fee_asset_definition_id,
         )?;
-
         for transfer in fee_asset_transfers
             .iter()
             .filter(|transfer| transfer.context_index == context_index)
@@ -2594,7 +2486,6 @@ fn enforce_context_policy(
             }
             qualifying_transfer_count += 1;
         }
-
         if qualifying_transfer_count == 0 {
             if fee_transfer.amount_minor_units != 0 {
                 return Err(ValidationFeeAdmissionError::WrongFeeAmount {
@@ -2604,7 +2495,6 @@ fn enforce_context_policy(
             }
             return Ok(ValidatedContextFee::NONE);
         }
-
         let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
         if fee_transfer.amount_minor_units != required_fee_minor_units {
             return Err(ValidationFeeAdmissionError::WrongFeeAmount {
@@ -2612,13 +2502,11 @@ fn enforce_context_policy(
                 observed_minor_units: fee_transfer.amount_minor_units,
             });
         }
-
         return Ok(ValidatedContextFee {
             requires_policy_metadata: true,
             credited_minor_units: required_fee_minor_units,
         });
     }
-
     for transfer in fee_asset_transfers
         .iter()
         .filter(|transfer| transfer.context_index == context_index)
@@ -2632,7 +2520,6 @@ fn enforce_context_policy(
             qualifying_transfer_count += 1;
         }
     }
-
     if qualifying_transfer_count == 0 {
         if uncoordinated_fee_candidates.is_empty() {
             return Ok(ValidatedContextFee::NONE);
@@ -2644,7 +2531,6 @@ fn enforce_context_policy(
         }
         return Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate);
     }
-
     if !allow_implicit_context_fee {
         let uncoordinated_fee_candidate_count = fee_asset_transfers
             .iter()
@@ -2663,7 +2549,6 @@ fn enforce_context_policy(
             return Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate);
         }
     }
-
     if uncoordinated_fee_candidates.is_empty() {
         let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
         return Err(ValidationFeeAdmissionError::MissingFee {
@@ -2675,7 +2560,6 @@ fn enforce_context_policy(
             count: uncoordinated_fee_candidates.len(),
         });
     }
-
     let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
     let fee_transfer = &uncoordinated_fee_candidates[0];
     if fee_transfer.amount_minor_units != required_fee_minor_units {
@@ -2684,20 +2568,17 @@ fn enforce_context_policy(
             observed_minor_units: fee_transfer.amount_minor_units,
         });
     }
-
     Ok(ValidatedContextFee {
         requires_policy_metadata: true,
         credited_minor_units: required_fee_minor_units,
     })
 }
-
 fn treasury_payout_exemption_enabled(policy: &ValidationFeePolicyV1) -> bool {
     policy
         .exemption_classes
         .iter()
         .any(|class| class == VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS)
 }
-
 fn validate_explicit_fee_coordinate<'a>(
     fee_coordinate: FeeInstructionCoordinate,
     context_index: usize,
@@ -2735,7 +2616,6 @@ fn validate_explicit_fee_coordinate<'a>(
             observed_account_id: raw_fee_transfer.destination_account_id.to_string(),
         });
     }
-
     fee_asset_transfers
         .iter()
         .find(|transfer| {
@@ -2746,7 +2626,6 @@ fn validate_explicit_fee_coordinate<'a>(
             entry_index: fee_coordinate.entry_index,
         })
 }
-
 fn resolve_fee_coordinate_context(
     fee_coordinate: FeeInstructionCoordinate,
     transfers: &[AssetTransferSummary],
@@ -2774,7 +2653,6 @@ fn resolve_fee_coordinate_context(
         entry_index: fee_coordinate.entry_index,
     })
 }
-
 fn required_fee_minor_units(
     qualifying_transfer_count: usize,
     policy: &ValidationFeePolicyV1,
@@ -2789,7 +2667,6 @@ fn required_fee_minor_units(
     )
     .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)
 }
-
 fn validation_fee_coordinate(
     metadata: &Metadata,
 ) -> Result<Option<FeeInstructionCoordinate>, ValidationFeeAdmissionError> {
@@ -2808,7 +2685,6 @@ fn validation_fee_coordinate(
         .map_err(|_| ValidationFeeAdmissionError::MalformedFeeInstructionMetadata)?;
     let instruction_index = usize::try_from(instruction_index)
         .map_err(|_| ValidationFeeAdmissionError::MalformedFeeInstructionMetadata)?;
-
     let entry_index = metadata
         .get(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
         .map(|value| {
@@ -2821,13 +2697,11 @@ fn validation_fee_coordinate(
                 })
         })
         .transpose()?;
-
     Ok(Some(FeeInstructionCoordinate {
         instruction_index,
         entry_index,
     }))
 }
-
 fn validate_policy_metadata(
     metadata: &Metadata,
     policy: &ValidationFeePolicyV1,
@@ -2843,7 +2717,6 @@ fn validate_policy_metadata(
             observed_version,
         });
     }
-
     let observed_hash_hex = metadata
         .get(VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
         .ok_or(ValidationFeeAdmissionError::MissingPolicyHashMetadata)?
@@ -2860,10 +2733,8 @@ fn validate_policy_metadata(
             observed_hash_hex,
         });
     }
-
     Ok(())
 }
-
 fn has_validation_fee_metadata(metadata: &Metadata) -> bool {
     metadata
         .get(VALIDATION_FEE_POLICY_VERSION_METADATA_KEY)
@@ -2878,14 +2749,12 @@ fn has_validation_fee_metadata(metadata: &Metadata) -> bool {
             .get(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
             .is_some()
 }
-
 /// Return whether a signed transaction advertises validation-fee policy/coordinate metadata.
 /// Such transactions require consensus credit post-processing and must not use detached batch
 /// merge paths that commit effects before admission facts.
 pub(crate) fn transaction_has_validation_fee_metadata(tx: &SignedTransaction) -> bool {
     has_validation_fee_metadata(tx.metadata())
 }
-
 fn collect_asset_transfers(
     executable: &Executable,
     authority: &AccountId,
@@ -2917,7 +2786,6 @@ fn collect_asset_transfers(
             return Err(ValidationFeeAdmissionError::UnsupportedExecutable);
         }
     };
-
     let mut collection = TransferCollection {
         contexts: vec![TransferExecutionContext {
             execution_account_id: authority.clone(),
@@ -2929,7 +2797,6 @@ fn collect_asset_transfers(
     collect_instruction_asset_transfers(instructions, 0, fee_asset_definition_id, &mut collection)?;
     Ok(collection)
 }
-
 fn repo_touches_fee_asset(
     cash_asset_definition_id: &AssetDefinitionId,
     collateral_asset_definition_id: &AssetDefinitionId,
@@ -2938,7 +2805,6 @@ fn repo_touches_fee_asset(
     cash_asset_definition_id == fee_asset_definition_id
         || collateral_asset_definition_id == fee_asset_definition_id
 }
-
 fn native_fee_asset_movement_wire_id(
     instruction: &InstructionBox,
     fee_asset_definition_id: &AssetDefinitionId,
@@ -2963,7 +2829,6 @@ fn native_fee_asset_movement_wire_id(
             RepoInstructionBox::Initiate(_) | RepoInstructionBox::MarginCall(_) => {}
         }
     }
-
     if let Some(isi) = instruction.as_any().downcast_ref::<RepoIsi>()
         && repo_touches_fee_asset(
             isi.cash_leg.asset_definition_id(),
@@ -2973,7 +2838,6 @@ fn native_fee_asset_movement_wire_id(
     {
         return Some(RepoIsi::WIRE_ID);
     }
-
     if instruction
         .as_any()
         .downcast_ref::<ReverseRepoIsi>()
@@ -2981,7 +2845,6 @@ fn native_fee_asset_movement_wire_id(
     {
         return Some(ReverseRepoIsi::WIRE_ID);
     }
-
     if let Some(settlement) = instruction
         .as_any()
         .downcast_ref::<SettlementInstructionBox>()
@@ -3023,31 +2886,26 @@ fn native_fee_asset_movement_wire_id(
             | SettlementInstructionBox::SettleFxCorridor(_) => {}
         }
     }
-
     if let Some(isi) = instruction.as_any().downcast_ref::<DvpIsi>()
         && (isi.delivery_leg.asset_definition_id() == fee_asset_definition_id
             || isi.payment_leg.asset_definition_id() == fee_asset_definition_id)
     {
         return Some(DvpIsi::WIRE_ID);
     }
-
     if let Some(isi) = instruction.as_any().downcast_ref::<PvpIsi>()
         && (isi.primary_leg.asset_definition_id() == fee_asset_definition_id
             || isi.counter_leg.asset_definition_id() == fee_asset_definition_id)
     {
         return Some(PvpIsi::WIRE_ID);
     }
-
     if let Some(isi) = instruction.as_any().downcast_ref::<SettleFxCorridor>()
         && (isi.source_asset_definition_id == *fee_asset_definition_id
             || isi.destination_asset_definition_id == *fee_asset_definition_id)
     {
         return Some(SettleFxCorridor::WIRE_ID);
     }
-
     None
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeInstructionDsEffectDisposition {
     /// A transparent transfer whose signed source, destination, asset, and amount are collected.
@@ -3067,7 +2925,6 @@ enum NativeInstructionDsEffectDisposition {
     /// Custom or otherwise absent from the native dispatch table.
     Unknown,
 }
-
 fn native_instruction_ds_effect_disposition(
     instruction: &InstructionBox,
     fee_asset_definition_id: &AssetDefinitionId,
@@ -3083,7 +2940,6 @@ fn native_instruction_ds_effect_disposition(
             )+
         };
     }
-
     macro_rules! audited_no_ds_effect {
         ($($ty:ty),+ $(,)?) => {
             $(
@@ -3093,7 +2949,6 @@ fn native_instruction_ds_effect_disposition(
             )+
         };
     }
-
     if instruction
         .as_any()
         .downcast_ref::<TransferAssetBatch>()
@@ -3105,7 +2960,6 @@ fn native_instruction_ds_effect_disposition(
     {
         return NativeInstructionDsEffectDisposition::ExplicitAssetTransfer;
     }
-
     if let Some(transfer) = instruction.as_any().downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Asset(_) => NativeInstructionDsEffectDisposition::ExplicitAssetTransfer,
@@ -3120,7 +2974,6 @@ fn native_instruction_ds_effect_disposition(
             }
         };
     }
-
     if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) => {
@@ -3136,7 +2989,6 @@ fn native_instruction_ds_effect_disposition(
             }
         };
     }
-
     if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
         return match register {
             // Trigger artifacts are traversed by the opaque-deferred guards and checked again
@@ -3150,7 +3002,6 @@ fn native_instruction_ds_effect_disposition(
             | RegisterBox::Role(_) => NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
         };
     }
-
     if let Some(unregister) = instruction.as_any().downcast_ref::<UnregisterBox>() {
         return match unregister {
             // Removing these containers can delete policy-DS balances or total supply without a
@@ -3168,7 +3019,6 @@ fn native_instruction_ds_effect_disposition(
             | UnregisterBox::Trigger(_) => NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
         };
     }
-
     if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
         return match mint {
             // Quantity mint is supply-changing and can also charge an implicit account fee.
@@ -3195,13 +3045,11 @@ fn native_instruction_ds_effect_disposition(
         };
     }
     reject_known!(Mint<Quantity, Asset>, Burn<Quantity, Asset>);
-
     if let Some(instruction_wire_id) =
         native_fee_asset_movement_wire_id(instruction, fee_asset_definition_id)
     {
         return NativeInstructionDsEffectDisposition::RejectKnownDsCapable(instruction_wire_id);
     }
-
     // Kagemusha does not expose an arbitrary transparent account-to-account transfer. A top-up
     // can only debit the payer authenticated inside the request and reserve the exact amount in
     // protocol escrow; a redemption can only debit provenance-bound protocol escrow and credit
@@ -3230,7 +3078,6 @@ fn native_instruction_ds_effect_disposition(
             NativeInstructionDsEffectDisposition::AuditedNoDsEffect
         };
     }
-
     // Repo initiation and settlement paths with signed non-policy-DS legs were audited above.
     // Reverse-repo settlement is always rejected because its legs are state-derived. Margin calls
     // do not move assets. Any signed policy-DS leg was already rejected.
@@ -3244,7 +3091,6 @@ fn native_instruction_ds_effect_disposition(
         SetFxCorridorPolicy,
         SettleFxCorridor,
     );
-
     macro_rules! reject_fee_asset_transfer_control {
         ($ty:ty) => {
             if let Some(control) = instruction.as_any().downcast_ref::<$ty>() {
@@ -3264,7 +3110,6 @@ fn native_instruction_ds_effect_disposition(
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferBlacklist);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferControl);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetHoldingLimit);
-
     // These families have native, state-derived balance/supply/custody effects that cannot be
     // represented faithfully as a signed transparent transfer coordinate. Keep them disabled
     // until they have an effect-plan representation covered by the user signature.
@@ -3345,7 +3190,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
     );
-
     // Narrow allowlist of native families whose handlers only mutate metadata, permissions,
     // control-plane records, or deferred-execution bookkeeping.
     audited_no_ds_effect!(
@@ -3393,7 +3237,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::SetAssetDefinitionAlias,
         SetKeyValue<Trigger>,
     );
-
     match crate::smartcontracts::isi::registered_native_instruction_type_name(instruction) {
         Some(type_name) => {
             NativeInstructionDsEffectDisposition::UnclassifiedDispatchable(type_name)
@@ -3401,7 +3244,6 @@ fn native_instruction_ds_effect_disposition(
         None => NativeInstructionDsEffectDisposition::Unknown,
     }
 }
-
 fn collect_instruction_asset_transfers(
     instructions: &[InstructionBox],
     context_index: usize,
@@ -3428,7 +3270,6 @@ fn collect_instruction_asset_transfers(
                 });
             }
         }
-
         match native_instruction_ds_effect_disposition(instruction, fee_asset_definition_id) {
             NativeInstructionDsEffectDisposition::ExplicitAssetTransfer => {
                 if let Some(batch) = instruction.as_any().downcast_ref::<TransferAssetBatch>() {
@@ -3445,7 +3286,6 @@ fn collect_instruction_asset_transfers(
                     }
                     continue;
                 }
-
                 let transfer = instruction
                     .as_any()
                     .downcast_ref::<Transfer<Asset, Quantity, Account>>()
@@ -3558,7 +3398,6 @@ fn collect_instruction_asset_transfers(
     }
     Ok(())
 }
-
 fn reject_potential_implicit_account_admission_fee_with<F>(
     collection: &TransferCollection,
     mut account_exists: F,
@@ -3573,7 +3412,6 @@ where
     else {
         return Ok(());
     };
-
     Err(
         ValidationFeeAdmissionError::PotentialImplicitAccountAdmissionFee {
             context_index: transfer.context_index,
@@ -3583,7 +3421,6 @@ where
         },
     )
 }
-
 fn collect_fee_asset_transfers(
     transfers: &[AssetTransferSummary],
     policy: &ValidationFeePolicyV1,
@@ -3609,7 +3446,6 @@ fn collect_fee_asset_transfers(
         })
         .collect()
 }
-
 fn quantity_to_minor_units(
     amount: &Quantity,
     policy_scale: u8,
@@ -3634,7 +3470,6 @@ fn quantity_to_minor_units(
     u64::try_from(scaled)
         .map_err(|_| ValidationFeeAdmissionError::AmountTooLarge { instruction_index })
 }
-
 fn pow10(exponent: u32) -> Result<u128, ValidationFeeAdmissionError> {
     let mut value = 1u128;
     for _ in 0..exponent {
@@ -3644,20 +3479,16 @@ fn pow10(exponent: u32) -> Result<u128, ValidationFeeAdmissionError> {
     }
     Ok(value)
 }
-
 fn decode_hash_hex(value: &str) -> Option<[u8; 32]> {
     let bytes = hex::decode(value).ok()?;
     bytes.try_into().ok()
 }
-
 fn format_entry_index(entry_index: Option<usize>) -> String {
     entry_index.map_or_else(String::new, |entry_index| format!("/{entry_index}"))
 }
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -3716,9 +3547,7 @@ mod tests {
     };
     use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
     use iroha_primitives::json::Json;
-
-    use super::*;
-
+    use std::str::FromStr as _;
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 =
         iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
@@ -3726,33 +3555,27 @@ mod tests {
     const TEST_POLICY_EFFECTIVE_HEIGHT: u64 = TEST_REFERENDUM_START_HEIGHT
         + 3_600
         + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn asset_definition(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "paynet").expect("domain id"),
             Name::from_str(name).expect("asset name"),
         )
     }
-
     fn fee_asset() -> AssetDefinitionId {
         asset_definition("fee_token")
     }
-
     fn validation_fee_test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7; 32])),
         )
     }
-
     fn policy(treasury: &AccountId) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
@@ -3770,11 +3593,9 @@ mod tests {
             treasury_payout_binding: None,
         }
     }
-
     fn xor_asset() -> AssetDefinitionId {
         asset_definition("xor")
     }
-
     fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
         iroha_data_model::smart_contract::ContractAddress::derive(
             &validation_fee_test_network_id(),
@@ -3784,7 +3605,6 @@ mod tests {
         )
         .expect("test contract address")
     }
-
     fn treasury_payout_binding(
         contract_address: iroha_data_model::smart_contract::ContractAddress,
         code: &[u8],
@@ -3811,7 +3631,6 @@ mod tests {
                 .collect(),
         }
     }
-
     fn policy_with_treasury_payout_lifecycle(
         binding: ValidationFeeTreasuryPayoutBindingV1,
     ) -> ValidationFeePolicyV1 {
@@ -3822,11 +3641,9 @@ mod tests {
         policy.treasury_payout_binding = Some(binding);
         policy
     }
-
     fn policy_fee_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
         policy.ds_asset_id.clone()
     }
-
     fn successor_policy(previous: &ValidationFeePolicyV1) -> ValidationFeePolicyV1 {
         let mut policy = previous.clone();
         policy.policy_version += 1;
@@ -3835,12 +3652,10 @@ mod tests {
         policy.expires_after_height = Some(policy.effective_from_height + 100);
         policy
     }
-
     fn test_parliament_bodies() -> iroha_data_model::governance::types::ParliamentBodies {
         use iroha_data_model::governance::types::{
             ParliamentBodies, ParliamentBody, ParliamentRoster,
         };
-
         let member = account(250);
         let rosters = [
             ParliamentBody::RulesCommittee,
@@ -3871,7 +3686,6 @@ mod tests {
             rosters,
         }
     }
-
     fn test_roster_root() -> [u8; 32] {
         let encoded =
             norito::to_bytes(&test_parliament_bodies()).expect("encode Parliament bodies");
@@ -3880,7 +3694,6 @@ mod tests {
         root.copy_from_slice(&digest[..32]);
         root
     }
-
     fn test_plain_electorate_snapshot(
         proposal_id: [u8; 32],
         captured_at_height: u64,
@@ -3900,7 +3713,6 @@ mod tests {
         )
         .expect("canonical test PLAIN electorate snapshot")
     }
-
     fn test_authorization(
         proposal_id: [u8; 32],
         policy_effective_height: u64,
@@ -3944,7 +3756,6 @@ mod tests {
             enacted_at_height,
         }
     }
-
     fn test_plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
         ValidationFeePlainElectorateRulesV1 {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
@@ -3965,7 +3776,6 @@ mod tests {
                 ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
         }
     }
-
     fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyRegistryV1 {
         let registered_policies = policies
             .iter()
@@ -3973,7 +3783,6 @@ mod tests {
                 use iroha_data_model::governance::types::{
                     ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
                 };
-
                 let plain_electorate_rules = test_plain_electorate_rules();
                 let payout_lifecycle = policy.treasury_payout_binding.as_ref().map(|binding| {
                     let lifecycle_seal = binding
@@ -4017,7 +3826,6 @@ mod tests {
             registered_policies,
         }
     }
-
     fn seed_authorized_proposal(
         kind: iroha_data_model::governance::types::ProposalKind,
         authorization: ValidationFeeParliamentAuthorizationV1,
@@ -4027,7 +3835,6 @@ mod tests {
             governance::types::{GovernanceFinalizationEvidence, ParliamentBody},
             isi::governance::VotingMode,
         };
-
         let proposal_id = authorization.proposal_id;
         let referendum_id = hex::encode(proposal_id);
         let bodies = test_parliament_bodies();
@@ -4126,7 +3933,6 @@ mod tests {
             .governance_stage_approvals
             .insert(referendum_id, approvals);
     }
-
     fn install_policy_registry_fixture(
         registry: &ValidationFeePolicyRegistryV1,
         state_tx: &mut StateTransaction<'_, '_>,
@@ -4134,7 +3940,6 @@ mod tests {
         use iroha_data_model::governance::types::{
             ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         };
-
         for entry in &registry.registered_policies {
             if let (Some(binding), Some(reference)) = (
                 entry.policy.treasury_payout_binding.as_ref(),
@@ -4170,11 +3975,9 @@ mod tests {
             .get_mut()
             .set_parameter(Parameter::Custom(registry.clone().into_custom_parameter()));
     }
-
     fn block_hash(bytes: [u8; 32]) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
     }
-
     fn minimal_bound_contract_artifact() -> (
         Vec<u8>,
         iroha_data_model::smart_contract::manifest::ContractManifest,
@@ -4235,10 +4038,8 @@ mod tests {
             ivm::verify_contract_artifact(&artifact).expect("valid bound contract artifact");
         (artifact, verified.manifest)
     }
-
     fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
         use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
-
         let contract_domain =
             Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
                 .build(deployer);
@@ -4269,7 +4070,6 @@ mod tests {
             [fee_definition, xor_definition],
         )
     }
-
     fn install_active_bound_validation_fee_policy(
         state_tx: &mut StateTransaction<'_, '_>,
         deployer: &AccountId,
@@ -4278,7 +4078,6 @@ mod tests {
         use iroha_data_model::{
             nexus::DataSpaceId, prelude::Account, smart_contract::ContractAddress,
         };
-
         let deployment_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
@@ -4311,7 +4110,6 @@ mod tests {
             state_tx,
         )
         .expect("activate contract instance");
-
         let binding = treasury_payout_binding(contract_address, &code);
         crate::smartcontracts::Execute::execute(
             Register::account(Account::new(binding.treasury_account_id.clone())),
@@ -4323,12 +4121,10 @@ mod tests {
         install_policy_registry_fixture(&policy_registry(std::slice::from_ref(&policy)), state_tx);
         policy
     }
-
     fn minor_units(value: u64) -> Quantity {
         quantity_from_policy_minor_units(value, TEST_VALIDATION_FEE_ASSET_SCALE)
             .expect("validation-fee fixture minor units fit Quantity")
     }
-
     fn transfer(
         from: &AccountId,
         asset_definition: &AssetDefinitionId,
@@ -4342,7 +4138,6 @@ mod tests {
         )
         .into()
     }
-
     fn canonical_treasury_payout_plan(
         binding: &ValidationFeeTreasuryPayoutBindingV1,
         xor_out: Quantity,
@@ -4392,7 +4187,6 @@ mod tests {
         );
         instructions
     }
-
     fn ordered_treasury_payout_plan(
         binding: &ValidationFeeTreasuryPayoutBindingV1,
         instructions: &[InstructionBox],
@@ -4403,7 +4197,6 @@ mod tests {
             .map(|instruction| (binding.treasury_account_id.clone(), instruction))
             .collect()
     }
-
     fn assert_treasury_payout_plan_mismatch(
         binding: &ValidationFeeTreasuryPayoutBindingV1,
         groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
@@ -4415,7 +4208,6 @@ mod tests {
                 | Err(ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)
         ));
     }
-
     fn kagemusha_artifact_binding() -> KagemushaRecursiveSpendArtifactBindingV4 {
         KagemushaRecursiveSpendArtifactBindingV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
@@ -4423,7 +4215,6 @@ mod tests {
             manifest_sha256: [0xA1; 32],
         }
     }
-
     fn kagemusha_authorization(
         authority: AccountId,
         asset_definition_id: AssetDefinitionId,
@@ -4451,7 +4242,6 @@ mod tests {
             ),
         }
     }
-
     fn kagemusha_top_up_request(
         asset_definition_id: &AssetDefinitionId,
     ) -> KagemushaRecursiveSpendTopUpRequestV4 {
@@ -4499,7 +4289,6 @@ mod tests {
             ))
             .expect("valid top-up request")
     }
-
     fn kagemusha_redeem_request(
         asset_definition_id: &AssetDefinitionId,
     ) -> KagemushaRecursiveSpendRedeemRequestV4 {
@@ -4641,7 +4430,6 @@ mod tests {
             ))
             .expect("valid redemption request")
     }
-
     fn repo_initiate(
         agreement: &str,
         initiator: &AccountId,
@@ -4664,11 +4452,9 @@ mod tests {
             RepoGovernance::with_defaults(0, 0),
         )
     }
-
     fn repo_reverse(agreement: &str) -> ReverseRepoIsi {
         ReverseRepoIsi::new(agreement.parse().expect("repo agreement id"))
     }
-
     fn settlement_leg(
         asset_definition_id: &AssetDefinitionId,
         from: &AccountId,
@@ -4676,7 +4462,6 @@ mod tests {
     ) -> SettlementLeg {
         SettlementLeg::new(asset_definition_id.clone(), 1_u64, from.clone(), to.clone())
     }
-
     fn tx(
         authority_seed: u8,
         instructions: Vec<InstructionBox>,
@@ -4692,7 +4477,6 @@ mod tests {
         .with_metadata(metadata)
         .sign(key_pair.private_key())
     }
-
     fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         TransactionBuilder::new(
@@ -4711,7 +4495,6 @@ mod tests {
         .with_metadata(metadata)
         .sign(key_pair.private_key())
     }
-
     fn ivm_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
         TransactionBuilder::new(
@@ -4723,7 +4506,6 @@ mod tests {
         .with_metadata(metadata)
         .sign(key_pair.private_key())
     }
-
     fn ivm_proved_tx(
         authority_seed: u8,
         overlay: Vec<InstructionBox>,
@@ -4744,7 +4526,6 @@ mod tests {
         .with_metadata(metadata)
         .sign(key_pair.private_key())
     }
-
     fn metadata_for(policy: &ValidationFeePolicyV1) -> Metadata {
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -4757,7 +4538,6 @@ mod tests {
         );
         metadata
     }
-
     fn metadata_for_fee_instruction(
         policy: &ValidationFeePolicyV1,
         instruction_index: usize,
@@ -4769,7 +4549,6 @@ mod tests {
         );
         metadata
     }
-
     fn metadata_for_fee_instruction_coordinate(instruction_index: usize) -> Metadata {
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -4778,7 +4557,6 @@ mod tests {
         );
         metadata
     }
-
     fn metadata_for_fee_batch_entry(
         policy: &ValidationFeePolicyV1,
         instruction_index: usize,
@@ -4791,7 +4569,6 @@ mod tests {
         );
         metadata
     }
-
     fn with_multisig_fee_marker(
         policy: &ValidationFeePolicyV1,
         mut instructions: Vec<InstructionBox>,
@@ -4809,7 +4586,6 @@ mod tests {
         );
         instructions
     }
-
     #[test]
     fn newly_dispatchable_native_instruction_fails_until_explicitly_classified() {
         let treasury = account(3);
@@ -4821,7 +4597,6 @@ mod tests {
         )
         .into();
         let type_name = core::any::type_name::<iroha_data_model::isi::InvalidInstruction>();
-
         assert_eq!(
             crate::smartcontracts::isi::registered_native_instruction_type_name(&instruction),
             Some(type_name),
@@ -4840,14 +4615,12 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn custom_instruction_without_effect_disposition_fails_closed() {
         let treasury = account(3);
         let policy = policy(&treasury);
         let instruction: InstructionBox =
             CustomInstruction::new(Json::new("unclassified custom effect")).into();
-
         assert_eq!(
             native_instruction_ds_effect_disposition(&instruction, &policy_fee_asset(&policy)),
             NativeInstructionDsEffectDisposition::Unknown
@@ -4861,7 +4634,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps() {
         use iroha_data_model::{
@@ -4872,7 +4644,6 @@ mod tests {
             },
             smart_contract::manifest::ContractManifest,
         };
-
         let treasury = account(3);
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"permissionless-contract-artifact");
@@ -4932,7 +4703,6 @@ mod tests {
             }
             .into(),
         ];
-
         for instruction in &instructions {
             assert_eq!(
                 native_instruction_ds_effect_disposition(instruction, &policy_fee_asset(&policy),),
@@ -4944,13 +4714,11 @@ mod tests {
             Ok(()),
         );
     }
-
     #[test]
     fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
         use iroha_data_model::isi::smart_contract_code::{
             CommitContractDeployment, DeactivateContractInstance, RemoveSmartContractBytes,
         };
-
         let treasury = account(3);
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"immutable-contract-artifact");
@@ -4979,7 +4747,6 @@ mod tests {
             }
             .into(),
         ];
-
         for (index, instruction) in instructions.into_iter().enumerate() {
             let instruction_wire_id = match index {
                 0 => core::any::type_name::<DeactivateContractInstance>(),
@@ -4998,7 +4765,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn numeric_supply_changes_are_disabled_while_policy_is_active() {
         let user = account(1);
@@ -5007,7 +4773,6 @@ mod tests {
         let mint: InstructionBox =
             Mint::asset_quantity(1_u64, AssetId::new(policy_fee_asset(&policy), user)).into();
         let instruction_wire_id = core::any::type_name::<MintBox>();
-
         assert_eq!(
             enforce_policy(&tx(1, vec![mint], Metadata::default()), &policy),
             Err(
@@ -5019,7 +4784,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn policy_ds_transfer_controls_cannot_encumber_balances() {
         let treasury = account(3);
@@ -5036,7 +4800,6 @@ mod tests {
             .into();
         let instruction_wire_id =
             core::any::type_name::<iroha_data_model::isi::SetAssetTransferAvailability>();
-
         assert_eq!(
             enforce_policy(&tx(1, vec![availability], Metadata::default()), &policy),
             Err(
@@ -5048,17 +4811,14 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn audited_no_ds_effect_instruction_remains_available() {
         let treasury = account(3);
         let policy = policy(&treasury);
         let log: InstructionBox = Log::new(Level::INFO, "audit-only".to_owned()).into();
-
         enforce_policy(&tx(1, vec![log], Metadata::default()), &policy)
             .expect("audited no-DS-effect instruction should remain available");
     }
-
     #[test]
     fn active_policy_admits_publicly_bound_kagemusha_fee_asset_conversions() {
         let treasury = account(3);
@@ -5068,7 +4828,6 @@ mod tests {
             TopUpKagemushaRecursiveV4::new(kagemusha_top_up_request(&fee_asset)).into();
         let redeem: InstructionBox =
             RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
-
         for instruction in [top_up, redeem] {
             assert_eq!(
                 native_instruction_ds_effect_disposition(&instruction, &fee_asset),
@@ -5088,13 +4847,11 @@ mod tests {
                 .expect("Kagemusha conversion must remain usable for the policy fee asset");
         }
     }
-
     #[test]
     fn kagemusha_conversion_admission_rejects_redirected_public_bindings() {
         let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         let mut top_up = kagemusha_top_up_request(&fee_asset);
         top_up.authorization.authority = account(2);
         assert_eq!(
@@ -5114,7 +4871,6 @@ mod tests {
                 },
             ),
         );
-
         let mut redeem = kagemusha_redeem_request(&fee_asset);
         redeem.recipient = account(2);
         assert_eq!(
@@ -5135,7 +4891,6 @@ mod tests {
             ),
         );
     }
-
     #[test]
     fn kagemusha_conversion_does_not_exempt_adjacent_fee_asset_transfers() {
         let user = account(1);
@@ -5148,7 +4903,6 @@ mod tests {
         let redeem: InstructionBox =
             RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
         let principal = transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
-
         for conversion in [top_up, redeem] {
             assert_eq!(
                 enforce_policy(
@@ -5164,7 +4918,6 @@ mod tests {
                 }),
                 "an adjacent ordinary SBD transfer must still pay the exact validation fee",
             );
-
             let fee = transfer(
                 &user,
                 &fee_asset,
@@ -5182,7 +4935,6 @@ mod tests {
             .expect("the ordinary transfer remains admissible with its exact signed fee");
         }
     }
-
     #[test]
     fn transfer_to_unregistered_account_is_rejected_as_hidden_fee_candidate() {
         let user = account(1);
@@ -5204,7 +4956,6 @@ mod tests {
             &fee_asset,
         )
         .expect("transparent transfer is classifiable");
-
         assert_eq!(
             reject_potential_implicit_account_admission_fee_with(&collection, |_| false),
             Err(
@@ -5219,7 +4970,6 @@ mod tests {
         reject_potential_implicit_account_admission_fee_with(&collection, |_| true)
             .expect("an already registered recipient cannot derive account-admission fees");
     }
-
     #[test]
     fn active_policy_rejects_same_label_with_a_different_exact_network() {
         let treasury = account(3);
@@ -5227,13 +4977,11 @@ mod tests {
         let first_display_label = ChainId::from("shared-display-label");
         let second_display_label = ChainId::from("shared-display-label");
         assert_eq!(first_display_label, second_display_label);
-
         validate_policy_network_id(&policy, &validation_fee_test_network_id())
             .expect("matching exact network id should validate");
         let foreign_network_id = iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9; 32])),
         );
-
         assert_eq!(
             validate_policy_network_id(&policy, &foreign_network_id),
             Err(ValidationFeeAdmissionError::WrongPolicyNetwork {
@@ -5242,16 +4990,13 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn active_policy_registry_requires_monotonic_chain() {
         let treasury = account(3);
         let first = policy(&treasury);
         let second = successor_policy(&first);
         let registry = policy_registry(&[first.clone(), second.clone()]);
-
         registry.validate().expect("valid policy chain");
-
         let mut skipped = registry.clone();
         skipped.registered_policies[1].policy.policy_version = 3;
         assert!(matches!(
@@ -5261,7 +5006,6 @@ mod tests {
                 found: 3,
             })
         ));
-
         let mut broken_previous = registry.clone();
         broken_previous.registered_policies[1]
             .policy
@@ -5273,7 +5017,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn enacted_initial_policy_remains_inactive_until_delayed_effective_height() {
         let future = policy_with_treasury_payout_lifecycle(treasury_payout_binding(
@@ -5299,7 +5042,6 @@ mod tests {
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         install_policy_registry_fixture(&registry, &mut state_tx);
-
         assert!(
             active_policy(&state_tx)
                 .expect("future initial policy is valid")
@@ -5307,11 +5049,9 @@ mod tests {
             "the mandatory 120,960-block activation delay must not halt pre-activation writes"
         );
     }
-
     #[test]
     fn active_policy_lookup_rejects_the_exact_expiry_height() {
         use iroha_data_model::block::BlockHeader;
-
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
         let state = crate::state::State::new_with_chain_and_network_id_for_testing(
@@ -5326,7 +5066,6 @@ mod tests {
             hashes.push_for_tests(block_hash([7; 32]));
             hashes.commit_for_tests();
         }
-
         let expiry_height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(expiry_height).expect("expiry height is non-zero"),
@@ -5341,7 +5080,6 @@ mod tests {
         let policy =
             install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
         assert_eq!(policy.expires_after_height, Some(expiry_height));
-
         let error = active_policy(&state_tx)
             .expect_err("the exclusive expiry height must reject fee admission");
         assert!(
@@ -5354,12 +5092,10 @@ mod tests {
             "unexpected expired-policy rejection: {error:?}",
         );
     }
-
     #[test]
     fn active_policy_window_rejects_expired_policy() {
         let treasury = account(3);
         let policy = policy(&treasury);
-
         assert!(!policy.is_active_at_height(policy.effective_from_height - 1));
         assert!(policy.is_active_at_height(policy.effective_from_height));
         let successor = successor_policy(&policy);
@@ -5369,7 +5105,6 @@ mod tests {
         );
         assert!(!policy.is_active_at_height(policy.expires_after_height.expect("expiry height")));
     }
-
     #[test]
     fn active_policy_requires_exact_fee_and_transaction_bound_metadata() {
         let user = account(1);
@@ -5385,17 +5120,14 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         enforce_policy(&tx, &policy).expect("valid fee-bearing transaction");
     }
-
     #[test]
     fn active_policy_rejects_raw_contract_and_ivm_executables_fail_closed() {
         let treasury = account(3);
         let policy = policy(&treasury);
         let contract_call = contract_call_tx(1, metadata_for(&policy));
         let raw_ivm = ivm_tx(1, metadata_for(&policy));
-
         assert_eq!(
             enforce_policy(&contract_call, &policy),
             Err(ValidationFeeAdmissionError::UnsupportedExecutable)
@@ -5405,7 +5137,6 @@ mod tests {
             Err(ValidationFeeAdmissionError::UnsupportedExecutable)
         );
     }
-
     #[test]
     fn native_repo_ds_movements_fail_closed_at_top_level() {
         let initiator = account(1);
@@ -5414,7 +5145,6 @@ mod tests {
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
         let xor = asset_definition("xor");
-
         let blocked = [
             (
                 InstructionBox::from(RepoInstructionBox::from(repo_initiate(
@@ -5447,7 +5177,6 @@ mod tests {
                 ReverseRepoIsi::WIRE_ID,
             ),
         ];
-
         for (instruction, instruction_wire_id) in blocked {
             let transaction = tx(1, vec![instruction], Metadata::default());
             assert_eq!(
@@ -5461,7 +5190,6 @@ mod tests {
                 )
             );
         }
-
         let non_ds = tx(
             1,
             vec![
@@ -5477,7 +5205,6 @@ mod tests {
             Metadata::default(),
         );
         enforce_policy(&non_ds, &policy).expect("non-DS repo remains generic");
-
         let margin_call = tx(
             1,
             vec![
@@ -5490,7 +5217,6 @@ mod tests {
         );
         enforce_policy(&margin_call, &policy).expect("repo margin call has no balance effect");
     }
-
     #[test]
     fn native_settlement_ds_movements_fail_closed_through_wrappers() {
         let initiator = account(1);
@@ -5500,7 +5226,6 @@ mod tests {
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
         let xor = asset_definition("xor");
-
         let dvp = DvpIsi::new(
             "wrapped_ds_dvp".parse().expect("settlement id"),
             settlement_leg(&xor, &initiator, &counterparty),
@@ -5522,7 +5247,6 @@ mod tests {
                 }
             )
         );
-
         let pvp = PvpIsi::new(
             "multisig_ds_pvp".parse().expect("settlement id"),
             settlement_leg(&xor, &multisig, &counterparty),
@@ -5551,7 +5275,6 @@ mod tests {
                 }
             )
         );
-
         let non_ds_dvp = DvpIsi::new(
             "wrapped_non_ds_dvp".parse().expect("settlement id"),
             settlement_leg(&xor, &initiator, &counterparty),
@@ -5565,7 +5288,6 @@ mod tests {
         );
         enforce_policy(&non_ds_proved, &policy).expect("non-DS settlement remains generic");
     }
-
     #[test]
     fn opaque_trigger_artifacts_reject_native_repo_ds_movement() {
         let initiator = account(1);
@@ -5598,7 +5320,6 @@ mod tests {
             initiator,
             vec![RegisterBox::Trigger(Register::trigger(trigger)).into()],
         )]);
-
         assert_eq!(
             enforce_opaque_deferred_policy(&instruction_groups, &policy, None),
             Err(
@@ -5610,7 +5331,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn ivm_proved_overlay_requires_exact_validation_fee() {
         let user = account(1);
@@ -5618,7 +5338,6 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         let exact = ivm_proved_tx(
             1,
             vec![
@@ -5628,7 +5347,6 @@ mod tests {
             metadata_for_fee_instruction(&policy, 1),
         );
         enforce_policy(&exact, &policy).expect("exact proved-IVM overlay fee should validate");
-
         let missing = ivm_proved_tx(
             1,
             vec![transfer(
@@ -5645,7 +5363,6 @@ mod tests {
                 required_minor_units: 10,
             })
         );
-
         for observed_minor_units in [9, 11] {
             let wrong = ivm_proved_tx(
                 1,
@@ -5669,7 +5386,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn deferred_instruction_list_requires_exact_execution_time_fee() {
         let user = account(1);
@@ -5678,7 +5394,6 @@ mod tests {
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
         let principal = || transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
-
         assert_eq!(
             enforce_deferred_policy(&user, &[principal()], &policy),
             Err(ValidationFeeAdmissionError::MissingMultisigFeeMarker { context_index: 0 })
@@ -5702,7 +5417,6 @@ mod tests {
         );
         enforce_deferred_policy(&user, &exact, &policy)
             .expect("deferred principal and exact fee should validate atomically");
-
         for observed_minor_units in [9, 11] {
             assert_eq!(
                 enforce_deferred_policy(
@@ -5730,7 +5444,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn deferred_multisig_marker_is_unique_policy_bound_and_batch_aware() {
         let user = account(1);
@@ -5740,7 +5453,6 @@ mod tests {
         let fee_asset = policy_fee_asset(&policy);
         let principal = || transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
         let fee = || transfer(&user, &fee_asset, minor_units(10), &treasury);
-
         let mut duplicate = with_multisig_fee_marker(&policy, vec![principal(), fee()], 1, None);
         duplicate.push(
             ValidationFeeMultisigMarkerV1::new(
@@ -5758,7 +5470,6 @@ mod tests {
                 count: 2,
             })
         );
-
         let malformed: InstructionBox = Log::new(
             Level::TRACE,
             "iroha:validation_fee:multisig:v1:malformed".to_owned(),
@@ -5771,7 +5482,6 @@ mod tests {
                 instruction_index: 2,
             })
         );
-
         let wrong_version = vec![
             principal(),
             fee(),
@@ -5792,7 +5502,6 @@ mod tests {
                 }
             )
         );
-
         let wrong_hash = vec![
             principal(),
             fee(),
@@ -5808,13 +5517,11 @@ mod tests {
                 }
             )
         );
-
         let wrong_coordinate = with_multisig_fee_marker(&policy, vec![principal(), fee()], 0, None);
         assert!(matches!(
             enforce_deferred_policy(&user, &wrong_coordinate, &policy),
             Err(ValidationFeeAdmissionError::WrongFeeBeneficiary { .. })
         ));
-
         let batch = TransferAssetBatch::new(vec![
             TransferAssetBatchEntry::new(user.clone(), recipient, fee_asset.clone(), 1_u64),
             TransferAssetBatchEntry::new(
@@ -5828,7 +5535,6 @@ mod tests {
             with_multisig_fee_marker(&policy, vec![InstructionBox::from(batch)], 0, Some(1));
         enforce_deferred_policy(&user, &batch_with_marker, &policy)
             .expect("canonical batch-entry marker validates exact deferred fee");
-
         let unrelated_treasury_inflow = with_multisig_fee_marker(
             &policy,
             vec![transfer(&user, &fee_asset, minor_units(10), &treasury)],
@@ -5843,7 +5549,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn opaque_deferred_artifacts_reject_fee_asset_but_allow_generic_assets() {
         let user = account(1);
@@ -5859,7 +5564,6 @@ mod tests {
         );
         enforce_opaque_deferred_policy(&instruction_groups, &policy, None)
             .expect("opaque non-fee-asset artifacts remain generic");
-
         instruction_groups.insert(
             user.clone(),
             vec![
@@ -5877,7 +5581,6 @@ mod tests {
                 }
             )
         );
-
         let trigger_id: iroha_data_model::trigger::TriggerId =
             "opaque_derived_ds_trigger".parse().expect("trigger id");
         let trigger = Trigger::new(
@@ -5901,7 +5604,6 @@ mod tests {
             enforce_opaque_deferred_policy(&instruction_groups, &policy, None),
             Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
         ));
-
         let nested_trigger_id: iroha_data_model::trigger::TriggerId =
             "multisig_wrapped_opaque_ds_trigger"
                 .parse()
@@ -5935,7 +5637,6 @@ mod tests {
             enforce_opaque_deferred_policy(&instruction_groups, &policy, None),
             Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
         ));
-
         let proposal_instructions = vec![
             transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
             transfer(&multisig, &fee_asset, minor_units(10), &treasury),
@@ -5943,7 +5644,6 @@ mod tests {
         let proposal_hash = HashOf::new(&proposal_instructions);
         let approve = MultisigApprove::new(multisig.clone(), proposal_hash);
         let approve_instruction: InstructionBox = approve.clone().into();
-
         let assert_indirect_approval_rejected = |instructions: Vec<InstructionBox>| {
             let mut visited = std::collections::BTreeSet::new();
             let mut resolver = |candidate: &MultisigApprove| {
@@ -5965,7 +5665,6 @@ mod tests {
         assert_indirect_approval_rejected(vec![
             MultisigPropose::new(account(5), vec![approve_instruction.clone()], None).into(),
         ]);
-
         let approval_trigger_id: iroha_data_model::trigger::TriggerId =
             "opaque_multisig_approval_trigger"
                 .parse()
@@ -5984,7 +5683,6 @@ mod tests {
             RegisterBox::Trigger(Register::trigger(approval_trigger)).into(),
         ]);
     }
-
     #[test]
     fn opaque_treasury_payout_exception_is_direct_source_and_authority_bound() {
         let binding = treasury_payout_binding(test_contract_address(), b"bound-pool");
@@ -5993,7 +5691,6 @@ mod tests {
         let other = account(7);
         let policy = policy_with_treasury_payout_lifecycle(binding);
         let fee_asset = policy_fee_asset(&policy);
-
         let direct_payout = std::collections::BTreeMap::from([(
             treasury.clone(),
             vec![transfer(
@@ -6016,7 +5713,6 @@ mod tests {
         );
         enforce_opaque_deferred_policy(&direct_payout, &policy, Some(&treasury))
             .expect("a verified contract-subject treasury may make its enacted-lifecycle payout");
-
         let wrong_authority = std::collections::BTreeMap::from([(
             other.clone(),
             vec![transfer(
@@ -6033,7 +5729,6 @@ mod tests {
                 ..
             }) if execution_account_id == other.to_string()
         ));
-
         let wrong_source = std::collections::BTreeMap::from([(
             treasury.clone(),
             vec![transfer(
@@ -6047,7 +5742,6 @@ mod tests {
             enforce_opaque_deferred_policy(&wrong_source, &policy, Some(&treasury)),
             Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
         ));
-
         let nested = MultisigPropose::new(
             treasury.clone(),
             vec![transfer(
@@ -6067,7 +5761,6 @@ mod tests {
             Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
         ));
     }
-
     #[test]
     fn treasury_payout_effect_plan_rejects_every_unbound_substitution() {
         let binding = treasury_payout_binding(test_contract_address(), b"bound-pool");
@@ -6078,7 +5771,6 @@ mod tests {
         let canonical_ordered = ordered_treasury_payout_plan(&binding, &canonical);
         validate_treasury_payout_effect_plan(&canonical_groups, &canonical_ordered, &binding)
             .expect("the exact six-transfer plan is accepted");
-
         let mut missing = canonical.clone();
         missing.pop();
         let missing_groups =
@@ -6088,7 +5780,6 @@ mod tests {
             &missing_groups,
             &ordered_treasury_payout_plan(&binding, &missing),
         );
-
         let mut extra = canonical.clone();
         extra.push(canonical[5].clone());
         let extra_groups = std::collections::BTreeMap::from([(treasury.clone(), extra.clone())]);
@@ -6097,11 +5788,9 @@ mod tests {
             &extra_groups,
             &ordered_treasury_payout_plan(&binding, &extra),
         );
-
         let mut reordered = canonical_ordered.clone();
         reordered.swap(0, 1);
         assert_treasury_payout_plan_mismatch(&binding, &canonical_groups, &reordered);
-
         let mut wrong_batch = canonical.clone();
         wrong_batch[0] = transfer(
             &treasury,
@@ -6116,7 +5805,6 @@ mod tests {
             &wrong_batch_groups,
             &ordered_treasury_payout_plan(&binding, &wrong_batch),
         );
-
         let mut wrong_sbd_asset = canonical.clone();
         wrong_sbd_asset[0] = transfer(
             &treasury,
@@ -6131,7 +5819,6 @@ mod tests {
             &wrong_sbd_asset_groups,
             &ordered_treasury_payout_plan(&binding, &wrong_sbd_asset),
         );
-
         let mut wrong_vault = canonical.clone();
         wrong_vault[1] = transfer(
             &account(7),
@@ -6146,7 +5833,6 @@ mod tests {
             &wrong_vault_groups,
             &ordered_treasury_payout_plan(&binding, &wrong_vault),
         );
-
         for outside_bound in [3_u64, 101_u64] {
             let out_of_bounds =
                 canonical_treasury_payout_plan(&binding, Quantity::from(outside_bound));
@@ -6158,7 +5844,6 @@ mod tests {
                 &ordered_treasury_payout_plan(&binding, &out_of_bounds),
             );
         }
-
         let mut wrong_validator = canonical.clone();
         wrong_validator[2] = transfer(
             &treasury,
@@ -6173,7 +5858,6 @@ mod tests {
             &wrong_validator_groups,
             &ordered_treasury_payout_plan(&binding, &wrong_validator),
         );
-
         let mut wrong_final_amount = canonical.clone();
         wrong_final_amount[5] = transfer(
             &treasury,
@@ -6188,7 +5872,6 @@ mod tests {
             &wrong_final_groups,
             &ordered_treasury_payout_plan(&binding, &wrong_final_amount),
         );
-
         let mut changed_shares = binding.clone();
         changed_shares.recipients[0].share = "0.20".parse().expect("changed share");
         changed_shares.recipients[1].share = "0.30".parse().expect("changed share");
@@ -6197,7 +5880,6 @@ mod tests {
             &canonical_groups,
             &canonical_ordered,
         );
-
         let other_authority = account(7);
         let wrong_authority_groups =
             std::collections::BTreeMap::from([(other_authority.clone(), canonical.clone())]);
@@ -6211,7 +5893,6 @@ mod tests {
             &wrong_authority_groups,
             &wrong_authority_ordered,
         );
-
         let mut split_groups =
             std::collections::BTreeMap::from([(treasury.clone(), canonical[..5].to_vec())]);
         split_groups.insert(other_authority.clone(), vec![canonical[5].clone()]);
@@ -6219,7 +5900,6 @@ mod tests {
         split_ordered[5].0 = other_authority;
         assert_treasury_payout_plan_mismatch(&binding, &split_groups, &split_ordered);
     }
-
     #[test]
     fn opaque_deferred_unresolved_multisig_approval_fails_closed_against_state_mutation() {
         let user = account(1);
@@ -6231,7 +5911,6 @@ mod tests {
         let mut visited = std::collections::BTreeSet::new();
         let mut resolver =
             |_candidate: &MultisigApprove| -> Option<(AccountId, Vec<InstructionBox>)> { None };
-
         assert_eq!(
             reject_opaque_deferred_approval_effects_with(
                 &user,
@@ -6249,7 +5928,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn missing_fee_is_rejected() {
         let user = account(1);
@@ -6267,7 +5945,6 @@ mod tests {
             )],
             metadata_for(&policy),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MissingFee {
@@ -6275,13 +5952,11 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn ivm_proved_axt_without_overlay_fee_fails_closed() {
         let treasury = account(3);
         let policy = policy(&treasury);
         let tx = ivm_proved_tx(1, Vec::new(), Metadata::default());
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Ok(()),
@@ -6294,7 +5969,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn ivm_proved_axt_with_exact_overlay_fee_still_fails_closed() {
         let user = account(1);
@@ -6315,7 +5989,6 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Ok(()),
@@ -6329,7 +6002,6 @@ mod tests {
             "an exact overlay fee cannot cover opaque AXT DS effects"
         );
     }
-
     #[test]
     fn typed_treasury_payout_policy_cannot_name_a_signable_treasury() {
         let mut policy = policy_with_treasury_payout_lifecycle(treasury_payout_binding(
@@ -6342,7 +6014,6 @@ mod tests {
             Some("validation-fee treasury payout contract subject must equal the policy treasury")
         );
     }
-
     #[test]
     fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         use iroha_data_model::{
@@ -6393,7 +6064,6 @@ mod tests {
             hashes.push_for_tests(block_hash([7; 32]));
             hashes.commit_for_tests();
         }
-
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
                 .expect("test policy effective height is non-zero"),
@@ -6440,7 +6110,6 @@ mod tests {
             &mut state_tx,
         )
         .expect("activate contract instance");
-
         let binding = treasury_payout_binding(contract_address.clone(), &code);
         let treasury = binding.treasury_account_id.clone();
         crate::smartcontracts::Execute::execute(
@@ -6463,10 +6132,8 @@ mod tests {
             ) if message.contains("deployed code hash differs from the enacted binding")),
             "unexpected governed code-hash rejection: {wrong_code_error:?}",
         );
-
         let registry = policy_registry(std::slice::from_ref(&policy));
         install_policy_registry_fixture(&registry, &mut state_tx);
-
         active_policy(&state_tx)
             .expect("read active policy")
             .expect("policy is active");
@@ -6602,7 +6269,6 @@ mod tests {
             !is_validation_fee_credit_state_key(&retired_key),
             "the first release must not reserve or decode the retired fixed-width leaf"
         );
-
         let canonical_credit_state = state_tx
             .world
             .smart_contract_state
@@ -6617,7 +6283,6 @@ mod tests {
                 .expect("decode canonical nominal credit"),
             payout_credit.amount
         );
-
         state_tx.world.smart_contract_state.insert(
             expected_credit_key.clone(),
             norito::to_bytes(&100_i64).expect("encode retired primitive state value"),
@@ -6639,7 +6304,6 @@ mod tests {
             Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
         ));
         state_tx.world.smart_contract_state.remove(retired_key);
-
         let mut noncanonical_record = canonical_credit_state.clone();
         noncanonical_record.push(0);
         state_tx
@@ -6650,7 +6314,6 @@ mod tests {
             read_validation_fee_credit_balance(&state_tx, &payout_credit),
             Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
         ));
-
         let mut wrong_schema_record = record.clone();
         wrong_schema_record.schema_hash[0] ^= 1;
         state_tx.world.smart_contract_state.insert(
@@ -6661,7 +6324,6 @@ mod tests {
             read_validation_fee_credit_balance(&state_tx, &payout_credit),
             Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
         ));
-
         let wrong_scale: Quantity = "0.001".parse().expect("canonical scale-three quantity");
         state_tx.world.smart_contract_state.insert(
             expected_credit_key.clone(),
@@ -6676,7 +6338,6 @@ mod tests {
                 ..
             }) if amount == wrong_scale
         ));
-
         let wrong_policy_scale = ValidationFeeCredit::from_policy_minor_units(
             treasury.clone(),
             policy_fee_asset(&policy),
@@ -6698,7 +6359,6 @@ mod tests {
                 }
             )
         ));
-
         let excessive_debit_minor_units = payout_credit_minor_units
             .checked_mul(2)
             .expect("fixture debit must fit minor-unit domain");
@@ -6720,7 +6380,6 @@ mod tests {
                 requested,
             }) if available == payout_credit.amount && requested == excessive_debit_amount
         ));
-
         let wide: Quantity = "18446744073709551616"
             .parse()
             .expect("canonical credit above u64::MAX");
@@ -6744,7 +6403,6 @@ mod tests {
                 .parse::<Quantity>()
                 .expect("canonical accumulated wide credit")
         );
-
         let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
         *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7f;
         let maximum_mantissa = iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
@@ -6775,7 +6433,6 @@ mod tests {
             .smart_contract_state
             .insert(expected_credit_key, canonical_credit_state);
         state_tx.apply();
-
         {
             let mut failed_signed_transaction = block.transaction();
             let exact_fee_credit = ValidationFeeCredit::from_policy_minor_units(
@@ -6798,7 +6455,6 @@ mod tests {
             );
             // Simulate a later transaction/data-trigger failure: no staged credit is applied.
         }
-
         {
             let mut failed_trigger_transaction = block.transaction();
             assert_eq!(
@@ -6837,7 +6493,6 @@ mod tests {
             // Simulate failure of the sixth (final validator) transfer: dropping this
             // subtransaction must roll back the pool-state artifact and native credit debit.
         }
-
         let mut successful_trigger_transaction = block.transaction();
         assert_eq!(
             read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
@@ -6857,7 +6512,6 @@ mod tests {
                 .is_none(),
             "a final-leg failure must roll back staged pool state as well as credit",
         );
-
         let altered_code = [code.as_slice(), &[0_u8]].concat();
         let error = enforce_opaque_deferred_instruction_groups(
             &groups,
@@ -6875,7 +6529,6 @@ mod tests {
             ) if message.contains("opaque deferred executable derived a policy fee-asset transfer")),
             "unexpected altered-code rejection: {error:?}",
         );
-
         let wrong_runtime = crate::executor::ContractRuntimeExecutionContext {
             contract_address: contract_address.clone(),
             contract_subject: deployer,
@@ -6895,7 +6548,6 @@ mod tests {
             .is_err(),
             "a signable runtime authority must not inherit the contract-subject exception"
         );
-
         assert_eq!(
             enforce_opaque_deferred_instruction_groups(
                 &groups,
@@ -6915,7 +6567,6 @@ mod tests {
             "matching payout consumes exactly its policy-minor-unit debit"
         );
         successful_trigger_transaction.apply();
-
         let mut exhausted_credit_transaction = block.transaction();
         assert_eq!(
             enforce_opaque_deferred_instruction_groups(
@@ -6942,7 +6593,6 @@ mod tests {
             OpaqueDeferredValidationOutcome::NoOp
         );
     }
-
     #[test]
     fn active_policy_admission_rejects_completed_ivm_proved_axt() {
         use iroha_data_model::block::BlockHeader;
@@ -6960,7 +6610,6 @@ mod tests {
             hashes.push_for_tests(block_hash([7; 32]));
             hashes.commit_for_tests();
         }
-
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
                 .expect("test policy effective height is non-zero"),
@@ -6980,7 +6629,6 @@ mod tests {
                 .expect("bound policy is active"),
             policy
         );
-
         let error = enforce_ivm_proved_completed_axt_admission(1, &state_tx)
             .expect_err("active policy must reject opaque IvmProved AXT effects");
         assert!(
@@ -6990,7 +6638,6 @@ mod tests {
             "unexpected active-policy AXT rejection: {error:?}"
         );
     }
-
     #[test]
     fn fee_bearing_transaction_requires_signed_fee_instruction_coordinate() {
         let user = account(1);
@@ -7006,13 +6653,11 @@ mod tests {
             ],
             metadata_for(&policy),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate)
         );
     }
-
     #[test]
     fn dangling_fee_batch_entry_coordinate_is_rejected() {
         let user = account(1);
@@ -7033,13 +6678,11 @@ mod tests {
             ],
             metadata,
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MalformedFeeInstructionMetadata)
         );
     }
-
     #[test]
     fn non_authority_source_transfer_requires_context_authority_fee() {
         let authority = account(1);
@@ -7048,7 +6691,6 @@ mod tests {
         let delegated_source = account(4);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         let missing_fee_tx = tx(
             1,
             vec![transfer(
@@ -7065,7 +6707,6 @@ mod tests {
                 required_minor_units: 10,
             })
         );
-
         let exact_fee_tx = tx(
             1,
             vec![
@@ -7082,7 +6723,6 @@ mod tests {
         enforce_policy(&exact_fee_tx, &policy)
             .expect("context authority-paid aggregate fee should validate");
     }
-
     #[test]
     fn unrelated_treasury_inflow_does_not_inflate_transaction_bound_fee_credit() {
         let user = account(1);
@@ -7102,7 +6742,6 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         assert_eq!(
             enforce_policy_with_credit(&transaction, &policy)
                 .expect("principal inflow plus exact coordinate must validate"),
@@ -7110,7 +6749,6 @@ mod tests {
             "only the exact signed fee coordinate becomes spendable fee credit"
         );
     }
-
     #[test]
     fn underpayment_and_overpayment_are_rejected() {
         let user = account(1);
@@ -7118,7 +6756,6 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         for (observed, expected_error) in [
             (
                 9,
@@ -7143,11 +6780,9 @@ mod tests {
                 ],
                 metadata_for_fee_instruction(&policy, 1),
             );
-
             assert_eq!(enforce_policy(&tx, &policy), Err(expected_error));
         }
     }
-
     #[test]
     fn duplicate_fee_instructions_are_rejected_as_ambiguous() {
         let user = account(1);
@@ -7164,13 +6799,11 @@ mod tests {
             ],
             metadata_for(&policy),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::DuplicateFeeInstructions { count: 2 })
         );
     }
-
     #[test]
     fn signed_fee_coordinate_treats_additional_treasury_transfer_as_qualifying() {
         let user = account(1);
@@ -7187,7 +6820,6 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongFeeAmount {
@@ -7196,7 +6828,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn wrong_treasury_or_wrong_asset_fee_is_rejected() {
         let user = account(1);
@@ -7206,7 +6837,6 @@ mod tests {
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
         let xor = asset_definition("xor");
-
         let wrong_treasury_tx = tx(
             1,
             vec![
@@ -7224,7 +6854,6 @@ mod tests {
                 observed_account_id: wrong_treasury.to_string(),
             })
         );
-
         let wrong_asset_tx = tx(
             1,
             vec![
@@ -7241,7 +6870,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn signed_fee_coordinate_rejects_fee_not_paid_by_transaction_authority() {
         let user = account(1);
@@ -7258,7 +6886,6 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongFeeSource {
@@ -7267,7 +6894,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn fee_transfer_is_not_recursively_charged() {
         let user = account(1);
@@ -7275,7 +6901,6 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         let exact_fee_tx = tx(
             1,
             vec![
@@ -7285,7 +6910,6 @@ mod tests {
             metadata_for_fee_instruction(&policy, 1),
         );
         enforce_policy(&exact_fee_tx, &policy).expect("fee instruction is not recursively charged");
-
         let recursively_charged_tx = tx(
             1,
             vec![
@@ -7302,7 +6926,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn retail_transfer_to_treasury_requires_separate_signed_fee() {
         let user = account(1);
@@ -7317,11 +6940,9 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         enforce_policy(&tx, &policy)
             .expect("treasury-destination principal requires a separate signed fee instruction");
     }
-
     #[test]
     fn single_treasury_transfer_cannot_be_signed_as_standalone_fee() {
         let user = account(1);
@@ -7333,7 +6954,6 @@ mod tests {
             vec![transfer(&user, &fee_asset, minor_units(10), &treasury)],
             metadata_for_fee_instruction(&policy, 0),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongFeeAmount {
@@ -7342,14 +6962,12 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn treasury_payout_requires_enacted_payout_lifecycle() {
         let user = account(1);
         let treasury = account(2);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         let treasury_payout = tx(
             2,
             vec![transfer(
@@ -7367,14 +6985,12 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn non_exempt_treasury_payout_is_accepted_with_exact_fee() {
         let user = account(1);
         let treasury = account(2);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         let treasury_payout = tx(
             2,
             vec![
@@ -7386,7 +7002,6 @@ mod tests {
         enforce_policy(&treasury_payout, &policy)
             .expect("non-exempt treasury payout can pay the exact protocol fee");
     }
-
     #[test]
     fn ordinary_sbd_transfer_from_bound_treasury_remains_fee_bearing() {
         let user = account(1);
@@ -7394,7 +7009,6 @@ mod tests {
         let treasury = binding.treasury_account_id.clone();
         let policy = policy_with_treasury_payout_lifecycle(binding);
         let fee_asset = policy_fee_asset(&policy);
-
         let treasury_payout = tx(
             2,
             vec![transfer(
@@ -7413,7 +7027,6 @@ mod tests {
             "the exemption is available only to the exact bound opaque runtime plan",
         );
     }
-
     #[test]
     fn sub_minor_fee_amount_is_rejected() {
         let user = account(1);
@@ -7434,7 +7047,6 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::NonMinorUnitAmount {
@@ -7444,7 +7056,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn policy_version_metadata_is_required_and_exact() {
         let user = account(1);
@@ -7458,7 +7069,6 @@ mod tests {
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ]
         };
-
         let missing_metadata_tx = tx(
             1,
             instructions(),
@@ -7468,7 +7078,6 @@ mod tests {
             enforce_policy(&missing_metadata_tx, &policy),
             Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
         );
-
         let mut wrong_version = metadata_for_fee_instruction(&policy, 1);
         wrong_version.insert(
             Name::from_str(VALIDATION_FEE_POLICY_VERSION_METADATA_KEY).expect("metadata key"),
@@ -7483,7 +7092,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn wrong_policy_hash_metadata_is_rejected() {
         let user = account(1);
@@ -7504,13 +7112,11 @@ mod tests {
             ],
             metadata,
         );
-
         assert!(matches!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongPolicyHashMetadata { .. })
         ));
     }
-
     #[test]
     fn zero_qualifying_transaction_rejects_mismatched_validation_fee_policy_metadata() {
         let user = account(1);
@@ -7534,7 +7140,6 @@ mod tests {
             )],
             metadata,
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongPolicyHashMetadata {
@@ -7543,7 +7148,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn zero_qualifying_transaction_with_fee_coordinate_requires_policy_metadata() {
         let user = account(1);
@@ -7561,13 +7165,11 @@ mod tests {
             )],
             metadata_for_fee_instruction_coordinate(0),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
         );
     }
-
     #[test]
     fn zero_qualifying_transaction_rejects_dangling_fee_entry_coordinate() {
         let user = account(1);
@@ -7590,13 +7192,11 @@ mod tests {
             )],
             metadata,
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MalformedFeeInstructionMetadata)
         );
     }
-
     #[test]
     fn batch_entries_are_charged_per_entry() {
         let user = account(1);
@@ -7627,14 +7227,12 @@ mod tests {
             ],
             metadata_for_fee_batch_entry(&policy, 0, 2),
         );
-
         assert_eq!(
             enforce_policy_with_credit(&tx, &policy).expect("batch aggregate fee validates"),
             20,
             "a signed batch credits exactly its aggregate protocol fee"
         );
     }
-
     #[test]
     fn batch_entries_reject_underpayment_and_overpayment() {
         let user = account(1);
@@ -7643,7 +7241,6 @@ mod tests {
         let treasury = account(4);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         for (observed, expected_error) in [
             (
                 10,
@@ -7687,11 +7284,9 @@ mod tests {
                 ],
                 metadata_for_fee_batch_entry(&policy, 0, 2),
             );
-
             assert_eq!(enforce_policy(&tx, &policy), Err(expected_error));
         }
     }
-
     #[test]
     fn batch_fee_coordinate_pointing_at_principal_entry_is_rejected() {
         let user = account(1);
@@ -7720,7 +7315,6 @@ mod tests {
             ],
             metadata_for_fee_batch_entry(&policy, 0, 0),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongFeeBeneficiary {
@@ -7731,7 +7325,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn batch_fee_entry_rejects_wrong_treasury_asset_and_source() {
         let user = account(1);
@@ -7743,7 +7336,6 @@ mod tests {
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
         let xor = asset_definition("xor");
-
         let wrong_treasury_tx = tx(
             1,
             vec![
@@ -7780,7 +7372,6 @@ mod tests {
                 observed_account_id: wrong_treasury.to_string(),
             })
         );
-
         let wrong_asset_tx = tx(
             1,
             vec![
@@ -7815,7 +7406,6 @@ mod tests {
                 entry_index: Some(2),
             })
         );
-
         let wrong_source_tx = tx(
             1,
             vec![
@@ -7846,7 +7436,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn multisig_proposal_fee_asset_transfer_requires_context_fee() {
         let user = account(1);
@@ -7866,12 +7455,10 @@ mod tests {
             None,
         );
         let missing_fee_tx = tx(1, vec![proposal.into()], metadata_for(&policy));
-
         assert_eq!(
             enforce_policy(&missing_fee_tx, &policy),
             Err(ValidationFeeAdmissionError::MissingMultisigFeeMarker { context_index: 1 })
         );
-
         let top_level_fee = tx(
             1,
             vec![
@@ -7902,7 +7489,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn multisig_proposal_context_fee_validates() {
         let recipient = account(2);
@@ -7930,10 +7516,8 @@ mod tests {
             ],
             metadata_for(&policy),
         );
-
         enforce_policy(&tx, &policy).expect("multisig proposal context fee validates");
     }
-
     #[test]
     fn multisig_fee_credits_only_when_deferred_instructions_execute() {
         let recipient = account(2);
@@ -7962,7 +7546,6 @@ mod tests {
             ],
             metadata_for(&policy),
         );
-
         assert_eq!(
             enforce_policy_with_credit(&proposal_transaction, &policy)
                 .expect("signed proposal must validate"),
@@ -7976,7 +7559,6 @@ mod tests {
             "the exact marker-bound fee credits when the proposal actually executes"
         );
     }
-
     #[test]
     fn multisig_proposal_signed_fee_coordinate_resolves_unique_nested_context() {
         let user = account(1);
@@ -8000,7 +7582,6 @@ mod tests {
                 None,
             )
         };
-
         let exact = tx(
             1,
             vec![nested_proposal().into()],
@@ -8008,7 +7589,6 @@ mod tests {
         );
         enforce_policy(&exact, &policy)
             .expect("signed fee coordinate should resolve the unique nested proposal context");
-
         let wrong = tx(
             1,
             vec![nested_proposal().into()],
@@ -8018,7 +7598,6 @@ mod tests {
             enforce_policy(&wrong, &policy),
             Err(ValidationFeeAdmissionError::ConflictingMultisigFeeCoordinate { context_index: 1 })
         );
-
         let ambiguous = tx(
             1,
             vec![
@@ -8042,7 +7621,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn nested_fee_coordinate_does_not_implicitly_designate_top_level_treasury_inflow() {
         let user = account(1);
@@ -8073,13 +7651,11 @@ mod tests {
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate)
         );
     }
-
     #[test]
     fn multisig_proposal_context_fee_requires_policy_coordinates() {
         let recipient = account(2);
@@ -8107,13 +7683,11 @@ mod tests {
             ],
             Metadata::default(),
         );
-
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
         );
     }
-
     #[test]
     fn multisig_proposal_context_fee_rejects_wrong_amounts() {
         let recipient = account(2);
@@ -8121,7 +7695,6 @@ mod tests {
         let multisig = account(4);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-
         for (observed, expected_error) in [
             (
                 9,
@@ -8158,11 +7731,9 @@ mod tests {
                 ],
                 metadata_for(&policy),
             );
-
             assert_eq!(enforce_policy(&tx, &policy), Err(expected_error));
         }
     }
-
     #[test]
     fn multisig_proposal_context_fee_rejects_wrong_treasury_asset_and_source() {
         let recipient = account(2);
@@ -8173,7 +7744,6 @@ mod tests {
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
         let xor = asset_definition("xor");
-
         let wrong_treasury_tx = tx(
             1,
             vec![
@@ -8203,7 +7773,6 @@ mod tests {
                 observed_account_id: wrong_treasury.to_string(),
             })
         );
-
         let wrong_asset_tx = tx(
             1,
             vec![
@@ -8231,7 +7800,6 @@ mod tests {
                 entry_index: None,
             })
         );
-
         let wrong_source_tx = tx(
             1,
             vec![
@@ -8260,7 +7828,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn multisig_proposal_batch_entries_are_charged_per_entry() {
         let recipient_a = account(2);
@@ -8302,9 +7869,7 @@ mod tests {
             None,
         );
         let tx = tx(1, vec![proposal.into()], metadata_for(&policy));
-
         enforce_policy(&tx, &policy).expect("multisig batch aggregate fee validates");
     }
-
     include!("validation_fee/multisig_batch_tests.rs");
 }

@@ -1,20 +1,17 @@
 //! Custom parameter definitions.
-use std::collections::BTreeMap;
-
+use crate::name::Name;
 use getset::Getters;
 use iroha_primitives::json::Json;
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
-use crate::name::Name;
-
+use std::collections::BTreeMap;
 #[cfg(feature = "json")]
 pub mod json_helpers {
     //! JSON helper utilities for serializing and deserializing custom parameters.
-    use norito::json::{self, JsonDeserialize, JsonSerialize, Parser, Value};
-
     use super::*;
-
+    use norito::json::{
+        self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser, Value,
+    };
     /// Serialize a `CustomParameters` map into a JSON object written to `out`.
     pub fn serialize(parameters: &CustomParameters, out: &mut String) {
         out.push('{');
@@ -31,7 +28,36 @@ pub mod json_helpers {
         }
         out.push('}');
     }
-
+    /// Serialize a `CustomParameters` map through a checked JSON sink.
+    ///
+    /// Unlike [`serialize`], this path never stages the map in a temporary
+    /// `String`; it also accounts for the object in the sink's depth budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BoundedJsonError`] when the configured output or nesting bound
+    /// is exceeded, or when a nested parameter cannot use the checked writer.
+    pub fn serialize_bounded(
+        parameters: &CustomParameters,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        for (id, parameter) in parameters {
+            if first {
+                first = false;
+            } else {
+                out.push(',')?;
+            }
+            id.json_serialize_to(out)?;
+            out.push(':')?;
+            parameter.json_serialize_to(out)?;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
     /// Deserialize a `CustomParameters` map from a JSON stream.
     ///
     /// # Errors
@@ -42,7 +68,6 @@ pub mod json_helpers {
         let value = Value::json_deserialize(parser)?;
         from_value(value)
     }
-
     /// Convert a JSON [`Value`] into `CustomParameters`.
     ///
     /// # Errors
@@ -58,7 +83,6 @@ pub mod json_helpers {
                 )));
             }
         };
-
         let mut out: CustomParameters = CustomParameters::default();
         for (key, entry) in map {
             let id: CustomParameterId =
@@ -69,7 +93,6 @@ pub mod json_helpers {
                             message: err.to_string(),
                         }
                     })?;
-
             let entry_json = norito::json::to_json(&entry)
                 .map_err(|err| json::Error::Message(err.to_string()))?;
             let mut entry_parser = Parser::new(&entry_json);
@@ -77,24 +100,18 @@ pub mod json_helpers {
             parameter.id = id.clone();
             out.insert(id, parameter);
         }
-
         Ok(out)
     }
 }
-
 /// Collection of [`CustomParameter`]s
 pub(crate) type CustomParameters = BTreeMap<CustomParameterId, CustomParameter>;
-
 pub use self::model::*;
-
 #[iroha_data_model_derive::model]
 mod model {
+    use super::*;
     use derive_more::{Constructor, Display, FromStr};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
-    use super::*;
-
     /// Id of a custom parameter
     #[derive(
         Debug,
@@ -113,7 +130,6 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct CustomParameterId(pub Name);
-
     /// A custom blockchain parameter
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Getters)]
     #[getset(get = "pub")]
@@ -127,14 +143,12 @@ mod model {
         pub payload: Json,
     }
 }
-
 impl CustomParameterId {
     /// Getter for name
     pub fn name(&self) -> &Name {
         &self.0
     }
 }
-
 impl CustomParameter {
     /// Constructor
     pub fn new(id: CustomParameterId, payload: impl Into<Json>) -> Self {
@@ -144,29 +158,30 @@ impl CustomParameter {
         }
     }
 }
-
 impl crate::Identifiable for CustomParameter {
     type Id = CustomParameterId;
-
     fn id(&self) -> &Self::Id {
         &self.id
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for CustomParameterId {
     fn json_serialize(&self, out: &mut String) {
         self.0.json_serialize(out);
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.json_serialize_to(out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for CustomParameterId {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Name::json_deserialize(parser).map(Self)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for CustomParameter {
     fn json_serialize(&self, out: &mut String) {
@@ -180,8 +195,20 @@ impl JsonSerialize for CustomParameter {
         self.payload.json_serialize(out);
         out.push('}');
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        self.id.json_serialize_to(out)?;
+        out.push_str(",\"payload\":")?;
+        self.payload.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for CustomParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -195,7 +222,6 @@ impl JsonDeserialize for CustomParameter {
                 });
             }
         };
-
         let id_value = map.remove("id").ok_or_else(|| json::Error::MissingField {
             field: String::from("id"),
         })?;
@@ -204,42 +230,34 @@ impl JsonDeserialize for CustomParameter {
             .ok_or_else(|| json::Error::MissingField {
                 field: String::from("payload"),
             })?;
-
         if let Some((field, _)) = map.into_iter().next() {
             return Err(json::Error::UnknownField { field });
         }
-
         let id = {
             let json_id = norito::json::to_json(&id_value)
                 .map_err(|err| json::Error::Message(err.to_string()))?;
             let mut parser = norito::json::Parser::new(&json_id);
             CustomParameterId::json_deserialize(&mut parser)?
         };
-
         let payload = {
             let json_payload = norito::json::to_json(&payload_value)
                 .map_err(|err| json::Error::Message(err.to_string()))?;
             let mut parser = norito::json::Parser::new(&json_payload);
             Json::json_deserialize(&mut parser)?
         };
-
         Ok(Self { id, payload })
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr as _;
-
     use super::*;
     use crate::name::Name;
-
+    use core::str::FromStr as _;
     #[test]
     fn id_name_returns_inner() {
         let id = CustomParameterId::new(Name::from_str("param").expect("Valid"));
         assert_eq!(id.name(), &Name::from_str("param").expect("Valid"));
     }
-
     #[test]
     fn new_parameter_stores_payload() {
         let id = CustomParameterId::new(Name::from_str("test").expect("Valid"));

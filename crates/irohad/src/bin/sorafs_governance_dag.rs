@@ -4,16 +4,13 @@
 //! policy, expected identities, stable provider handles, revisions, bounds,
 //! and policy digests. Runtime credentials and private keys remain behind the
 //! platform-fixed local provider broker.
-
-use std::{path::PathBuf, process, sync::Arc};
-
 use clap::Parser;
 use iroha_data_model::{ChainId, NetworkId};
 use irohad::StockGovernanceDagServiceRuntimeProviderRegistryV1;
 use sorafs_node::{
     GovernanceDagServiceRuntimeProviderRegistryV1, run_governance_dag_service_with_runtime_registry,
 };
-
+use std::{path::PathBuf, process, sync::Arc};
 #[derive(Debug, Parser)]
 #[command(
     author,
@@ -36,7 +33,6 @@ struct Args {
     #[arg(long)]
     once: bool,
 }
-
 #[tokio::main]
 async fn main() {
     let Args {
@@ -55,11 +51,9 @@ async fn main() {
         process::exit(1);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn cli_requires_a_canonical_chain_identity() {
         let args = Args::try_parse_from([
@@ -79,7 +73,6 @@ mod tests {
             "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
         );
         assert!(args.once);
-
         assert!(
             Args::try_parse_from([
                 "sorafs_governance_dag",

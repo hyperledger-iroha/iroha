@@ -1,7 +1,6 @@
 #[test]
 fn rounded_decimal_division_supports_every_v1_rounding_mode() {
     use ivm_abi::numeric::RoundingModeV1 as AbiMode;
-
     for (dividend, mode, expected, abi_mode) in [
         ("1.0", "toward_zero", "0.12", AbiMode::TowardZero),
         ("1.0", "away_from_zero", "0.13", AbiMode::AwayFromZero),
@@ -24,7 +23,6 @@ fn rounded_decimal_division_supports_every_v1_rounding_mode() {
             panic!("constant rounded division must fold");
         };
         assert_eq!(value.to_string(), expected, "mode={mode}");
-
         let expression = returned_expr(&format!(
             "fn rounded(decimal value) -> decimal {{ return value.div_round(\
                     divisor: 8.0, scale: 2, mode: Rounding::{mode}); }}"
@@ -43,7 +41,6 @@ fn rounded_decimal_division_supports_every_v1_rounding_mode() {
             abi_mode.tag(),
         );
     }
-
     let expression = returned_expr(
         "fn rounded(quantity value, decimal divisor, int scale) -> quantity { \
                 return value.div_round( \
@@ -69,7 +66,6 @@ fn rounded_decimal_division_supports_every_v1_rounding_mode() {
                 == Some(ivm_abi::numeric::RoundingModeV1::NearestEven.tag())
     ));
     assert_eq!(evaluation_order, [0, 3, 1, 2]);
-
     let ratio = returned_expr(
         "fn rounded(quantity value, quantity divisor, int scale) -> decimal { \
                 return value.ratio_round( \

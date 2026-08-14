@@ -3,7 +3,6 @@
 //! The parser still sees raw identifiers, but semantic analysis, lowering, and
 //! effect checks should agree on the canonical builtin set through this enum
 //! instead of open-coded string matching.
-
 /// Typed pointer ABI constructors recognized by compiler lowering.
 ///
 /// Only constructors whose enclosing [`Builtin`] has a source-visible surface
@@ -32,7 +31,6 @@ pub enum PointerConstructor {
     SoracloudRequest,
     SoracloudResponse,
 }
-
 impl PointerConstructor {
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
@@ -55,11 +53,9 @@ impl PointerConstructor {
             _ => return None,
         })
     }
-
     pub const fn name(self) -> &'static str {
         self.into_str()
     }
-
     const fn return_type_name(self) -> &'static str {
         match self {
             Self::AccountId => "AccountId",
@@ -79,7 +75,6 @@ impl PointerConstructor {
         }
     }
 }
-
 /// Security-relevant effects produced by a builtin call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BuiltinEffects {
@@ -90,7 +85,6 @@ pub struct BuiltinEffects {
     /// The call mutates contract-owned durable state.
     pub mutates_durable_state: bool,
 }
-
 impl BuiltinEffects {
     /// No externally visible effects.
     pub const NONE: Self = Self {
@@ -114,7 +108,6 @@ impl BuiltinEffects {
         ..Self::NONE
     };
 }
-
 /// Coarse scheduler access class for a builtin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BuiltinAccess {
@@ -132,7 +125,6 @@ pub enum BuiltinAccess {
     /// Dynamic access that must conservatively serialize when unresolved.
     Dynamic,
 }
-
 /// Execution mode required by a builtin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BuiltinMode {
@@ -148,7 +140,6 @@ pub enum BuiltinMode {
     /// Compiler/runtime implementation detail, not a V1 source API.
     CompilerInternal,
 }
-
 /// Coarse gas model used for compiler and host consistency checks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BuiltinGasClass {
@@ -160,7 +151,6 @@ pub enum BuiltinGasClass {
     /// The host quotes the deterministic cost before execution.
     HostQuoted,
 }
-
 /// Source-call form admitted for a builtin.
 ///
 /// Method calls are desugared to an internal free-call shape after parsing, so
@@ -178,7 +168,6 @@ pub enum BuiltinSurface {
     /// Not callable from V1 source.
     CompilerInternal,
 }
-
 /// How a builtin reaches the IVM host boundary.
 ///
 /// The syscall list contains operation syscalls only. Pointer publication is
@@ -196,7 +185,6 @@ pub enum BuiltinLowering {
     /// control-flow path.
     DerivedSyscalls,
 }
-
 /// Machine-readable source signature for a builtin.
 ///
 /// Parameter descriptors use canonical Kotodama type names. `A|B` denotes a
@@ -212,7 +200,6 @@ pub struct BuiltinSignature {
     /// Return type descriptor.
     pub return_type: &'static str,
 }
-
 impl BuiltinSignature {
     const fn new(parameters: &'static [&'static str], return_type: &'static str) -> Self {
         Self {
@@ -221,13 +208,11 @@ impl BuiltinSignature {
             return_type,
         }
     }
-
     const fn with_names(mut self, parameter_names: &'static [&'static str]) -> Self {
         self.parameter_names = parameter_names;
         self
     }
 }
-
 const fn default_parameter_names(arity: usize) -> &'static [&'static str] {
     match arity {
         0 => &[],
@@ -246,7 +231,6 @@ const fn default_parameter_names(arity: usize) -> &'static [&'static str] {
         _ => &[],
     }
 }
-
 /// Source argument policy attached to a builtin declaration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BuiltinCallPolicy {
@@ -257,7 +241,6 @@ pub enum BuiltinCallPolicy {
     /// Pagination calls always require explicit `offset` and `limit` names.
     Pagination,
 }
-
 /// Canonical security and lowering metadata for one builtin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuiltinSpec {
@@ -284,7 +267,6 @@ pub struct BuiltinSpec {
     /// Source argument policy.
     pub call_policy: BuiltinCallPolicy,
 }
-
 /// Canonical Kotodama helper/builtin calls that are part of the current source
 /// surface and are worth classifying centrally.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter, strum::IntoStaticStr)]
@@ -535,7 +517,6 @@ pub enum Builtin {
     Entrypoint,
     SysvarAuthority,
 }
-
 impl Builtin {
     /// Iterate over every canonical builtin variant.
     ///
@@ -545,12 +526,10 @@ impl Builtin {
     /// replaced with every pointer-constructor variant.
     pub fn all() -> impl Iterator<Item = Self> {
         use strum::IntoEnumIterator as _;
-
         PointerConstructor::iter()
             .map(Self::PointerConstructor)
             .chain(Self::iter().filter(|builtin| !matches!(builtin, Self::PointerConstructor(_))))
     }
-
     /// Iterate over the single exhaustive builtin security registry.
     ///
     /// Every record includes the signature, effects, scheduler access, gas
@@ -558,7 +537,6 @@ impl Builtin {
     pub fn registry() -> impl Iterator<Item = (Self, BuiltinSpec)> {
         Self::all().map(|builtin| (builtin, builtin.spec()))
     }
-
     /// Resolve a builtin from its canonical compiler-internal spelling.
     ///
     /// Source resolution must use [`Self::from_source_name`] so an internal
@@ -800,7 +778,6 @@ impl Builtin {
             _ => return None,
         })
     }
-
     /// The canonical compiler-internal spelling used by typed HIR and lowering.
     pub const fn name(self) -> &'static str {
         match self {
@@ -808,7 +785,6 @@ impl Builtin {
             _ => self.into_str(),
         }
     }
-
     /// Canonical V1 source spelling, including the public namespace.
     pub const fn source_name(self) -> &'static str {
         match self {
@@ -1073,7 +1049,6 @@ impl Builtin {
             | Self::SysvarAuthority => self.name(),
         }
     }
-
     /// Resolve a source-visible builtin by its canonical spelling.
     pub fn from_source_name(name: &str) -> Option<Self> {
         Self::all().find(|builtin| {
@@ -1083,7 +1058,6 @@ impl Builtin {
             ) && builtin.source_name() == name
         })
     }
-
     /// Return how V1 source may call this builtin.
     pub const fn surface(self) -> BuiltinSurface {
         match self {
@@ -1108,7 +1082,6 @@ impl Builtin {
             _ => BuiltinSurface::Function,
         }
     }
-
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
@@ -1207,7 +1180,6 @@ impl Builtin {
             _ => BuiltinEffects::NONE,
         }
     }
-
     /// Return the scheduler access class for this builtin.
     pub const fn access(self) -> BuiltinAccess {
         match self {
@@ -1278,7 +1250,6 @@ impl Builtin {
             _ => BuiltinAccess::None,
         }
     }
-
     /// Return the execution mode required by this builtin.
     pub const fn mode(self) -> BuiltinMode {
         match self {
@@ -1386,7 +1357,6 @@ impl Builtin {
             _ => BuiltinMode::Any,
         }
     }
-
     /// Return the gas charging class for this builtin.
     pub const fn gas_class(self) -> BuiltinGasClass {
         match self {
@@ -1406,14 +1376,12 @@ impl Builtin {
             _ => BuiltinGasClass::Constant,
         }
     }
-
     /// Return every operation syscall reachable from this builtin's lowering.
     ///
     /// This deliberately excludes `INPUT_PUBLISH_TLV`, which is pointer-ABI
     /// transport rather than the operation being authorized and scheduled.
     pub const fn operation_syscalls(self) -> &'static [u32] {
         use ivm_abi::syscalls as s;
-
         match self {
             Self::PointerConstructor(PointerConstructor::AccountId) => {
                 &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS]
@@ -1708,7 +1676,6 @@ impl Builtin {
             Self::SysvarAuthority => &[s::SYSCALL_SYSVAR_AUTHORITY],
         }
     }
-
     /// Return whether syscall emission is direct or compiler-derived.
     pub const fn lowering(self) -> BuiltinLowering {
         let syscalls = self.operation_syscalls();
@@ -1746,7 +1713,6 @@ impl Builtin {
             BuiltinLowering::DirectSyscall
         }
     }
-
     /// Return a direct syscall number when lowering is one-to-one.
     pub const fn syscall(self) -> Option<u32> {
         if !matches!(self.lowering(), BuiltinLowering::DirectSyscall) {
@@ -1759,14 +1725,12 @@ impl Builtin {
             None
         }
     }
-
     /// Return the canonical source-level parameter and return types.
     ///
     /// This match is intentionally exhaustive: adding a builtin without an
     /// explicit signature is a compile error rather than an implicit `any`.
     pub const fn signature(self) -> BuiltinSignature {
         use BuiltinSignature as S;
-
         let signature = match self {
             Self::PointerConstructor(constructor) => {
                 S::new(&["string"], constructor.return_type_name())
@@ -2037,7 +2001,6 @@ impl Builtin {
             Self::CurrentTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "int"),
             Self::ChainId | Self::ContractAddress | Self::Entrypoint => S::new(&[], "bytes"),
         };
-
         match self {
             Self::PointerConstructor(_) => signature.with_names(&["value"]),
             Self::Contains => signature.with_names(&["map", "key"]),
@@ -2223,7 +2186,6 @@ impl Builtin {
             _ => signature,
         }
     }
-
     /// Return the source argument policy attached to this builtin.
     pub const fn call_policy(self) -> BuiltinCallPolicy {
         if matches!(
@@ -2243,7 +2205,6 @@ impl Builtin {
             BuiltinCallPolicy::Flexible
         }
     }
-
     /// Return the canonical builtin registry record.
     pub const fn spec(self) -> BuiltinSpec {
         BuiltinSpec {
@@ -2260,7 +2221,6 @@ impl Builtin {
             call_policy: self.call_policy(),
         }
     }
-
     /// Whether the builtin is a JSON payload helper that public/view entrypoints
     /// must reject in favor of typed parameters.
     pub const fn is_payload_helper(self) -> bool {
@@ -2279,16 +2239,13 @@ impl Builtin {
         )
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::{
         Builtin, BuiltinAccess, BuiltinCallPolicy, BuiltinEffects, BuiltinGasClass,
         BuiltinLowering, BuiltinMode, BuiltinSurface, PointerConstructor,
     };
-
+    use std::collections::HashSet;
     #[test]
     fn release_mutators_are_effectful_in_canonical_registry() {
         for name in [
@@ -2307,7 +2264,6 @@ mod tests {
             assert!(!builtin.spec().name.is_empty());
         }
     }
-
     #[test]
     fn raw_and_private_builtins_have_restricted_modes() {
         assert_eq!(Builtin::Alloc.mode(), BuiltinMode::CompilerInternal);
@@ -2391,7 +2347,6 @@ mod tests {
             Some(ivm_abi::syscalls::SYSCALL_GET_PRIVATE_INPUT)
         );
     }
-
     #[test]
     fn vm_local_host_operations_do_not_claim_ledger_access() {
         for builtin in [Builtin::CommitOutput, Builtin::SetExecutionDepth] {
@@ -2399,7 +2354,6 @@ mod tests {
             assert_eq!(builtin.spec().access, BuiltinAccess::None, "{builtin:?}");
         }
     }
-
     #[test]
     fn public_pointer_constructors_have_one_typed_canonical_spelling() {
         for (constructor, canonical) in [
@@ -2422,7 +2376,6 @@ mod tests {
             assert_eq!(builtin.signature().parameters, &["string"]);
         }
     }
-
     #[test]
     fn registry_is_exhaustive_and_canonical_names_round_trip() {
         let mut variants = HashSet::new();
@@ -2480,7 +2433,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn wrapping_arithmetic_is_explicit_and_pure() {
         for (name, source_name) in [
@@ -2500,7 +2452,6 @@ mod tests {
             assert_eq!(builtin.syscall(), None);
         }
     }
-
     #[test]
     fn signatures_publish_named_call_metadata_without_arity_drift() {
         for builtin in Builtin::all() {
@@ -2534,11 +2485,9 @@ mod tests {
             BuiltinCallPolicy::Pagination
         );
     }
-
     #[test]
     fn native_transfer_control_and_recovery_registry_is_exact() {
         use ivm_abi::syscalls as s;
-
         for (builtin, name, source_name, syscall, parameters, parameter_names) in [
             (
                 Builtin::SetAssetTransferAvailability,
@@ -2626,11 +2575,9 @@ mod tests {
             assert_eq!(signature.return_type, "()");
         }
     }
-
     #[test]
     fn seiyaku_kotoage_capability_registry_is_exact_and_namespaced() {
         use ivm_abi::syscalls as s;
-
         for (builtin, internal_name, source_name, syscall) in [
             (
                 Builtin::GrantContractEntrypoint,
@@ -2661,7 +2608,6 @@ mod tests {
             assert_eq!(signature.return_type, "()");
         }
     }
-
     #[test]
     fn escrow_open_offer_registry_matches_the_lowered_host_abi() {
         let spec = Builtin::EscrowOpenOffer.spec();
@@ -2679,7 +2625,6 @@ mod tests {
             Some(ivm_abi::syscalls::SYSCALL_ESCROW_OPEN_OFFER)
         );
     }
-
     #[test]
     fn projected_core_query_registry_is_typed_and_pages_are_named_only() {
         for (singular, plural, id, view) in [
@@ -2720,7 +2665,6 @@ mod tests {
                 singular.operation_syscalls(),
                 &[ivm_abi::syscalls::SYSCALL_CORE_QUERY_GET]
             );
-
             assert_eq!(plural.signature().parameters, &["int", "int"]);
             assert_eq!(plural.signature().parameter_names, &["offset", "limit"]);
             assert_eq!(plural.signature().return_type, format!("QueryPage<{view}>"));
@@ -2731,7 +2675,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn trigger_registry_exposes_only_canonical_lifecycle_operations() {
         assert_eq!(
@@ -2755,7 +2698,6 @@ mod tests {
             &[ivm_abi::syscalls::SYSCALL_REMOVE_TRIGGER]
         );
     }
-
     #[test]
     fn typed_json_getter_registry_returns_active_only_options() {
         for (getter, payload) in [
@@ -2773,7 +2715,6 @@ mod tests {
         }
         assert_eq!(Builtin::GetQuantity.source_name(), "json::get_quantity");
     }
-
     #[test]
     fn source_visible_helpers_are_namespaced_except_language_intrinsics() {
         for builtin in Builtin::all() {
@@ -2791,7 +2732,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bytes_len_is_a_narrow_pure_source_capability() {
         let builtin = Builtin::BytesLen;
@@ -2810,7 +2750,6 @@ mod tests {
         assert_eq!(builtin.syscall(), Some(ivm_abi::syscalls::SYSCALL_TLV_LEN));
         assert_eq!(builtin.gas_class(), BuiltinGasClass::HostQuoted);
     }
-
     #[test]
     fn lowering_registry_is_fail_closed_and_gas_classified() {
         for (builtin, spec) in Builtin::registry() {
@@ -2848,7 +2787,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn state_map_and_path_helpers_are_method_only() {
         for builtin in [
@@ -2867,7 +2805,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_input_registry_matches_the_typed_bytes_surface() {
         let signature = Builtin::GetPublicInput.signature();
@@ -2878,7 +2815,6 @@ mod tests {
             "context::public_input"
         );
     }
-
     #[test]
     fn compiler_internal_seiyaku_lifecycle_names_are_branded_but_not_source_visible() {
         for (builtin, branded, english) in [
@@ -2914,7 +2850,6 @@ mod tests {
             assert_eq!(Builtin::from_source_name(english), None, "{english}");
         }
     }
-
     #[test]
     fn truncated_scalar_crypto_and_removed_nullifier_are_not_source_features() {
         for (builtin, source_name) in [
@@ -2930,10 +2865,8 @@ mod tests {
             // source spellings either.
             assert_eq!(Builtin::from_source_name(builtin.name()), None);
         }
-
         assert_eq!(Builtin::from_name("use_nullifier"), None);
         assert_eq!(Builtin::from_source_name("crypto::use_nullifier"), None);
-
         let commitment = Builtin::Valcom.signature();
         assert_eq!(
             commitment.parameters,
@@ -2949,7 +2882,6 @@ mod tests {
             Some(Builtin::Valcom)
         );
     }
-
     #[test]
     fn retired_anonymous_escrow_helpers_are_not_source_features() {
         for (name, source_name) in [
@@ -2990,7 +2922,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn compiler_internal_numeric_negation_registry_excludes_quantity() {
         for builtin in [Builtin::NumericNeg, Builtin::NumericNegDirect] {
@@ -3002,7 +2933,6 @@ mod tests {
             assert_eq!(Builtin::from_source_name(builtin.source_name()), None);
         }
     }
-
     #[test]
     fn source_feature_concepts_use_seiyaku_and_kotoage_names_only() {
         for (builtin, branded, retired_english) in [
@@ -3056,7 +2986,6 @@ mod tests {
             assert_eq!(Builtin::from_source_name(branded), Some(builtin));
             assert_eq!(Builtin::from_source_name(retired_english), None);
         }
-
         assert_eq!(
             Builtin::TestInvokeEntrypoint.signature().parameter_names,
             &["kotoage", "arguments"]
@@ -3070,7 +2999,6 @@ mod tests {
             &["actor", "kotoage", "arguments"]
         );
     }
-
     #[test]
     fn forbidden_raw_surfaces_do_not_resolve() {
         for name in [

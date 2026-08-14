@@ -1,5 +1,4 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
     let value = vec!["first".to_owned(), "second".to_owned()];
@@ -16,7 +15,6 @@ fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
         assert!(host.try_reserve_serialized_output(&value, 1));
         host.retained_output_bytes()
     };
-
     let name: Name = "state_input".parse().expect("valid public-input name");
     let canonical_name = CoreHost::encode_norito_payload(&name).expect("encode canonical Name");
     let path: StatePath = "state/first".parse().expect("valid state path");
@@ -31,7 +29,6 @@ fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
     assert_ne!(alternate_name, canonical_name);
     let alternate_path = norito::to_bytes(&path).expect("encode StatePath under alternate layout");
     assert_ne!(alternate_path, canonical_path);
-
     let encoded_under_ambient =
         CoreHost::encode_norito_payload(&value).expect("encode host payload canonically");
     assert_eq!(encoded_under_ambient, canonical);
@@ -74,14 +71,12 @@ fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
         ambient_before,
         "canonical helpers must restore the caller's ambient layout"
     );
-
     drop(ambient);
     assert_eq!(
         norito::to_bytes(&value).expect("encode payload after ambient guard"),
         canonical
     );
 }
-
 fn exact_return_type(
     kind: iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1,
 ) -> iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
@@ -91,7 +86,6 @@ fn exact_return_type(
         ],
     }
 }
-
 fn decode_nested_return(
     payload: &[u8],
     kind: iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1,
@@ -103,7 +97,6 @@ fn decode_nested_return(
     crate::smartcontracts::ivm::return_value::render_entrypoint_return_record(&schema, &record)
         .expect("render typed nested return record")
 }
-
 fn decode_nested_int(payload: &[u8]) -> i64 {
     decode_nested_return(
         payload,
@@ -114,27 +107,22 @@ fn decode_nested_int(payload: &[u8]) -> i64 {
     .parse()
     .expect("fixture nested int fits i64")
 }
-
 pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
     let tlv = make_tlv(ty as u16, payload);
     vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
 }
-
 pub(super) fn quantity_frame(value: &Quantity) -> Vec<u8> {
     QuantityValueV1::new(value.clone())
         .encode_frame()
         .expect("encode quantity frame")
 }
-
 pub(super) fn store_quantity(vm: &mut IVM, value: &Quantity) -> u64 {
     store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
 }
-
 fn read_option_words(vm: &IVM, handle: u64, some_words: u64) -> (bool, Vec<u64>) {
     let layout = ivm::sum::SumLayoutV1::option(some_words).expect("option layout");
     ivm::sum::read_words(vm, handle, layout).expect("read option handle")
 }
-
 fn read_option_int(vm: &IVM, handle: u64) -> Option<i64> {
     let (present, words) = read_option_words(vm, handle, 1);
     if !present {
@@ -157,7 +145,6 @@ fn read_option_int(vm: &IVM, handle: u64) -> Option<i64> {
             .expect("query next offset fits i64"),
     )
 }
-
 fn decode_typed_leaf<T>(vm: &IVM, pointer: u64, expected: PointerType) -> T
 where
     for<'de> T: NoritoDeserialize<'de>,
@@ -166,7 +153,6 @@ where
     assert_eq!(tlv.type_id, expected);
     norito::decode_from_bytes(tlv.payload).expect("decode typed leaf")
 }
-
 fn decode_quantity_leaf(vm: &IVM, pointer: u64) -> Quantity {
     let tlv = vm.memory.validate_tlv(pointer).expect("quantity leaf TLV");
     assert_eq!(tlv.type_id, PointerType::Quantity);
@@ -174,15 +160,12 @@ fn decode_quantity_leaf(vm: &IVM, pointer: u64) -> Quantity {
         .expect("decode quantity leaf")
         .into_quantity()
 }
-
 fn seed_test_call_hash(tx: &mut StateTransaction<'_, '_>, byte: u8) {
     tx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
 }
-
 fn fixture_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("fixture domain id")
 }
-
 fn fixture_account(label: &str) -> AccountId {
     match label {
         "alice" => ALICE_ID.clone(),
@@ -194,13 +177,11 @@ fn fixture_account(label: &str) -> AccountId {
         other => panic!("unsupported fixture account label: {other}"),
     }
 }
-
 fn local_contract_host(authority: AccountId) -> CoreHost {
     let mut host = CoreHost::new(authority);
     host.set_local_contract_debug_execution();
     host
 }
-
 fn build_authenticated_test_contract_program(
     code: &[u8],
     vector_length: u8,
@@ -208,7 +189,6 @@ fn build_authenticated_test_contract_program(
 ) -> Vec<u8> {
     build_authenticated_test_contract_program_with_states(code, vector_length, zk_mode, Vec::new())
 }
-
 fn build_authenticated_test_contract_program_with_states(
     code: &[u8],
     vector_length: u8,
@@ -257,7 +237,6 @@ fn build_authenticated_test_contract_program_with_states(
     program.extend_from_slice(code);
     program
 }
-
 fn fixture_account_in_domain(label: &str, domain_label: &str) -> AccountId {
     let seed: Vec<u8> = format!("{label}@{domain_label}")
         .as_bytes()
@@ -268,14 +247,12 @@ fn fixture_account_in_domain(label: &str, domain_label: &str) -> AccountId {
         .collect();
     AccountId::new(fixture_public_key_from_seed(seed))
 }
-
 pub(super) fn fixture_public_key_from_seed(seed: Vec<u8>) -> iroha_crypto::PublicKey {
     let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .expect("fixture seed must derive a valid keypair")
         .into_parts();
     public_key
 }
-
 #[test]
 fn fixture_public_key_from_seed_uses_checked_seed_derivation() {
     assert_eq!(
@@ -289,7 +266,6 @@ fn fixture_public_key_from_seed_uses_checked_seed_derivation() {
         "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
     );
 }
-
 #[test]
 fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scope() {
     let authority = fixture_account("alice");
@@ -311,25 +287,21 @@ fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scop
         entrypoint: "main".to_owned(),
     }));
     let mut vm = IVM::new(100_000);
-
     host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm)
         .expect("read contract subject");
     let observed: AccountId =
         CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
             .expect("decode contract subject");
     assert_eq!(observed, subject);
-
     let mut host = local_contract_host(authority);
     assert_eq!(
         host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm),
         Err(ivm::VMError::PermissionDenied)
     );
 }
-
 fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
     Account::new(id.clone()).build(authority)
 }
-
 fn retail_dataspace_catalog() -> (
     iroha_data_model::nexus::DataSpaceId,
     iroha_data_model::nexus::DataSpaceCatalog,
@@ -347,7 +319,6 @@ fn retail_dataspace_catalog() -> (
     .expect("retail dataspace catalog");
     (paynet, catalog)
 }
-
 fn resolved_test_account_alias(
     tx: &StateTransaction<'_, '_>,
     alias: &AccountAlias,
@@ -361,7 +332,6 @@ fn resolved_test_account_alias(
         alias.dataspace,
     )
 }
-
 fn seed_test_account_alias_lease_record(
     tx: &mut StateTransaction<'_, '_>,
     alias: &AccountAlias,
@@ -401,7 +371,6 @@ fn seed_test_account_alias_lease_record(
             .smart_contract_state
             .insert(dataspace_key, norito::codec::Encode::encode(&record));
     }
-
     if let Some(domain_id) = alias
         .domain_id(&tx.nexus.dataspace_catalog)
         .expect("fixture alias domain")
@@ -438,7 +407,6 @@ fn seed_test_account_alias_lease_record(
                 .insert(storage_key, norito::codec::Encode::encode(&record));
         }
     }
-
     let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
         .expect("fixture alias selector");
     let storage_key = crate::sns::record_storage_key(&selector);
@@ -461,13 +429,11 @@ fn seed_test_account_alias_lease_record(
         .smart_contract_state
         .insert(storage_key, norito::codec::Encode::encode(&record));
 }
-
 /// Lease-only state fixture for alias-resolution tests.
 struct SeedTestAccountAliasLease {
     alias: AccountAlias,
     owner: AccountId,
 }
-
 impl SeedTestAccountAliasLease {
     fn new(
         alias: AccountAlias,
@@ -479,7 +445,6 @@ impl SeedTestAccountAliasLease {
         Self { alias, owner }
     }
 }
-
 impl Execute for SeedTestAccountAliasLease {
     fn execute(
         self,
@@ -490,19 +455,16 @@ impl Execute for SeedTestAccountAliasLease {
         Ok(())
     }
 }
-
 /// Declarative repair/CAS adapter used to build alias-resolution fixtures.
 struct EnsureTestAccountAliasBinding {
     account: AccountId,
     alias: AccountAlias,
 }
-
 impl EnsureTestAccountAliasBinding {
     fn bind(account: AccountId, alias: AccountAlias, _lease_expiry_ms: Option<u64>) -> Self {
         Self { account, alias }
     }
 }
-
 impl Execute for EnsureTestAccountAliasBinding {
     fn execute(
         self,
@@ -555,7 +517,6 @@ impl Execute for EnsureTestAccountAliasBinding {
         .execute(authority, tx)
     }
 }
-
 fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
     if authority == &*ALICE_ID {
         return (*ALICE_KEYPAIR).clone();
@@ -565,7 +526,6 @@ fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
     }
     panic!("unsupported fixture signing authority: {authority}");
 }
-
 pub(super) fn contract_test_state(authority: &AccountId) -> State {
     let domain = Domain::new(fixture_domain_id()).build(authority);
     let account = build_fixture_account(authority, authority);
@@ -587,7 +547,6 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
     );
     state
 }
-
 pub(super) fn install_contract(
     state: &State,
     authority: &AccountId,
@@ -596,7 +555,6 @@ pub(super) fn install_contract(
 ) -> ContractAddress {
     install_contract_with_interface_and_lifecycle(state, authority, source, nonce, false, |_| {})
 }
-
 fn install_contract_with_pending_lifecycle(
     state: &State,
     authority: &AccountId,
@@ -605,7 +563,6 @@ fn install_contract_with_pending_lifecycle(
 ) -> ContractAddress {
     install_contract_with_interface_and_lifecycle(state, authority, source, nonce, true, |_| {})
 }
-
 fn install_contract_with_interface(
     state: &State,
     authority: &AccountId,
@@ -622,7 +579,6 @@ fn install_contract_with_interface(
         customize_interface,
     )
 }
-
 fn install_contract_with_interface_and_lifecycle(
     state: &State,
     authority: &AccountId,

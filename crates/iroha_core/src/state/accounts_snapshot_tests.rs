@@ -1,9 +1,6 @@
-use core::num::NonZeroU64;
-
-use iroha_test_samples::ALICE_ID;
-
 use super::*;
-
+use core::num::NonZeroU64;
+use iroha_test_samples::ALICE_ID;
 fn test_state_with_account() -> (State, AccountId) {
     let kura = crate::kura::Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
@@ -16,7 +13,6 @@ fn test_state_with_account() -> (State, AccountId) {
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     (state, account_id)
 }
-
 #[test]
 fn state_block_accounts_snapshot_is_cached() {
     let (state, account_id) = test_state_with_account();
@@ -35,7 +31,6 @@ fn state_block_accounts_snapshot_is_cached() {
     assert_eq!(first.len(), 1);
     assert_eq!(&first[0], &account_id);
 }
-
 #[test]
 fn state_view_accounts_snapshot_is_cached() {
     let (state, account_id) = test_state_with_account();

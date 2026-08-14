@@ -1,7 +1,9 @@
 //! Typed Torii surface for Parliament-governed validation-fee state.
-
-use std::ops::Bound::{Excluded, Unbounded};
-
+use crate::{
+    Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
+    gov::validation_fee_plain_electorate_rules, require_runtime_governance_account,
+    utils::extractors::NoritoOnly,
+};
 use axum::{
     extract::{ConnectInfo, Extension, Path, State},
     http::HeaderMap,
@@ -42,34 +44,25 @@ use iroha_torii_shared::validation_fee_api::{
     validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
-
-use crate::{
-    Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
-    gov::validation_fee_plain_electorate_rules, require_runtime_governance_account,
-    utils::extractors::NoritoOnly,
-};
-
+use std::ops::Bound::{Excluded, Unbounded};
 fn inconsistent(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "validation_fee_state_inconsistent",
         message: message.into(),
     }
 }
-
 fn bad_request(message: impl Into<String>) -> Error {
     Error::AppQueryValidation {
         code: "validation_fee_request_invalid",
         message: message.into(),
     }
 }
-
 fn not_found(message: impl Into<String>) -> Error {
     Error::AppNotFound {
         code: "validation_fee_proposal_not_found",
         message: message.into(),
     }
 }
-
 fn parse_proposal_id(value: &str) -> Result<[u8; 32], Error> {
     if value.len() != 64
         || !value
@@ -86,7 +79,6 @@ fn parse_proposal_id(value: &str) -> Result<[u8; 32], Error> {
         .try_into()
         .map_err(|_| bad_request("proposal_id must decode to exactly 32 bytes"))
 }
-
 fn retained_plain_electorate_rules(
     proposal_kind: &ProposalKind,
 ) -> Result<&ValidationFeePlainElectorateRulesV1, Error> {
@@ -110,7 +102,6 @@ fn retained_plain_electorate_rules(
     }
     Ok(rules)
 }
-
 const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,
@@ -120,7 +111,6 @@ const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
     ParliamentBody::OversightCommittee,
     ParliamentBody::FmaCommittee,
 ];
-
 fn validate_retained_parliament_snapshot(
     proposal: &iroha_core::state::GovernanceProposalRecord,
 ) -> Result<(), Error> {
@@ -173,7 +163,6 @@ fn validate_retained_parliament_snapshot(
     }
     Ok(())
 }
-
 fn retained_plain_electorate_snapshot<'a>(
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
@@ -211,7 +200,6 @@ fn retained_plain_electorate_snapshot<'a>(
     }
     Ok(Some(snapshot))
 }
-
 fn validate_retained_proposal_state<'a>(
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
@@ -232,7 +220,6 @@ fn validate_retained_proposal_state<'a>(
     }
     let electorate =
         retained_plain_electorate_snapshot(proposal_id, proposal, referendum, approvals, rules)?;
-
     let Some(evidence) = proposal.finalization_evidence.as_ref() else {
         if referendum.status == iroha_core::state::GovernanceReferendumStatus::Closed
             || proposal.status != iroha_core::state::GovernanceProposalStatus::Proposed
@@ -292,7 +279,6 @@ fn validate_retained_proposal_state<'a>(
     }
     Ok(electorate)
 }
-
 fn parliament_body_progress(
     proposal: &iroha_core::state::GovernanceProposalRecord,
     approvals: Option<&iroha_core::state::GovernanceStageApprovals>,
@@ -384,7 +370,6 @@ fn parliament_body_progress(
     }
     Ok(progress)
 }
-
 fn integer_sqrt_u128(n: u128) -> u128 {
     if n == 0 {
         return 0;
@@ -397,7 +382,6 @@ fn integer_sqrt_u128(n: u128) -> u128 {
     }
     x0
 }
-
 fn validation_fee_lock_custody(
     rules: &ValidationFeePlainElectorateRulesV1,
 ) -> iroha_core::state::GovernanceLockCustody {
@@ -408,7 +392,6 @@ fn validation_fee_lock_custody(
         slash_receiver_account: rules.slash_receiver_account.clone(),
     }
 }
-
 fn live_plain_tally(
     locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
     referendum_end: u64,
@@ -467,7 +450,6 @@ fn live_plain_tally(
     }
     Ok((approve, reject, abstain))
 }
-
 fn public_pipeline(
     proposal: &iroha_core::state::GovernanceProposalRecord,
 ) -> ValidationFeeProposalPipelineV1 {
@@ -486,7 +468,6 @@ fn public_pipeline(
             .collect(),
     }
 }
-
 fn public_locks(
     locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
 ) -> ValidationFeeProposalLocksV1 {
@@ -515,7 +496,6 @@ fn public_locks(
         .collect();
     ValidationFeeProposalLocksV1 { locks }
 }
-
 fn public_proposal_record(
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
@@ -596,7 +576,6 @@ fn public_proposal_record(
         enacted_at_height: proposal.enacted_at_height.map(|height| height.to_string()),
     })
 }
-
 fn bounded_validation_fee_proposal_keys<'a>(
     indexed: impl Iterator<Item = (&'a (u64, [u8; 32]), &'a ())>,
     limit: usize,
@@ -611,7 +590,6 @@ fn bounded_validation_fee_proposal_keys<'a>(
     }
     (keys, has_more)
 }
-
 /// Return one bounded page of typed validation-fee Parliament proposals.
 pub(crate) async fn handler_proposals(
     State(app): State<SharedAppState>,
@@ -694,7 +672,6 @@ pub(crate) async fn handler_proposals(
         next_cursor,
     }))
 }
-
 /// Return one typed validation-fee Parliament proposal.
 pub(crate) async fn handler_proposal_detail(
     State(app): State<SharedAppState>,
@@ -801,7 +778,6 @@ pub(crate) async fn handler_proposal_detail(
         locks: public_locks(world.governance_locks().get(&proposal_id)),
     }))
 }
-
 fn canonical_draft_instruction(
     request: &ValidationFeeProposalDraftRequestV1,
 ) -> Result<(ProposalKind, InstructionBox), Error> {
@@ -892,7 +868,6 @@ fn canonical_draft_instruction(
     };
     Ok((proposal_kind, instruction))
 }
-
 fn validate_draft_plain_electorate_rules(
     requested: &ValidationFeePlainElectorateRulesV1,
     gov: &iroha_config::parameters::actual::Governance,
@@ -920,7 +895,6 @@ fn validate_draft_plain_electorate_rules(
     }
     Ok(())
 }
-
 fn validate_draft_referendum_window(
     window: Option<AtWindow>,
     current_tip: u64,
@@ -956,7 +930,6 @@ fn validate_draft_referendum_window(
     }
     Ok(())
 }
-
 fn framed_instruction_draft(
     instruction: &InstructionBox,
 ) -> Result<ValidationFeeProposalInstructionDraftV1, Error> {
@@ -972,7 +945,6 @@ fn framed_instruction_draft(
         payload_hex: hex::encode(framed),
     })
 }
-
 /// Build one exact native validation-fee proposal instruction for local signing.
 pub(crate) async fn handler_proposal_draft(
     State(app): State<SharedAppState>,
@@ -1008,7 +980,6 @@ pub(crate) async fn handler_proposal_draft(
         tx_instructions: vec![instruction],
     }))
 }
-
 fn canonical_plain_ballot(
     proposal_id: &str,
     owner: AccountId,
@@ -1023,7 +994,6 @@ fn canonical_plain_ballot(
         direction: direction.native_code(),
     }
 }
-
 /// Build one exact proposal-bound PLAIN ballot instruction for local signing.
 pub(crate) async fn handler_plain_ballot_draft(
     State(app): State<SharedAppState>,
@@ -1050,7 +1020,6 @@ pub(crate) async fn handler_plain_ballot_draft(
             "unsupported validation-fee PLAIN ballot draft version",
         ));
     }
-
     let proposal_id_bytes = parse_proposal_id(&proposal_id)?;
     let world = app.state.world_view();
     let proposal = world
@@ -1101,7 +1070,6 @@ pub(crate) async fn handler_plain_ballot_draft(
             "validation-fee referendum is not open at the next possible inclusion height",
         ));
     }
-
     if world
         .governance_locks()
         .get(&proposal_id)
@@ -1128,7 +1096,6 @@ pub(crate) async fn handler_plain_ballot_draft(
             "validation-fee proposal does not retain current seven-body Parliament approval",
         ));
     }
-
     let ballot = canonical_plain_ballot(
         &proposal_id,
         request.owner.clone(),
@@ -1148,13 +1115,10 @@ pub(crate) async fn handler_plain_ballot_draft(
         tx_instructions: vec![framed_instruction_draft(&instruction)?],
     }))
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::BTreeMap};
-
     use super::*;
-
+    use std::{cell::Cell, collections::BTreeMap};
     #[test]
     fn proposal_page_traversal_reads_only_limit_plus_one_index_rows() {
         let rows = (0_u64..10_000)
@@ -1169,16 +1133,13 @@ mod tests {
             .iter()
             .inspect(|_| visited.set(visited.get().saturating_add(1)))
             .map(|(key, value)| (key, value));
-
         let (keys, has_more) = bounded_validation_fee_proposal_keys(indexed, 3);
-
         assert_eq!(visited.get(), 4, "one lookahead row is the exact bound");
         assert_eq!(keys.len(), 3);
         assert!(has_more);
         assert_eq!(keys[0].0, 0);
         assert_eq!(keys[2].0, 2);
     }
-
     #[test]
     fn proposal_list_cannot_reintroduce_a_full_governance_scan() {
         let source = include_str!("validation_fee_api.rs");
@@ -1190,13 +1151,11 @@ mod tests {
             .find("/// Return one typed validation-fee Parliament proposal.")
             .expect("proposal-list handler terminator");
         let implementation = &tail[..end];
-
         assert!(implementation.contains("validation_fee_proposal_index()"));
         assert!(implementation.contains("bounded_validation_fee_proposal_keys(indexed, limit)"));
         assert!(!implementation.contains("governance_proposals().iter()"));
         assert!(!implementation.contains(".sort"));
     }
-
     #[test]
     fn explicit_draft_window_accounts_for_next_block_and_exact_span() {
         let stale = AtWindow {
@@ -1206,7 +1165,6 @@ mod tests {
         let error = validate_draft_referendum_window(Some(stale), 100, 600, 3_600)
             .expect_err("tip+600 omits the proposal inclusion block");
         assert!(error.contains("at least 701"));
-
         validate_draft_referendum_window(
             Some(AtWindow {
                 lower: 701,
@@ -1217,7 +1175,6 @@ mod tests {
             3_600,
         )
         .expect("next-block-safe exact Taira window");
-
         let error = validate_draft_referendum_window(
             Some(AtWindow {
                 lower: 701,
@@ -1230,13 +1187,11 @@ mod tests {
         .expect_err("short referendum window must fail closed");
         assert!(error.contains("exactly 3600 blocks"));
     }
-
     #[test]
     fn omitted_draft_window_is_left_for_atomic_core_resolution() {
         validate_draft_referendum_window(None, u64::MAX, 600, 3_600)
             .expect("omitted lifecycle window does not precompute against a stale tip");
     }
-
     #[test]
     fn draft_electorate_rules_must_exactly_match_live_governance() {
         let mut gov = iroha_config::parameters::actual::Governance {
@@ -1250,13 +1205,11 @@ mod tests {
         assert!(expected.invariant_error().is_none());
         validate_draft_plain_electorate_rules(&expected, &gov)
             .expect("exact live electorate rules");
-
         let mut different = expected;
         different.max_members = 255;
         validate_draft_plain_electorate_rules(&different, &gov)
             .expect_err("an otherwise valid rule set must not differ from live governance");
     }
-
     #[test]
     fn typed_plain_ballot_forces_retained_amount_duration_and_direction() {
         let mut gov = iroha_config::parameters::actual::Governance {
@@ -1279,7 +1232,6 @@ mod tests {
             assert_eq!(ballot.amount, 150_u64.into());
             assert_eq!(ballot.duration_blocks, 3_600);
             assert_eq!(ballot.direction, native_code);
-
             let instruction: InstructionBox = ballot.clone().into();
             let draft = framed_instruction_draft(&instruction).expect("frame exact native ballot");
             let framed = hex::decode(draft.payload_hex).expect("decode framed ballot hex");
@@ -1295,7 +1247,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn live_plain_tally_requires_exact_frozen_membership_and_lock_shape() {
         let mut gov = iroha_config::parameters::actual::Governance {
@@ -1348,7 +1299,6 @@ mod tests {
         let locks = iroha_core::state::GovernanceLocksForReferendum {
             locks: BTreeMap::from([(member.clone(), lock.clone())]),
         };
-
         assert_eq!(
             live_plain_tally(Some(&locks), referendum_end, &rules, Some(&electorate))
                 .expect("exact frozen member lock"),
@@ -1358,7 +1308,6 @@ mod tests {
             live_plain_tally(Some(&locks), referendum_end, &rules, None).is_err(),
             "locks without a frozen electorate must fail closed"
         );
-
         let nonmember_locks = iroha_core::state::GovernanceLocksForReferendum {
             locks: BTreeMap::from([(
                 nonmember.clone(),
@@ -1378,7 +1327,6 @@ mod tests {
             .is_err(),
             "a lock outside the frozen electorate must fail closed"
         );
-
         let slashed_locks = iroha_core::state::GovernanceLocksForReferendum {
             locks: BTreeMap::from([(
                 member.clone(),
@@ -1398,7 +1346,6 @@ mod tests {
             .is_err(),
             "a validation-fee lock with an outstanding slash must fail closed"
         );
-
         let expired_locks = iroha_core::state::GovernanceLocksForReferendum {
             locks: BTreeMap::from([(
                 member,
@@ -1420,7 +1367,6 @@ mod tests {
         );
     }
 }
-
 fn registry_at_height(
     current: Option<ValidationFeePolicyRegistryV1>,
     height: u64,
@@ -1443,7 +1389,6 @@ fn registry_at_height(
         Ok(Some(registry))
     }
 }
-
 /// Return one bounded finality page for the current validation-fee registry.
 pub(crate) async fn handler_current_policy_proof(
     State(app): State<SharedAppState>,
@@ -1465,7 +1410,6 @@ pub(crate) async fn handler_current_policy_proof(
             "validation-fee proof version or checkpoint height is invalid",
         ));
     }
-
     let state_view = app.state.view();
     let observed_ledger_tip_height = u64::try_from(state_view.height())
         .map_err(|_| inconsistent("ledger height does not fit the public validation-fee proof"))?;
@@ -1492,7 +1436,6 @@ pub(crate) async fn handler_current_policy_proof(
     let expected_commitment =
         ValidationFeePolicySnapshotCommitmentV1::from_registry(evaluated_height, registry.as_ref());
     drop(state_view);
-
     let policy_witness = app
         .kura
         .validation_fee_policy_witness_proof_v1(evaluated_height)
@@ -1507,7 +1450,6 @@ pub(crate) async fn handler_current_policy_proof(
             "retained policy witness differs from the historical protected registry",
         ));
     }
-
     let proof_count = evaluated_height
         .checked_sub(request.trusted_checkpoint_height)
         .and_then(|gap| gap.checked_add(1))
@@ -1525,9 +1467,9 @@ pub(crate) async fn handler_current_policy_proof(
             )?,
         );
     }
-    let finality_bytes = norito::to_bytes(&finality_chain)
+    let finality_encoded_bytes = norito::core::encoded_frame_len(&finality_chain)
         .map_err(|error| inconsistent(format!("finality chain cannot be encoded: {error}")))?;
-    if finality_bytes.len() > VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES {
+    if finality_encoded_bytes > VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES {
         return Err(Error::AppConflict {
             code: "validation_fee_finality_page_too_large",
             message: "The bounded finality page exceeds the response byte budget.".to_owned(),
@@ -1549,9 +1491,9 @@ pub(crate) async fn handler_current_policy_proof(
         observed_ledger_tip_height,
         more_available: evaluated_height < observed_ledger_tip_height,
     };
-    let response_bytes = norito::to_bytes(&response)
+    let response_encoded_bytes = norito::core::encoded_frame_len(&response)
         .map_err(|error| inconsistent(format!("policy proof cannot be encoded: {error}")))?;
-    if response_bytes.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES {
+    if response_encoded_bytes > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES {
         return Err(Error::AppConflict {
             code: "validation_fee_policy_proof_too_large",
             message: "The validation-fee proof exceeds the response byte budget.".to_owned(),

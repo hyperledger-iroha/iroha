@@ -1,8 +1,6 @@
 //! Number tokenization tests for the JSON Reader.
 #![cfg(feature = "json")]
-
 use norito::json::{Reader, Token};
-
 #[test]
 fn numbers_tokenization_variants() {
     let s = r#"{"a":-1,"b":0.0,"c":1.25,"d":-2.5e10,"e":3E+5,"f":6e-7}"#;
@@ -38,7 +36,6 @@ fn numbers_tokenization_variants() {
         }
     }
 }
-
 #[test]
 fn tape_skip_value_numbers_array() {
     let s = r#"[1,-2,3.14,4e5]"#;

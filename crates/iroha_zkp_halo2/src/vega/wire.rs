@@ -1,10 +1,7 @@
 //! Strict Norito primitive wire types for canonical Vega proofs.
 #![allow(unexpected_cfgs)]
-
-use thiserror::Error;
-
 use super::{VegaCurveError, VegaFieldError, VegaT256PointV1, VegaT256ScalarV1};
-
+use thiserror::Error;
 /// Failure while validating canonical Vega proof wire material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaWireError {
@@ -15,7 +12,6 @@ pub enum VegaWireError {
     #[error(transparent)]
     Point(#[from] VegaCurveError),
 }
-
 /// Canonical 32-byte little-endian proof encoding of one T256 scalar.
 #[derive(
     Clone,
@@ -34,7 +30,6 @@ pub enum VegaWireError {
 pub struct VegaScalarWireV1 {
     bytes: [u8; 32],
 }
-
 impl VegaScalarWireV1 {
     /// Construct the wire representation of a canonical scalar.
     #[must_use]
@@ -43,7 +38,6 @@ impl VegaScalarWireV1 {
             bytes: scalar.to_le_bytes(),
         }
     }
-
     /// Decode this wire value without modular reduction.
     ///
     /// # Errors
@@ -53,13 +47,11 @@ impl VegaScalarWireV1 {
     pub fn to_scalar(self) -> Result<VegaT256ScalarV1, VegaWireError> {
         Ok(VegaT256ScalarV1::from_le_bytes_exact(self.bytes)?)
     }
-
     #[cfg(test)]
     pub(super) const fn from_raw_bytes_for_test(bytes: [u8; 32]) -> Self {
         Self { bytes }
     }
 }
-
 /// Canonical 33-byte non-identity compressed T256 proof point.
 #[derive(
     Clone,
@@ -78,7 +70,6 @@ impl VegaScalarWireV1 {
 pub struct VegaPointWireV1 {
     bytes: [u8; 33],
 }
-
 impl VegaPointWireV1 {
     /// Construct the wire representation of a non-identity canonical point.
     ///
@@ -90,7 +81,6 @@ impl VegaPointWireV1 {
             bytes: point.to_non_identity_wire_bytes()?,
         })
     }
-
     /// Decode and validate this point.
     ///
     /// # Errors
@@ -101,17 +91,14 @@ impl VegaPointWireV1 {
             &self.bytes,
         )?)
     }
-
     #[cfg(test)]
     pub(super) const fn from_raw_bytes_for_test(bytes: [u8; 33]) -> Self {
         Self { bytes }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(
         Clone,
         Debug,
@@ -126,7 +113,6 @@ mod tests {
         scalar: VegaScalarWireV1,
         point: VegaPointWireV1,
     }
-
     fn fixture() -> PrimitiveFixture {
         PrimitiveFixture {
             scalar: VegaScalarWireV1::from_scalar(VegaT256ScalarV1::from_u64(0x0102)),
@@ -136,7 +122,6 @@ mod tests {
             .expect("non-identity"),
         }
     }
-
     #[test]
     fn norito_primitive_fixture_roundtrips_exactly() {
         let fixture = fixture();
@@ -153,7 +138,6 @@ mod tests {
             VegaT256PointV1::canonical_generator().expect("canonical generator")
         );
     }
-
     #[test]
     fn norito_exact_decoder_rejects_every_truncation_and_trailing_bytes() {
         let encoded = norito::codec::encode_adaptive(&fixture());
@@ -168,7 +152,6 @@ mod tests {
         trailing.push(0);
         assert!(norito::codec::decode_exact_from_slice::<PrimitiveFixture>(&trailing).is_err());
     }
-
     #[test]
     fn raw_norito_values_still_require_algebraic_validation() {
         let invalid_scalar = VegaScalarWireV1 { bytes: [0xff; 32] };

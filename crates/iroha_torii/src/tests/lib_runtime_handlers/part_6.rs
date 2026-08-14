@@ -9,7 +9,6 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
         .join("v2_finality")
         .join("00000000000000000001.norito");
     assert!(!sidecar.exists(), "fixture starts without finality sidecar");
-
     let recent_response = routing::handle_v1_sccp_messages_recent(
         Arc::clone(&app.state),
         routing::SccpRecentWindowQuery::default(),
@@ -43,7 +42,6 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
     assert_eq!(links.len(), 2);
     assert!(links.contains_key("bundle_path"));
     assert!(links.contains_key("proof_request_path"));
-
     assert!(
         matches!(
             routing::handle_v1_sccp_message_bundle(
@@ -61,7 +59,6 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
         ),
         "a valid legacy QC must not substitute for a missing exact-v2 artifact"
     );
-
     std::fs::create_dir_all(sidecar.parent().expect("sidecar directory"))
         .expect("create adversarial finality directory");
     std::fs::write(&sidecar, b"malformed-finality-sidecar")
@@ -80,7 +77,6 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
         .await
         .expect("recent body after sidecar corruption");
     assert_eq!(recent_after, recent_before);
-
     assert!(matches!(
         routing::handle_v1_sccp_message_bundle(
             app.state.clone(),
@@ -94,7 +90,6 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
         Err(Error::Query(ValidationFail::InternalError(_)))
     ));
 }
-
 #[tokio::test]
 async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
     let mut app = mk_app_state_for_tests();
@@ -102,7 +97,6 @@ async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::from_millis(1);
     let message_id = "11".repeat(32);
-
     let errors = [
         handler_bridge_finality_proof(
             State(app.clone()),
@@ -159,14 +153,12 @@ async fn finality_and_sccp_proof_routes_require_heavy_query_admission() {
         );
     }
 }
-
 #[tokio::test]
 async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
-
     let roots_error = match handler_zk_roots(
         State(app.clone()),
         HeaderMap::new(),
@@ -210,7 +202,6 @@ async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
         );
     }
 }
-
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
 async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
@@ -228,7 +219,6 @@ async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
-
     let error = match handler_zk_verify_batch(
         State(app),
         headers,
@@ -246,7 +236,6 @@ async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
             if message == "halo2 verification is disabled in node configuration"
     ));
 }
-
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
 async fn enabled_zk_verify_batch_requires_heavy_compute_admission() {
@@ -264,7 +253,6 @@ async fn enabled_zk_verify_batch_requires_heavy_compute_admission() {
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
-
     let error = match handler_zk_verify_batch(
         State(app),
         headers,
@@ -283,7 +271,6 @@ async fn enabled_zk_verify_batch_requires_heavy_compute_admission() {
         ))
     ));
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn por_history_routes_require_heavy_query_admission_before_projection() {
@@ -291,7 +278,6 @@ async fn por_history_routes_require_heavy_query_admission_before_projection() {
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
-
     let errors = [
         handler_get_sorafs_por_status(
             State(app.clone()),
@@ -323,7 +309,6 @@ async fn por_history_routes_require_heavy_query_admission_before_projection() {
             .await
             .expect_err("PoR report projection must acquire heavy admission"),
     ];
-
     for error in errors {
         assert!(
             matches!(
@@ -336,7 +321,6 @@ async fn por_history_routes_require_heavy_query_admission_before_projection() {
         );
     }
 }
-
 async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMap) -> [Error; 5] {
     let message_id = "11".repeat(32);
     [
@@ -384,7 +368,6 @@ async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMa
         .expect_err("SCCP recent authentication must reject"),
     ]
 }
-
 async fn light_sccp_route_auth_errors_for_test(
     app: SharedAppState,
     headers: HeaderMap,
@@ -408,7 +391,6 @@ async fn light_sccp_route_auth_errors_for_test(
         .expect_err("SCCP capabilities authentication must reject"),
     ]
 }
-
 #[tokio::test]
 async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_tokens() {
     for duplicate in [false, true] {
@@ -432,7 +414,6 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         } else {
             "127.0.0.1"
         };
-
         let heavy_errors =
             heavy_route_auth_errors_for_test(Arc::clone(&app), headers.clone()).await;
         let light_errors = light_sccp_route_auth_errors_for_test(Arc::clone(&app), headers).await;
@@ -448,7 +429,6 @@ async fn all_sccp_and_bridge_read_routes_fail_closed_on_empty_or_duplicate_token
         );
     }
 }
-
 #[tokio::test]
 async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admission() {
     let mut app = mk_app_state_for_tests();
@@ -463,7 +443,6 @@ async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admissi
         HeaderValue::from_static("image/png"),
     );
     let message_id = "11".repeat(32);
-
     let responses = [
         handler_bridge_finality_proof(
             State(app.clone()),
@@ -518,7 +497,6 @@ async fn heavy_finality_routes_reject_unsupported_accept_before_rate_and_admissi
         "unsupported representations must reject before rate accounting"
     );
 }
-
 #[test]
 fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
     let remote = Some(
@@ -536,7 +514,6 @@ fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
         HEADER_API_TOKEN,
         HeaderValue::from_static("attacker-token-2"),
     );
-
     assert_eq!(
         signed_query_preauth_rate_limit_key(&first, remote, false),
         signed_query_preauth_rate_limit_key(&second, remote, false),
@@ -548,19 +525,16 @@ fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
         "an already-validated API credential may identify its own caller budget"
     );
 }
-
 #[test]
 fn signed_query_authority_keys_are_canonical_and_namespaced() {
     let first = checked_torii_test_account_id(0x71, "derive first query-admission authority");
     let second = checked_torii_test_account_id(0x72, "derive second query-admission authority");
     let first_key = signed_query_authority_rate_limit_key(&first);
     let second_key = signed_query_authority_rate_limit_key(&second);
-
     assert_eq!(first_key, signed_query_authority_rate_limit_key(&first));
     assert_ne!(first_key, second_key);
     assert!(first_key.starts_with("v1/query:authority:"));
 }
-
 #[tokio::test]
 async fn signed_query_authority_admission_isolated_by_verified_identity() {
     let first =
@@ -571,7 +545,6 @@ async fn signed_query_authority_admission_isolated_by_verified_identity() {
     Arc::get_mut(&mut app)
         .expect("unique query-authority admission fixture")
         .query_authority_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
-
     admit_signed_query_authority(app.as_ref(), &first)
         .await
         .expect("first authority consumes its own budget");
@@ -588,13 +561,9 @@ async fn signed_query_authority_admission_isolated_by_verified_identity() {
         ))
     ));
 }
-
 #[tokio::test]
 async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets() {
-    use iroha_data_model::query::{
-        QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion,
-    };
-
+    use iroha_data_model::query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion};
     let key_pair =
         checked_torii_test_ed25519_keypair(0x73, "derive signed-query admission fixture authority");
     let authority = AccountId::new(key_pair.public_key().clone());
@@ -609,7 +578,6 @@ async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets(
         )
         .sign(&key_pair)
     };
-
     for token in ["attacker-token-1", "attacker-token-2"] {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -638,7 +606,6 @@ async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets(
         1,
         "replayed requests from one signer must share one authority bucket"
     );
-
     let mut rotated = HeaderMap::new();
     rotated.insert(
         HEADER_API_TOKEN,
@@ -661,7 +628,6 @@ async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets(
         ))
     ));
 }
-
 #[tokio::test]
 async fn zero_query_queue_timeout_is_fail_fast_and_does_not_reserve_general_capacity() {
     let mut app = mk_app_state_for_tests();
@@ -670,7 +636,6 @@ async fn zero_query_queue_timeout_is_fail_fast_and_does_not_reserve_general_capa
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
     let query = Arc::clone(&app_mut.query_inflight);
-
     let outcome = tokio::time::timeout(
         Duration::from_millis(50),
         acquire_query_admission(app.as_ref(), true),
@@ -689,7 +654,6 @@ async fn zero_query_queue_timeout_is_fail_fast_and_does_not_reserve_general_capa
     ));
     assert_eq!(query.available_permits(), 1);
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn heavy_admission_waits_for_heavy_capacity_before_reserving_general_capacity() {
     let mut app = mk_app_state_for_tests();
@@ -709,7 +673,6 @@ async fn heavy_admission_waits_for_heavy_capacity_before_reserving_general_capac
         1,
         "a heavy waiter must not occupy general query capacity"
     );
-
     heavy.add_permits(1);
     let admission = tokio::time::timeout(Duration::from_secs(1), admission_task)
         .await
@@ -722,7 +685,6 @@ async fn heavy_admission_waits_for_heavy_capacity_before_reserving_general_capac
     assert_eq!(query.available_permits(), 1);
     assert_eq!(heavy.available_permits(), 1);
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn heavy_admission_uses_one_end_to_end_queue_deadline() {
     let mut app = mk_app_state_for_tests();
@@ -735,7 +697,6 @@ async fn heavy_admission_uses_one_end_to_end_queue_deadline() {
         tokio::time::sleep(Duration::from_millis(100)).await;
         heavy.add_permits(1);
     });
-
     let outcome = tokio::time::timeout(
         Duration::from_millis(550),
         acquire_query_admission(app.as_ref(), true),
@@ -754,7 +715,6 @@ async fn heavy_admission_uses_one_end_to_end_queue_deadline() {
     ));
     release.await.expect("heavy release task");
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishes() {
     let mut app = mk_app_state_for_tests();
@@ -788,7 +748,6 @@ async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishe
         },
     ));
     started_rx.await.expect("physical worker started");
-
     awaiting_request.abort();
     tokio::task::yield_now().await;
     assert!(
@@ -803,7 +762,6 @@ async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishe
         body_semaphore.clone().try_acquire_owned().is_err(),
         "request cancellation must not release the body permit"
     );
-
     release_tx.send(()).expect("release physical worker");
     let query_permit =
         tokio::time::timeout(Duration::from_secs(5), query_semaphore.acquire_owned())
@@ -821,7 +779,6 @@ async fn cancelled_query_cannot_release_admission_before_blocking_worker_finishe
         .expect("body semaphore remains open");
     drop((query_permit, heavy_permit, body_permit));
 }
-
 #[tokio::test]
 async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
     let mut app = mk_app_state_for_tests();
@@ -829,7 +786,6 @@ async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
         .expect("unique Torii app fixture")
         .rate_limiter = limits::RateLimiter::new(Some(1), Some(7));
     let key = "capped-finality-cost";
-
     rate_limit_requests_with_cost(&app, key, FINALITY_HEAVY_QUERY_RATE_COST)
         .await
         .expect("a positive configured burst must keep finality serviceable");
@@ -846,7 +802,6 @@ async fn finality_rate_weight_caps_to_burst_without_disabling_the_route() {
         .await
         .expect("weighted accounting remains isolated by caller key");
 }
-
 #[tokio::test]
 async fn query_free_sccp_handlers_reject_legacy_query_material_before_lookup() {
     let app = mk_app_state_for_tests();
@@ -861,7 +816,6 @@ async fn query_free_sccp_handlers_reject_legacy_query_material_before_lookup() {
         ))
     };
     let message_id = "11".repeat(32);
-
     let bundle_error = handler_sccp_message_proof(
         State(app.clone()),
         axum::extract::Path(message_id.clone()),
@@ -892,7 +846,6 @@ async fn query_free_sccp_handlers_reject_legacy_query_material_before_lookup() {
         handler_sccp_capabilities(State(app), legacy_query(), HeaderMap::new(), remote)
             .await
             .expect_err("capability query material must reject");
-
     for error in [
         bundle_error,
         request_error,
@@ -912,7 +865,6 @@ async fn query_free_sccp_handlers_reject_legacy_query_material_before_lookup() {
         );
     }
 }
-
 #[test]
 fn first_release_sccp_router_has_only_closed_read_surfaces() {
     let source = include_str!("../../lib.rs");
@@ -937,13 +889,11 @@ fn first_release_sccp_router_has_only_closed_read_surfaces() {
         );
     }
 }
-
 fn clone_private_key(
     src: &iroha_data_model::prelude::ExposedPrivateKey,
 ) -> iroha_data_model::prelude::ExposedPrivateKey {
     iroha_data_model::prelude::ExposedPrivateKey(src.0.clone())
 }
-
 #[derive(Clone)]
 struct TestLocalReadRuntime {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
@@ -972,20 +922,16 @@ struct TestLocalReadRuntime {
         >,
     >,
 }
-
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalReadRuntime {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         self.snapshot.clone()
     }
-
     fn state_dir(&self) -> PathBuf {
         self.state_dir.clone()
     }
-
     fn local_peer_id(&self) -> Option<String> {
         self.local_peer_id.clone()
     }
-
     fn report_generated_hf_proxy_failure(
         &self,
         request: &SoracloudLocalReadRequest,
@@ -997,7 +943,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalRead
             .expect("proxy failure capture lock")
             .push((request.clone(), target_peer_id.to_owned(), error.clone()));
     }
-
     fn request_generated_hf_reconcile(
         &self,
         request: &SoracloudLocalReadRequest,
@@ -1008,7 +953,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalRead
             .expect("reconcile capture lock")
             .push((request.clone(), error.clone()));
     }
-
     fn request_generated_hf_proxy_responder_reconcile(
         &self,
         request: &SoracloudLocalReadRequest,
@@ -1029,7 +973,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalRead
                 ));
     }
 }
-
 impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
     fn execute_local_read(
         &self,
@@ -1044,7 +987,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
             .push(request);
         self.result.clone()
     }
-
     fn execute_ordered_mailbox(
         &self,
         _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
@@ -1059,7 +1001,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
             ),
         )
     }
-
     fn execute_apartment(
         &self,
         _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
@@ -1075,7 +1016,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
         )
     }
 }
-
 #[derive(Clone)]
 struct TestMailboxRuntime {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
@@ -1091,21 +1031,17 @@ struct TestMailboxRuntime {
         >,
     >,
 }
-
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestMailboxRuntime {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         self.snapshot.clone()
     }
-
     fn state_dir(&self) -> PathBuf {
         self.state_dir.clone()
     }
-
     fn local_peer_id(&self) -> Option<String> {
         self.local_peer_id.clone()
     }
 }
-
 impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
     fn execute_local_read(
         &self,
@@ -1121,7 +1057,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
             ),
         )
     }
-
     fn execute_ordered_mailbox(
         &self,
         request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
@@ -1135,7 +1070,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
             .push(request);
         self.result.clone()
     }
-
     fn execute_apartment(
         &self,
         _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
@@ -1151,28 +1085,23 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
         )
     }
 }
-
 #[derive(Clone)]
 struct TestSoracloudRuntimeHandle {
     snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
     state_dir: PathBuf,
     local_peer_id: Option<String>,
 }
-
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         self.snapshot.clone()
     }
-
     fn state_dir(&self) -> PathBuf {
         self.state_dir.clone()
     }
-
     fn local_peer_id(&self) -> Option<String> {
         self.local_peer_id.clone()
     }
 }
-
 impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHandle {
     fn execute_local_read(
         &self,
@@ -1188,7 +1117,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHan
             ),
         )
     }
-
     fn execute_ordered_mailbox(
         &self,
         _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
@@ -1203,7 +1131,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHan
             ),
         )
     }
-
     fn execute_apartment(
         &self,
         _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
@@ -1219,7 +1146,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHan
         )
     }
 }
-
 fn sample_soracloud_runtime_snapshot(
     health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
 ) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
@@ -1308,7 +1234,6 @@ fn sample_soracloud_runtime_snapshot(
             revoked_policy_capability_count: 1,
         },
     )]);
-
     iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
         schema_version: 1,
         observed_height: 42,
@@ -1319,7 +1244,6 @@ fn sample_soracloud_runtime_snapshot(
         hf_sources: std::collections::BTreeMap::new(),
     }
 }
-
 fn seed_public_soracloud_world() -> World {
     let mut world = World::new();
     let service_name: iroha_data_model::name::Name = "web_portal".parse().expect("service");
@@ -1475,7 +1399,6 @@ fn seed_public_soracloud_world() -> World {
         );
     world
 }
-
 fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, String) {
     use iroha_data_model::{
         asset::AssetDefinitionId,
@@ -1490,7 +1413,6 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
         },
         sorafs::pin_registry::StorageClass,
     };
-
     let mut world = World::new();
     let service_name: Name = "hf_router".parse().expect("service");
     let service_name_string = service_name.as_ref().to_owned();
@@ -1516,7 +1438,6 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
             .clone(),
     )
     .to_string();
-
     world.soracloud_service_revisions_mut_for_testing().insert(
         (service_name_string.clone(), service_version.clone()),
         bundle.clone(),
@@ -1629,10 +1550,8 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
             last_error: None,
         },
     );
-
     (world, service_name_string, service_version)
 }
-
 fn hosted_http_runtime_plan(
     materialization_dir: &Path,
     service_name: &str,
@@ -1706,7 +1625,6 @@ fn hosted_http_runtime_plan(
         artifacts: Vec::new(),
     }
 }
-
 fn hosted_http_runtime_replica_plan(
     materialization_dir: &Path,
     replica_slot: u16,
@@ -1727,7 +1645,6 @@ fn hosted_http_runtime_replica_plan(
         last_error: None,
     }
 }
-
 fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
     iroha_data_model::soracloud::SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
@@ -1758,7 +1675,6 @@ fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
         ssh_authorized_keys: vec!["ssh-ed25519 test-key torii-tests".to_owned()],
     }
 }
-
 fn seed_authoritative_hosted_http_revision(
     world: &mut World,
     bundle: &iroha_data_model::soracloud::SoraDeploymentBundleV1,
@@ -1806,7 +1722,6 @@ fn seed_authoritative_hosted_http_revision(
                 last_error: None,
             },
         );
-
     for ((replica_slot, validator_account_id, peer_id, health_status), placement) in
         assignments.iter().zip(placements.iter())
     {
@@ -1840,7 +1755,6 @@ fn seed_authoritative_hosted_http_revision(
             );
     }
 }
-
 fn seed_public_hosted_http_rollout_app(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1857,7 +1771,6 @@ fn seed_public_hosted_http_rollout_app(
         )),
     )
 }
-
 fn seed_public_hosted_http_rollout_app_with_service_lease(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1886,7 +1799,6 @@ fn seed_public_hosted_http_rollout_app_with_service_lease(
         service_lease,
     )
 }
-
 fn seed_public_hosted_http_rollout_app_with_local_replicas(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1908,7 +1820,6 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas(
         )),
     )
 }
-
 fn hosted_http_service_lease_state(
     status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1,
     prepaid_runtime_balance: Quantity,
@@ -1930,7 +1841,6 @@ fn hosted_http_service_lease_state(
         last_status_reason: None,
     }
 }
-
 fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1978,7 +1888,6 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         (service_name.to_owned(), baseline_version.to_owned()),
         baseline_bundle.clone(),
     );
-
     let mut candidate_bundle = baseline_bundle.clone();
     candidate_bundle.service.service_version = candidate_version.to_owned();
     candidate_bundle.container.bundle_hash = Hash::new(b"hosted-http-canary-bundle");
@@ -1988,7 +1897,6 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         (service_name.to_owned(), candidate_version.to_owned()),
         candidate_bundle.clone(),
     );
-
     world
         .soracloud_service_deployments_mut_for_testing()
         .insert(
@@ -2028,7 +1936,6 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
                 lease_volume_states: Vec::new(),
             },
         );
-
     let local_validator_account_id =
         checked_torii_test_account_id(0x3d, "derive hosted-http rollout validator fixture key");
     let local_peer_id = PeerId::from(
@@ -2070,10 +1977,8 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         candidate_bundle.service.replicas.get(),
         &candidate_assignments,
     );
-
     let baseline_dir = temp.path().join("service-baseline");
     let candidate_dir = temp.path().join("service-canary");
-
     let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
     snapshot.local_peer_id = snapshot_local_peer_id;
     snapshot.services.insert(
@@ -2105,7 +2010,6 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
             ),
         ]),
     );
-
     let runtime = TestLocalReadRuntime {
         snapshot,
         state_dir: temp.path().to_path_buf(),
@@ -2126,7 +2030,6 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     app_mut.soracloud_runtime = Some(Arc::new(runtime));
     app
 }
-
 fn hosted_http_rollout_test_ip<P>(
     service_name: &str,
     method: &HttpMethod,
@@ -2145,7 +2048,6 @@ where
     }
     panic!("failed to find a rollout bucket match for hosted-http routing test");
 }
-
 fn hosted_http_replica_test_ip<P>(
     service_name: &str,
     service_version: &str,
@@ -2173,12 +2075,10 @@ where
     }
     panic!("failed to find a replica bucket match for hosted-http routing test");
 }
-
 #[tokio::test]
 async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_context() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestLocalReadRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
@@ -2211,7 +2111,6 @@ async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_co
     let router = axum::Router::new()
         .fallback(any(handler_soracloud_public_local_read))
         .with_state(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2238,7 +2137,6 @@ async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_co
         .expect("body")
         .to_bytes();
     assert_eq!(body.as_ref(), b"asset-body");
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].service_name, "web_portal");
@@ -2246,12 +2144,10 @@ async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_co
     assert_eq!(captured[0].request_path, "/app/assets");
     assert_eq!(captured[0].handler_path, "/");
 }
-
 #[tokio::test]
 async fn soradns_public_alias_gateway_routes_local_read_requests() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestLocalReadRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
@@ -2283,7 +2179,6 @@ async fn soradns_public_alias_gateway_routes_local_read_requests() {
         .soracloud_runtime = Some(Arc::new(runtime));
     bind_domain_name_for_test(&app, "portal.sora");
     let router = soradns_public_alias_router(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2303,7 +2198,6 @@ async fn soradns_public_alias_gateway_routes_local_read_requests() {
         .expect("body")
         .to_bytes();
     assert_eq!(body.as_ref(), b"asset-body");
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].request_path, "/app/assets");
@@ -2313,12 +2207,10 @@ async fn soradns_public_alias_gateway_routes_local_read_requests() {
         Some("portal.sora")
     );
 }
-
 #[tokio::test]
 async fn taira_mon_gateway_host_routes_local_read_requests() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestLocalReadRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
@@ -2350,7 +2242,6 @@ async fn taira_mon_gateway_host_routes_local_read_requests() {
         .soracloud_runtime = Some(Arc::new(runtime));
     bind_domain_name_for_test(&app, "portal.sora");
     let router = soradns_public_alias_router(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2373,7 +2264,6 @@ async fn taira_mon_gateway_host_routes_local_read_requests() {
         .expect("body")
         .to_bytes();
     assert_eq!(body.as_ref(), b"mon-asset-body");
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].request_path, "/app/assets");
@@ -2383,12 +2273,10 @@ async fn taira_mon_gateway_host_routes_local_read_requests() {
         Some("portal.sora")
     );
 }
-
 #[tokio::test]
 async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let mut world = seed_public_soracloud_world();
     let mut bundle = world
         .view()
@@ -2430,7 +2318,6 @@ async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
     world
         .soracloud_service_deployments_mut_for_testing()
         .insert(deployment_service_name, deployment);
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestLocalReadRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
@@ -2456,7 +2343,6 @@ async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
         .soracloud_runtime = Some(Arc::new(runtime));
     bind_domain_name_for_test(&app, "docs.sora");
     let router = soradns_public_alias_router(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2476,7 +2362,6 @@ async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
         .expect("body")
         .to_bytes();
     assert_eq!(body.as_ref(), b"docs-root");
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].request_path, "/");
@@ -2485,14 +2370,11 @@ async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
         Some("docs.sora")
     );
 }
-
 #[tokio::test]
 async fn soradns_public_alias_gateway_rejects_invalid_aliases() {
     use tower::ServiceExt as _;
-
     let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     let router = soradns_public_alias_router(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2506,11 +2388,9 @@ async fn soradns_public_alias_gateway_rejects_invalid_aliases() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
     use tower::ServiceExt as _;
-
     let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     bind_domain_name_for_test_with_status(
         &app,
@@ -2521,7 +2401,6 @@ async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
         }),
     );
     let router = soradns_public_alias_router(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2535,12 +2414,10 @@ async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let mut world = seed_public_soracloud_world();
     let mut bundle = world
         .view()
@@ -2567,7 +2444,6 @@ async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
     world
         .soracloud_service_deployments_mut_for_testing()
         .insert(deployment_service_name, deployment);
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestLocalReadRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
@@ -2593,7 +2469,6 @@ async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
         .soracloud_runtime = Some(Arc::new(runtime));
     bind_domain_name_for_test(&app, "portal.dao");
     let router = soradns_public_alias_router(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2613,7 +2488,6 @@ async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
         .expect("body")
         .to_bytes();
     assert_eq!(body.as_ref(), b"dao-alias");
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(
@@ -2621,12 +2495,10 @@ async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
         Some("portal.dao")
     );
 }
-
 #[tokio::test]
 async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_node() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind upstream listener");
@@ -2647,11 +2519,9 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
             .expect("serve upstream");
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-
     let temp = tempfile::tempdir().expect("tempdir");
     let listen_base_url = format!("http://{addr}");
     let live_materialization_dir = temp.path().join("travel-ops-live");
-
     let mut world = seed_public_soracloud_world();
     let seed_bundle = world
         .view()
@@ -2659,7 +2529,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
         .get(&("web_portal".to_owned(), "2026.02.0".to_owned()))
         .cloned()
         .expect("seed bundle");
-
     let mut live_bundle = seed_bundle.clone();
     live_bundle.service.service_name = "travel_ops_live".parse().expect("service");
     live_bundle.service.service_version = "2026.04.0".to_owned();
@@ -2680,7 +2549,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     live_bundle.service.handlers.clear();
     live_bundle.service.state_bindings.clear();
     live_bundle.service.container.manifest_hash = live_bundle.container_manifest_hash();
-
     let mut vault_bundle = seed_bundle;
     vault_bundle.service.service_name = "travel_ops_vault".parse().expect("service");
     vault_bundle.service.service_version = "2026.04.0".to_owned();
@@ -2703,7 +2571,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
         mailbox: None,
     }];
     vault_bundle.service.container.manifest_hash = vault_bundle.container_manifest_hash();
-
     for bundle in [live_bundle.clone(), vault_bundle.clone()] {
         let service_name = bundle.service.service_name.clone();
         world.soracloud_service_revisions_mut_for_testing().insert(
@@ -2762,7 +2629,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
                 },
             );
     }
-
     let live_validator_account_id =
         checked_torii_test_account_id(0x45, "derive hosted live/local split validator fixture key");
     let live_peer_id = PeerId::from(
@@ -2781,7 +2647,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         )],
     );
-
     let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
     snapshot.local_peer_id = Some(live_peer_id.to_string());
     snapshot.services.insert(
@@ -2805,7 +2670,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
             ),
         )]),
     );
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestLocalReadRuntime {
         snapshot,
@@ -2832,7 +2696,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     let router = axum::Router::new()
         .fallback(any(handler_soracloud_public_local_read))
         .with_state(app);
-
     let live_response = router
         .clone()
         .oneshot(
@@ -2857,7 +2720,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
         captured_requests.lock().expect("capture lock").is_empty(),
         "hosted live routes must bypass deterministic local-read execution"
     );
-
     let vault_response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2877,7 +2739,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
         .expect("vault body")
         .to_bytes();
     assert_eq!(vault_body.as_ref(), br#"{"wallet":"alice"}"#);
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].service_name, "travel_ops_vault");
@@ -2890,6 +2751,5 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     assert_eq!(captured[0].request_method, "GET");
     assert_eq!(captured[0].request_path, "/api/auth/me");
     assert_eq!(captured[0].handler_path, "/");
-
     upstream_task.abort();
 }

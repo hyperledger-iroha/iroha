@@ -1,8 +1,6 @@
 //! Golden-like tests for AoS ad-hoc bodies and borrowed views.
 //! Validates roundtrip and truncation detection for common shapes.
-
 use norito::core::Error;
-
 #[test]
 fn aos_view_str_bool_roundtrip() {
     let rows: Vec<(u64, &str, bool)> = vec![(1, "alice", true), (2, "bob", false)];
@@ -15,7 +13,6 @@ fn aos_view_str_bool_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn aos_view_bytes_u32_bool_roundtrip() {
     let rows: Vec<(u64, &[u8], u32, bool)> = vec![
@@ -32,7 +29,6 @@ fn aos_view_bytes_u32_bool_roundtrip() {
         assert_eq!(view.flag(i), row.3);
     }
 }
-
 #[test]
 fn aos_view_opt_str_bool_roundtrip() {
     let rows: Vec<(u64, Option<&str>, bool)> = vec![(1, Some("aa"), true), (2, None, false)];
@@ -46,7 +42,6 @@ fn aos_view_opt_str_bool_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn aos_enum_view_roundtrip() {
     use norito::columnar::AosEnumRef;
@@ -71,7 +66,6 @@ fn aos_enum_view_roundtrip() {
         assert_eq!(view.flag(i), row.2);
     }
 }
-
 #[test]
 fn aos_view_truncation_detected() {
     let rows: Vec<(u64, &str, bool)> = vec![(1, "alice", true), (2, "bob", false)];
@@ -84,7 +78,6 @@ fn aos_view_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn aos_bytes_view_truncation_detected() {
     // Two rows bytes body; then truncate
@@ -98,7 +91,6 @@ fn aos_bytes_view_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn aos_view_optstr_truncation_detected() {
     let rows: Vec<(u64, Option<&str>, bool)> = vec![(1, Some("aa"), true), (2, None, false)];
@@ -111,7 +103,6 @@ fn aos_view_optstr_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn aos_enum_view_truncation_detected() {
     use norito::columnar::EnumBorrow;
@@ -128,7 +119,6 @@ fn aos_enum_view_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn aos_enum_view_invalid_tag_detected() {
     use norito::columnar::EnumBorrow;
@@ -150,7 +140,6 @@ fn aos_enum_view_invalid_tag_detected() {
         assert!(matches!(e, Error::InvalidTag { .. }));
     }
 }
-
 #[test]
 fn aos_enum_view_invalid_utf8_detected() {
     use norito::columnar::EnumBorrow;
@@ -158,7 +147,6 @@ fn aos_enum_view_invalid_utf8_detected() {
     let rows: Vec<(u64, norito::columnar::EnumBorrow<'_>, bool)> =
         vec![(1, EnumBorrow::Name("n"), true)];
     let mut body = norito::aos::encode_rows_u64_enum_bool(&rows);
-
     // Walk the AoS enum body to locate the string byte and corrupt it
     let mut off = 0usize;
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
@@ -172,7 +160,6 @@ fn aos_enum_view_invalid_utf8_detected() {
     assert!(slen >= 1 && off + slen <= body.len());
     // Corrupt first byte to invalid UTF-8 (0xFF)
     body[off] = 0xff;
-
     // Build view and ensure payload() returns InvalidUtf8
     let view = norito::columnar::view_aos_u64_enum_bool(&body).expect("view builds");
     let res = view.payload(0);
@@ -181,7 +168,6 @@ fn aos_enum_view_invalid_utf8_detected() {
         assert!(matches!(e, Error::InvalidUtf8));
     }
 }
-
 #[test]
 fn aos_view_str_invalid_utf8_detected() {
     // Single row: (1, "a", true)
@@ -204,7 +190,6 @@ fn aos_view_str_invalid_utf8_detected() {
         assert!(matches!(e, Error::InvalidUtf8));
     }
 }
-
 #[test]
 fn aos_view_str_u32_invalid_utf8_detected() {
     // Single row: (1, "a", 3, true)
@@ -228,13 +213,11 @@ fn aos_view_str_u32_invalid_utf8_detected() {
         assert!(matches!(e, Error::InvalidUtf8));
     }
 }
-
 #[test]
 fn aos_optstr_view_invalid_utf8_detected() {
     // Start with a valid single-row AoS opt-str body with Some("a")
     let rows: Vec<(u64, Option<&str>, bool)> = vec![(1, Some("a"), true)];
     let mut body = norito::aos::encode_rows_u64_optstr_bool(&rows);
-
     // Walk the AoS opt-str body to locate the string byte and corrupt it
     let mut off = 0usize;
     let (_n, used) = norito::core::read_len_from_slice(&body[off..]).expect("len");
@@ -252,7 +235,6 @@ fn aos_optstr_view_invalid_utf8_detected() {
     assert!(slen >= 1 && off + slen <= body.len());
     // Corrupt first byte to invalid UTF-8 (0xFF)
     body[off] = 0xff;
-
     // Build view and ensure name(0) returns InvalidUtf8
     let view = norito::columnar::view_aos_u64_optstr_bool(&body).expect("view builds");
     let res = view.name(0);
@@ -261,7 +243,6 @@ fn aos_optstr_view_invalid_utf8_detected() {
         assert!(matches!(e, Error::InvalidUtf8));
     }
 }
-
 #[test]
 fn aos_view_str_u32_truncation_detected() {
     use norito::core::Error;
@@ -274,7 +255,6 @@ fn aos_view_str_u32_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn aos_view_bytes_u32_truncation_detected() {
     use norito::core::Error;
@@ -290,7 +270,6 @@ fn aos_view_bytes_u32_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn aos_optu32_view_truncation_detected() {
     // Build a valid body for rows: (10, Some(7), true), (11, None, false)

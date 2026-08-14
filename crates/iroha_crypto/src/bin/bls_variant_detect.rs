@@ -7,16 +7,11 @@
 //!
 //! Build (requires blstrs backend):
 //!   cargo run -p `iroha_crypto` --features "dev-tools bls bls-backend-blstrs" --bin bls-variant-detect
-
 #![allow(clippy::print_stdout)]
-
-use std::error::Error;
-
 use iroha_crypto::{BlsNormal, BlsSmall, KeyGenOption};
+use std::error::Error;
 use w3f_bls::SerializableToBytes as _;
-
 const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Flavor {
     Concat,
@@ -24,9 +19,7 @@ enum Flavor {
     None,
     Both,
 }
-
 // no blstrs-based helpers needed; use w3f-bls detection only
-
 fn detect_normal(message: &[u8], signature: &[u8], pk_bytes: &[u8]) -> Flavor {
     // Use w3f-bls to match semantics precisely (bytes + ciphersuite)
     let sig = if let Ok(s) = w3f_bls::Signature::<w3f_bls::ZBLS>::from_bytes(signature) {
@@ -51,7 +44,6 @@ fn detect_normal(message: &[u8], signature: &[u8], pk_bytes: &[u8]) -> Flavor {
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, &buf);
         sig.verify(&msg, &pk)
     };
-
     match (ok_concat, ok_aug) {
         (true, false) => Flavor::Concat,
         (false, true) => Flavor::Aug,
@@ -59,7 +51,6 @@ fn detect_normal(message: &[u8], signature: &[u8], pk_bytes: &[u8]) -> Flavor {
         (false, false) => Flavor::None,
     }
 }
-
 fn detect_small(message: &[u8], signature: &[u8], pk_bytes: &[u8]) -> Flavor {
     let sig = if let Ok(s) = w3f_bls::Signature::<w3f_bls::TinyBLS381>::from_bytes(signature) {
         s
@@ -82,7 +73,6 @@ fn detect_small(message: &[u8], signature: &[u8], pk_bytes: &[u8]) -> Flavor {
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, &buf);
         sig.verify(&msg, &pk)
     };
-
     match (ok_concat, ok_aug) {
         (true, false) => Flavor::Concat,
         (false, true) => Flavor::Aug,
@@ -90,7 +80,6 @@ fn detect_small(message: &[u8], signature: &[u8], pk_bytes: &[u8]) -> Flavor {
         (false, false) => Flavor::None,
     }
 }
-
 fn banner() -> &'static str {
     // Simple retro-styled banner with a Japanese vibe (Shift-JIS era aesthetics)
     r"
@@ -100,7 +89,6 @@ fn banner() -> &'static str {
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 "
 }
-
 fn print_result(title: &str, flavor: Flavor) {
     let (mark, label) = match flavor {
         Flavor::Concat => ("◎", "CONCAT (ctx || msg)"),
@@ -110,19 +98,16 @@ fn print_result(title: &str, flavor: Flavor) {
     };
     println!("  ▸ {title:<8} => {mark}  {label}");
 }
-
 struct DetectionReport {
     normal_flavor: Flavor,
     small_flavor: Flavor,
     normal_lib_ok: bool,
     small_lib_ok: bool,
 }
-
 fn build_detection_report() -> Result<DetectionReport, Box<dyn Error>> {
     // Deterministic seeds/messages for stable output
     let msg_normal = "昭和SIGN-ノーマル".as_bytes(); // "Showa SIGN - normal"
     let msg_small = "昭和SIGN-スモール".as_bytes(); // "Showa SIGN - small"
-
     // Normal (G1 pk, G2 sig)
     let (pk_n, sk_n) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![7; 16]))
         .map_err(|err| format!("BLS normal keypair: {err}"))?;
@@ -131,7 +116,6 @@ fn build_detection_report() -> Result<DetectionReport, Box<dyn Error>> {
     let pk_n_bytes = pk_n.to_bytes();
     let normal_lib_ok = BlsNormal::verify(msg_normal, &sig_n, &pk_n).is_ok();
     let normal_flavor = detect_normal(msg_normal, &sig_n, &pk_n_bytes);
-
     // Small (G2 pk, G1 sig)
     let (pk_s, sk_s) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![9; 24]))
         .map_err(|err| format!("BLS small keypair: {err}"))?;
@@ -139,7 +123,6 @@ fn build_detection_report() -> Result<DetectionReport, Box<dyn Error>> {
     let pk_small_bytes = pk_s.to_bytes();
     let small_lib_ok = BlsSmall::verify(msg_small, &sig_s, &pk_s).is_ok();
     let small_flavor = detect_small(msg_small, &sig_s, &pk_small_bytes);
-
     Ok(DetectionReport {
         normal_flavor,
         small_flavor,
@@ -147,7 +130,6 @@ fn build_detection_report() -> Result<DetectionReport, Box<dyn Error>> {
         small_lib_ok,
     })
 }
-
 fn validate_detection_report(report: &DetectionReport) -> Result<(), Box<dyn Error>> {
     if !report.normal_lib_ok {
         return Err("BLS normal generated signature failed library verification".into());
@@ -159,7 +141,6 @@ fn validate_detection_report(report: &DetectionReport) -> Result<(), Box<dyn Err
     validate_flavor("SMALL", report.small_flavor)?;
     Ok(())
 }
-
 fn validate_flavor(title: &str, flavor: Flavor) -> Result<(), Box<dyn Error>> {
     match flavor {
         Flavor::Concat => Ok(()),
@@ -168,7 +149,6 @@ fn validate_flavor(title: &str, flavor: Flavor) -> Result<(), Box<dyn Error>> {
         Flavor::None => Err(format!("{title} detected no compatible BLS flavor").into()),
     }
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", banner());
     println!(
@@ -180,11 +160,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     );
     println!("  ───────────────────────────────────────────────────────────────");
-
     let report = build_detection_report()?;
     print_result("NORMAL", report.normal_flavor);
     print_result("SMALL", report.small_flavor);
-
     println!("  ───────────────────────────────────────────────────────────────");
     println!(
         "  [LIB  ] verify: NORMAL={}, SMALL={}",
@@ -195,22 +173,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("        AUG は代替ciphersuiteです (互換検査用)。");
     validate_detection_report(&report)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn generated_bls_variants_detect_concat_flavor() {
         let report = build_detection_report().expect("deterministic BLS report");
-
         assert!(report.normal_lib_ok);
         assert!(report.small_lib_ok);
         assert_eq!(report.normal_flavor, Flavor::Concat);
         assert_eq!(report.small_flavor, Flavor::Concat);
         validate_detection_report(&report).expect("CONCAT report must validate");
     }
-
     #[test]
     fn detector_validation_rejects_ambiguous_or_missing_flavors() {
         for flavor in [Flavor::Aug, Flavor::Both, Flavor::None] {
@@ -220,7 +194,6 @@ mod tests {
                 normal_lib_ok: true,
                 small_lib_ok: true,
             };
-
             let err = validate_detection_report(&report)
                 .expect_err("non-CONCAT normal flavor must fail closed");
             assert!(
@@ -229,7 +202,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn detector_validation_rejects_library_verify_failure() {
         let report = DetectionReport {
@@ -240,7 +212,6 @@ mod tests {
         };
         let err =
             validate_detection_report(&report).expect_err("library verify failure must be fatal");
-
         assert!(
             err.to_string().contains("library verification"),
             "unexpected error: {err}"

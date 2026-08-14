@@ -1,5 +1,4 @@
 use ivm::{IVM, IVMHost, SyscallPolicy};
-
 #[test]
 fn unknown_syscalls_rejected_by_policy_function() {
     // Pick a number outside known ABI list
@@ -9,7 +8,6 @@ fn unknown_syscalls_rejected_by_policy_function() {
         unknown
     ));
 }
-
 #[test]
 fn default_host_rejects_unknown_syscalls() {
     let mut vm = IVM::new(0);

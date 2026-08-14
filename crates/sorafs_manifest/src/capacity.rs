@@ -1,26 +1,21 @@
 #![allow(unexpected_cfgs)]
-
 //! Capacity marketplace schemas and validators for SoraFS (SF-2c).
 //!
 //! The Norito payloads defined here allow governance, Torii, and storage
 //! operators to exchange deterministic capacity declarations, replication
 //! orders, and telemetry snapshots.
-
-use std::collections::BTreeSet;
-
+use crate::{
+    chunker_registry,
+    provider_advert::{CapabilityType, SignatureAlgorithm, StakePointer},
+};
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_schema::IntoSchema;
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
 };
+use std::collections::BTreeSet;
 use thiserror::Error;
-
-use crate::{
-    chunker_registry,
-    provider_advert::{CapabilityType, SignatureAlgorithm, StakePointer},
-};
-
 /// Schema version for [`CapacityDeclarationV1`].
 pub const CAPACITY_DECLARATION_VERSION_V1: u8 = 1;
 /// Schema version for [`ReplicationOrderV1`].
@@ -33,7 +28,6 @@ pub const REPLICATION_ORDER_SIGNATURE_DOMAIN_V1: &str = "sorafs.replication_orde
 pub const CAPACITY_TELEMETRY_VERSION_V1: u8 = 1;
 /// Schema version for [`CapacityDisputeV1`].
 pub const CAPACITY_DISPUTE_VERSION_V1: u8 = 1;
-
 /// Governance-authored statement of a provider's committed capacity.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityDeclarationV1 {
@@ -61,7 +55,6 @@ pub struct CapacityDeclarationV1 {
     #[norito(default)]
     pub metadata: Vec<CapacityMetadataEntry>,
 }
-
 impl CapacityDeclarationV1 {
     /// Validates the declaration against registry policy.
     pub fn validate(&self) -> Result<(), CapacityDeclarationValidationError> {
@@ -108,7 +101,6 @@ impl CapacityDeclarationV1 {
         if self.valid_until <= self.valid_from {
             return Err(CapacityDeclarationValidationError::InvalidValidityWindow);
         }
-
         let mut previous_profile: Option<&str> = None;
         let mut total_committed = 0u128;
         for (index, commitment) in self.chunker_commitments.iter().enumerate() {
@@ -131,7 +123,6 @@ impl CapacityDeclarationV1 {
                 },
             );
         }
-
         let mut previous_lane: Option<&str> = None;
         for (index, lane) in self.lane_commitments.iter().enumerate() {
             lane.validate(self.committed_capacity_gib)
@@ -146,13 +137,11 @@ impl CapacityDeclarationV1 {
             }
             previous_lane = Some(lane.lane_id.as_str());
         }
-
         if let Some(pricing) = &self.pricing {
             pricing
                 .validate()
                 .map_err(CapacityDeclarationValidationError::PricingInvalid)?;
         }
-
         let mut metadata_bytes = 0usize;
         let mut metadata_keys = BTreeSet::new();
         for (index, entry) in self.metadata.iter().enumerate() {
@@ -178,11 +167,9 @@ impl CapacityDeclarationV1 {
                 });
             }
         }
-
         Ok(())
     }
 }
-
 /// Per-profile capacity allocation.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ChunkerCommitmentV1 {
@@ -197,7 +184,6 @@ pub struct ChunkerCommitmentV1 {
     #[norito(default)]
     pub capability_refs: Vec<CapabilityType>,
 }
-
 impl ChunkerCommitmentV1 {
     fn validate(
         &self,
@@ -268,7 +254,6 @@ impl ChunkerCommitmentV1 {
         Ok(descriptor)
     }
 }
-
 /// Upper-bound commitment for a capacity lane.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct LaneCommitmentV1 {
@@ -277,7 +262,6 @@ pub struct LaneCommitmentV1 {
     /// Maximum capacity allocatable to the lane (GiB).
     pub max_gib: u64,
 }
-
 impl LaneCommitmentV1 {
     fn validate(&self, total_capacity: u64) -> Result<(), LaneCommitmentError> {
         if self.lane_id.trim().is_empty() {
@@ -310,7 +294,6 @@ impl LaneCommitmentV1 {
         Ok(())
     }
 }
-
 /// Pricing hints attached to a capacity declaration.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PricingScheduleV1 {
@@ -325,7 +308,6 @@ pub struct PricingScheduleV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl PricingScheduleV1 {
     fn validate(&self) -> Result<(), PricingScheduleError> {
         let trimmed = self.currency.trim();
@@ -361,13 +343,11 @@ impl PricingScheduleV1 {
         Ok(())
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for PricingScheduleV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         decode_field_canonical::<PricingScheduleV1>(bytes)
     }
 }
-
 /// Metadata entry attached to capacity artefacts.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -378,7 +358,6 @@ pub struct CapacityMetadataEntry {
     /// Metadata value (non-empty UTF-8).
     pub value: String,
 }
-
 impl CapacityMetadataEntry {
     pub fn validate(&self) -> Result<(), MetadataError> {
         let key_trimmed = self.key.trim();
@@ -416,7 +395,6 @@ impl CapacityMetadataEntry {
         Ok(())
     }
 }
-
 /// Maximum key length for capacity/order metadata.
 pub const MAX_CAPACITY_METADATA_KEY_BYTES: usize = 128;
 /// Maximum value length for capacity/order metadata.
@@ -451,7 +429,6 @@ pub const MAX_CAPACITY_PROFILE_HANDLE_BYTES: usize = 128;
 pub const MAX_CAPACITY_LANE_ID_BYTES: usize = 64;
 /// Maximum pricing-note length.
 pub const MAX_CAPACITY_PRICING_NOTES_BYTES: usize = 1024;
-
 /// Replication order issued by governance.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -481,7 +458,6 @@ pub struct ReplicationOrderV1 {
     #[norito(default)]
     pub metadata: Vec<CapacityMetadataEntry>,
 }
-
 impl ReplicationOrderV1 {
     /// Validates the replication order structure.
     pub fn validate(&self) -> Result<(), ReplicationOrderValidationError> {
@@ -557,7 +533,6 @@ impl ReplicationOrderV1 {
         if self.deadline_at <= self.issued_at {
             return Err(ReplicationOrderValidationError::InvalidDeadline);
         }
-
         let mut previous_provider = None;
         for (index, assignment) in self.assignments.iter().enumerate() {
             assignment.validate().map_err(|source| {
@@ -574,7 +549,6 @@ impl ReplicationOrderV1 {
         if u64::from(self.sla.ingest_deadline_secs) > self.deadline_at - self.issued_at {
             return Err(ReplicationOrderValidationError::SlaExceedsOrderWindow);
         }
-
         if self.metadata.len() > MAX_REPLICATION_ORDER_METADATA_ENTRIES {
             return Err(ReplicationOrderValidationError::TooManyMetadataEntries {
                 found: self.metadata.len(),
@@ -606,11 +580,9 @@ impl ReplicationOrderV1 {
                 });
             }
         }
-
         Ok(())
     }
 }
-
 /// Signature attached to a governance-issued replication order.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -623,7 +595,6 @@ pub struct ReplicationOrderSignatureV1 {
     /// Raw signature bytes.
     pub signature: Vec<u8>,
 }
-
 impl ReplicationOrderSignatureV1 {
     fn validate(&self) -> Result<(), SignedReplicationOrderValidationError> {
         if self.public_key.is_empty()
@@ -636,7 +607,6 @@ impl ReplicationOrderSignatureV1 {
         Ok(())
     }
 }
-
 /// Signed governance envelope for a replication order.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -649,14 +619,12 @@ pub struct SignedReplicationOrderV1 {
     /// Governance signature over the canonical order signing payload.
     pub signature: ReplicationOrderSignatureV1,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct ReplicationOrderSigningPayloadV1 {
     domain: String,
     version: u8,
     order: ReplicationOrderV1,
 }
-
 impl From<&SignedReplicationOrderV1> for ReplicationOrderSigningPayloadV1 {
     fn from(envelope: &SignedReplicationOrderV1) -> Self {
         Self {
@@ -666,7 +634,6 @@ impl From<&SignedReplicationOrderV1> for ReplicationOrderSigningPayloadV1 {
         }
     }
 }
-
 impl SignedReplicationOrderV1 {
     /// Validates the signed replication-order envelope structure.
     pub fn validate(&self) -> Result<(), SignedReplicationOrderValidationError> {
@@ -681,7 +648,6 @@ impl SignedReplicationOrderV1 {
         self.signature.validate()?;
         Ok(())
     }
-
     /// Returns canonical Norito bytes signed by the governance issuer.
     ///
     /// The payload excludes `signature` so signers and verifiers use stable bytes
@@ -689,7 +655,6 @@ impl SignedReplicationOrderV1 {
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         norito::to_bytes(&ReplicationOrderSigningPayloadV1::from(self))
     }
-
     /// Verifies an Ed25519 signature over the canonical order signing payload.
     pub fn verify_signature(&self) -> Result<(), ReplicationOrderSignatureVerificationError> {
         match self.signature.algorithm {
@@ -700,7 +665,6 @@ impl SignedReplicationOrderV1 {
                 );
             }
         }
-
         if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
             return Err(
                 ReplicationOrderSignatureVerificationError::InvalidPublicKeyLength {
@@ -715,21 +679,18 @@ impl SignedReplicationOrderV1 {
                 },
             );
         }
-
         let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
         public_key.copy_from_slice(&self.signature.public_key);
         let verifying_key =
             crate::checked_ed25519_verifying_key_from_bytes(&public_key).map_err(|err| {
                 ReplicationOrderSignatureVerificationError::InvalidPublicKey { reason: err }
             })?;
-
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(&self.signature.signature);
         let signature =
             crate::checked_ed25519_signature_from_bytes(&signature).map_err(|reason| {
                 ReplicationOrderSignatureVerificationError::Verification { reason }
             })?;
-
         let payload_bytes = self.signature_payload_bytes().map_err(|err| {
             ReplicationOrderSignatureVerificationError::PayloadEncoding {
                 reason: err.to_string(),
@@ -744,7 +705,6 @@ impl SignedReplicationOrderV1 {
             )
     }
 }
-
 /// Assignment binding a provider to store a manifest slice.
 #[derive(
     Debug,
@@ -768,7 +728,6 @@ pub struct ReplicationAssignmentV1 {
     #[norito(default)]
     pub lane: Option<String>,
 }
-
 impl ReplicationAssignmentV1 {
     fn validate(&self) -> Result<(), AssignmentError> {
         if self.provider_id.iter().all(|&byte| byte == 0) {
@@ -790,7 +749,6 @@ impl ReplicationAssignmentV1 {
         Ok(())
     }
 }
-
 /// SLA constraints attached to a replication order.
 #[derive(
     Debug,
@@ -811,7 +769,6 @@ pub struct ReplicationOrderSlaV1 {
     /// Minimum proof-of-replication success percentage (scaled by 1000).
     pub min_por_success_percent_milli: u32,
 }
-
 impl ReplicationOrderSlaV1 {
     fn validate(&self) -> Result<(), SlaError> {
         if self.ingest_deadline_secs == 0 {
@@ -831,7 +788,6 @@ impl ReplicationOrderSlaV1 {
         Ok(())
     }
 }
-
 /// Telemetry snapshot emitted for fee distribution.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityTelemetryV1 {
@@ -859,7 +815,6 @@ pub struct CapacityTelemetryV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl CapacityTelemetryV1 {
     /// Validates the telemetry payload.
     pub fn validate(&self) -> Result<(), CapacityTelemetryValidationError> {
@@ -902,7 +857,6 @@ impl CapacityTelemetryV1 {
         Ok(())
     }
 }
-
 /// Maximum length permitted for dispute descriptions.
 const MAX_DISPUTE_DESCRIPTION_LEN: usize = 2_048;
 /// Maximum length permitted for dispute remediation notes.
@@ -911,7 +865,6 @@ const MAX_DISPUTE_REMEDY_LEN: usize = 512;
 const MAX_DISPUTE_EVIDENCE_URI_LEN: usize = 512;
 /// Maximum length permitted for evidence media types.
 const MAX_DISPUTE_EVIDENCE_MEDIA_LEN: usize = 128;
-
 /// Enumerates dispute categories recognised by governance.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -927,7 +880,6 @@ pub enum CapacityDisputeKind {
     /// Custom dispute reason (see description field for details).
     Other = 255,
 }
-
 /// Evidence bundle describing supporting material for a dispute.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityDisputeEvidenceV1 {
@@ -943,7 +895,6 @@ pub struct CapacityDisputeEvidenceV1 {
     #[norito(default)]
     pub size_bytes: Option<u64>,
 }
-
 impl CapacityDisputeEvidenceV1 {
     fn validate(&self) -> Result<(), CapacityDisputeEvidenceError> {
         if self.evidence_digest.iter().all(|&byte| byte == 0) {
@@ -987,7 +938,6 @@ impl CapacityDisputeEvidenceV1 {
         Ok(())
     }
 }
-
 /// Governance-authored dispute payload targeting a storage provider.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityDisputeV1 {
@@ -1012,7 +962,6 @@ pub struct CapacityDisputeV1 {
     #[norito(default)]
     pub requested_remedy: Option<String>,
 }
-
 impl CapacityDisputeV1 {
     /// Validates the dispute payload.
     pub fn validate(&self) -> Result<(), CapacityDisputeValidationError> {
@@ -1066,7 +1015,6 @@ impl CapacityDisputeV1 {
         Ok(())
     }
 }
-
 /// Errors raised when validating capacity declarations.
 #[derive(Debug, Error)]
 pub enum CapacityDeclarationValidationError {
@@ -1122,7 +1070,6 @@ pub enum CapacityDeclarationValidationError {
     #[error("committed capacity overflowed 128-bit accumulator")]
     CommittedCapacityOverflow,
 }
-
 /// Errors raised when validating chunker commitments.
 #[derive(Debug, Error)]
 pub enum ChunkerCommitmentError {
@@ -1151,7 +1098,6 @@ pub enum ChunkerCommitmentError {
     #[error("capability references must be distinct and strictly ordered (index {index})")]
     NonCanonicalCapabilityOrder { index: usize },
 }
-
 /// Errors raised for lane commitments.
 #[derive(Debug, Error)]
 pub enum LaneCommitmentError {
@@ -1166,7 +1112,6 @@ pub enum LaneCommitmentError {
     #[error("lane capacity {lane_gib} GiB exceeds declared total {declared_gib} GiB")]
     CapacityExceedsDeclaration { lane_gib: u64, declared_gib: u64 },
 }
-
 /// Errors raised for pricing schedule validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PricingScheduleError {
@@ -1185,7 +1130,6 @@ pub enum PricingScheduleError {
     #[error("notes must not be empty when provided")]
     InvalidNotes,
 }
-
 /// Errors raised for metadata validation.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MetadataError {
@@ -1204,7 +1148,6 @@ pub enum MetadataError {
     )]
     InvalidValue { found: usize, maximum: usize },
 }
-
 /// Errors raised when validating replication orders.
 #[derive(Debug, Error)]
 pub enum ReplicationOrderValidationError {
@@ -1256,7 +1199,6 @@ pub enum ReplicationOrderValidationError {
     #[error("duplicate replication-order metadata key `{key}`")]
     DuplicateMetadataKey { key: String },
 }
-
 /// Errors raised when validating signed replication-order envelopes.
 #[derive(Debug, Error)]
 pub enum SignedReplicationOrderValidationError {
@@ -1273,7 +1215,6 @@ pub enum SignedReplicationOrderValidationError {
     #[error("replication order signature missing key or signature bytes")]
     InvalidSignature,
 }
-
 /// Errors raised while verifying a signed replication-order signature.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ReplicationOrderSignatureVerificationError {
@@ -1311,7 +1252,6 @@ pub enum ReplicationOrderSignatureVerificationError {
         reason: String,
     },
 }
-
 /// Errors raised for assignment validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AssignmentError {
@@ -1322,7 +1262,6 @@ pub enum AssignmentError {
     #[error("assignment lane hint must not be empty")]
     InvalidLane,
 }
-
 /// Errors raised for SLA validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum SlaError {
@@ -1333,7 +1272,6 @@ pub enum SlaError {
     #[error("proof-of-replication percentage out of range: {value}")]
     PorOutOfRange { value: u32 },
 }
-
 /// Errors raised for telemetry validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CapacityTelemetryValidationError {
@@ -1353,7 +1291,6 @@ pub enum CapacityTelemetryValidationError {
     #[error("notes must not be empty when provided")]
     InvalidNotes,
 }
-
 /// Errors raised while validating dispute payloads.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CapacityDisputeValidationError {
@@ -1372,7 +1309,6 @@ pub enum CapacityDisputeValidationError {
     #[error("evidence invalid: {0}")]
     Evidence(#[from] CapacityDisputeEvidenceError),
 }
-
 /// Errors raised while validating dispute evidence metadata.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CapacityDisputeEvidenceError {
@@ -1385,7 +1321,6 @@ pub enum CapacityDisputeEvidenceError {
     #[error("evidence size must be positive")]
     SizeNonPositive,
 }
-
 fn validate_aliases(
     aliases: &[String],
     descriptor: &'static chunker_registry::ChunkerProfileDescriptor,
@@ -1418,7 +1353,6 @@ fn validate_aliases(
     }
     Ok(())
 }
-
 #[derive(Debug, Error)]
 enum ChunkerAliasError {
     #[error("chunker alias list must be non-empty and whitespace-trimmed")]
@@ -1428,7 +1362,6 @@ enum ChunkerAliasError {
     #[error("chunker aliases must include canonical handle {canonical}")]
     MissingCanonicalAlias { canonical: String },
 }
-
 impl From<ChunkerAliasError> for ChunkerCommitmentError {
     fn from(value: ChunkerAliasError) -> Self {
         match value {
@@ -1444,12 +1377,10 @@ impl From<ChunkerAliasError> for ChunkerCommitmentError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1459,11 +1390,9 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn provider_id(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn base_replication_order() -> ReplicationOrderV1 {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
@@ -1494,7 +1423,6 @@ mod tests {
             metadata: vec![],
         }
     }
-
     fn sign_replication_order(
         order: ReplicationOrderV1,
         seed: &[u8; 32],
@@ -1516,7 +1444,6 @@ mod tests {
         envelope.signature.signature = signature.to_bytes().to_vec();
         envelope
     }
-
     fn base_declaration() -> CapacityDeclarationV1 {
         CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
@@ -1540,7 +1467,6 @@ mod tests {
             metadata: vec![],
         }
     }
-
     fn sf2_commitment(committed_gib: u64) -> ChunkerCommitmentV1 {
         ChunkerCommitmentV1 {
             profile_id: "sorafs.sf2@1.0.0".to_owned(),
@@ -1549,7 +1475,6 @@ mod tests {
             capability_refs: vec![],
         }
     }
-
     fn base_dispute() -> CapacityDisputeV1 {
         CapacityDisputeV1 {
             version: CAPACITY_DISPUTE_VERSION_V1,
@@ -1568,7 +1493,6 @@ mod tests {
             requested_remedy: Some("Slash 10% of committed stake".to_owned()),
         }
     }
-
     #[test]
     fn declaration_validation_succeeds_for_well_formed_payload() {
         let mut declaration = base_declaration();
@@ -1586,10 +1510,8 @@ mod tests {
             key: "region".to_owned(),
             value: "global".to_owned(),
         });
-
         assert!(declaration.validate().is_ok());
     }
-
     #[test]
     fn declaration_rejects_non_canonical_profile_handle() {
         let mut declaration = base_declaration();
@@ -1600,7 +1522,6 @@ mod tests {
             CapacityDeclarationValidationError::ChunkerCommitmentInvalid { .. }
         ));
     }
-
     #[test]
     fn declaration_rejects_duplicate_profile_commitment() {
         let mut declaration = base_declaration();
@@ -1616,7 +1537,6 @@ mod tests {
             CapacityDeclarationValidationError::NonCanonicalChunkerOrder { .. }
         ));
     }
-
     #[test]
     fn declaration_rejects_inert_stake_and_unaccounted_capacity() {
         let mut inert_pool = base_declaration();
@@ -1625,7 +1545,6 @@ mod tests {
             inert_pool.validate(),
             Err(CapacityDeclarationValidationError::InvalidStakePoolId)
         ));
-
         let mut undercommitted = base_declaration();
         undercommitted.committed_capacity_gib += 1;
         assert!(matches!(
@@ -1637,7 +1556,6 @@ mod tests {
                 }
             )
         ));
-
         let mut overcommitted = base_declaration();
         overcommitted.committed_capacity_gib -= 1;
         assert!(matches!(
@@ -1650,7 +1568,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn declaration_rejects_noncanonical_collection_order() {
         let mut reversed_profiles = base_declaration();
@@ -1662,7 +1579,6 @@ mod tests {
             reversed_profiles.validate(),
             Err(CapacityDeclarationValidationError::NonCanonicalChunkerOrder { .. })
         ));
-
         let mut reversed_lanes = base_declaration();
         reversed_lanes.lane_commitments = vec![
             LaneCommitmentV1 {
@@ -1678,7 +1594,6 @@ mod tests {
             reversed_lanes.validate(),
             Err(CapacityDeclarationValidationError::NonCanonicalLaneOrder { .. })
         ));
-
         let mut duplicate_lanes = base_declaration();
         duplicate_lanes.lane_commitments = vec![
             LaneCommitmentV1 {
@@ -1694,7 +1609,6 @@ mod tests {
             duplicate_lanes.validate(),
             Err(CapacityDeclarationValidationError::NonCanonicalLaneOrder { .. })
         ));
-
         let mut duplicate_capabilities = base_declaration();
         duplicate_capabilities.chunker_commitments[0].capability_refs =
             vec![CapabilityType::ToriiGateway, CapabilityType::ToriiGateway];
@@ -1707,7 +1621,6 @@ mod tests {
                 }
             )
         ));
-
         let mut reversed_capabilities = base_declaration();
         reversed_capabilities.chunker_commitments[0].capability_refs =
             vec![CapabilityType::QuicNoise, CapabilityType::ToriiGateway];
@@ -1721,7 +1634,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn declaration_rejects_resource_exhaustion_shapes() {
         let mut chunker_flood = base_declaration();
@@ -1733,7 +1645,6 @@ mod tests {
             chunker_flood.validate(),
             Err(CapacityDeclarationValidationError::TooManyChunkerCommitments { .. })
         ));
-
         let mut lane_flood = base_declaration();
         lane_flood.lane_commitments = (0..=MAX_CAPACITY_LANE_COMMITMENTS)
             .map(|index| LaneCommitmentV1 {
@@ -1745,7 +1656,6 @@ mod tests {
             lane_flood.validate(),
             Err(CapacityDeclarationValidationError::TooManyLaneCommitments { .. })
         ));
-
         let mut metadata_flood = base_declaration();
         metadata_flood.metadata = (0..=MAX_CAPACITY_DECLARATION_METADATA_ENTRIES)
             .map(|index| CapacityMetadataEntry {
@@ -1757,7 +1667,6 @@ mod tests {
             metadata_flood.validate(),
             Err(CapacityDeclarationValidationError::TooManyMetadataEntries { .. })
         ));
-
         let mut metadata_bytes = base_declaration();
         metadata_bytes.metadata = (0..MAX_CAPACITY_DECLARATION_METADATA_ENTRIES)
             .map(|index| CapacityMetadataEntry {
@@ -1769,7 +1678,6 @@ mod tests {
             metadata_bytes.validate(),
             Err(CapacityDeclarationValidationError::MetadataBytesExceeded { .. })
         ));
-
         let mut alias_flood = base_declaration();
         alias_flood.chunker_commitments[0].profile_aliases = Some(
             (0..=MAX_CAPACITY_PROFILE_ALIASES)
@@ -1785,7 +1693,6 @@ mod tests {
                 }
             )
         ));
-
         let mut capability_flood = base_declaration();
         capability_flood.chunker_commitments[0].capability_refs =
             vec![CapabilityType::ToriiGateway; MAX_CAPACITY_CAPABILITY_REFS + 1];
@@ -1799,7 +1706,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn declaration_rejects_oversized_and_noncanonical_text() {
         let mut profile = base_declaration();
@@ -1814,7 +1720,6 @@ mod tests {
                 }
             )
         ));
-
         let mut alias = base_declaration();
         alias.chunker_commitments[0].profile_aliases = Some(vec![
             "sorafs.sf1@1.0.0".to_owned(),
@@ -1829,7 +1734,6 @@ mod tests {
                 }
             )
         ));
-
         let mut alias_order = base_declaration();
         alias_order.chunker_commitments[0]
             .profile_aliases
@@ -1845,7 +1749,6 @@ mod tests {
                 }
             )
         ));
-
         let mut padded_lane = base_declaration();
         padded_lane.lane_commitments = vec![LaneCommitmentV1 {
             lane_id: " hot ".to_owned(),
@@ -1858,7 +1761,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut oversized_lane = base_declaration();
         oversized_lane.lane_commitments = vec![LaneCommitmentV1 {
             lane_id: "x".repeat(MAX_CAPACITY_LANE_ID_BYTES + 1),
@@ -1871,7 +1773,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut padded_currency = base_declaration();
         padded_currency.pricing = Some(PricingScheduleV1 {
             currency: " xor ".to_owned(),
@@ -1885,7 +1786,6 @@ mod tests {
                 PricingScheduleError::NonCanonicalCurrency
             ))
         ));
-
         let mut zero_rate = base_declaration();
         zero_rate.pricing = Some(PricingScheduleV1 {
             currency: "xor".to_owned(),
@@ -1899,7 +1799,6 @@ mod tests {
                 PricingScheduleError::ZeroRate
             ))
         ));
-
         let mut oversized_notes = base_declaration();
         oversized_notes.pricing = Some(PricingScheduleV1 {
             currency: "xor".to_owned(),
@@ -1913,7 +1812,6 @@ mod tests {
                 PricingScheduleError::InvalidNotes
             ))
         ));
-
         let mut duplicate_metadata = base_declaration();
         duplicate_metadata.metadata = vec![
             CapacityMetadataEntry {
@@ -1929,7 +1827,6 @@ mod tests {
             duplicate_metadata.validate(),
             Err(CapacityDeclarationValidationError::DuplicateMetadataKey { .. })
         ));
-
         let mut oversized_metadata = base_declaration();
         oversized_metadata.metadata = vec![CapacityMetadataEntry {
             key: "region".to_owned(),
@@ -1943,13 +1840,11 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn replication_order_validation_checks_assignments() {
         let order = base_replication_order();
         assert!(order.validate().is_ok());
     }
-
     #[test]
     fn signed_replication_order_payload_excludes_signature() {
         let envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
@@ -1959,17 +1854,14 @@ mod tests {
         let payload: ReplicationOrderSigningPayloadV1 =
             norito::decode_from_bytes(&payload_bytes).expect("decode signing payload");
         assert_eq!(payload.domain, REPLICATION_ORDER_SIGNATURE_DOMAIN_V1);
-
         let mut different_signature = envelope.clone();
         different_signature.signature.signature = vec![0xBB; 64];
-
         assert_eq!(
             payload_bytes,
             different_signature
                 .signature_payload_bytes()
                 .expect("encode signed order payload")
         );
-
         let mut different_order = envelope.clone();
         different_order.order.deadline_at += 1;
         assert_ne!(
@@ -1981,32 +1873,26 @@ mod tests {
                 .expect("encode signed order payload")
         );
     }
-
     #[test]
     fn signed_replication_order_verifies_ed25519_signature() {
         let envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
-
         envelope
             .verify_signature()
             .expect("signed replication order verifies");
     }
-
     #[test]
     fn signed_replication_order_rejects_tampered_order() {
         let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
         envelope.order.deadline_at += 1;
-
         assert!(matches!(
             envelope.verify_signature(),
             Err(ReplicationOrderSignatureVerificationError::Verification { .. })
         ));
     }
-
     #[test]
     fn signed_replication_order_rejects_all_zero_signature_material() {
         let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
         envelope.signature.signature.fill(0);
-
         let err = envelope
             .verify_signature()
             .expect_err("all-zero replication order signature must be rejected");
@@ -2016,7 +1902,6 @@ mod tests {
                 if reason.contains("all zero")
         ));
     }
-
     #[test]
     fn signed_replication_order_rejects_malformed_ed25519_signature_r() {
         for (label, replacement_r, expected_reason) in [
@@ -2025,7 +1910,6 @@ mod tests {
         ] {
             let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
             envelope.signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
-
             let err = envelope
                 .verify_signature()
                 .expect_err("malformed replication order signature R must be rejected");
@@ -2039,26 +1923,21 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn signed_replication_order_validate_rejects_all_zero_signature_material() {
         let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
         envelope.signature.signature.fill(0);
-
         assert!(matches!(
             envelope.validate(),
             Err(SignedReplicationOrderValidationError::InvalidSignature)
         ));
-
         envelope.signature.signature = vec![0xA7; 64];
         envelope.signature.public_key = vec![0; 32];
-
         assert!(matches!(
             envelope.validate(),
             Err(SignedReplicationOrderValidationError::InvalidSignature)
         ));
     }
-
     #[test]
     fn replication_order_rejects_duplicate_providers() {
         let order = ReplicationOrderV1 {
@@ -2095,7 +1974,6 @@ mod tests {
             ReplicationOrderValidationError::NonCanonicalProviderOrder { .. }
         ));
     }
-
     #[test]
     fn replication_order_rejects_resource_exhaustion_shapes() {
         let mut oversized_cid = base_replication_order();
@@ -2104,35 +1982,30 @@ mod tests {
             oversized_cid.validate(),
             Err(ReplicationOrderValidationError::InvalidManifestCidLength { .. })
         ));
-
         let mut wrong_version = base_replication_order();
         wrong_version.manifest_cid[0] = 2;
         assert!(matches!(
             wrong_version.validate(),
             Err(ReplicationOrderValidationError::MalformedManifestCid { .. })
         ));
-
         let mut wrong_codec = base_replication_order();
         wrong_codec.manifest_cid[1] = 0x55;
         assert!(matches!(
             wrong_codec.validate(),
             Err(ReplicationOrderValidationError::MalformedManifestCid { .. })
         ));
-
         let mut zero_digest = base_replication_order();
         zero_digest.manifest_cid[4..].fill(0);
         assert!(matches!(
             zero_digest.validate(),
             Err(ReplicationOrderValidationError::InertManifestCid)
         ));
-
         let mut oversized_profile = base_replication_order();
         oversized_profile.chunking_profile = "x".repeat(MAX_REPLICATION_ORDER_PROFILE_BYTES + 1);
         assert!(matches!(
             oversized_profile.validate(),
             Err(ReplicationOrderValidationError::ProfileHandleTooLong { .. })
         ));
-
         let mut assignment_flood = base_replication_order();
         assignment_flood.assignments = (0..=MAX_REPLICATION_ORDER_ASSIGNMENTS)
             .map(|index| {
@@ -2153,7 +2026,6 @@ mod tests {
             assignment_flood.validate(),
             Err(ReplicationOrderValidationError::TooManyAssignments { .. })
         ));
-
         let mut metadata_flood = base_replication_order();
         metadata_flood.metadata = (0..=MAX_REPLICATION_ORDER_METADATA_ENTRIES)
             .map(|index| CapacityMetadataEntry {
@@ -2166,7 +2038,6 @@ mod tests {
             Err(ReplicationOrderValidationError::TooManyMetadataEntries { .. })
         ));
     }
-
     #[test]
     fn replication_order_rejects_noncanonical_assignments_sla_and_metadata() {
         let mut reversed = base_replication_order();
@@ -2175,28 +2046,24 @@ mod tests {
             reversed.validate(),
             Err(ReplicationOrderValidationError::NonCanonicalProviderOrder { .. })
         ));
-
         let mut invalid_lane = base_replication_order();
         invalid_lane.assignments[0].lane = Some(" Global ".to_owned());
         assert!(matches!(
             invalid_lane.validate(),
             Err(ReplicationOrderValidationError::AssignmentInvalid { .. })
         ));
-
         let mut zero_sla = base_replication_order();
         zero_sla.sla.min_availability_percent_milli = 0;
         assert!(matches!(
             zero_sla.validate(),
             Err(ReplicationOrderValidationError::SlaInvalid(_))
         ));
-
         let mut long_sla = base_replication_order();
         long_sla.sla.ingest_deadline_secs = 601;
         assert!(matches!(
             long_sla.validate(),
             Err(ReplicationOrderValidationError::SlaExceedsOrderWindow)
         ));
-
         let mut duplicate_metadata = base_replication_order();
         duplicate_metadata.metadata = vec![
             CapacityMetadataEntry {
@@ -2213,7 +2080,6 @@ mod tests {
             Err(ReplicationOrderValidationError::DuplicateMetadataKey { .. })
         ));
     }
-
     #[test]
     fn telemetry_validation_enforces_ranges() {
         let telemetry = CapacityTelemetryV1 {
@@ -2230,7 +2096,6 @@ mod tests {
             notes: None,
         };
         assert!(telemetry.validate().is_ok());
-
         let telemetry_overflow = CapacityTelemetryV1 {
             utilised_capacity_gib: 401,
             ..telemetry
@@ -2241,13 +2106,11 @@ mod tests {
             CapacityTelemetryValidationError::UtilisationExceedsDeclaration { .. }
         ));
     }
-
     #[test]
     fn dispute_validation_accepts_well_formed_payload() {
         let dispute = base_dispute();
         assert!(dispute.validate().is_ok());
     }
-
     #[test]
     fn dispute_validation_rejects_empty_description() {
         let mut dispute = base_dispute();
@@ -2258,7 +2121,6 @@ mod tests {
             CapacityDisputeValidationError::InvalidDescription { .. }
         ));
     }
-
     #[test]
     fn dispute_validation_rejects_zero_evidence_digest() {
         let mut dispute = base_dispute();

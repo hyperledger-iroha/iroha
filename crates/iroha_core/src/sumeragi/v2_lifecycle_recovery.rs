@@ -5,12 +5,6 @@
 //! cursor ownership to the current process generation, and restores only body custody proven by
 //! the durable payload. The caller may publish the Queue startup gate only after this function
 //! returns its original combined V4/V6 receipt.
-
-use std::collections::{BTreeMap, BTreeSet};
-
-use iroha_crypto::{Hash, KeyPair, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-
 use super::v2_apply::{
     LaneReservationSnapshotPlannerEvidence, recover_pending_autonomous_lifecycle_terminal_outcome,
 };
@@ -42,7 +36,9 @@ use crate::{
     },
     state::{State, consensus_lane_dataspace_at_height},
 };
-
+use iroha_crypto::{Hash, KeyPair, Signature};
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 std::thread_local! {
     static DEFERRED_TERMINAL_STAGE_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -51,7 +47,6 @@ std::thread_local! {
         Option<Box<dyn FnMut(&AutonomousLifecycleCursorV2)>>,
     > = std::cell::RefCell::new(None);
 }
-
 #[cfg(test)]
 pub(crate) fn install_deferred_terminal_stage_proof_hook_for_test(hook: impl FnOnce() + 'static) {
     DEFERRED_TERMINAL_STAGE_PROOF_HOOK.with(|slot| {
@@ -62,7 +57,6 @@ pub(crate) fn install_deferred_terminal_stage_proof_hook_for_test(hook: impl FnO
         *slot.borrow_mut() = Some(Box::new(hook));
     });
 }
-
 #[cfg(test)]
 fn run_deferred_terminal_stage_proof_hook_for_test() {
     let hook = DEFERRED_TERMINAL_STAGE_PROOF_HOOK.with(|slot| slot.borrow_mut().take());
@@ -70,7 +64,6 @@ fn run_deferred_terminal_stage_proof_hook_for_test() {
         hook();
     }
 }
-
 #[cfg(test)]
 pub(crate) fn install_post_lifecycle_cursor_cas_hook_for_test(
     hook: impl FnMut(&AutonomousLifecycleCursorV2) + 'static,
@@ -83,12 +76,10 @@ pub(crate) fn install_post_lifecycle_cursor_cas_hook_for_test(
         *slot.borrow_mut() = Some(Box::new(hook));
     });
 }
-
 #[cfg(test)]
 pub(crate) fn clear_post_lifecycle_cursor_cas_hook_for_test() {
     POST_LIFECYCLE_CURSOR_CAS_HOOK.with(|slot| drop(slot.borrow_mut().take()));
 }
-
 #[cfg(test)]
 fn run_post_lifecycle_cursor_cas_hook_for_test(cursor: &AutonomousLifecycleCursorV2) {
     POST_LIFECYCLE_CURSOR_CAS_HOOK.with(|slot| {
@@ -97,7 +88,6 @@ fn run_post_lifecycle_cursor_cas_hook_for_test(cursor: &AutonomousLifecycleCurso
         }
     });
 }
-
 /// Exact Queue handoff retained after all local lifecycle recovery is durable.
 #[must_use = "the recovered Queue receipt must reach the startup publication gate"]
 pub(crate) struct RecoveredAutonomousLifecycleStartup {
@@ -107,7 +97,6 @@ pub(crate) struct RecoveredAutonomousLifecycleStartup {
     completed_bootstraps: usize,
     recovered_attempts: usize,
 }
-
 impl RecoveredAutonomousLifecycleStartup {
     /// Consume the recovery result into the exact Queue cut and its move-only receipt.
     pub(crate) fn into_queue_handoff(
@@ -119,20 +108,17 @@ impl RecoveredAutonomousLifecycleStartup {
     ) {
         (self.snapshot, self.receipt, self.deferred_terminal_recovery)
     }
-
     /// Number of signed bootstrap intents completed idempotently.
     #[must_use]
     pub(crate) const fn completed_bootstraps(&self) -> usize {
         self.completed_bootstraps
     }
-
     /// Number of non-terminal attempts transferred or rehydrated for this process generation.
     #[must_use]
     pub(crate) const fn recovered_attempts(&self) -> usize {
         self.recovered_attempts
     }
 }
-
 /// Bounded result of joining durable terminal sources with their exact Queue
 /// ownership outcomes before ordinary reservation planning begins.
 #[derive(Debug, Default)]
@@ -141,25 +127,21 @@ pub(crate) struct AutonomousLifecycleTerminalRecoverySummary {
     finalized_reservations: usize,
     deferred_terminal_recovery: AutonomousLifecycleDeferredTerminalRecoveryHandoff,
 }
-
 impl AutonomousLifecycleTerminalRecoverySummary {
     /// Number of Pending Kura outcomes promoted through positive Queue proof.
     #[must_use]
     pub(crate) const fn completed_outcomes(&self) -> usize {
         self.completed_outcomes
     }
-
     /// Number of live Queue reservation owners consumed while catching up.
     pub(crate) const fn finalized_reservations(&self) -> usize {
         self.finalized_reservations
     }
-
     /// Number of exact Pending groups deferred behind the immutable Queue replay receipt.
     #[must_use]
     pub(crate) fn deferred_pending_groups(&self) -> usize {
         self.deferred_terminal_recovery.group_count()
     }
-
     /// Consume the pre-sweep result into the exact Pending bindings which the
     /// ordinary planner must terminalize before Queue publication.
     pub(crate) fn into_deferred_terminal_recovery(
@@ -168,16 +150,13 @@ impl AutonomousLifecycleTerminalRecoverySummary {
         self.deferred_terminal_recovery
     }
 }
-
 type AutonomousLifecycleTerminalRecoveryUnitIdentity = (u8, Vec<Hash>);
-
 #[derive(Debug)]
 struct AutonomousLifecycleDeferredTerminalRecoveryUnit {
     identity: AutonomousLifecycleTerminalRecoveryUnitIdentity,
     pending_groups: Vec<AutonomousLifecyclePendingReservationGroupObservation>,
     owned_group_hashes: BTreeSet<Hash>,
 }
-
 /// Opaque move-only handoff from the receipt-safe pre-sweep to normal startup
 /// planning and final application.
 ///
@@ -189,20 +168,17 @@ struct AutonomousLifecycleDeferredTerminalRecoveryUnit {
 pub(crate) struct AutonomousLifecycleDeferredTerminalRecoveryHandoff {
     units: Vec<AutonomousLifecycleDeferredTerminalRecoveryUnit>,
 }
-
 impl AutonomousLifecycleDeferredTerminalRecoveryHandoff {
     /// Construct the only valid caller-supplied form: no deferred source units.
     #[must_use]
     pub(crate) const fn empty() -> Self {
         Self { units: Vec::new() }
     }
-
     #[cfg(test)]
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.units.is_empty()
     }
-
     #[must_use]
     fn group_count(&self) -> usize {
         self.units
@@ -210,7 +186,6 @@ impl AutonomousLifecycleDeferredTerminalRecoveryHandoff {
             .map(|unit| unit.pending_groups.len())
             .sum()
     }
-
     fn bindings_for_route(
         &self,
         lane_id: iroha_data_model::nexus::LaneId,
@@ -229,11 +204,9 @@ impl AutonomousLifecycleDeferredTerminalRecoveryHandoff {
             .collect()
     }
 }
-
 fn lifecycle_error(stage: &str, error: impl core::fmt::Display) -> String {
     format!("autonomous lifecycle startup {stage}: {error}")
 }
-
 fn active_lifecycle_routes(
     state: &State,
     context: &wire::HeightContext,
@@ -279,7 +252,6 @@ fn active_lifecycle_routes(
     }
     Ok(routes.into_iter().collect())
 }
-
 pub(crate) fn sign_lifecycle_cursor(
     key_pair: &KeyPair,
     local_peer: &PeerId,
@@ -310,7 +282,6 @@ pub(crate) fn sign_lifecycle_cursor(
         .finalize(signature, validator_set)
         .map_err(|reason| lifecycle_error("cursor signature verification failed", reason))
 }
-
 fn compare_and_swap_phase(
     kura: &Kura,
     key_pair: &KeyPair,
@@ -352,7 +323,6 @@ fn compare_and_swap_phase(
     );
     Ok(read)
 }
-
 fn prepared_recovery_state(
     cursor: &AutonomousLifecycleCursorV2,
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, String> {
@@ -376,7 +346,6 @@ fn prepared_recovery_state(
         )),
     }
 }
-
 fn cursor_recovery_state(
     cursor: &AutonomousLifecycleCursorV2,
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, String> {
@@ -394,7 +363,6 @@ fn cursor_recovery_state(
             }),
     }
 }
-
 fn exact_current_queue_group_matches(
     binding: &AutonomousLifecycleAttemptBindingV1,
     ordered_keys: &[LaneQueueReservationKeyV2],
@@ -414,7 +382,6 @@ fn exact_current_queue_group_matches(
         && lane_queue_reservation_group_binding_from_ordered_keys(current_keys.iter()).ok()
             == Some(expected)
 }
-
 /// A producer cursor is signed against the Queue owner which selected the
 /// executable payload. Unlike an observer's replicated Kura custody, that
 /// local producer authority cannot be reconstructed from the payload alone.
@@ -441,7 +408,6 @@ fn require_local_producer_queue_owner(
     }
     Ok(())
 }
-
 fn recover_one_attempt(
     kura: &Kura,
     process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -471,7 +437,6 @@ fn recover_one_attempt(
                     .to_owned(),
             );
         }
-
         if owner_generation < current_generation {
             let before = cursor_recovery_state(&cursor)?;
             let phase = if before.session.crashed & local_actor != 0 {
@@ -502,7 +467,6 @@ fn recover_one_attempt(
             changed = true;
             continue;
         }
-
         match cursor.phase_kind() {
             AutonomousLifecycleCursorPhaseKindV2::Crashed => {
                 let before = cursor_recovery_state(&cursor)?;
@@ -575,7 +539,6 @@ fn recover_one_attempt(
     }
     Err("autonomous lifecycle startup exceeded its fixed eight-transition attempt bound".to_owned())
 }
-
 fn lifecycle_projection_for_cursor(
     queue: &Queue,
     receipt: &LaneReservationStartupReconciliationReceipt,
@@ -603,7 +566,6 @@ fn lifecycle_projection_for_cursor(
     )
     .map_err(|error| lifecycle_error("Queue cursor projection failed", error))
 }
-
 fn lifecycle_identity_projection_for_cursor(
     cursor: &AutonomousLifecycleCursorV2,
     ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
@@ -623,7 +585,6 @@ fn lifecycle_identity_projection_for_cursor(
     )
     .map_err(|error| lifecycle_error("Queue cursor identity projection failed", error))
 }
-
 fn planner_covered_pending_groups_for_route(
     deferred_terminal_recovery: &AutonomousLifecycleDeferredTerminalRecoveryHandoff,
     lane_id: iroha_data_model::nexus::LaneId,
@@ -632,7 +593,6 @@ fn planner_covered_pending_groups_for_route(
 ) -> Vec<LaneQueueReservationGroupBindingV1> {
     deferred_terminal_recovery.bindings_for_route(lane_id, dataspace_id, lane_incarnation)
 }
-
 fn observer_retirement_lifecycle_projections(
     kura: &Kura,
     network_id: iroha_data_model::NetworkId,
@@ -700,13 +660,11 @@ fn observer_retirement_lifecycle_projections(
     }
     Ok(projections.into_values().collect())
 }
-
 struct AutonomousLifecycleTerminalRecoveryPreflight {
     recovery: AutonomousLifecyclePendingTerminalOutcomeRecovery,
     pending_groups: Vec<AutonomousLifecyclePendingReservationGroupObservation>,
     deferred: bool,
 }
-
 fn pending_terminal_recovery_observations(
     recovery: &AutonomousLifecyclePendingTerminalOutcomeRecovery,
     network_id: iroha_data_model::NetworkId,
@@ -776,7 +734,6 @@ fn pending_terminal_recovery_observations(
     );
     Ok((pending_groups, unit_identity))
 }
-
 fn pending_terminal_group_has_exact_queue_owner(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     observation: &AutonomousLifecyclePendingReservationGroupObservation,
@@ -792,7 +749,6 @@ fn pending_terminal_group_has_exact_queue_owner(
             "autonomous lifecycle terminal recovery duplicates one source Queue key".to_owned(),
         );
     }
-
     let mut has_exact_owner = false;
     let mut seen_owner_hashes = BTreeSet::new();
     for phase in &snapshot.ordered_owner_phases {
@@ -819,7 +775,6 @@ fn pending_terminal_group_has_exact_queue_owner(
     }
     Ok(has_exact_owner)
 }
-
 /// Complete only already-empty crash-stranded terminal joins before taking the
 /// immutable Queue receipt used by ordinary reservation planning.
 ///
@@ -912,7 +867,6 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
             deferred,
         });
     }
-
     let mut completed_outcomes = 0_usize;
     let mut finalized_reservations = 0_usize;
     for preflight in preflighted {
@@ -1014,7 +968,6 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
         deferred_terminal_recovery,
     })
 }
-
 /// Close any planner-covered Pending sources left after the normal Queue
 /// actions, without consuming another owner or rebinding the startup receipt.
 ///
@@ -1061,7 +1014,6 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
             }
         }
     }
-
     let expected_groups = deferred
         .units
         .iter()
@@ -1118,7 +1070,6 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
             "deferred autonomous terminal stage proof omitted an expected handoff group".to_owned(),
         );
     }
-
     let recoveries = kura
         .pending_autonomous_lifecycle_terminal_outcome_inventory()
         .map_err(|error| lifecycle_error("deferred terminal inventory failed", error))?;
@@ -1186,7 +1137,6 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
                 .to_owned(),
         );
     }
-
     let mut completed = 0_usize;
     for (recovery, pending_count) in preflighted {
         let finalized =
@@ -1269,7 +1219,6 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
     }
     Ok(completed)
 }
-
 /// Reconcile every local lifecycle bootstrap and cursor before live lane activation.
 ///
 /// The caller must already have recovered canonical State/Kura and installed both Queue journals,
@@ -1391,7 +1340,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
             );
         }
     }
-
     let network_id = context.network_id;
     let Some(process_generation) = process_generation else {
         if snapshot.is_empty() {
@@ -1452,7 +1400,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                 .to_owned(),
         );
     }
-
     let routes = active_lifecycle_routes(state, context)?;
     let mut current_queue_groups =
         BTreeMap::<LaneQueueReservationGroupIdentityV1, Vec<LaneQueueReservationKeyV2>>::new();
@@ -1486,7 +1433,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                 .to_owned(),
         );
     }
-
     let mut projections = BTreeMap::new();
     for authority in &bootstraps {
         let identity = authority.binding().reservation_group_binding().identity;
@@ -1570,7 +1516,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
             projections.insert(identity, projection);
         }
     }
-
     let mut receipt_slot = Some(receipt);
     let mut recovery_authorization = if snapshot.is_empty() {
         None
@@ -1587,7 +1532,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                 .map_err(|error| lifecycle_error("Queue snapshot authorization failed", error))?,
         )
     };
-
     let mut completed_bootstraps = 0_usize;
     for authority in bootstraps {
         let expected_live = authority.live_cursor().clone();
@@ -1632,7 +1576,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
         }
         completed_bootstraps = completed_bootstraps.saturating_add(1);
     }
-
     // Consume the checked action-25 stutters only after every ProducerQueue bootstrap has reached
     // exact Live readback. The receipt remains unpublished while generation takeover proceeds.
     let receipt = if let Some(recovery) = recovery_authorization {
@@ -1644,7 +1587,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
             .take()
             .expect("empty Queue recovery retains exactly one direct receipt")
     };
-
     let mut recovered_attempts = 0_usize;
     for (lane_id, dataspace_id, lane_incarnation) in routes {
         let route_pending_groups = planner_covered_pending_groups_for_route(
@@ -1692,7 +1634,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
             }
         }
     }
-
     if !queue
         .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)
         .map_err(|error| lifecycle_error("final Queue receipt revalidation failed", error))?
@@ -1712,7 +1653,6 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
         recovered_attempts,
     })
 }
-
 #[cfg(test)]
 #[path = "tests/v2_lifecycle_recovery.rs"]
 mod tests;

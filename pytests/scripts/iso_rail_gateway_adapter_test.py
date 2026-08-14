@@ -1,14 +1,12 @@
 import argparse
 import array
 import contextlib
-import http.server
 import importlib.util
 import io
 import json
 import os
 import sys
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 
@@ -22,138 +20,17 @@ sys.modules[SPEC.name] = ADAPTER
 SPEC.loader.exec_module(ADAPTER)
 
 
-SAMPLE_XML = b"<Document><FIToFIPmtStsRpt><GrpHdr><MsgId>rail-1</MsgId></GrpHdr></FIToFIPmtStsRpt></Document>"
-
-
-def run_main(argv):
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        rc = ADAPTER.main(argv)
-    return rc, stdout.getvalue(), stderr.getvalue()
-
-
-def write_message(inbox, *, message_type="pacs.002", profile="swift-cbpr-plus", payload=SAMPLE_XML):
-    xml_path = inbox / "rail-status.xml"
-    xml_path.write_bytes(payload)
-    sidecar = {
-        "message_type": message_type,
-        "profile": profile,
-        "payload_sha256": ADAPTER.sha256_hex(payload),
-        "rail_message_id": "rail-drop-1",
-    }
-    (inbox / "rail-status.xml.json").write_text(json.dumps(sidecar), encoding="utf-8")
-    return xml_path, sidecar
-
-
-def write_named_message(
-    inbox,
-    name,
-    *,
-    message_type="pacs.002",
-    profile="swift-cbpr-plus",
-    payload=SAMPLE_XML,
-    rail_message_id=None,
-):
-    xml_path = inbox / f"{name}.xml"
-    xml_path.write_bytes(payload)
-    sidecar = {
-        "message_type": message_type,
-        "profile": profile,
-        "payload_sha256": ADAPTER.sha256_hex(payload),
-        "rail_message_id": rail_message_id or f"{name}-rail-id",
-    }
-    (inbox / f"{name}.xml.json").write_text(json.dumps(sidecar), encoding="utf-8")
-    return xml_path, sidecar
-
-
-def receipt_digest_matches(receipt):
-    expected = receipt[ADAPTER.RECEIPT_DIGEST_FIELD]
-    body = dict(receipt)
-    body.pop(ADAPTER.RECEIPT_DIGEST_FIELD)
-    return ADAPTER.sha256_hex(ADAPTER._canonical_json_bytes(body)) == expected
-
-
-@contextlib.contextmanager
-def capture_server(status=202, body=b'{"message_id":"rail-1"}'):
-    requests = []
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = self.rfile.read(length)
-            requests.append(
-                {
-                    "path": self.path,
-                    "headers": dict(self.headers),
-                    "body": payload,
-                }
-            )
-            self.send_response(status)
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *_args):
-            return
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}", requests
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-
-
-@contextlib.contextmanager
-def capture_redirect_server(body=b"redirect"):
-    requests = []
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = self.rfile.read(length)
-            requests.append(
-                {
-                    "method": "POST",
-                    "path": self.path,
-                    "headers": dict(self.headers),
-                    "body": payload,
-                }
-            )
-            location = f"http://127.0.0.1:{self.server.server_address[1]}/redirected"
-            self.send_response(302)
-            self.send_header("Location", location)
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
-            requests.append(
-                {
-                    "method": "GET",
-                    "path": self.path,
-                    "headers": dict(self.headers),
-                    "body": b"",
-                }
-            )
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"followed")
-
-        def log_message(self, *_args):
-            return
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}", requests
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
+from pytests.scripts.iso_rail_gateway_adapter_test_support import (
+    SAMPLE_XML,
+    TEST_NETWORK_ID,
+    TEST_OPERATOR_CONTEXT,
+    capture_redirect_server,
+    capture_server,
+    receipt_digest_matches,
+    run_main,
+    write_message,
+    write_named_message,
+)
 
 
 class IsoRailGatewayAdapterTest(unittest.TestCase):
@@ -2065,11 +1942,14 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 0)
             self.assertEqual(len(requests), 1)
-            self.assertEqual(requests[0]["path"], "/v1/iso20022/pacs002")
-            self.assertEqual(requests[0]["body"], SAMPLE_XML)
             self.assertEqual(
-                requests[0]["headers"]["X-Iroha-Iso-Profile"], "swift-cbpr-plus"
+                requests[0]["path"],
+                "/v1/iso20022/pacs002?profile=swift-cbpr-plus",
             )
+            self.assertEqual(requests[0]["body"], SAMPLE_XML)
+            self.assertNotIn("X-Iroha-Iso-Profile", requests[0]["headers"])
+            self.assertNotIn("Authorization", requests[0]["headers"])
+            self.assertIn("X-Iroha-Operator-Signature", requests[0]["headers"])
             self.assertEqual(
                 requests[0]["headers"]["X-Iroha-Iso-Gateway-Payload-Sha256"],
                 sidecar["payload_sha256"],
@@ -2083,7 +1963,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(receipts[0].stat().st_mode & 0o077, 0)
             self.assertEqual(list(receipt_dir.glob(".iso-*.tmp")), [])
 
-    def test_bearer_token_file_adds_authorization_without_persisting_token(self):
+    def test_operator_private_key_file_generates_auth_without_persisting_key(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             inbox = root / "inbox"
@@ -2091,29 +1971,37 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             write_message(inbox)
             token_dir = root / "runtime"
             token_dir.mkdir()
-            token_file = token_dir / "token.txt"
-            token_file.write_text("rail-token-123", encoding="utf-8")
-            with capture_server() as (base_url, requests):
-                rc, _stdout, stderr = run_main(
-                    [
-                        "--inbox-dir",
-                        str(inbox),
-                        "--torii-base-url",
-                        base_url,
-                        "--allow-insecure-http",
-                        "--bearer-token-file",
-                        str(token_file),
-                    ]
-                )
+            token_file = token_dir / "operator-key.txt"
+            private_key = "11" * 32
+            token_file.write_text(private_key, encoding="ascii")
+            original_loader = ADAPTER._load_operator_signing_context
+            ADAPTER._load_operator_signing_context = lambda _network_id, _path: (
+                TEST_OPERATOR_CONTEXT
+            )
+            try:
+                with capture_server() as (base_url, requests):
+                    rc, _stdout, stderr = run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            "--operator-private-key-file",
+                            str(token_file),
+                        ]
+                    )
+            finally:
+                ADAPTER._load_operator_signing_context = original_loader
 
             self.assertEqual(rc, 0, stderr)
             self.assertEqual(len(requests), 1)
-            self.assertEqual(
-                requests[0]["headers"]["Authorization"], "Bearer rail-token-123"
-            )
+            self.assertNotIn("Authorization", requests[0]["headers"])
+            self.assertNotIn("X-Iroha-Iso-Profile", requests[0]["headers"])
+            self.assertIn("X-Iroha-Operator-Signature", requests[0]["headers"])
             receipts = list((inbox / "receipts").glob("*.receipt.json"))
             self.assertEqual(len(receipts), 1)
-            self.assertNotIn("rail-token-123", receipts[0].read_text(encoding="utf-8"))
+            self.assertNotIn(private_key, receipts[0].read_text(encoding="utf-8"))
 
     def test_duplicate_payloads_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2460,7 +2348,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertIn("unsupported message_type", stderr)
             self.assertNotIn(hidden, stderr)
 
-    def test_malformed_bearer_token_file_is_rejected_before_network_delivery(self):
+    def test_malformed_operator_private_key_file_is_rejected_before_network_delivery(
+        self,
+    ):
         cases = [
             ("empty", b"", "empty"),
             ("padded", b" rail-token", "surrounding whitespace"),
@@ -2470,12 +2360,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             (
                 "unicode-format",
                 "rail-token\u200drail-token-hidden".encode("utf-8"),
-                "must not contain control characters",
+                "is not ASCII",
             ),
-            ("non-utf8", b"rail-token\xff", "not UTF-8"),
+            ("non-ascii", b"rail-token\xff", "not ASCII"),
             (
                 "oversized",
-                b"a" * (ADAPTER.MAX_BEARER_TOKEN_BYTES + 1),
+                b"a" * (ADAPTER.MAX_OPERATOR_PRIVATE_KEY_BYTES + 1),
                 "exceeds",
             ),
         ]
@@ -2498,7 +2388,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                                 "--torii-base-url",
                                 base_url,
                                 "--allow-insecure-http",
-                                "--bearer-token-file",
+                                "--operator-private-key-file",
                                 str(token_file),
                             ]
                         )
@@ -2508,21 +2398,23 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertNotIn("rail-token-hidden", stderr)
 
-    def test_bearer_token_reader_enforces_configured_file_cap(self):
+    def test_operator_private_key_reader_enforces_configured_file_cap(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             token_file = Path(raw_inbox) / "token.txt"
             token_file.write_bytes(b"a" * 9)
-            original_limit = ADAPTER.MAX_BEARER_TOKEN_BYTES
-            ADAPTER.MAX_BEARER_TOKEN_BYTES = 8
+            original_limit = ADAPTER.MAX_OPERATOR_PRIVATE_KEY_BYTES
+            ADAPTER.MAX_OPERATOR_PRIVATE_KEY_BYTES = 8
             try:
                 with self.assertRaises(ADAPTER.AdapterError) as raised:
-                    ADAPTER._load_bearer_token(token_file)
+                    ADAPTER._load_operator_signing_context(TEST_NETWORK_ID, token_file)
             finally:
-                ADAPTER.MAX_BEARER_TOKEN_BYTES = original_limit
+                ADAPTER.MAX_OPERATOR_PRIVATE_KEY_BYTES = original_limit
 
-            self.assertIn("exceeds 8 byte bearer token limit", str(raised.exception))
+            self.assertIn(
+                "exceeds 8 byte operator private key limit", str(raised.exception)
+            )
 
-    def test_bearer_token_file_errors_do_not_echo_runtime_path(self):
+    def test_operator_private_key_file_errors_do_not_echo_runtime_path(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             secret_dir = Path(raw_inbox) / "private_key=rail-secret"
             secret_dir.mkdir()
@@ -2535,15 +2427,15 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 ),
                 ("empty", secret_dir / "token=rail-secret-empty.txt", b"", "empty"),
                 (
-                    "non-utf8",
-                    secret_dir / "token=rail-secret-nonutf8.txt",
+                    "non-ascii",
+                    secret_dir / "token=rail-secret-nonascii.txt",
                     b"rail-token\xff",
-                    "not UTF-8",
+                    "not ASCII",
                 ),
                 (
                     "oversized",
                     secret_dir / "token=rail-secret-oversized.txt",
-                    b"a" * (ADAPTER.MAX_BEARER_TOKEN_BYTES + 1),
+                    b"a" * (ADAPTER.MAX_OPERATOR_PRIVATE_KEY_BYTES + 1),
                     "exceeds",
                 ),
             ]
@@ -2552,16 +2444,20 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     if token_bytes is not None:
                         token_file.write_bytes(token_bytes)
                     with self.assertRaises(ADAPTER.AdapterError) as raised:
-                        ADAPTER._load_bearer_token(token_file)
+                        ADAPTER._load_operator_signing_context(
+                            TEST_NETWORK_ID, token_file
+                        )
 
                     error = str(raised.exception)
-                    self.assertIn("bearer token file", error)
+                    self.assertIn("operator private key file", error)
                     self.assertIn(message, error)
                     self.assertNotIn("private_key=rail-secret", error)
                     self.assertNotIn("token=rail-secret", error)
                     self.assertNotIn(str(token_file), error)
 
-    def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
+    def test_non_regular_operator_private_key_files_are_rejected_before_network_delivery(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             inbox = root / "inbox"
@@ -2592,7 +2488,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                                 "--torii-base-url",
                                 base_url,
                                 "--allow-insecure-http",
-                                "--bearer-token-file",
+                                "--operator-private-key-file",
                                 str(token_file),
                             ]
                         )
@@ -2601,7 +2497,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertEqual(requests, [])
                     self.assertIn(message, stderr)
 
-    def test_bearer_token_file_symlinked_ancestor_is_rejected_before_network_delivery(self):
+    def test_operator_private_key_file_symlinked_ancestor_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             inbox = root / "inbox"
@@ -2626,7 +2522,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         "--torii-base-url",
                         base_url,
                         "--allow-insecure-http",
-                        "--bearer-token-file",
+                        "--operator-private-key-file",
                         str(token_file),
                     ]
                 )
@@ -2635,7 +2531,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertIn("must not be a symlink", stderr)
 
-    def test_bearer_token_file_cannot_overlap_inbox_before_loading(self):
+    def test_operator_private_key_file_cannot_overlap_inbox_before_loading(self):
         cases = (
             (
                 "same-as-inbox",
@@ -2677,7 +2573,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                                 "--torii-base-url",
                                 base_url,
                                 "--allow-insecure-http",
-                                "--bearer-token-file",
+                                "--operator-private-key-file",
                                 str(token_file),
                                 "--receipt-dir",
                                 str(receipt_dir),
@@ -2688,7 +2584,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertEqual(requests, [])
                     self.assertIn(
-                        "bearer_token_file must not overlap inbox_dir path",
+                        "operator_private_key_file must not overlap inbox_dir path",
                         stderr,
                     )
                     self.assertNotIn("rail-token-123", stderr)
@@ -2708,19 +2604,19 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ),
             (
                 "token empty",
-                "--bearer-token-file",
+                "--operator-private-key-file",
                 lambda root: f"{root}//token.txt",
                 "empty path",
             ),
             (
                 "token backslash",
-                "--bearer-token-file",
+                "--operator-private-key-file",
                 r"nested\token.txt",
                 "forward slashes",
             ),
             (
                 "token secret-looking",
-                "--bearer-token-file",
+                "--operator-private-key-file",
                 "token=rail-secret",
                 "secret-looking material",
             ),
@@ -2773,7 +2669,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "message": None,
                 "torii_base_url": "https://torii.example.invalid",
                 "receipt_dir": root / "receipts",
-                "bearer_token_file": None,
+                "operator_private_key_file": None,
                 "timeout_secs": 1.0,
                 "response_limit_bytes": 1024,
                 "max_payload_bytes": 1024,
@@ -2826,9 +2722,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "token secret",
                 lambda root: args_for(
                     root,
-                    bearer_token_file=root / "token=rail-secret",
+                    operator_private_key_file=root / "token=rail-secret",
                 ),
-                "bearer_token_file must not contain secret-looking material",
+                "operator_private_key_file must not contain secret-looking material",
             ),
         )
         for name, make_args, message in cases:
@@ -2864,7 +2760,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("inbox", "inbox_dir", object(), "inbox_dir"),
             ("inbox pathlike", "inbox_dir", HostilePathLike(), "inbox_dir"),
             ("receipt", "receipt_dir", object(), "receipt_dir"),
-            ("token", "bearer_token_file", object(), "bearer_token_file"),
+            (
+                "token",
+                "operator_private_key_file",
+                object(),
+                "operator_private_key_file",
+            ),
         )
         for name, field, value, label in cases:
             with self.subTest(name=name):
@@ -2875,7 +2776,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message=None,
                         torii_base_url="https://torii.example.invalid",
                         receipt_dir=root / "receipts",
-                        bearer_token_file=None,
+                        operator_private_key_file=None,
                         timeout_secs=1.0,
                         response_limit_bytes=1024,
                         max_payload_bytes=1024,
@@ -2923,7 +2824,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message=value,
                         torii_base_url="https://torii.example.invalid",
                         receipt_dir=root / "receipts",
-                        bearer_token_file=None,
+                        operator_private_key_file=None,
                         timeout_secs=1.0,
                         response_limit_bytes=1024,
                         max_payload_bytes=1024,
@@ -2957,7 +2858,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message=None,
                         torii_base_url=value,
                         receipt_dir=root / "receipts",
-                        bearer_token_file=None,
+                        operator_private_key_file=None,
                         timeout_secs=1.0,
                         response_limit_bytes=1024,
                         max_payload_bytes=1024,
@@ -2991,7 +2892,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message=None,
                         torii_base_url="https://torii.example.invalid",
                         receipt_dir=root / "receipts",
-                        bearer_token_file=None,
+                        operator_private_key_file=None,
                         timeout_secs=1.0,
                         response_limit_bytes=1024,
                         max_payload_bytes=1024,
@@ -3024,7 +2925,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message=None,
                         torii_base_url="https://torii.example.invalid",
                         receipt_dir=root / "receipts",
-                        bearer_token_file=None,
+                        operator_private_key_file=None,
                         timeout_secs=1.0,
                         response_limit_bytes=1024,
                         max_payload_bytes=1024,
@@ -3050,7 +2951,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message=None,
                 torii_base_url="https://torii.example.invalid",
                 receipt_dir=root / "receipts",
-                bearer_token_file=None,
+                operator_private_key_file=None,
                 timeout_secs=1.0,
                 response_limit_bytes=ADAPTER.MAX_RESPONSE_LIMIT_BYTES + 1,
                 max_payload_bytes=1024,
@@ -3442,8 +3343,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 0, stderr)
             self.assertEqual(len(requests), 1)
-            self.assertEqual(requests[0]["path"], "/v1/iso20022/colr012")
-            self.assertEqual(requests[0]["headers"]["X-Iroha-Iso-Profile"], "securities-csd")
+            self.assertEqual(requests[0]["path"], "/v1/iso20022/colr012?profile=securities-csd")
+            self.assertNotIn("X-Iroha-Iso-Profile", requests[0]["headers"])
 
     def test_colr007_submission_is_unsupported(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -3663,14 +3564,14 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertIn("message[0].sidecar must not be read from receipt_dir", stderr)
 
-    def test_receipt_dir_cannot_reuse_bearer_token_file_before_loading(self):
+    def test_receipt_dir_cannot_reuse_operator_private_key_file_before_loading(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             inbox = root / "inbox"
             inbox.mkdir()
             write_message(inbox)
-            bearer_token_file = root / "adapter-auth.txt"
-            bearer_token_file.write_text("rail-token-123\n", encoding="utf-8")
+            operator_private_key_file = root / "adapter-auth.txt"
+            operator_private_key_file.write_text("rail-token-123\n", encoding="utf-8")
             with capture_server() as (base_url, requests):
                 rc, stdout, stderr = run_main(
                     [
@@ -3679,21 +3580,23 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         "--torii-base-url",
                         base_url,
                         "--allow-insecure-http",
-                        "--bearer-token-file",
-                        str(bearer_token_file),
+                        "--operator-private-key-file",
+                        str(operator_private_key_file),
                         "--receipt-dir",
-                        str(bearer_token_file),
+                        str(operator_private_key_file),
                     ]
                 )
 
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertEqual(requests, [])
-            self.assertIn("receipt_dir must not overlap bearer_token_file path", stderr)
+            self.assertIn(
+                "receipt_dir must not overlap operator_private_key_file path", stderr
+            )
             self.assertNotIn("rail-token-123", stderr)
-            self.assertEqual(bearer_token_file.read_text(encoding="utf-8"), "rail-token-123\n")
+            self.assertEqual(operator_private_key_file.read_text(encoding="utf-8"), "rail-token-123\n")
 
-    def test_receipt_dir_cannot_contain_bearer_token_file_before_loading(self):
+    def test_receipt_dir_cannot_contain_operator_private_key_file_before_loading(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             inbox = root / "inbox"
@@ -3701,8 +3604,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             write_message(inbox)
             token_dir = root / "runtime-auth"
             token_dir.mkdir()
-            bearer_token_file = token_dir / "adapter-auth.txt"
-            bearer_token_file.write_text("rail-token-123\n", encoding="utf-8")
+            operator_private_key_file = token_dir / "adapter-auth.txt"
+            operator_private_key_file.write_text("rail-token-123\n", encoding="utf-8")
             with capture_server() as (base_url, requests):
                 rc, stdout, stderr = run_main(
                     [
@@ -3711,8 +3614,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         "--torii-base-url",
                         base_url,
                         "--allow-insecure-http",
-                        "--bearer-token-file",
-                        str(bearer_token_file),
+                        "--operator-private-key-file",
+                        str(operator_private_key_file),
                         "--receipt-dir",
                         str(token_dir),
                     ]
@@ -3721,9 +3624,11 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertEqual(requests, [])
-            self.assertIn("receipt_dir must not overlap bearer_token_file path", stderr)
+            self.assertIn(
+                "receipt_dir must not overlap operator_private_key_file path", stderr
+            )
             self.assertNotIn("rail-token-123", stderr)
-            self.assertEqual(bearer_token_file.read_text(encoding="utf-8"), "rail-token-123\n")
+            self.assertEqual(operator_private_key_file.read_text(encoding="utf-8"), "rail-token-123\n")
 
     def test_explicit_symlinked_message_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -4572,7 +4477,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -4616,7 +4521,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -4669,7 +4574,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -4719,7 +4624,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -4770,7 +4675,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -4821,7 +4726,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5107,7 +5012,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5143,7 +5048,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5191,7 +5096,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5236,7 +5141,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5284,7 +5189,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5335,7 +5240,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message,
                         timeout_secs=1.0,
                         response_limit_bytes=128,
-                        bearer_token=None,
+                        operator_signing_context=TEST_OPERATOR_CONTEXT,
                     )
 
                     self.assertTrue(result.ok)
@@ -5369,7 +5274,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     message,
                     timeout_secs=1.0,
                     response_limit_bytes=3,
-                    bearer_token=None,
+                    operator_signing_context=TEST_OPERATOR_CONTEXT,
                 )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5440,7 +5345,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5485,7 +5390,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5533,7 +5438,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5581,7 +5486,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5630,7 +5535,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5679,7 +5584,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5734,7 +5639,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         message,
                         timeout_secs=1.0,
                         response_limit_bytes=128,
-                        bearer_token=None,
+                        operator_signing_context=TEST_OPERATOR_CONTEXT,
                     )
 
                     self.assertFalse(result.ok)
@@ -5772,7 +5677,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     message,
                     timeout_secs=1.0,
                     response_limit_bytes=3,
-                    bearer_token=None,
+                    operator_signing_context=TEST_OPERATOR_CONTEXT,
                 )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5815,7 +5720,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5866,7 +5771,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
@@ -5917,7 +5822,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message,
                 timeout_secs=1.0,
                 response_limit_bytes=128,
-                bearer_token=None,
+                operator_signing_context=TEST_OPERATOR_CONTEXT,
             )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener

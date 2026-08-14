@@ -340,6 +340,12 @@ Durable state
   the `NoritoBytes` payload length, misses and tombstones charge only the fixed
   base, and key enumeration adds the returned-key count plus encoded result
   bytes.
+- The development/test `DurableStateOverlay` is not the ledger state backend.
+  Its restart file is a direct regular Norito JSON file capped at 30 MiB and is
+  admitted before parse. The retained overlay is capped at 4,096 entries,
+  4 MiB of canonical path text, and 16 MiB of raw values. Set, restore, load,
+  checkpoint, and flush all share those bounds; persistence writes one encoded
+  output buffer instead of building an additional JSON value tree.
 
 Smart‑contract helpers (Norito)
 - 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`, `2=RecordSccpMessage`) → 0 — Gas: G_sci

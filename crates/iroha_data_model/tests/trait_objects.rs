@@ -1,15 +1,11 @@
 //! Tests for trait object instructions
-
 use iroha_data_model::{instruction_registry, isi::set_instruction_registry, prelude::*};
-
 struct RegistryGuard;
-
 impl Drop for RegistryGuard {
     fn drop(&mut self) {
         set_instruction_registry(iroha_data_model::instruction_registry::default());
     }
 }
-
 #[test]
 fn instruction_box_roundtrip() {
     let log = Log::new(Level::INFO, "roundtrip".to_string());
@@ -25,7 +21,6 @@ fn instruction_box_roundtrip() {
     assert_eq!(decoded_log, &log);
     assert_eq!(Instruction::dyn_encode(&*decoded), payload);
 }
-
 #[test]
 fn instruction_box_norito_roundtrip() {
     let _guard = RegistryGuard;

@@ -20,7 +20,6 @@ fn sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility() {
             .any(|encoding| encoding.as_str() == Some("plain")),
         "retired Plain payload encoding must not be advertised"
     );
-
     let layout = schemas
         .get("SumeragiV2DataAvailabilityLayout")
         .and_then(Value::as_object)
@@ -69,7 +68,6 @@ fn sumeragi_v2_da_schema_requires_reed_solomon16_without_plain_compatibility() {
         "retired Plain layout branch must not be advertised"
     );
 }
-
 #[test]
 fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
     fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
@@ -78,7 +76,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("missing object schema {name}"))
     }
-
     fn string_set(value: Option<&Value>, label: &str) -> Vec<String> {
         let mut values = value
             .and_then(Value::as_array)
@@ -94,7 +91,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         values.sort_unstable();
         values
     }
-
     fn assert_closed_shape(schemas: &Map, name: &str, required: &[&str], properties: &[&str]) {
         let schema = schema(schemas, name);
         assert_eq!(
@@ -130,7 +126,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             "{name} property-set drift"
         );
     }
-
     fn property<'a>(schemas: &'a Map, schema_name: &str, field: &str) -> &'a Map {
         schema(schemas, schema_name)
             .get("properties")
@@ -139,7 +134,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("missing {schema_name}.{field} schema"))
     }
-
     fn assert_ref(schemas: &Map, schema_name: &str, field: &str, expected: &str) {
         assert_eq!(
             property(schemas, schema_name, field)
@@ -149,7 +143,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             "{schema_name}.{field} reference drift"
         );
     }
-
     let schemas = openapi_schemas();
     let max_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
@@ -399,7 +392,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             "execution_context_hash",
         ],
     );
-
     assert_eq!(
         property(&schemas, "BridgeFinalityProof", "version")
             .get("enum")
@@ -419,7 +411,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             "{schema_name}.{field} must be version-exact"
         );
     }
-
     let roster = property(&schemas, "SumeragiV2HeightContext", "roster");
     assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(4));
     assert_eq!(
@@ -456,7 +447,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
             .and_then(Value::as_str),
         Some("^ea0130[0-9A-F]{96}$")
     );
-
     for owner in [
         "SumeragiV2FinalityArtifact",
         "SumeragiV2FinalizedNextEpochSnapshot",
@@ -484,7 +474,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         .expect("BLS proof byte schema");
     assert_eq!(bls_byte.get("minimum").and_then(Value::as_u64), Some(0));
     assert_eq!(bls_byte.get("maximum").and_then(Value::as_u64), Some(255));
-
     for certificate in [
         "SumeragiV2QuorumCertificate",
         "SumeragiV2CommitQuorumCertificate",
@@ -636,7 +625,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
     let context_id = schema(&schemas, "SumeragiV2HeightContextId");
     assert_eq!(context_id.get("minItems").and_then(Value::as_u64), Some(1));
     assert_eq!(context_id.get("maxItems").and_then(Value::as_u64), Some(1));
-
     let mut bridge_components = Map::new();
     for name in [
         "BridgeFinalityProof",
@@ -689,7 +677,6 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         );
     }
 }
-
 #[test]
 fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
     let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
@@ -703,7 +690,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         proof_fields,
         ["block_header", "finality_artifact", "version"]
     );
-
     let header = proof_object
         .get("block_header")
         .and_then(Value::as_object)
@@ -734,7 +720,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         header.get("sccp_commitment_root").and_then(Value::as_str),
         Some(expected_commitment_root.as_str())
     );
-
     let document = generate_spec();
     let schemas = component_schemas(&document);
     let bytes32 = schemas
@@ -764,7 +749,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         fixed_bytes32.get("maxItems").and_then(Value::as_u64),
         Some(32)
     );
-
     let artifact = proof_object
         .get("finality_artifact")
         .and_then(Value::as_object)
@@ -824,7 +808,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         Some("reed_solomon16")
     );
     assert_eq!(encoding.get("details"), Some(&Value::Null));
-
     let roster = context
         .get("roster")
         .and_then(Value::as_array)
@@ -852,7 +835,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
     assert_eq!(quorum.len(), 2);
     assert!(quorum.get("min_signers").and_then(Value::as_u64).is_some());
     assert!(quorum.get("total_power").and_then(Value::as_u64).is_some());
-
     let subject = artifact
         .get("subject")
         .and_then(Value::as_object)
@@ -866,7 +848,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         assert!(hash.starts_with("hash:"));
         assert_eq!(hash.len(), 74);
     }
-
     let commit_qc = artifact
         .get("commit_qc")
         .and_then(Value::as_object)
@@ -971,7 +952,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
             .and_then(Value::as_array)
             .is_some_and(|signature| signature.len() == 96)
     );
-
     let pops = artifact
         .get("validator_set_pops")
         .and_then(Value::as_array)
@@ -985,7 +965,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
                     .all(|byte| byte.as_u64().is_some_and(|byte| byte <= 255))
         })
     }));
-
     let mut missing_execution = value.clone();
     let removed = missing_execution
         .as_object_mut()
@@ -1006,7 +985,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         .is_err(),
         "BridgeFinalityProof JSON decoder accepted a CommitQC without its execution commitment"
     );
-
     for retired in [
         "height",
         "chain_id",
@@ -1041,7 +1019,6 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         );
     }
 }
-
 #[test]
 fn bridge_finality_operations_describe_durable_v2_evidence() {
     let paths = generate_spec()
@@ -1077,7 +1054,6 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
         assert!(description.contains("durable"));
         assert!(!description.contains("validator set signatures"));
         assert!(!description.contains("block header and commit certificate"));
-
         let content = operation
             .get("responses")
             .and_then(Value::as_object)
@@ -1106,7 +1082,6 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
         assert_eq!(norito.get("type").and_then(Value::as_str), Some("string"));
         assert_eq!(norito.get("format").and_then(Value::as_str), Some("binary"));
     }
-
     let attestation = paths
         .get("/v1/bridge/finality/attestation/{height}")
         .and_then(Value::as_object)
@@ -1167,7 +1142,6 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
         );
     }
 }
-
 #[test]
 fn generated_spec_documents_read_only_nexus_lifecycle_status() {
     let doc = generate_spec();
@@ -1210,12 +1184,10 @@ fn generated_spec_documents_read_only_nexus_lifecycle_status() {
         .expect("lifecycle status response content");
     assert!(content.contains_key("application/json"));
     assert!(content.contains_key("application/x-norito"));
-
     assert!(
         !path.contains_key("post"),
         "the first-release lifecycle resource is read-only"
     );
-
     let schema = doc
         .get("components")
         .and_then(Value::as_object)
@@ -1272,7 +1244,6 @@ fn generated_spec_documents_read_only_nexus_lifecycle_status() {
         Some("#/components/schemas/NexusLaneLifecycleIncarnationEntry")
     );
 }
-
 #[test]
 fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
     let doc = generate_spec();
@@ -1304,7 +1275,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         status_enabled.then_some("#/components/schemas/SumeragiStatusResponse"),
         "authoritative status presence and schema must follow the enabled catalog OpenAPI projection"
     );
-
     let schemas = doc
         .get("components")
         .and_then(|components| components.get("schemas"))
@@ -1423,7 +1393,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             .any(|value| value.as_str() == Some("last_commit_qc")),
         "last CommitQC must remain optional before an authenticated summary exists"
     );
-
     let context_schema = schemas
         .get("SumeragiV2HeightContextStatus")
         .and_then(Value::as_object)
@@ -1456,7 +1425,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             .and_then(Value::as_u64),
         Some(max_validators)
     );
-
     let commit_schema = schemas
         .get("SumeragiV2CommitQcStatus")
         .and_then(Value::as_object)
@@ -1484,7 +1452,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             "CommitQC status {field} must match the reducer validator bound"
         );
     }
-
     let diagnostics_schema_ref = paths
         .get("/v1/sumeragi/diagnostics")
         .and_then(Value::as_object)
@@ -1568,7 +1535,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             "diagnostics must not duplicate canonical field {canonical_field}"
         );
     }
-
     let commitment_properties = schemas
         .get("LaneSettlementCommitment")
         .and_then(Value::as_object)
@@ -1621,7 +1587,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
                 .iter()
                 .any(|field| field.as_str() == Some("lane_incarnation")))
     );
-
     let receipt_properties = schemas
         .get("NativeAmxReceipt")
         .and_then(Value::as_object)
@@ -1672,7 +1637,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         legs_schema.get("uniqueItems").and_then(Value::as_bool),
         Some(true)
     );
-
     let leg_properties = schemas
         .get("NativeAmxLegRecord")
         .and_then(Value::as_object)
@@ -1794,7 +1758,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             "{qc_field} should reference the QC schema"
         );
     }
-
     let qc_properties = schemas
         .get("NativeAmxAttestationQc")
         .and_then(Value::as_object)
@@ -1877,7 +1840,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             .and_then(Value::as_str),
         Some("#/components/schemas/SumeragiV2BlsProof")
     );
-
     let descriptor_properties = schemas
         .get("NativeAmxParticipantLaneBlockDescriptor")
         .and_then(Value::as_object)
@@ -1899,7 +1861,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             Some(true)
         );
     }
-
     let body_schema = schemas
         .get("NativeAmxAttestationBody")
         .and_then(Value::as_object)
@@ -1993,7 +1954,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             .and_then(Value::as_str),
         Some("null")
     );
-
     for (schema_name, tag, values) in [
         (
             "LaneLiquidityProfile",
@@ -2049,7 +2009,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             .and_then(Value::as_str),
         Some("#/components/schemas/LaneVolatilityClass")
     );
-
     for field in [
         "total_local_amount",
         "total_xor_due",
@@ -2117,7 +2076,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
             "retired fixed-unit field leaked into the settlement receipt schema: {retired}"
         );
     }
-
     for (schema_name, field_name) in [
         ("NexusFeeReceipt", "lane_id"),
         ("NativeAmxAttestationBody", "coordinator_lane_id"),
@@ -2143,7 +2101,6 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         );
     }
 }
-
 #[test]
 fn generated_spec_documents_soracloud_private_uploaded_model_routes() {
     let doc = generate_spec();
@@ -2167,7 +2124,6 @@ fn generated_spec_documents_soracloud_private_uploaded_model_routes() {
     assert!(status_description.contains("declared_lane_count"));
     assert!(status_description.contains("active lane ids/count"));
     assert!(status_description.contains("autoscale-capacity lane ids/count"));
-
     let hf_deploy = paths
         .get("/v1/soracloud/hf/deploy")
         .and_then(Value::as_object)
@@ -2218,7 +2174,6 @@ fn generated_spec_documents_soracloud_private_uploaded_model_routes() {
             "Soracloud HF deploy header missing {header}"
         );
     }
-
     let schemas = doc
         .get("components")
         .and_then(|components| components.get("schemas"))
@@ -2279,7 +2234,6 @@ fn generated_spec_documents_soracloud_private_uploaded_model_routes() {
         assert!(properties.contains_key(key), "metadata field missing {key}");
     }
 }
-
 #[test]
 fn generated_spec_documents_app_query_page_metadata() {
     let doc = generate_spec();
@@ -2381,7 +2335,6 @@ fn generated_spec_documents_app_query_page_metadata() {
             .expect("path response schema ref");
         assert_eq!(schema_ref, expected_ref, "{method} {path}");
     }
-
     let schemas = doc
         .get("components")
         .and_then(|components| components.get("schemas"))
@@ -2422,7 +2375,6 @@ fn generated_spec_documents_app_query_page_metadata() {
             "metadata properties should include {field}"
         );
     }
-
     let repo_agreement = schemas
         .get("RepoAgreement")
         .and_then(Value::as_object)
@@ -2452,7 +2404,6 @@ fn generated_spec_documents_app_query_page_metadata() {
             "repo agreement should document {field}"
         );
     }
-
     let repo_request_properties = schemas
         .get("RepoAgreementsQueryRequest")
         .and_then(Value::as_object)
@@ -2466,7 +2417,6 @@ fn generated_spec_documents_app_query_page_metadata() {
         );
     }
 }
-
 #[test]
 fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
     let document = generate_spec();
@@ -2477,7 +2427,6 @@ fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
         ("X-Iroha-Nonce".to_owned(), false),
         ("X-Iroha-Witness".to_owned(), false),
     ];
-
     for path in ["/v1/aliases/resolve-index", "/v1/aliases/by-account"] {
         let operation = openapi_operation(&document, path, "post");
         assert_eq!(
@@ -2494,14 +2443,12 @@ fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
             "POST {path} must distinguish authorization failure from missing authentication"
         );
     }
-
     let lookup_description = openapi_operation(&document, "/v1/aliases/by-account", "post")
         .get("description")
         .and_then(Value::as_str)
         .expect("alias by-account description");
     assert!(lookup_description.contains("Canonical authentication is optional"));
     assert!(lookup_description.contains("required for restricted data"));
-
     let exact_resolve = openapi_operation(&document, "/v1/aliases/resolve", "post");
     assert_eq!(
         operation_header_requirements(exact_resolve),
@@ -2517,7 +2464,6 @@ fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
                 |description| description.contains("Public dataspaces may be read unsigned")
             )
     );
-
     let setup_plan = openapi_operation(&document, "/v1/aliases/setup/plan", "post");
     assert_eq!(
         operation_header_requirements(setup_plan),
@@ -2558,7 +2504,6 @@ fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
             .is_some_and(|responses| responses.contains_key("403")),
         "the exact alias resolve route must distinguish permission failure from missing authentication"
     );
-
     for (path, reject_code, requires_authorization_response) in [
         (
             "/v1/retail/recipients/lookup",
@@ -2594,7 +2539,6 @@ fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
         );
     }
 }
-
 #[test]
 fn protected_contract_identity_openapi_is_signed_and_exact() {
     let document = generate_spec();
@@ -2605,7 +2549,6 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         ("X-Iroha-Nonce".to_owned(), false),
         ("X-Iroha-Witness".to_owned(), false),
     ];
-
     for (path, method, response_schema, reject_code, expected_statuses) in [
         (
             "/v1/contracts/aliases/resolve",
@@ -2654,7 +2597,6 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
             "{method} {path} must document the exact fail-closed response surface"
         );
     }
-
     assert_eq!(
         operation_request_schema_ref(
             openapi_operation(&document, "/v1/contracts/aliases/resolve", "post"),
@@ -2662,7 +2604,6 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         ),
         "#/components/schemas/ContractAliasResolveRequest"
     );
-
     let schemas = document
         .get("components")
         .and_then(|components| components.get("schemas"))
@@ -2731,7 +2672,6 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
             "{name} must not advertise undeclared compatibility fields"
         );
     }
-
     let governed = schemas
         .get("GovernedContractResponse")
         .and_then(Value::as_object)
@@ -2778,7 +2718,6 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         assert_eq!(properties, expected);
     }
 }
-
 #[test]
 fn multisig_read_auth_contract_is_path_specific() {
     let document = generate_spec();
@@ -2789,7 +2728,6 @@ fn multisig_read_auth_contract_is_path_specific() {
         ("X-Iroha-Nonce".to_owned(), false),
         ("X-Iroha-Witness".to_owned(), false),
     ];
-
     for path in [
         "/v1/multisig/spec",
         "/v1/multisig/proposals/query",
@@ -2810,7 +2748,6 @@ fn multisig_read_auth_contract_is_path_specific() {
         assert!(description.contains("`multisig_account_alias` selectors require"));
         assert!(description.contains("body fields never establish signer identity"));
     }
-
     for path in [
         "/v1/multisig/propose",
         "/v1/multisig/approve",

@@ -5,7 +5,6 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         .expect("nexus status test lock");
     crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
     crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
-
     let paynet = DataSpaceId::new(7);
     let cbuae = DataSpaceId::new(8);
     let chain_id = ChainId::from("native-amx-test-chain");
@@ -57,7 +56,6 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
     }
     install_test_lane_manifests(&state);
-
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
     let tx = TransactionBuilder::new_with_time_source(
         state.network_id,
@@ -148,7 +146,6 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         .with_lane_payload_ownerships(vec![ownership]);
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     time_handle.advance(Duration::from_millis(1));
-
     let block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
         .chain(0, state.view().latest_block().as_deref())
         .with_execution_context(Some(execution_context))
@@ -170,7 +167,6 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
             .entrypoint_results()
             .collect::<Vec<_>>()
     );
-
     let statements = valid_block.as_ref().lane_finality_statements();
     assert_eq!(statements.len(), 1);
     let statement = &statements[0];
@@ -188,17 +184,14 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         plan.coordinator_route().dataspace_id,
         "lane-finality statement must use the native AMX coordinator dataspace"
     );
-
     let snapshot = crate::sumeragi::status::snapshot();
     assert!(
         snapshot.lane_settlement_commitments.is_empty() && snapshot.lane_relay_envelopes.is_empty(),
         "candidate validation must not publish process-global relay evidence before commit"
     );
-
     crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
     crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
 }
-
 fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
     let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
     let address =
@@ -219,7 +212,6 @@ fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &Doma
         norito::codec::Encode::encode(&record),
     );
 }
-
 #[allow(dead_code)]
 fn commit_block_at_height(
     state: &State,
@@ -245,7 +237,6 @@ fn commit_block_at_height(
         .expect("store committed block");
     committed.as_ref().hash()
 }
-
 #[test]
 fn map_overlay_error_labels_amx_budget() {
     let err =
@@ -277,7 +268,6 @@ fn map_overlay_error_labels_amx_budget() {
         other => panic!("unexpected rejection: {other:?}"),
     }
 }
-
 #[test]
 fn map_overlay_error_labels_amx_violation_variant() {
     let err = crate::pipeline::overlay::OverlayBuildError::AmxBudgetViolation(
@@ -310,7 +300,6 @@ fn map_overlay_error_labels_amx_violation_variant() {
         other => panic!("unexpected rejection: {other:?}"),
     }
 }
-
 #[test]
 pub fn committed_and_valid_block_hashes_are_equal() {
     let peer_key_pair =
@@ -323,18 +312,14 @@ pub fn committed_and_valid_block_hashes_are_equal() {
         .commit(&topology)
         .unpack(|_| {})
         .unwrap();
-
     assert_eq!(valid_block.as_ref().hash(), committed_block.as_ref().hash())
 }
-
 #[test]
 fn merkle_root_matches_header() {
     use std::borrow::Cow;
     let network_id = deterministic_test_network_id(0x0A);
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
-
     let log = Log::new(Level::INFO, "test".to_string());
-
     let tx1 = Box::new(
         TransactionBuilder::new(
             network_id,
@@ -346,7 +331,6 @@ fn merkle_root_matches_header() {
     );
     let tx1: &'static SignedTransaction = Box::leak(tx1);
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx1));
-
     let tx2 = Box::new(
         TransactionBuilder::new(
             network_id,
@@ -358,21 +342,17 @@ fn merkle_root_matches_header() {
     );
     let tx2: &'static SignedTransaction = Box::leak(tx2);
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx2));
-
     let block = BlockBuilder::new(vec![tx1, tx2])
         .chain(0, None)
         .sign(alice_keypair.private_key())
         .unpack(|_| {});
-
     let block: Box<SignedBlock> = Box::new(block.into());
     let mut tree: Box<MerkleTree<TransactionEntrypoint>> = Box::default();
     for tx in block.external_transactions() {
         tree.add(tx.hash_as_entrypoint());
     }
-
     assert_eq!(tree.root(), block.header().merkle_root());
 }
-
 #[test]
 fn entrypoint_merkle_bottom_up_matches_incremental_root_shapes() {
     fn sample_leaf(idx: u8) -> HashOf<TransactionEntrypoint> {
@@ -381,7 +361,6 @@ fn entrypoint_merkle_bottom_up_matches_incremental_root_shapes() {
         bytes[Hash::LENGTH - 1] = idx.wrapping_mul(17);
         HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
     }
-
     fn incremental_root(
         leaves: &[HashOf<TransactionEntrypoint>],
     ) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
@@ -391,14 +370,12 @@ fn entrypoint_merkle_bottom_up_matches_incremental_root_shapes() {
         }
         tree.root()
     }
-
     fn bottom_up_root(
         leaves: Vec<HashOf<TransactionEntrypoint>>,
     ) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
         let tree = MerkleTree::from_typed_leaves_parallel(leaves);
         tree.root()
     }
-
     for count in [1_usize, 2, 3, 4, 5, 8] {
         let leaves = (0..count)
             .map(|idx| sample_leaf(u8::try_from(idx + 1).expect("small test index")))
@@ -410,7 +387,6 @@ fn entrypoint_merkle_bottom_up_matches_incremental_root_shapes() {
         );
     }
 }
-
 #[test]
 fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
     use iroha_crypto::{Hash, HashOf};
@@ -419,7 +395,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
         da::commitment::DaCommitmentBundle,
         nexus::{DataSpaceId, LaneId},
     };
-
     let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
         Hash::prehashed([0xAB; Hash::LENGTH]),
     ));
@@ -432,7 +407,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
         0,
     );
     block_header.set_da_commitments_hash(da_hash);
-
     let lane_id = LaneId::new(2);
     let dataspace_id = DataSpaceId::new(1);
     let receipt = LaneSettlementReceipt {
@@ -458,7 +432,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-
     let mut lane_summaries = BTreeMap::new();
     lane_summaries.insert(
         lane_id,
@@ -467,7 +440,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
             ..LaneSummary::default()
         },
     );
-
     let descriptor_hash = Hash::new(b"lane-relay-helper-descriptor");
     let lane_payload_coordinates = BTreeMap::from([(
         (lane_id, dataspace_id),
@@ -477,7 +449,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
             lane_block_descriptor_hash: descriptor_hash,
         },
     )]);
-
     let missing_coordinate = lane_relay_envelopes_for_block(
         &block_header,
         da_hash,
@@ -490,7 +461,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
         missing_coordinate,
         BlockValidationError::ExecutionContextInvalid(_)
     ));
-
     let relays = lane_relay_envelopes_for_block(
         &block_header,
         da_hash,
@@ -511,7 +481,6 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
     assert_eq!(envelope.lane_block_descriptor_hash, Some(descriptor_hash));
     envelope.verify().expect("envelope should validate");
 }
-
 #[test]
 fn lane_relay_envelopes_attach_manifest_roots() {
     use iroha_crypto::{Hash, HashOf};
@@ -520,7 +489,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
         da::commitment::DaCommitmentBundle,
         nexus::{DataSpaceId, LaneId},
     };
-
     let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
         Hash::prehashed([0xAB; Hash::LENGTH]),
     ));
@@ -533,7 +501,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
         0,
     );
     block_header.set_da_commitments_hash(da_hash);
-
     let lane_id = LaneId::new(2);
     let dataspace_id = DataSpaceId::new(1);
     let receipt = LaneSettlementReceipt {
@@ -559,7 +526,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-
     let mut lane_summaries = BTreeMap::new();
     lane_summaries.insert(
         lane_id,
@@ -568,7 +534,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
             ..LaneSummary::default()
         },
     );
-
     let lane_payload_coordinates = BTreeMap::from([(
         (lane_id, dataspace_id),
         LanePayloadCoordinate {
@@ -577,7 +542,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
             lane_block_descriptor_hash: Hash::new(b"manifest-relay-descriptor"),
         },
     )]);
-
     let mut envelopes = lane_relay_envelopes_for_block(
         &block_header,
         da_hash,
@@ -590,7 +554,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
     let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
         core::iter::once((dataspace_id, manifest_root)).collect();
     attach_manifest_roots_to_relays(&mut envelopes, &manifest_roots);
-
     assert_eq!(envelopes.len(), 1);
     envelopes[0].fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
         proof_digest: Hash::new(b"test-fastpq-proof"),
@@ -602,7 +565,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
         .validate_fastpq_proof_metadata()
         .expect("FastPQ proof material must validate");
 }
-
 #[test]
 fn dag_fingerprint_stability_smoke() {
     // Build a small world and a block with two independent txs to exercise access-set derivation
@@ -632,7 +594,6 @@ fn dag_fingerprint_stability_smoke() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
-
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -661,7 +622,6 @@ fn dag_fingerprint_stability_smoke() {
         .into_iter()
         .map(|t| crate::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
         .collect();
-
     // Run twice and ensure both runs succeed (determinism covered by other tests);
     // pipeline persistence is best-effort in tests without a store dir.
     let new_block = BlockBuilder::new(acc.clone())
@@ -681,7 +641,6 @@ fn dag_fingerprint_stability_smoke() {
     let cb = vb.commit_unchecked().unpack(|_| {});
     let _ = sb.apply_without_execution(&cb, Vec::new());
     drop(sb);
-
     let new_block2 = BlockBuilder::new(acc)
         .chain(0, None)
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())

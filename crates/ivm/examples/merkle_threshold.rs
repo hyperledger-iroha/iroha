@@ -1,26 +1,21 @@
 //! Quick comparison between Metal-accelerated and CPU Merkle hashing paths.
 //! Run with `cargo run --release -p ivm --example merkle_threshold`.
-
+use ivm::{AccelerationConfig, ByteMerkleTree};
 use std::{
     env,
     fmt::Write as _,
     hint::black_box,
     time::{Duration, Instant},
 };
-
-use ivm::{AccelerationConfig, ByteMerkleTree};
-
 const CHUNK: usize = 32;
 const LEAF_COUNTS: &[usize] = &[1_024, 4_096, 8_192, 16_384, 32_768, 65_536];
 const SAMPLES: usize = 5;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policy {
     Auto,
     CpuOnly,
     AccelOnly,
 }
-
 fn build_bytes(leaves: usize) -> Vec<u8> {
     let total = leaves * CHUNK;
     let mut data = vec![0u8; total];
@@ -29,7 +24,6 @@ fn build_bytes(leaves: usize) -> Vec<u8> {
     }
     data
 }
-
 fn measure<F: FnMut()>(mut f: F) -> Duration {
     // Warm-up once to include shader compilation / pipeline setup.
     f();
@@ -41,10 +35,8 @@ fn measure<F: FnMut()>(mut f: F) -> Duration {
     }
     best
 }
-
 fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>, Option<Duration>) {
     let payload = build_bytes(leaves);
-
     // CPU baseline (Metal disabled) unless acceleration-only policy.
     let cpu = if policy != Policy::AccelOnly {
         ivm::set_acceleration_config(AccelerationConfig {
@@ -70,7 +62,6 @@ fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>,
     } else {
         None
     };
-
     // Metal acceleration measurement unless CPU-only policy.
     let metal = if policy != Policy::CpuOnly {
         ivm::reset_metal_backend_for_tests();
@@ -101,10 +92,8 @@ fn bench(leaves: usize, iterations: usize, policy: Policy) -> (Option<Duration>,
     } else {
         None
     };
-
     (cpu, metal)
 }
-
 fn main() {
     let mut output_json = false;
     let mut policy = Policy::Auto;
@@ -119,10 +108,8 @@ fn main() {
             };
         }
     }
-
     let mut rows = Vec::new();
     let mut metal_seen = false;
-
     for &leaves in LEAF_COUNTS {
         let iterations = if leaves <= 8_192 { 10 } else { 4 };
         let (cpu_opt, metal_opt) = bench(leaves, iterations, policy);
@@ -135,7 +122,6 @@ fn main() {
             metal_opt.map(|d| d.as_secs_f64() * 1_000.0),
         ));
     }
-
     if output_json {
         let mut json = String::new();
         json.push_str(&format!("{{\"metal_available\":{metal_seen},\"rows\":["));
@@ -184,7 +170,6 @@ fn main() {
             }
         }
     }
-
     // Restore defaults (Metal enabled, CUDA state unchanged).
     ivm::set_acceleration_config(AccelerationConfig {
         enable_simd: true,

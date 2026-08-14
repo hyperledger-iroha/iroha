@@ -1,9 +1,6 @@
 //! Roundtrip tests for container decoders using reusable scratch buffers.
-
-use std::collections::{BinaryHeap, LinkedList, VecDeque};
-
 use norito::{core, decode_from_bytes, to_bytes};
-
+use std::collections::{BinaryHeap, LinkedList, VecDeque};
 #[test]
 fn vec_nested_roundtrip_sequential() {
     let mut outer: Vec<Vec<u8>> = Vec::new();
@@ -20,7 +17,6 @@ fn vec_nested_roundtrip_sequential() {
             .collect();
         outer.push(inner);
     }
-
     let payload = (outer.clone(), 0xfeed_beefu64);
     let bytes = to_bytes(&payload).expect("encode sequential payload");
     let flags = bytes[core::Header::SIZE - 1];
@@ -37,12 +33,10 @@ fn vec_nested_roundtrip_sequential() {
         core::header_flags::COMPACT_LEN,
         "sequential default should advertise compact lengths"
     );
-
     let decoded: (Vec<Vec<u8>>, u64) = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(decoded.0, outer);
     assert_eq!(decoded.1, 0xfeed_beefu64);
 }
-
 #[test]
 fn vecdeque_roundtrip() {
     let mut vd: VecDeque<String> = VecDeque::new();
@@ -53,7 +47,6 @@ fn vecdeque_roundtrip() {
     let out: VecDeque<String> = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(vd, out);
 }
-
 #[test]
 fn linkedlist_roundtrip() {
     let mut ll: LinkedList<String> = LinkedList::new();
@@ -64,7 +57,6 @@ fn linkedlist_roundtrip() {
     let out: LinkedList<String> = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(ll, out);
 }
-
 #[test]
 fn binaryheap_roundtrip() {
     let mut heap: BinaryHeap<i64> = BinaryHeap::new();

@@ -4,12 +4,10 @@
 //!
 //! C ABI: `json_stage1_build_tape(input_ptr, input_len, out_offsets, out_capacity, out_len)`
 //! Returns 0 on success, non-zero on failure.
-
 #[cfg(crc64_cuda_available)]
 unsafe extern "C" {
     fn norito_crc64_cuda_impl(input_ptr: *const u8, input_len: usize, out_crc: *mut u64) -> i32;
 }
-
 #[cfg(jsonstage1_cuda_available)]
 unsafe extern "C" {
     fn json_stage1_build_tape_cuda_impl(
@@ -20,7 +18,6 @@ unsafe extern "C" {
         out_len: *mut usize,
     ) -> i32;
 }
-
 #[allow(dead_code)]
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
@@ -36,14 +33,12 @@ const FLAG_COMPACT_LEN: u8 = 0x02;
 const LAYOUT_LENGTH_PREFIXED: u32 = 0;
 #[allow(dead_code)]
 const LAYOUT_FIXED_OFFSETS: u32 = 1;
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NoritoSequenceSpan {
     start: usize,
     end: usize,
 }
-
 #[cfg(jsonstage1_cuda_available)]
 unsafe extern "C" {
     fn norito_sequence_plan_cuda_impl(
@@ -57,7 +52,6 @@ unsafe extern "C" {
         out_used: *mut usize,
     ) -> i32;
 }
-
 #[cfg_attr(any(not(test), jsonstage1_cuda_available), allow(dead_code))]
 fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize {
     let mut count = 0usize;
@@ -90,7 +84,6 @@ fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize
             base += 1;
             continue;
         }
-
         match c {
             b'"' => {
                 emit(base as u32);
@@ -109,7 +102,6 @@ fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize
     }
     count
 }
-
 /// Build a structural tape (offsets) for the given JSON input.
 ///
 /// # Safety
@@ -137,7 +129,6 @@ pub unsafe extern "C" fn json_stage1_build_tape(
         RC_GPU_UNAVAILABLE
     }
 }
-
 #[cfg_attr(any(not(test), jsonstage1_cuda_available), allow(dead_code))]
 unsafe fn json_stage1_build_tape_cpu(
     input_ptr: *const u8,
@@ -166,7 +157,6 @@ unsafe fn json_stage1_build_tape_cpu(
     debug_assert_eq!(written, need);
     0
 }
-
 #[cfg_attr(any(not(test), crc64_cuda_available), allow(dead_code))]
 fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     const POLY: u64 = 0xC96C_5795_D787_0F42;
@@ -183,7 +173,6 @@ fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     }
     crc
 }
-
 #[cfg_attr(any(not(test), crc64_cuda_available), allow(dead_code))]
 fn crc64_cpu(bytes: &[u8]) -> u64 {
     const INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -191,7 +180,6 @@ fn crc64_cpu(bytes: &[u8]) -> u64 {
     let crc = crc64_raw(bytes, INIT);
     crc ^ XOR_OUT
 }
-
 /// Compute CRC64-XZ using the CUDA helper.
 ///
 /// # Safety
@@ -216,7 +204,6 @@ pub unsafe extern "C" fn norito_crc64_cuda(
         RC_GPU_UNAVAILABLE
     }
 }
-
 /// Plan Norito binary sequence element spans through the helper ABI.
 ///
 /// # Safety
@@ -238,7 +225,6 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
     if out_capacity > 0 && out_spans.is_null() {
         return RC_INVALID;
     }
-
     #[cfg(jsonstage1_cuda_available)]
     {
         unsafe {
@@ -254,7 +240,6 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
             )
         }
     }
-
     #[cfg(not(jsonstage1_cuda_available))]
     {
         let _ = (input_len, flags, layout_kind, out_spans, out_capacity);
@@ -265,7 +250,6 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
         RC_GPU_UNAVAILABLE
     }
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
@@ -274,7 +258,6 @@ enum PlanError {
     Unavailable,
     Backend,
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn plan_sequence_cpu(
@@ -340,7 +323,6 @@ fn plan_sequence_cpu(
         _ => Err(PlanError::Unavailable),
     }
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn read_seq_len(bytes: &[u8]) -> Result<(usize, usize), PlanError> {
@@ -348,7 +330,6 @@ fn read_seq_len(bytes: &[u8]) -> Result<(usize, usize), PlanError> {
     let len = usize::try_from(raw).map_err(|_| PlanError::Invalid)?;
     Ok((len, 8))
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn read_u64(bytes: &[u8], idx: usize) -> Result<u64, PlanError> {
@@ -358,7 +339,6 @@ fn read_u64(bytes: &[u8], idx: usize) -> Result<u64, PlanError> {
     buf.copy_from_slice(bytes.get(start..end).ok_or(PlanError::Invalid)?);
     Ok(u64::from_le_bytes(buf))
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn read_value_len(bytes: &[u8], flags: u8) -> Result<(usize, usize), PlanError> {
@@ -369,7 +349,6 @@ fn read_value_len(bytes: &[u8], flags: u8) -> Result<(usize, usize), PlanError> 
     let len = usize::try_from(value).map_err(|_| PlanError::Invalid)?;
     Ok((len, used))
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn decode_varint(bytes: &[u8]) -> Result<(u64, usize), PlanError> {
@@ -392,7 +371,6 @@ fn decode_varint(bytes: &[u8]) -> Result<(u64, usize), PlanError> {
     }
     Err(PlanError::Invalid)
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn varint_len(mut value: u64) -> usize {
@@ -403,7 +381,6 @@ fn varint_len(mut value: u64) -> usize {
     }
     len
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -411,16 +388,13 @@ mod tests {
         crc64_raw, json_stage1_build_tape, json_stage1_build_tape_cpu, norito_binary_sequence_plan,
         norito_crc64_cuda, plan_sequence_cpu, scan_structural_offsets,
     };
-
     const CRC_123456789: u64 = 0x995D_C9BB_DF19_39FA;
     const CHUNK_SIZE: usize = 16 * 1024;
     const CRC64_INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const CRC64_XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-
     fn cuda_required() -> bool {
         std::env::var_os("JSONSTAGE1_CUDA_REQUIRE").is_some()
     }
-
     fn skip_if_unavailable(rc: i32, helper: &str) -> bool {
         if rc == RC_GPU_UNAVAILABLE {
             if cuda_required() {
@@ -434,13 +408,11 @@ mod tests {
             false
         }
     }
-
     fn reference_offsets(input: &[u8]) -> Vec<u32> {
         let mut expected = Vec::new();
         scan_structural_offsets(input, |offset| expected.push(offset));
         expected
     }
-
     fn lcg_payload(len: usize, mut seed: u64) -> Vec<u8> {
         let mut out = Vec::with_capacity(len);
         for _ in 0..len {
@@ -449,7 +421,6 @@ mod tests {
         }
         out
     }
-
     fn fixed_offset_sequence(offsets: &[u64], data: &[u8]) -> Vec<u8> {
         assert!(!offsets.is_empty());
         let mut bytes = Vec::new();
@@ -460,7 +431,6 @@ mod tests {
         bytes.extend_from_slice(data);
         bytes
     }
-
     #[test]
     fn basic_offsets() {
         let s = b"{\"a\":1}";
@@ -473,7 +443,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, vec![0, 1, 3, 4, 6]);
     }
-
     #[test]
     fn escaped_quotes_keep_string_state_aligned() {
         let s = b"{\"a\":\"b\\\"c\"}";
@@ -486,7 +455,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, vec![0, 1, 3, 4, 5, 10, 11]);
     }
-
     #[test]
     fn even_backslashes_do_not_escape_quote() {
         let s = br#"{"a":"b\\" ,"c":1}"#;
@@ -499,7 +467,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, vec![0, 1, 3, 4, 5, 9, 11, 12, 14, 15, 17]);
     }
-
     #[test]
     fn backslashes_outside_strings_do_not_escape_quotes() {
         let s = br#"{\"a\":1}"#;
@@ -512,7 +479,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, vec![0, 2]);
     }
-
     #[test]
     fn capacity_errors_still_report_required_length() {
         let s = b"{\"a\":1}";
@@ -524,14 +490,12 @@ mod tests {
         assert_eq!(rc, 2);
         assert_eq!(len, 5);
     }
-
     #[test]
     fn public_ffi_rejects_null_pointers() {
         let s = b"{\"a\":1}";
         let mut out = [0u32; 8];
         let mut len = 0usize;
         let mut crc = 0u64;
-
         let rc = unsafe {
             json_stage1_build_tape(
                 std::ptr::null(),
@@ -542,12 +506,10 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe {
             json_stage1_build_tape(s.as_ptr(), s.len(), std::ptr::null_mut(), 0, &mut len)
         };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe {
             json_stage1_build_tape(
                 s.as_ptr(),
@@ -558,14 +520,11 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe { norito_crc64_cuda(std::ptr::null(), s.len(), &mut crc) };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe { norito_crc64_cuda(s.as_ptr(), s.len(), std::ptr::null_mut()) };
         assert_eq!(rc, RC_INVALID);
     }
-
     #[test]
     fn public_ffi_rejects_sequence_planner_null_control_pointers() {
         let mut bytes = Vec::new();
@@ -573,7 +532,6 @@ mod tests {
         let mut spans = [NoritoSequenceSpan { start: 0, end: 0 }; 1];
         let mut count = 0usize;
         let mut used = 0usize;
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 std::ptr::null(),
@@ -587,7 +545,6 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 bytes.as_ptr(),
@@ -601,7 +558,6 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 bytes.as_ptr(),
@@ -615,7 +571,6 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_INVALID);
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 bytes.as_ptr(),
@@ -630,7 +585,6 @@ mod tests {
         };
         assert_eq!(rc, RC_INVALID);
     }
-
     #[test]
     fn cpu_stage1_empty_input_reports_zero_offsets() {
         let s = b"";
@@ -642,7 +596,6 @@ mod tests {
         assert_eq!(rc, 0);
         assert_eq!(len, 0);
     }
-
     #[test]
     fn binary_sequence_plan_fixed_offsets() {
         let mut bytes = Vec::new();
@@ -651,7 +604,6 @@ mod tests {
             bytes.extend_from_slice(&offset.to_le_bytes());
         }
         bytes.extend_from_slice(b"abcdef");
-
         let mut spans = vec![NoritoSequenceSpan { start: 0, end: 0 }; 3];
         let mut count = 0usize;
         let mut used = 0usize;
@@ -680,7 +632,6 @@ mod tests {
         assert_eq!(spans[2].end, 46);
         assert_eq!(used, bytes.len());
     }
-
     #[test]
     fn binary_sequence_plan_unknown_layout_is_not_accepted() {
         let bytes = 0u64.to_le_bytes();
@@ -700,7 +651,6 @@ mod tests {
         };
         assert_eq!(rc, RC_GPU_UNAVAILABLE);
     }
-
     #[test]
     fn cuda_sequence_plan_capacity_reports_required_count_when_available() {
         let mut bytes = Vec::new();
@@ -709,7 +659,6 @@ mod tests {
             bytes.extend_from_slice(&offset.to_le_bytes());
         }
         bytes.extend_from_slice(b"abcdef");
-
         let mut spans = vec![
             NoritoSequenceSpan {
                 start: usize::MAX,
@@ -744,7 +693,6 @@ mod tests {
             "capacity rejection must not write partial sequence spans"
         );
     }
-
     #[test]
     fn cuda_sequence_plan_rejects_descending_fixed_offsets_when_available() {
         let mut bytes = Vec::new();
@@ -753,7 +701,6 @@ mod tests {
             bytes.extend_from_slice(&offset.to_le_bytes());
         }
         bytes.extend_from_slice(b"abc");
-
         let mut spans = vec![NoritoSequenceSpan { start: 0, end: 0 }; 2];
         let mut count = 0usize;
         let mut used = 0usize;
@@ -775,7 +722,6 @@ mod tests {
         assert_eq!(rc, RC_INVALID);
         assert_eq!(count, 2);
     }
-
     #[test]
     fn reference_sequence_plan_rejects_adversarial_shapes() {
         let descending_offsets = fixed_offset_sequence(&[0, 1, 0, 2], b"ab");
@@ -783,7 +729,6 @@ mod tests {
             plan_sequence_cpu(&descending_offsets, 0, super::LAYOUT_FIXED_OFFSETS),
             Err(PlanError::Invalid)
         ));
-
         let mut truncated_length_prefixed = Vec::new();
         truncated_length_prefixed.extend_from_slice(&2u64.to_le_bytes());
         truncated_length_prefixed.extend_from_slice(&1u64.to_le_bytes());
@@ -794,7 +739,6 @@ mod tests {
             plan_sequence_cpu(&truncated_length_prefixed, 0, super::LAYOUT_LENGTH_PREFIXED),
             Err(PlanError::Invalid)
         ));
-
         let mut non_canonical_compact = Vec::new();
         non_canonical_compact.extend_from_slice(&1u64.to_le_bytes());
         non_canonical_compact.extend_from_slice(&[0x80, 0x00]);
@@ -807,7 +751,6 @@ mod tests {
             Err(PlanError::Invalid)
         ));
     }
-
     #[test]
     fn cuda_sequence_plan_invalid_fixed_offsets_do_not_publish_partial_spans_when_available() {
         let bytes = fixed_offset_sequence(&[0, 1, 0, 2], b"ab");
@@ -818,7 +761,6 @@ mod tests {
         let mut spans = vec![sentinel; 3];
         let mut count = 0usize;
         let mut used = usize::MAX;
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 bytes.as_ptr(),
@@ -844,7 +786,6 @@ mod tests {
             "invalid fixed-offset plans must not expose partially written CUDA spans"
         );
     }
-
     #[test]
     fn cuda_sequence_plan_invalid_length_prefix_do_not_publish_partial_spans_when_available() {
         let mut bytes = Vec::new();
@@ -860,7 +801,6 @@ mod tests {
         let mut spans = vec![sentinel; 2];
         let mut count = 0usize;
         let mut used = usize::MAX;
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 bytes.as_ptr(),
@@ -886,7 +826,6 @@ mod tests {
             "invalid length-prefixed plans must not expose partially written CUDA spans"
         );
     }
-
     #[test]
     fn cuda_sequence_plan_rejects_impossible_length_prefixed_count_when_available() {
         let mut bytes = Vec::new();
@@ -898,7 +837,6 @@ mod tests {
         let mut spans = vec![sentinel; 100];
         let mut count = 0usize;
         let mut used = usize::MAX;
-
         let rc = unsafe {
             norito_binary_sequence_plan(
                 bytes.as_ptr(),
@@ -924,7 +862,6 @@ mod tests {
             "impossible declared counts must fail before publishing CUDA spans"
         );
     }
-
     #[test]
     fn cpu_stage1_exact_capacity_writes_offsets() {
         let s = br#"{"exact":[1,2,3]}"#;
@@ -938,7 +875,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, expected);
     }
-
     #[test]
     fn cpu_stage1_zero_capacity_reports_required_length() {
         let s = br#"{"zero":[1,2,3]}"#;
@@ -951,12 +887,10 @@ mod tests {
         assert_eq!(rc, 2);
         assert_eq!(len, expected.len());
     }
-
     #[test]
     fn crc64_cpu_empty_matches_xz_identity() {
         assert_eq!(crc64_cpu(b""), 0);
     }
-
     #[test]
     fn public_cuda_entrypoints_handle_empty_inputs_without_device_work() {
         let s = b"";
@@ -976,7 +910,6 @@ mod tests {
         }
         assert_eq!(rc, 0);
         assert_eq!(len, 0);
-
         let mut crc = u64::MAX;
         let rc = unsafe { norito_crc64_cuda(s.as_ptr(), s.len(), &mut crc) };
         if skip_if_unavailable(rc, "jsonstage1_cuda CRC64") {
@@ -985,7 +918,6 @@ mod tests {
         assert_eq!(rc, 0);
         assert_eq!(crc, 0);
     }
-
     #[test]
     fn cuda_stage1_zero_capacity_reports_required_len_when_available() {
         let s = br#"{"zero":[1,2,3],"quoted":"a\"b"}"#;
@@ -1000,12 +932,10 @@ mod tests {
         assert_eq!(rc, 2);
         assert_eq!(len, expected.len());
     }
-
     #[test]
     fn cuda_stage1_matches_reference_when_available() {
         let s = br#"{"left":[1,2],"right":{"quoted":"a\"b"}}"#;
         let expected = reference_offsets(s);
-
         let mut out = vec![0u32; expected.len() + 8];
         let mut len = 0usize;
         let rc = unsafe {
@@ -1018,7 +948,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, expected);
     }
-
     #[test]
     fn cuda_stage1_exact_capacity_matches_reference_when_available() {
         let s = br#"{"exact":[1,2,3],"quoted":"a\"b"}"#;
@@ -1035,7 +964,6 @@ mod tests {
         out.truncate(len);
         assert_eq!(out, expected);
     }
-
     #[test]
     fn cuda_stage1_corpus_matches_reference_when_available() {
         let mut docs = vec![
@@ -1044,7 +972,6 @@ mod tests {
             br#"[{"nested":{"x":[1,2,3]}},{"empty":{}},{"arr":[]}]"#.to_vec(),
             br#"{\"invalid_but_scalar_defined\":1}"#.to_vec(),
         ];
-
         let mut boundary = String::from("{\"pad\":\"");
         boundary.push_str(&"a".repeat(31));
         boundary.push_str("\\\\\\\"");
@@ -1052,7 +979,6 @@ mod tests {
         boundary.push_str(&"z".repeat(65));
         boundary.push_str("\"}");
         docs.push(boundary.into_bytes());
-
         let mut large = String::from("{\"rows\":[");
         for idx in 0..2048 {
             if idx != 0 {
@@ -1066,7 +992,6 @@ mod tests {
         }
         large.push_str("]}");
         docs.push(large.into_bytes());
-
         for doc in docs {
             let expected = reference_offsets(&doc);
             let mut out = vec![0u32; expected.len() + 16];
@@ -1088,7 +1013,6 @@ mod tests {
             assert_eq!(out, expected);
         }
     }
-
     #[test]
     fn cuda_stage1_capacity_reports_required_len_when_available() {
         let s = br#"{"capacity":[1,2,3],"quoted":"a\"b"}"#;
@@ -1104,7 +1028,6 @@ mod tests {
         assert_eq!(rc, 2);
         assert_eq!(len, expected.len());
     }
-
     #[test]
     fn scanner_counts_match_written_offsets() {
         let s = br#"{"left":[1,2],"right":{"quoted":"a\"b"}}"#;
@@ -1113,7 +1036,6 @@ mod tests {
         assert_eq!(count, offsets.len());
         assert!(!offsets.is_empty());
     }
-
     #[test]
     fn crc64_matches_reference() {
         let data = b"123456789";
@@ -1125,7 +1047,6 @@ mod tests {
         assert_eq!(rc, 0);
         assert_eq!(out, CRC_123456789);
     }
-
     #[test]
     fn cuda_crc64_large_payload_matches_cpu_when_available() {
         let data = lcg_payload(2 * CHUNK_SIZE + 333, 0xa5a5_0123_dead_beef);
@@ -1137,13 +1058,11 @@ mod tests {
         assert_eq!(rc, 0);
         assert_eq!(out, crc64_cpu(&data));
     }
-
     #[test]
     fn cuda_required_env_fails_if_helpers_are_not_accelerated() {
         if !cuda_required() {
             return;
         }
-
         let s = br#"{"required":"cuda","array":[1,2,3],"quoted":"a\"b"}"#;
         let expected = reference_offsets(s);
         let mut out = vec![0u32; expected.len() + 4];
@@ -1154,40 +1073,33 @@ mod tests {
         assert_eq!(rc, 0, "JSONSTAGE1_CUDA_REQUIRE requires Stage-1 CUDA");
         out.truncate(len);
         assert_eq!(out, expected);
-
         let mut crc = 0u64;
         let rc = unsafe { norito_crc64_cuda(s.as_ptr(), s.len(), &mut crc) };
         assert_eq!(rc, 0, "JSONSTAGE1_CUDA_REQUIRE requires CUDA CRC64");
         assert_eq!(crc, crc64_cpu(s));
     }
-
     #[test]
     fn chunked_combine_matches_full_crc() {
         let data = (0u32..(CHUNK_SIZE as u32 + 3_333))
             .flat_map(|v| v.to_le_bytes())
             .collect::<Vec<u8>>();
-
         let mut combined = CRC64_INIT;
         for chunk in data.chunks(CHUNK_SIZE) {
             let part = crc64_raw(chunk, 0);
             combined = crc64_combine_raw(combined, part, chunk.len());
         }
-
         let full = crc64_cpu(&data);
         assert_eq!(combined ^ CRC64_XOR_OUT, full);
     }
-
     fn crc64_combine_raw(crc1: u64, crc2: u64, len2: usize) -> u64 {
         let shifted = crc64_shift(crc1, len2);
         shifted ^ crc2
     }
-
     fn crc64_shift(mut crc1: u64, len2: usize) -> u64 {
         const POLY: u64 = 0xC96C_5795_D787_0F42;
         if len2 == 0 {
             return crc1;
         }
-
         let mut mat = [0u64; 64];
         let mut square = [0u64; 64];
         let mut row = 1u64;
@@ -1196,7 +1108,6 @@ mod tests {
             *slot = row;
             row <<= 1;
         }
-
         fn gf2_matrix_times(mat: &[u64; 64], mut vec: u64) -> u64 {
             let mut sum = 0;
             let mut idx = 0;
@@ -1209,13 +1120,11 @@ mod tests {
             }
             sum
         }
-
         fn gf2_matrix_square(square: &mut [u64; 64], mat: &[u64; 64]) {
             for n in 0..64 {
                 square[n] = gf2_matrix_times(mat, mat[n]);
             }
         }
-
         let mut len_bits = len2 as u64 * 8;
         while len_bits != 0 {
             if len_bits & 1 != 0 {
@@ -1225,7 +1134,6 @@ mod tests {
             mat = square;
             len_bits >>= 1;
         }
-
         crc1
     }
 }

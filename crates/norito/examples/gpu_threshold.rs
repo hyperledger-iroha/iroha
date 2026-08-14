@@ -1,18 +1,15 @@
 //! Quick-and-dirty benchmark to compare Norito GPU compression against the CPU fallback.
 //! Run with `cargo run --release -p norito --example gpu_threshold` on a host
 //! that has Metal (Apple Silicon) or CUDA kernels available.
-
+#[cfg(feature = "gpu-compression")]
+use norito::core::{gpu_zstd, heuristics::compress_auto, hw};
+#[cfg(not(feature = "gpu-compression"))]
+use norito::core::{heuristics::compress_auto, hw};
 use std::{
     env,
     fmt::Write as _,
     time::{Duration, Instant},
 };
-
-#[cfg(feature = "gpu-compression")]
-use norito::core::{gpu_zstd, heuristics::compress_auto, hw};
-#[cfg(not(feature = "gpu-compression"))]
-use norito::core::{heuristics::compress_auto, hw};
-
 const SIZES: &[usize] = &[
     64 * 1024,
     256 * 1024,
@@ -23,14 +20,12 @@ const SIZES: &[usize] = &[
     8 * 1024 * 1024,
 ];
 const SAMPLES: usize = 5;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policy {
     Auto,
     CpuOnly,
     AccelOnly,
 }
-
 fn build_payload(len: usize) -> Vec<u8> {
     let mut data = vec![0u8; len];
     for (idx, byte) in data.iter_mut().enumerate() {
@@ -39,7 +34,6 @@ fn build_payload(len: usize) -> Vec<u8> {
     }
     data
 }
-
 fn measure<F: FnMut()>(mut f: F) -> Duration {
     // Warm-up run to amortize first-call setup (e.g., Metal pipeline compilation).
     f();
@@ -52,7 +46,6 @@ fn measure<F: FnMut()>(mut f: F) -> Duration {
     }
     best
 }
-
 fn bench_size(
     len: usize,
     iterations: usize,
@@ -60,7 +53,6 @@ fn bench_size(
 ) -> (Option<Duration>, Option<Duration>) {
     let payload = build_payload(len);
     let baseline_policy = hw::gpu_policy_allowed();
-
     // CPU baseline (GPU policy disabled) unless caller requested acceleration-only.
     let cpu_time = if policy != Policy::AccelOnly {
         hw::set_gpu_compression_allowed(false);
@@ -78,7 +70,6 @@ fn bench_size(
     } else {
         None
     };
-
     // Attempt GPU measurement (policy enabled) unless CPU-only.
     let gpu_time = if policy != Policy::CpuOnly {
         #[cfg(feature = "gpu-compression")]
@@ -108,11 +99,9 @@ fn bench_size(
     } else {
         None
     };
-
     hw::set_gpu_compression_allowed(baseline_policy);
     (cpu_time, gpu_time)
 }
-
 fn main() {
     let mut output_json = false;
     let mut policy = Policy::Auto;
@@ -129,7 +118,6 @@ fn main() {
     }
     let mut rows = Vec::new();
     let mut gpu_available = false;
-
     for &size in SIZES {
         let iterations = if size <= 512 * 1024 { 20 } else { 8 };
         let (cpu_opt, gpu_opt) = bench_size(size, iterations, policy);
@@ -142,7 +130,6 @@ fn main() {
             gpu_opt.map(|d| d.as_secs_f64() * 1_000.0),
         ));
     }
-
     if output_json {
         let mut json = String::new();
         json.push_str(&format!("{{\"gpu_available\":{gpu_available},\"rows\":["));

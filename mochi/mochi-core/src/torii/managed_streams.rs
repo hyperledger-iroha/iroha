@@ -1,6 +1,5 @@
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(8);
-
 /// Reconnecting wrapper around [`BlockStream`] that automatically retries with backoff.
 #[derive(Debug)]
 pub struct ManagedBlockStream {
@@ -9,7 +8,6 @@ pub struct ManagedBlockStream {
     worker: JoinHandle<()>,
     alias: Arc<str>,
 }
-
 impl ManagedBlockStream {
     /// Spawn a reconnection loop for `/v1/blocks/stream` using the provided runtime handle.
     ///
@@ -21,7 +19,6 @@ impl ManagedBlockStream {
             async move { client.subscribe_block_stream().await }
         })
     }
-
     fn spawn_with_factory<F, Fut>(handle: &Handle, alias: impl Into<String>, factory: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -37,7 +34,6 @@ impl ManagedBlockStream {
         let worker = handle.spawn(async move {
             run_managed_block_stream(run_alias, run_factory, run_sender, &mut shutdown_rx).await;
         });
-
         Self {
             sender,
             shutdown,
@@ -45,12 +41,10 @@ impl ManagedBlockStream {
             alias,
         }
     }
-
     /// Acquire a receiver that yields decoded block events with reconnection semantics.
     pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
         self.sender.subscribe()
     }
-
     /// Abort the reconnection loop and underlying subscription, if running.
     pub fn abort(&self) {
         let _ = self.shutdown.send(true);
@@ -58,24 +52,20 @@ impl ManagedBlockStream {
             self.worker.abort();
         }
     }
-
     /// Returns `true` when the reconnection loop has finished executing.
     pub fn is_finished(&self) -> bool {
         self.worker.is_finished()
     }
-
     /// Returns the alias associated with this managed stream.
     pub fn alias(&self) -> &str {
         self.alias.as_ref()
     }
 }
-
 impl Drop for ManagedBlockStream {
     fn drop(&mut self) {
         self.abort();
     }
 }
-
 async fn run_managed_block_stream<F, Fut>(
     alias: Arc<str>,
     factory: Arc<F>,
@@ -91,7 +81,6 @@ async fn run_managed_block_stream<F, Fut>(
         if shutdown_requested(shutdown) {
             break;
         }
-
         let subscription = match (factory.as_ref())().await {
             Ok(subscription) => subscription,
             Err(err) => {
@@ -108,7 +97,6 @@ async fn run_managed_block_stream<F, Fut>(
                         alias.as_ref()
                     ),
                 });
-
                 if wait_for_shutdown_or_delay(shutdown, backoff).await {
                     break;
                 }
@@ -116,7 +104,6 @@ async fn run_managed_block_stream<F, Fut>(
                 continue;
             }
         };
-
         if has_connected {
             let _ = sender.send(BlockStreamEvent::Text {
                 text: format!("Block stream `{}` reconnected.", alias.as_ref()),
@@ -128,7 +115,6 @@ async fn run_managed_block_stream<F, Fut>(
         let block_stream = BlockStream::new(subscription);
         let mut receiver = block_stream.subscribe();
         let mut should_stop = false;
-
         loop {
             tokio::select! {
                 changed = shutdown.changed() => {
@@ -165,18 +151,15 @@ async fn run_managed_block_stream<F, Fut>(
                 }
             }
         }
-
         block_stream.abort();
         if should_stop || shutdown_requested(shutdown) {
             break;
         }
-
         if wait_for_shutdown_or_delay(shutdown, backoff).await {
             break;
         }
     }
 }
-
 /// Reconnecting wrapper around [`EventStream`] with exponential backoff.
 #[derive(Debug)]
 pub struct ManagedEventStream {
@@ -185,7 +168,6 @@ pub struct ManagedEventStream {
     worker: JoinHandle<()>,
     alias: Arc<str>,
 }
-
 impl ManagedEventStream {
     /// Spawn a reconnection loop for `/v1/events/ws` using the provided runtime handle.
     pub fn spawn(handle: &Handle, alias: String, client: ToriiClient) -> Self {
@@ -194,7 +176,6 @@ impl ManagedEventStream {
             async move { client.subscribe_events_stream().await }
         })
     }
-
     fn spawn_with_factory<F, Fut>(handle: &Handle, alias: impl Into<String>, factory: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -210,7 +191,6 @@ impl ManagedEventStream {
         let worker = handle.spawn(async move {
             run_managed_event_stream(run_alias, run_factory, run_sender, &mut shutdown_rx).await;
         });
-
         Self {
             sender,
             shutdown,
@@ -218,12 +198,10 @@ impl ManagedEventStream {
             alias,
         }
     }
-
     /// Acquire a receiver that yields decoded events with reconnection semantics.
     pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
         self.sender.subscribe()
     }
-
     /// Abort the reconnection loop and underlying subscription, if running.
     pub fn abort(&self) {
         let _ = self.shutdown.send(true);
@@ -231,24 +209,20 @@ impl ManagedEventStream {
             self.worker.abort();
         }
     }
-
     /// Returns `true` when the reconnection loop has finished executing.
     pub fn is_finished(&self) -> bool {
         self.worker.is_finished()
     }
-
     /// Returns the alias associated with this managed stream.
     pub fn alias(&self) -> &str {
         self.alias.as_ref()
     }
 }
-
 impl Drop for ManagedEventStream {
     fn drop(&mut self) {
         self.abort();
     }
 }
-
 async fn run_managed_event_stream<F, Fut>(
     alias: Arc<str>,
     factory: Arc<F>,
@@ -264,7 +238,6 @@ async fn run_managed_event_stream<F, Fut>(
         if shutdown_requested(shutdown) {
             break;
         }
-
         let subscription = match (factory.as_ref())().await {
             Ok(subscription) => subscription,
             Err(err) => {
@@ -281,7 +254,6 @@ async fn run_managed_event_stream<F, Fut>(
                         alias.as_ref()
                     ),
                 });
-
                 if wait_for_shutdown_or_delay(shutdown, backoff).await {
                     break;
                 }
@@ -289,7 +261,6 @@ async fn run_managed_event_stream<F, Fut>(
                 continue;
             }
         };
-
         if has_connected {
             let _ = sender.send(EventStreamEvent::Text {
                 text: format!("Event stream `{}` reconnected.", alias.as_ref()),
@@ -301,7 +272,6 @@ async fn run_managed_event_stream<F, Fut>(
         let event_stream = EventStream::new(subscription);
         let mut receiver = event_stream.subscribe();
         let mut should_stop = false;
-
         loop {
             tokio::select! {
                 changed = shutdown.changed() => {
@@ -338,18 +308,15 @@ async fn run_managed_event_stream<F, Fut>(
                 }
             }
         }
-
         event_stream.abort();
         if should_stop || shutdown_requested(shutdown) {
             break;
         }
-
         if wait_for_shutdown_or_delay(shutdown, backoff).await {
             break;
         }
     }
 }
-
 /// Events emitted by the status polling helper.
 #[derive(Debug, Clone)]
 pub enum StatusStreamEvent {
@@ -378,7 +345,6 @@ pub enum StatusStreamEvent {
     /// Status polling loop exited.
     Closed,
 }
-
 /// Configuration values used when spawning [`ManagedStatusStream`].
 #[derive(Debug, Clone)]
 pub struct StatusStreamOptions {
@@ -389,7 +355,6 @@ pub struct StatusStreamOptions {
     /// throttle sampling to at most once per interval.
     pub metrics_poll_interval: Option<Duration>,
 }
-
 impl StatusStreamOptions {
     /// Create options with the supplied poll interval and default metrics behaviour.
     #[must_use]
@@ -399,7 +364,6 @@ impl StatusStreamOptions {
             metrics_poll_interval: None,
         }
     }
-
     /// Override the metrics refresh cadence.
     #[must_use]
     pub const fn with_metrics_poll_interval(mut self, interval: Option<Duration>) -> Self {
@@ -407,7 +371,6 @@ impl StatusStreamOptions {
         self
     }
 }
-
 /// Periodic status poller with exponential backoff on failures.
 #[derive(Debug)]
 pub struct ManagedStatusStream {
@@ -416,7 +379,6 @@ pub struct ManagedStatusStream {
     worker: JoinHandle<()>,
     alias: Arc<str>,
 }
-
 impl ManagedStatusStream {
     /// Spawn a polling loop that fetches `/status` on the requested interval.
     ///
@@ -436,7 +398,6 @@ impl ManagedStatusStream {
             StatusStreamOptions::new(poll_interval),
         )
     }
-
     /// Spawn a polling loop using the supplied options.
     pub fn spawn_with_options(
         handle: &Handle,
@@ -461,7 +422,6 @@ impl ManagedStatusStream {
             )
             .await;
         });
-
         Self {
             sender,
             shutdown,
@@ -469,12 +429,10 @@ impl ManagedStatusStream {
             alias,
         }
     }
-
     /// Acquire a receiver yielding poll results and failure notices.
     pub fn subscribe(&self) -> broadcast::Receiver<StatusStreamEvent> {
         self.sender.subscribe()
     }
-
     /// Abort the polling loop immediately.
     pub fn abort(&self) {
         let _ = self.shutdown.send(true);
@@ -482,31 +440,26 @@ impl ManagedStatusStream {
             self.worker.abort();
         }
     }
-
     /// Returns `true` once the polling loop has terminated.
     pub fn is_finished(&self) -> bool {
         self.worker.is_finished()
     }
-
     /// Returns the alias associated with this status stream.
     pub fn alias(&self) -> &str {
         self.alias.as_ref()
     }
 }
-
 impl Drop for ManagedStatusStream {
     fn drop(&mut self) {
         self.abort();
     }
 }
-
 #[derive(Default)]
 struct MetricsCache {
     last_snapshot: Option<Arc<ToriiMetricsSnapshot>>,
     last_error: Option<ToriiErrorInfo>,
     last_poll: Option<Instant>,
 }
-
 async fn run_managed_status_stream(
     _alias: Arc<str>,
     client: ToriiClient,
@@ -519,12 +472,10 @@ async fn run_managed_status_stream(
     let mut metrics_cache = MetricsCache::default();
     let poll_interval = options.poll_interval;
     let metrics_interval = options.metrics_poll_interval;
-
     loop {
         if shutdown_requested(shutdown) {
             break;
         }
-
         match client.fetch_status_snapshot().await {
             Ok(snapshot) => {
                 let snapshot_arc = Arc::new(snapshot);
@@ -561,7 +512,6 @@ async fn run_managed_status_stream(
                     error: err.summarize(),
                     consecutive_failures,
                 });
-
                 if wait_for_shutdown_or_delay(shutdown, backoff).await {
                     let _ = sender.send(StatusStreamEvent::Closed);
                     return;
@@ -570,15 +520,12 @@ async fn run_managed_status_stream(
                 continue;
             }
         }
-
         if wait_for_shutdown_or_delay(shutdown, poll_interval).await {
             break;
         }
     }
-
     let _ = sender.send(StatusStreamEvent::Closed);
 }
-
 async fn fetch_metrics_snapshot_if_needed(
     client: &ToriiClient,
     interval: Option<Duration>,
@@ -614,7 +561,6 @@ async fn fetch_metrics_snapshot_if_needed(
         }
     }
 }
-
 async fn fetch_metrics_snapshot_now(
     client: &ToriiClient,
     cache: &mut MetricsCache,
@@ -634,16 +580,13 @@ async fn fetch_metrics_snapshot_now(
         }
     }
 }
-
 fn shutdown_requested(shutdown: &watch::Receiver<bool>) -> bool {
     *shutdown.borrow()
 }
-
 async fn wait_for_shutdown_or_delay(shutdown: &mut watch::Receiver<bool>, delay: Duration) -> bool {
     if shutdown_requested(shutdown) {
         return true;
     }
-
     tokio::select! {
         changed = shutdown.changed() => {
             match changed {

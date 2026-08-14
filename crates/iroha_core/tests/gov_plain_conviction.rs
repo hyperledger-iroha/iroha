@@ -1,6 +1,5 @@
 //! Plain ballot conviction factor test.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -19,7 +18,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[test]
 fn plain_ballot_conviction_applies() {
     // Build minimal state/transaction
@@ -53,7 +51,6 @@ fn plain_ballot_conviction_applies() {
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
-
     // Defaults from config: conviction_step_blocks=100, max_conviction=6
     let amount: u128 = 10000; // sqrt=100
     let duration_blocks: u64 = 250; // factor = 1 + floor(250/100) = 3

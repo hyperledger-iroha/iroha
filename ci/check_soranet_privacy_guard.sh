@@ -6,6 +6,9 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd -- "${ROOT}"
 
 TARGET="crates/iroha_torii/src/lib.rs"
+INGRESS_TARGET="crates/iroha_torii/src/soranet_privacy_ingress.rs"
+BUILDER_TARGET="crates/iroha_torii/src/router/builder.rs"
+CATALOG_TARGET="crates/iroha_torii_shared/src/route_catalog.rs"
 PIN_TARGET="crates/iroha_torii/src/sorafs/api.rs"
 DOC_PATH="specs/references/configuration.md"
 RUNBOOK_PATH="specs/sorafs_authz_runbook.md"
@@ -17,12 +20,39 @@ endpoints=(
 )
 
 for fn in "${endpoints[@]}"; do
-	pattern="(?s)fn[[:space:]]+${fn}.*enforce_soranet_privacy_ingest"
-	if ! rg --pcre2 --multiline -n "${pattern}" "${TARGET}" >/dev/null; then
-		echo "error: ${fn} must call enforce_soranet_privacy_ingest to keep SoraNet privacy ingest authenticated." >&2
+	pattern="(?s)fn[[:space:]]+${fn}.*Extension\(_collector\):[[:space:]]+Extension<VerifiedSoranetPrivacyCollector>"
+	if ! rg --pcre2 --multiline -n "${pattern}" "${INGRESS_TARGET}" >/dev/null; then
+		echo "error: ${fn} must require the verified SoraNet collector witness." >&2
 		exit 1
 	fi
 done
+
+collector_auth_pattern="(?s)fn[[:space:]]+authenticated_soranet_privacy_collector\(.*enforce_soranet_privacy_collector_authentication.*enforce_operator_access.*AuthenticationPolicy::OperatorSignature"
+if ! rg --pcre2 --multiline -n "${collector_auth_pattern}" "${BUILDER_TARGET}" >/dev/null; then
+	echo "error: SoraNet privacy ingest must mount exact operator authentication before its secondary collector guard." >&2
+	exit 1
+fi
+
+if ! rg -Fq '.with_authentication(AuthenticationPolicy::OperatorSignature)' "${CATALOG_TARGET}"; then
+	echo "error: SoraNet privacy ingest catalog routes must advertise exact operator signatures." >&2
+	exit 1
+fi
+
+if ! rg -Fq 'AuthenticatedOperatorPublicKey' "${INGRESS_TARGET}"; then
+	echo "error: SoraNet privacy ingest limiter must key authenticated operator identity." >&2
+	exit 1
+fi
+
+if rg -n 'soranet_privacy_ingest::(REQUIRE_TOKEN|tokens)' \
+	crates/iroha_config/src/parameters/defaults.rs >/dev/null \
+	|| rg --pcre2 --multiline -n \
+		'(?s)pub struct (SoranetPrivacyIngest|ToriiSoranetPrivacyIngest)[[:space:]]*\{[^}]*pub (require_token|tokens):' \
+		crates/iroha_config/src/parameters/actual.rs \
+		crates/iroha_config/src/parameters/user.rs >/dev/null
+then
+	echo "error: retired SoraNet collector bearer configuration remains." >&2
+	exit 1
+fi
 
 repair_routes=(
 	"handle_post_sorafs_repair_report:Report"
@@ -130,7 +160,7 @@ for doc_key in "no public storage-ingest route" "governance.sorafs_telemetry"; d
 	fi
 done
 
-for runbook_key in "X-SoraNet-Privacy-Token" "per_provider_submitters" "Storage ingest is not an ingress route" "CanOperateSorafsRepair"; do
+for runbook_key in "X-Iroha-Operator" "per_provider_submitters" "Storage ingest is not an ingress route" "CanOperateSorafsRepair"; do
 	if ! rg -q "${runbook_key}" "${RUNBOOK_PATH}"; then
 		echo "error: ${RUNBOOK_PATH} is missing ${runbook_key} guidance; update the authz runbook alongside code changes." >&2
 		exit 1

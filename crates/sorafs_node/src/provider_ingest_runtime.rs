@@ -4,30 +4,23 @@
 //! provider-registration state. Every scan reads one immutable finalized view,
 //! drives the durable [`ProviderIngestOutbox`], and reconciles semantic ledger
 //! completion before considering transaction-level delivery state.
-
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    future::Future,
-    io::{self, Read},
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+use crate::provider_ingest_outbox::{
+    FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestMusubiContextV1,
+    PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningContextV1,
+    ProviderIngestCompletionStateV1, ProviderIngestDeadLetterReasonV1,
+    ProviderIngestDeliveryStateV1, ProviderIngestExposedCompletionExpiryV1,
+    ProviderIngestFailureClassV1, ProviderIngestFinalizedCancellationV1,
+    ProviderIngestFinalizedCompletionV1, ProviderIngestFinalizedCursorV1, ProviderIngestOutbox,
+    ProviderIngestOutboxError, ProviderIngestSignerPolicyObservationV1,
+    ProviderIngestSourceClaimV1,
 };
-
-use iroha_config::parameters::{
-    defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
-    is_production_runtime_handle,
-};
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature as IrohaSignature};
+use crate::store::AdmittedPayloadReadLeaseV1;
+use iroha_config::parameters::is_production_runtime_handle;
+use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::BlockHeader,
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
         MusubiArtifactDescriptorV1, MusubiContentDigestV1,
@@ -58,22 +51,21 @@ use sorafs_car::{
 use sorafs_manifest::capacity::{
     MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
 };
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    future::Future,
+    io::{self, Read},
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use tokio::sync::watch;
-
-use crate::provider_ingest_outbox::{
-    FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestMusubiContextV1,
-    PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
-    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningContextV1,
-    ProviderIngestCompletionStateV1, ProviderIngestDeadLetterReasonV1,
-    ProviderIngestDeliveryStateV1, ProviderIngestExposedCompletionExpiryV1,
-    ProviderIngestFailureClassV1, ProviderIngestFinalizedCancellationV1,
-    ProviderIngestFinalizedCompletionV1, ProviderIngestFinalizedCursorV1, ProviderIngestOutbox,
-    ProviderIngestOutboxError, ProviderIngestSignerPolicyObservationV1,
-    ProviderIngestSourceClaimV1,
-};
-use crate::store::AdmittedPayloadReadLeaseV1;
-
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const PROVIDER_INGEST_SOURCE_QUALIFICATION_VERSION_V1: u8 = 1;
 const PROVIDER_INGEST_COMPLETION_SIGNER_QUALIFICATION_VERSION_V1: u8 = 1;
@@ -97,10 +89,8 @@ const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
     32,
 );
-
 /// Boxed asynchronous operation used by provider-ingest integration traits.
 pub type ProviderIngestFutureV1<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
 /// Resource and timeout policy for one provider-ingest runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestRuntimePolicyV1 {
@@ -124,7 +114,6 @@ pub struct ProviderIngestRuntimePolicyV1 {
     /// Timeout for queue preflight, exposure, and transaction observation.
     pub ingress_timeout_ms: u64,
 }
-
 impl Default for ProviderIngestRuntimePolicyV1 {
     fn default() -> Self {
         Self {
@@ -140,7 +129,6 @@ impl Default for ProviderIngestRuntimePolicyV1 {
         }
     }
 }
-
 impl ProviderIngestRuntimePolicyV1 {
     fn validate(self, outbox: &ProviderIngestOutbox) -> Result<(), ProviderIngestRuntimeErrorV1> {
         if self.max_page_rows == 0
@@ -165,7 +153,6 @@ impl ProviderIngestRuntimePolicyV1 {
         Ok(())
     }
 }
-
 /// One assignment row read from a single immutable finalized state view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestFinalizedAssignmentV1 {
@@ -188,7 +175,6 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     /// Exact committed transaction hash, when the finalized reader exposes it.
     pub committed_transaction_hash: Option<[u8; 32]>,
 }
-
 /// Opaque consensus-authenticated Musubi archive binding emitted only by a
 /// finalized-ledger reader.
 ///
@@ -217,45 +203,38 @@ pub struct ProviderIngestFinalizedMusubiArchiveClaimV1 {
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     binding: MusubiReplicationOrderArchiveBindingV1,
 }
-
 impl ProviderIngestFinalizedMusubiArchiveClaimV1 {
     /// Exact configured deployment identity authenticated by the runtime boundary.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Local provider identity for which the finalized assignment was read.
     #[must_use]
     pub const fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     /// Exact finalized archive cursor at which this binding was observed.
     #[must_use]
     pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.observed_finalized_cursor
     }
-
     /// Exact replication order authenticated by the finalized reader.
     #[must_use]
     pub const fn replication_order(&self) -> [u8; 32] {
         *self.binding.replication_order.as_bytes()
     }
-
     /// Exact derived archive identity authenticated by the finalized reader.
     #[must_use]
     pub const fn archive_id(&self) -> ArchiveId {
         self.binding.archive_id
     }
-
     /// Complete immutable archive commitment authenticated by the finalized
     /// reader.
     #[must_use]
     pub const fn commitment(&self) -> &MusubiArchiveCommitmentV1 {
         &self.binding.commitment
     }
-
     /// Check every field shared with one finalized local-ingest authorization.
     #[must_use]
     pub fn matches_authorization(
@@ -285,7 +264,6 @@ impl ProviderIngestFinalizedMusubiArchiveClaimV1 {
             && commitment.content_length == authorization.content_length()
     }
 }
-
 /// Process-local identity of the exact storage/outbox instance allowed to
 /// derive completed-Musubi attestation work.
 ///
@@ -295,12 +273,10 @@ impl ProviderIngestFinalizedMusubiArchiveClaimV1 {
 /// transcript.
 #[derive(Clone)]
 pub(crate) struct CompletedMusubiStoreInstanceV1(Arc<CompletedMusubiStoreInstanceInnerV1>);
-
 struct CompletedMusubiStoreInstanceInnerV1 {
     _non_zst: u8,
     capture_coordinator_taken: AtomicBool,
 }
-
 impl CompletedMusubiStoreInstanceV1 {
     pub(crate) fn new() -> Self {
         Self(Arc::new(CompletedMusubiStoreInstanceInnerV1 {
@@ -308,11 +284,9 @@ impl CompletedMusubiStoreInstanceV1 {
             capture_coordinator_taken: AtomicBool::new(false),
         }))
     }
-
     pub(crate) fn matches(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
-
     /// Reserve the one completed-Musubi capture coordinator allowed for this
     /// exact storage/outbox instance.
     ///
@@ -327,13 +301,11 @@ impl CompletedMusubiStoreInstanceV1 {
             .is_ok()
     }
 }
-
 impl fmt::Debug for CompletedMusubiStoreInstanceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("<completed-musubi-store-instance>")
     }
 }
-
 /// Opaque consensus-authenticated Musubi claim sealed only from this provider's
 /// finalized completion row.
 ///
@@ -365,7 +337,6 @@ pub struct ProviderIngestFinalizedMusubiCompletionClaimV1 {
     completion: ReplicationOrderCompletionRecord,
     completed_musubi_store_instance: Option<CompletedMusubiStoreInstanceV1>,
 }
-
 impl PartialEq for ProviderIngestFinalizedMusubiCompletionClaimV1 {
     fn eq(&self, other: &Self) -> bool {
         self.network_id == other.network_id
@@ -375,52 +346,43 @@ impl PartialEq for ProviderIngestFinalizedMusubiCompletionClaimV1 {
             && self.completion == other.completion
     }
 }
-
 impl Eq for ProviderIngestFinalizedMusubiCompletionClaimV1 {}
-
 impl ProviderIngestFinalizedMusubiCompletionClaimV1 {
     /// Exact configured deployment identity authenticated by the finalized reader.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Local provider whose finalized completion was observed.
     #[must_use]
     pub const fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     /// Exact finalized archive cursor at which the completion row was observed.
     #[must_use]
     pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.observed_finalized_cursor
     }
-
     /// Exact replication order authenticated by the finalized reader.
     #[must_use]
     pub const fn replication_order(&self) -> [u8; 32] {
         *self.binding.replication_order.as_bytes()
     }
-
     /// Exact derived archive identity authenticated by the finalized reader.
     #[must_use]
     pub const fn archive_id(&self) -> ArchiveId {
         self.binding.archive_id
     }
-
     /// Complete immutable archive commitment authenticated by the finalized reader.
     #[must_use]
     pub const fn commitment(&self) -> &MusubiArchiveCommitmentV1 {
         &self.binding.commitment
     }
-
     /// Exact provider-scoped completion copied from the finalized order row.
     #[must_use]
     pub const fn completion(&self) -> &ReplicationOrderCompletionRecord {
         &self.completion
     }
-
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
@@ -429,7 +391,6 @@ impl ProviderIngestFinalizedMusubiCompletionClaimV1 {
             .as_ref()
             .is_some_and(|actual| actual.matches(expected))
     }
-
     /// Check every finalized identity, cursor, completion, and commitment field against the
     /// retained local-ingest authorization.
     ///
@@ -480,7 +441,6 @@ impl ProviderIngestFinalizedMusubiCompletionClaimV1 {
             && self.commitment().content_length == authorization.content_length()
     }
 }
-
 /// Closed failure returned while deriving a provider-attestation approval request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProviderIngestMusubiAttestationApprovalRequestErrorV1 {
@@ -488,7 +448,6 @@ pub enum ProviderIngestMusubiAttestationApprovalRequestErrorV1 {
     #[error("provider-ingest Musubi attestation evidence was rejected")]
     Rejected,
 }
-
 /// Opaque, unsigned request to approve one exact Musubi provider attestation payload.
 ///
 /// This value is deliberately nonserializable and has no arbitrary constructor. It can be
@@ -526,7 +485,6 @@ pub struct ProviderIngestMusubiAttestationApprovalRequestV1 {
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
     completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
 }
-
 impl PartialEq for ProviderIngestMusubiAttestationApprovalRequestV1 {
     fn eq(&self, other: &Self) -> bool {
         self.payload == other.payload
@@ -535,9 +493,7 @@ impl PartialEq for ProviderIngestMusubiAttestationApprovalRequestV1 {
             && self.signer_policy == other.signer_policy
     }
 }
-
 impl Eq for ProviderIngestMusubiAttestationApprovalRequestV1 {}
-
 impl ProviderIngestMusubiAttestationApprovalRequestV1 {
     /// Derive an unsigned approval request from exact finalized completion and verifier evidence.
     ///
@@ -562,7 +518,6 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
             .completed_musubi_store_instance
             .clone()
             .ok_or_else(rejected)?;
-
         claim.binding.validate().map_err(|_| rejected())?;
         descriptor.validate().map_err(|_| rejected())?;
         if claim.network_id.as_bytes()[31] & 1 != 1
@@ -598,7 +553,6 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
         {
             return Err(rejected());
         }
-
         let payload = MusubiProviderBundleVerificationPayloadV1 {
             version: MUSUBI_REGISTRY_VERSION_V1,
             binding: MusubiProviderBundleVerificationBindingV1 {
@@ -629,7 +583,6 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
             completed_musubi_store_instance,
         })
     }
-
     /// Construct a structurally valid opaque request for crate-local unit tests.
     ///
     /// Production code cannot call this helper, and the helper deliberately
@@ -665,13 +618,11 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
             completed_musubi_store_instance: CompletedMusubiStoreInstanceV1::new(),
         })
     }
-
     /// Return the exact unsigned provider-attestation payload.
     #[must_use]
     pub const fn payload(&self) -> &MusubiProviderBundleVerificationPayloadV1 {
         &self.payload
     }
-
     /// Return the stable domain-separated digest of the completed-row evidence.
     ///
     /// The observation cursor is retained separately and deliberately excluded
@@ -681,19 +632,16 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
     pub const fn completion_claim_digest(&self) -> [u8; 32] {
         self.completion_claim_digest
     }
-
     /// Return the finalized cursor at which the completed row was observed.
     #[must_use]
     pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.observed_finalized_cursor
     }
-
     /// Return the exact governed signer policy accepted by the finalized completion.
     #[must_use]
     pub const fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.signer_policy
     }
-
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
@@ -701,7 +649,6 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
         self.completed_musubi_store_instance.matches(expected)
     }
 }
-
 impl AdmittedPayloadReadLeaseV1<'_> {
     /// Reverify one completed Musubi bundle and mint its opaque unsigned approval request.
     ///
@@ -737,7 +684,6 @@ impl AdmittedPayloadReadLeaseV1<'_> {
         {
             return Err(ProviderIngestLocalStorageErrorV1::Permanent);
         }
-
         let first_read_error = Cell::new(None);
         let verified = MusubiBundleVerifierV1::verify_payload_with_factory(
             plan,
@@ -774,12 +720,10 @@ impl AdmittedPayloadReadLeaseV1<'_> {
         }
     }
 }
-
 struct ProviderIngestObservedAdmittedPayloadReaderV1<'observation, R> {
     inner: R,
     first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
 }
-
 impl<R: Read> Read for ProviderIngestObservedAdmittedPayloadReaderV1<'_, R> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         self.inner.read(output).inspect_err(|error| {
@@ -789,7 +733,6 @@ impl<R: Read> Read for ProviderIngestObservedAdmittedPayloadReaderV1<'_, R> {
         })
     }
 }
-
 const fn provider_ingest_admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
@@ -800,7 +743,6 @@ const fn provider_ingest_admitted_payload_read_error_is_retryable(kind: io::Erro
             | io::ErrorKind::Other
     )
 }
-
 #[derive(NoritoSerialize)]
 struct ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
     network_id: NetworkId,
@@ -808,7 +750,6 @@ struct ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
     binding: MusubiReplicationOrderArchiveBindingV1,
     completion: ReplicationOrderCompletionRecord,
 }
-
 fn provider_ingest_musubi_completion_claim_digest_v1(
     claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
 ) -> Option<[u8; 32]> {
@@ -826,7 +767,6 @@ fn provider_ingest_musubi_completion_claim_digest_v1(
     hasher.update(&canonical);
     Some(*hasher.finalize().as_bytes())
 }
-
 fn musubi_artifact_descriptor_digest_v1(
     descriptor: &MusubiArtifactDescriptorV1,
 ) -> Option<MusubiContentDigestV1> {
@@ -846,7 +786,6 @@ fn musubi_artifact_descriptor_digest_v1(
     hasher.update(&descriptor_bytes);
     Some(MusubiContentDigestV1::new(*hasher.finalize().as_bytes()))
 }
-
 /// Runtime-owned capability for constructing opaque claims inside one
 /// finalized-ledger read.
 ///
@@ -865,7 +804,6 @@ pub struct ProviderIngestFinalizedClaimFactoryV1 {
     provider_id: [u8; 32],
     completed_musubi_store_instance: Option<CompletedMusubiStoreInstanceV1>,
 }
-
 impl ProviderIngestFinalizedClaimFactoryV1 {
     fn new(network_id: NetworkId, provider_id: [u8; 32]) -> Self {
         Self {
@@ -874,7 +812,6 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
             completed_musubi_store_instance: None,
         }
     }
-
     fn new_completed_musubi_capture(
         network_id: NetworkId,
         provider_id: [u8; 32],
@@ -886,7 +823,6 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
             completed_musubi_store_instance: Some(completed_musubi_store_instance),
         }
     }
-
     /// Validate and seal one exact projected Musubi archive binding.
     ///
     /// # Errors
@@ -925,7 +861,6 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
             binding,
         })
     }
-
     /// Seal this provider's exact completed Musubi row as a post-completion capability.
     ///
     /// The method accepts the complete finalized order record and locates the
@@ -1016,7 +951,6 @@ impl ProviderIngestFinalizedClaimFactoryV1 {
         })
     }
 }
-
 /// Bounded stable page of provider assignments from one finalized state view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestFinalizedAssignmentPageV1 {
@@ -1029,7 +963,6 @@ pub struct ProviderIngestFinalizedAssignmentPageV1 {
     /// Last returned order identity when another page exists.
     pub next_after_order_id: Option<[u8; 32]>,
 }
-
 /// Finalized-ledger paging failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestFinalizedLedgerErrorV1 {
@@ -1038,7 +971,6 @@ pub enum ProviderIngestFinalizedLedgerErrorV1 {
     /// The finalized query service rejected the bounded request.
     Rejected,
 }
-
 /// Reader for chain-authoritative assignments and provider completions.
 pub trait ProviderIngestFinalizedLedgerV1: Send + Sync + 'static {
     /// Read one stable page after `after_order_id`.
@@ -1057,7 +989,6 @@ pub trait ProviderIngestFinalizedLedgerV1: Send + Sync + 'static {
         Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1>,
     >;
 }
-
 include!("provider_ingest_runtime/completed_musubi_capture.rs");
 /// Authenticated source-fetch outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1069,7 +1000,6 @@ pub enum ProviderIngestSourceFetchErrorV1 {
     /// A source identity, public policy, or qualification binding was rejected.
     Rejected,
 }
-
 /// Exact Musubi commitment forwarded only across the private authenticated source boundary.
 ///
 /// This value is not finalized evidence and cannot authorize storage completion or provider
@@ -1082,7 +1012,6 @@ pub struct ProviderIngestMusubiArchiveFetchBindingV1 {
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     binding: MusubiReplicationOrderArchiveBindingV1,
 }
-
 impl ProviderIngestMusubiArchiveFetchBindingV1 {
     /// Construct and validate one private-broker Musubi fetch binding.
     ///
@@ -1113,7 +1042,6 @@ impl ProviderIngestMusubiArchiveFetchBindingV1 {
             binding,
         })
     }
-
     fn from_finalized_claim(claim: &ProviderIngestFinalizedMusubiArchiveClaimV1) -> Self {
         Self {
             network_id: claim.network_id,
@@ -1122,31 +1050,26 @@ impl ProviderIngestMusubiArchiveFetchBindingV1 {
             binding: claim.binding.clone(),
         }
     }
-
     /// Exact configured deployment identity.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Provider for which the finalized assignment was read.
     #[must_use]
     pub const fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     /// Finalized archive cursor from which the runtime derived this binding.
     #[must_use]
     pub const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.observed_finalized_cursor
     }
-
     /// Complete order/archive commitment forwarded to the authenticated source.
     #[must_use]
     pub const fn binding(&self) -> &MusubiReplicationOrderArchiveBindingV1 {
         &self.binding
     }
-
     /// Check this informational binding against the exact finalized ingest authorization.
     #[must_use]
     pub fn matches_authorization(
@@ -1176,7 +1099,6 @@ impl ProviderIngestMusubiArchiveFetchBindingV1 {
             && commitment.content_length == authorization.content_length()
     }
 }
-
 /// Exact fetch request containing no source credentials or lease material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestSourceRequestV1 {
@@ -1184,7 +1106,6 @@ pub struct ProviderIngestSourceRequestV1 {
     source_provider_ids: Vec<[u8; 32]>,
     musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
 }
-
 impl ProviderIngestSourceRequestV1 {
     /// Construct one canonical request for an authenticated provider source.
     ///
@@ -1225,25 +1146,21 @@ impl ProviderIngestSourceRequestV1 {
             musubi_archive,
         })
     }
-
     /// Immutable finalized provider/order/manifest authorization.
     #[must_use]
     pub const fn authorization(&self) -> &FinalizedProviderIngestAuthorizationV1 {
         &self.authorization
     }
-
     /// Canonically ordered governed source provider identities.
     #[must_use]
     pub fn source_provider_ids(&self) -> &[[u8; 32]] {
         &self.source_provider_ids
     }
-
     /// Informational Musubi commitment derived from the opaque finalized claim.
     #[must_use]
     pub const fn musubi_archive(&self) -> Option<&ProviderIngestMusubiArchiveFetchBindingV1> {
         self.musubi_archive.as_ref()
     }
-
     /// Consume the request into its checked transport components.
     #[must_use]
     pub fn into_parts(
@@ -1260,7 +1177,6 @@ impl ProviderIngestSourceRequestV1 {
         )
     }
 }
-
 /// Public, non-secret qualification for a top-level provider-ingest adapter.
 ///
 /// The source-pool and governed signer-resolver roles each expose an
@@ -1273,7 +1189,6 @@ pub struct ProviderIngestRuntimeProviderQualificationV1 {
     /// Non-zero digest of the exact public adapter policy.
     pub policy_digest: [u8; 32],
 }
-
 impl ProviderIngestRuntimeProviderQualificationV1 {
     /// Construct one first-release public adapter qualification.
     #[must_use]
@@ -1283,14 +1198,12 @@ impl ProviderIngestRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return whether both required public qualification pins are non-zero.
     #[must_use]
     pub fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
-
 /// Payload-free public qualification of one authenticated provider source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestSourceQualificationV1 {
@@ -1301,7 +1214,6 @@ pub struct ProviderIngestSourceQualificationV1 {
     /// Non-zero digest of the exact public source policy.
     pub policy_digest: [u8; 32],
 }
-
 impl ProviderIngestSourceQualificationV1 {
     /// Construct a first-release source qualification.
     #[must_use]
@@ -1312,7 +1224,6 @@ impl ProviderIngestSourceQualificationV1 {
             policy_digest,
         }
     }
-
     /// Validate the qualification schema and non-zero binding.
     ///
     /// # Errors
@@ -1328,7 +1239,6 @@ impl ProviderIngestSourceQualificationV1 {
         Ok(())
     }
 }
-
 /// Independently configured public binding for one authenticated provider source.
 ///
 /// The binding contains no endpoint credentials, grants, tokens, private keys,
@@ -1344,14 +1254,12 @@ pub struct ProviderIngestAuthenticatedSourceBindingV1 {
     /// Exact non-zero digest of the public source policy.
     pub policy_digest: [u8; 32],
 }
-
 impl ProviderIngestAuthenticatedSourceBindingV1 {
     /// Return the exact qualification required from the injected source.
     #[must_use]
     pub const fn qualification(&self) -> ProviderIngestSourceQualificationV1 {
         ProviderIngestSourceQualificationV1::new(self.revision, self.policy_digest)
     }
-
     fn validate(
         &self,
         pool_runtime_handle: &str,
@@ -1367,7 +1275,6 @@ impl ProviderIngestAuthenticatedSourceBindingV1 {
         self.qualification().validate()
     }
 }
-
 /// Authenticated source fetch boundary.
 ///
 /// Production implementations must resolve only current governance-admitted
@@ -1380,14 +1287,12 @@ impl ProviderIngestAuthenticatedSourceBindingV1 {
 pub trait ProviderIngestAuthenticatedSourceFetchV1: Send + Sync + 'static {
     /// Verified material passed directly to local storage.
     type Fetched: Send + 'static;
-
     /// Fetch and verify exact material from an authenticated governed source.
     fn fetch<'a>(
         &'a self,
         request: ProviderIngestSourceRequestV1,
     ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>;
 }
-
 /// One independently authenticated provider source used by the production pool.
 ///
 /// Implementations own their runtime-only endpoint, grant, credential, and
@@ -1398,13 +1303,10 @@ pub trait ProviderIngestAuthenticatedSourceFetchV1: Send + Sync + 'static {
 pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
     /// Verified material returned by this source.
     type Fetched: Send + 'static;
-
     /// Exact governed provider identity served by this source.
     fn provider_id(&self) -> [u8; 32];
-
     /// Stable public identity of this provider-specific transport.
     fn runtime_handle(&self) -> &str;
-
     /// Current payload-free adapter and public-policy qualification.
     ///
     /// # Errors
@@ -1414,7 +1316,6 @@ pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
     fn qualification(
         &self,
     ) -> Result<ProviderIngestSourceQualificationV1, ProviderIngestSourceFetchErrorV1>;
-
     /// Non-mutating authenticated readiness check.
     ///
     /// # Errors
@@ -1422,7 +1323,6 @@ pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
     /// Returns a fixed payload-free source failure when the source is not
     /// currently ready or its public policy is rejected.
     fn check_readiness(&self) -> Result<(), ProviderIngestSourceFetchErrorV1>;
-
     /// Fetch exact material for one finalized authorization.
     fn fetch_provider<'a>(
         &'a self,
@@ -1430,7 +1330,6 @@ pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
         musubi_archive: Option<ProviderIngestMusubiArchiveFetchBindingV1>,
     ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>;
 }
-
 /// Invalid construction of an authenticated multi-provider source pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProviderIngestAuthenticatedSourcePoolErrorV1 {
@@ -1465,13 +1364,11 @@ pub enum ProviderIngestAuthenticatedSourcePoolErrorV1 {
     #[error("provider-ingest source-pool contains a duplicate source handle")]
     DuplicateSourceHandle,
 }
-
 /// One independently bound authenticated provider source.
 pub struct ProviderIngestAuthenticatedSourceRegistrationV1<Fetched: Send + 'static> {
     binding: ProviderIngestAuthenticatedSourceBindingV1,
     source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
 }
-
 impl<Fetched: Send + 'static> fmt::Debug
     for ProviderIngestAuthenticatedSourceRegistrationV1<Fetched>
 {
@@ -1482,7 +1379,6 @@ impl<Fetched: Send + 'static> fmt::Debug
             .finish_non_exhaustive()
     }
 }
-
 impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceRegistrationV1<Fetched> {
     /// Pair an independently configured public binding with one injected source.
     #[must_use]
@@ -1493,12 +1389,10 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceRegistrationV1<Fe
         Self { binding, source }
     }
 }
-
 struct PinnedProviderIngestSourceV1<Fetched: Send + 'static> {
     binding: ProviderIngestAuthenticatedSourceBindingV1,
     source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
 }
-
 /// Bounded, identity-pinned authenticated multi-provider source coordinator.
 ///
 /// The pool freezes a canonical public provider inventory at construction,
@@ -1515,7 +1409,6 @@ pub struct ProviderIngestAuthenticatedSourcePoolV1<Fetched: Send + 'static> {
     provider_ids: Vec<[u8; 32]>,
     sources: BTreeMap<[u8; 32], PinnedProviderIngestSourceV1<Fetched>>,
 }
-
 impl<Fetched: Send + 'static> fmt::Debug for ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1527,7 +1420,6 @@ impl<Fetched: Send + 'static> fmt::Debug for ProviderIngestAuthenticatedSourcePo
             .finish_non_exhaustive()
     }
 }
-
 impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
     /// Construct a production pool from independently configured source bindings.
     ///
@@ -1554,7 +1446,6 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
         if sources.len() < 2 || sources.len() > MAX_REPLICATION_ORDER_ASSIGNMENTS {
             return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceCount);
         }
-
         let mut pinned_handles = BTreeSet::new();
         let mut pinned_sources = BTreeMap::new();
         for registration in sources {
@@ -1588,31 +1479,26 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
             sources: pinned_sources,
         })
     }
-
     /// Stable public identity of the complete source pool.
     #[must_use]
     pub fn runtime_handle(&self) -> &str {
         &self.runtime_handle
     }
-
     /// Return the pool's exact top-level adapter qualification.
     #[must_use]
     pub const fn qualification(&self) -> ProviderIngestRuntimeProviderQualificationV1 {
         self.qualification
     }
-
     /// Canonical identity-pinned provider inventory.
     #[must_use]
     pub fn source_provider_ids(&self) -> &[[u8; 32]] {
         &self.provider_ids
     }
-
     /// Maximum sources admitted in one finalized fetch request.
     #[must_use]
     pub const fn max_sources_per_fetch(&self) -> usize {
         self.max_sources_per_fetch
     }
-
     /// Revalidate every pinned source without exposing request material.
     ///
     /// # Errors
@@ -1646,7 +1532,6 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
         }
         Ok(())
     }
-
     fn source_is_ready(
         &self,
         source: &PinnedProviderIngestSourceV1<Fetched>,
@@ -1674,7 +1559,6 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
         }
         Ok(before_ready && readiness.is_ok() && after.is_ok())
     }
-
     fn validate_source(
         &self,
         source: &PinnedProviderIngestSourceV1<Fetched>,
@@ -1702,7 +1586,6 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
         }
         Ok(())
     }
-
     fn validate_request(
         &self,
         request: &ProviderIngestSourceRequestV1,
@@ -1726,12 +1609,10 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
         Ok(())
     }
 }
-
 impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceFetchV1
     for ProviderIngestAuthenticatedSourcePoolV1<Fetched>
 {
     type Fetched = Fetched;
-
     fn fetch<'a>(
         &'a self,
         request: ProviderIngestSourceRequestV1,
@@ -1775,7 +1656,6 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceFetchV1
         })
     }
 }
-
 /// Local storage verification/persistence failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestLocalStorageErrorV1 {
@@ -1791,7 +1671,6 @@ pub enum ProviderIngestLocalStorageErrorV1 {
     /// finalized cursor while making completion unreachable.
     Quarantined,
 }
-
 /// Closed evidence that one immutable local payload passed the complete Musubi verifier.
 ///
 /// The value can be constructed only from [`VerifiedMusubiBundleV1`], whose representation is
@@ -1819,7 +1698,6 @@ pub struct ProviderIngestVerifiedMusubiBundleReceiptV1 {
     semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
     verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 /// Crate-private canonical checkpoint representation of a verified Musubi receipt.
 ///
 /// Keeping codec implementations on this non-exported type preserves durable checkpointing
@@ -1836,7 +1714,6 @@ pub(crate) struct StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
     semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
     verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
     /// Bind canonical verifier output to the exact opaque finalized precursor.
     ///
@@ -1879,7 +1756,6 @@ impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
         }
         Ok(receipt)
     }
-
     /// Return whether this receipt covers the exact finalized precursor and local authorization.
     #[must_use]
     pub fn matches(
@@ -1908,7 +1784,6 @@ impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
             && !self.semantic_release_manifest_digest.is_zero()
             && !self.verification_lock_digest.is_zero()
     }
-
     pub(crate) fn validate_stored(
         &self,
         authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -1941,19 +1816,16 @@ impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
                 encoded.len() <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1
             })
     }
-
     /// Domain-separated semantic release-manifest digest parsed from the bundle.
     #[must_use]
     pub const fn semantic_release_manifest_digest(&self) -> MusubiSemanticReleaseDigestV1 {
         self.semantic_release_manifest_digest
     }
-
     /// Normalized verification-lock digest parsed from the bundle.
     #[must_use]
     pub const fn verification_lock_digest(&self) -> MusubiVerificationLockDigestV1 {
         self.verification_lock_digest
     }
-
     pub(crate) fn to_stored(&self) -> StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
         StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
             network_id: self.network_id,
@@ -1967,7 +1839,6 @@ impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
             verification_lock_digest: self.verification_lock_digest,
         }
     }
-
     #[cfg(test)]
     pub(crate) fn new_for_test(
         authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -1991,12 +1862,10 @@ impl ProviderIngestVerifiedMusubiBundleReceiptV1 {
         }
     }
 }
-
 impl StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
     pub(crate) const fn observed_finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.observed_finalized_cursor
     }
-
     #[cfg(test)]
     pub(crate) const fn set_observed_finalized_cursor_for_test(
         &mut self,
@@ -2004,7 +1873,6 @@ impl StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
     ) {
         self.observed_finalized_cursor = cursor;
     }
-
     pub(crate) fn into_receipt(self) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
         ProviderIngestVerifiedMusubiBundleReceiptV1 {
             network_id: self.network_id,
@@ -2018,11 +1886,9 @@ impl StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
             verification_lock_digest: self.verification_lock_digest,
         }
     }
-
     pub(crate) fn to_receipt(&self) -> ProviderIngestVerifiedMusubiBundleReceiptV1 {
         self.clone().into_receipt()
     }
-
     pub(crate) fn validate_stored(
         &self,
         authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -2030,7 +1896,6 @@ impl StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
         self.to_receipt().validate_stored(authorization)
     }
 }
-
 fn finalized_cursor_is_same_or_later(
     candidate: ProviderIngestFinalizedCursorV1,
     baseline: ProviderIngestFinalizedCursorV1,
@@ -2038,7 +1903,6 @@ fn finalized_cursor_is_same_or_later(
     candidate.height > baseline.height
         || candidate.height == baseline.height && candidate.block_hash == baseline.block_hash
 }
-
 fn authorization_musubi_context_matches(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     network_id: &NetworkId,
@@ -2048,14 +1912,12 @@ fn authorization_musubi_context_matches(
         context.network_id() == network_id && context.archive_id() == archive_id
     })
 }
-
 /// Exact local-storage result accepted before a completion transaction may be prepared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestLocalStoredV1 {
     manifest_id: String,
     musubi_bundle: Option<ProviderIngestVerifiedMusubiBundleReceiptV1>,
 }
-
 impl ProviderIngestLocalStoredV1 {
     /// Construct a result for an ordinary non-Musubi replication order.
     #[must_use]
@@ -2065,7 +1927,6 @@ impl ProviderIngestLocalStoredV1 {
             musubi_bundle: None,
         }
     }
-
     /// Construct a result whose local payload passed the complete Musubi verifier.
     #[must_use]
     pub fn musubi(
@@ -2077,20 +1938,17 @@ impl ProviderIngestLocalStoredV1 {
             musubi_bundle: Some(receipt),
         }
     }
-
     /// Canonical local manifest identity.
     #[must_use]
     pub fn manifest_id(&self) -> &str {
         &self.manifest_id
     }
-
     /// Verified Musubi receipt, absent only for a generic replication order.
     #[must_use]
     pub const fn musubi_bundle(&self) -> Option<&ProviderIngestVerifiedMusubiBundleReceiptV1> {
         self.musubi_bundle.as_ref()
     }
 }
-
 /// Exact local storage boundary.
 pub trait ProviderIngestLocalStorageV1<Fetched>: Send + Sync + 'static {
     /// Verify whether exact authorized material is already durable locally.
@@ -2104,7 +1962,6 @@ pub trait ProviderIngestLocalStorageV1<Fetched>: Send + Sync + 'static {
         'a,
         Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1>,
     >;
-
     /// Atomically store exact material, then verify any Musubi bundle from admitted storage.
     fn store<'a>(
         &'a self,
@@ -2116,7 +1973,6 @@ pub trait ProviderIngestLocalStorageV1<Fetched>: Send + Sync + 'static {
         Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1>,
     >;
 }
-
 /// Request for one exact fee-quoted provider completion payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionPayloadRequestV1 {
@@ -2135,7 +1991,6 @@ pub struct ProviderIngestCompletionPayloadRequestV1 {
     /// Finalized baseline preceding signing.
     pub finalized_cursor: ProviderIngestFinalizedCursorV1,
 }
-
 /// Completion payload construction failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestCompletionPayloadErrorV1 {
@@ -2144,7 +1999,6 @@ pub enum ProviderIngestCompletionPayloadErrorV1 {
     /// Current policy rejects completion payload construction.
     Rejected,
 }
-
 /// Builds the exact bounded, fee-quoted transaction payload to sign.
 pub trait ProviderIngestCompletionPayloadBuilderV1: Send + Sync + 'static {
     /// Build one exact completion payload.
@@ -2156,7 +2010,6 @@ pub trait ProviderIngestCompletionPayloadBuilderV1: Send + Sync + 'static {
         Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1>,
     >;
 }
-
 /// Isolated signer failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestCompletionSignerErrorV1 {
@@ -2165,7 +2018,6 @@ pub enum ProviderIngestCompletionSignerErrorV1 {
     /// The signer rejected an otherwise exact prepared operation.
     Rejected,
 }
-
 /// Exact finalized authorization independently pinned while resolving a signer.
 ///
 /// The context is carried separately from the transaction payload so an
@@ -2182,7 +2034,6 @@ pub struct ProviderIngestCompletionSignerResolutionContextV1 {
     /// Exact finalized baseline whose anchor must appear in the completion.
     pub finalized_cursor: ProviderIngestFinalizedCursorV1,
 }
-
 impl ProviderIngestCompletionSignerResolutionContextV1 {
     /// Construct one exact signer-resolution context.
     #[must_use]
@@ -2199,7 +2050,6 @@ impl ProviderIngestCompletionSignerResolutionContextV1 {
             finalized_cursor,
         }
     }
-
     /// Return whether every independently pinned field is production-shaped.
     #[must_use]
     pub fn is_valid(&self) -> bool {
@@ -2209,7 +2059,6 @@ impl ProviderIngestCompletionSignerResolutionContextV1 {
             && self.finalized_cursor.block_hash != [0; 32]
     }
 }
-
 /// Payload-free public qualification of one provider-ingest completion signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionSignerQualificationV1 {
@@ -2224,7 +2073,6 @@ pub struct ProviderIngestCompletionSignerQualificationV1 {
     /// Exact public key controlled by the external signer.
     pub public_key: PublicKey,
 }
-
 impl ProviderIngestCompletionSignerQualificationV1 {
     /// Construct a first-release completion-signer qualification.
     #[must_use]
@@ -2242,7 +2090,6 @@ impl ProviderIngestCompletionSignerQualificationV1 {
             public_key,
         }
     }
-
     /// Validate the schema, revision, policy lineage, algorithm, and public key.
     ///
     /// # Errors
@@ -2265,14 +2112,12 @@ impl ProviderIngestCompletionSignerQualificationV1 {
         }
         Ok(())
     }
-
     /// Return whether the qualified public key is the exact single-key authority.
     #[must_use]
     pub fn matches_authority(&self, authority: &AccountId) -> bool {
         authority.try_signatory() == Some(&self.public_key)
     }
 }
-
 /// Independently configured public binding for one completion signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionSignerBindingV1 {
@@ -2281,7 +2126,6 @@ pub struct ProviderIngestCompletionSignerBindingV1 {
     /// Exact payload-free signer qualification.
     pub qualification: ProviderIngestCompletionSignerQualificationV1,
 }
-
 impl ProviderIngestCompletionSignerBindingV1 {
     /// Pair a stable public handle with the required signer qualification.
     #[must_use]
@@ -2294,7 +2138,6 @@ impl ProviderIngestCompletionSignerBindingV1 {
             qualification,
         }
     }
-
     /// Validate the complete configured signer binding.
     ///
     /// # Errors
@@ -2307,7 +2150,6 @@ impl ProviderIngestCompletionSignerBindingV1 {
         self.qualification.validate()
     }
 }
-
 /// Invalid public binding for a provider-ingest completion signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProviderIngestCompletionSignerBindingErrorV1 {
@@ -2318,15 +2160,12 @@ pub enum ProviderIngestCompletionSignerBindingErrorV1 {
     #[error("provider-ingest completion-signer qualification is invalid")]
     InvalidSignerQualification,
 }
-
 /// Isolated runtime signer that has no queue or outbox access.
 pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     /// Stable public HSM/KMS signer or key handle.
     fn runtime_handle(&self) -> &str;
-
     /// Account controlled by this signer.
     fn authority(&self) -> &AccountId;
-
     /// Current payload-free signer qualification.
     ///
     /// # Errors
@@ -2336,12 +2175,10 @@ pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     fn qualification(
         &self,
     ) -> Result<ProviderIngestCompletionSignerQualificationV1, ProviderIngestCompletionSignerErrorV1>;
-
     /// Exact governed policy identity under which this signer is currently
     /// eligible. Implementations must change this value on key rotation and
     /// reject signing atomically when the policy is revoked or superseded.
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1;
-
     /// Revalidate the live owner/key/policy authority represented by this
     /// signer and return its exact current policy identity.
     ///
@@ -2354,21 +2191,18 @@ pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerErrorV1>;
-
     /// Sign exactly the supplied payload without rewriting any field.
     fn sign<'a>(
         &'a self,
         payload: TransactionPayload,
     ) -> ProviderIngestFutureV1<'a, Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>>;
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CurrentSignerPolicyErrorV1 {
     Unavailable,
     Ineligible,
     ProtocolViolation,
 }
-
 fn exact_current_signer_policy<Signer: ProviderIngestCompletionSignerV1>(
     signer: &Signer,
     expected_owner: &AccountId,
@@ -2401,7 +2235,6 @@ fn exact_current_signer_policy<Signer: ProviderIngestCompletionSignerV1>(
     }
     Ok(policy)
 }
-
 /// Signer resolution failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestCompletionSignerResolverErrorV1 {
@@ -2410,7 +2243,6 @@ pub enum ProviderIngestCompletionSignerResolverErrorV1 {
     /// The requested finalized owner is revoked or disallowed.
     Rejected,
 }
-
 /// Resolves the signer for one exact finalized completion authorization.
 ///
 /// Implementations must authenticate every field in the resolution context
@@ -2419,7 +2251,6 @@ pub enum ProviderIngestCompletionSignerResolverErrorV1 {
 pub trait ProviderIngestCompletionSignerResolverV1: Send + Sync + 'static {
     /// Isolated signer implementation.
     type Signer: ProviderIngestCompletionSignerV1;
-
     /// Resolve an eligible signer for one exact finalized authorization.
     fn resolve<'a>(
         &'a self,
@@ -2429,7 +2260,6 @@ pub trait ProviderIngestCompletionSignerResolverV1: Send + Sync + 'static {
         Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
     >;
 }
-
 /// Queue preflight failure that occurs before transaction exposure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestIngressPrepareErrorV1 {
@@ -2438,7 +2268,6 @@ pub enum ProviderIngestIngressPrepareErrorV1 {
     /// The exact transaction was terminally rejected before exposure.
     Rejected,
 }
-
 /// Outcome after an exact transaction may have been exposed to ingress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestIngressDispositionV1 {
@@ -2451,7 +2280,6 @@ pub enum ProviderIngestIngressDispositionV1 {
     /// Exposure may have happened and requires reconciliation.
     Ambiguous,
 }
-
 /// Observation of one exact retained transaction hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestTransactionObservationV1 {
@@ -2470,25 +2298,21 @@ pub enum ProviderIngestTransactionObservationV1 {
     /// The observation service is temporarily unavailable.
     Unavailable,
 }
-
 /// Transaction ingress split into preflight and post-durable exposure phases.
 pub trait ProviderIngestTransactionIngressV1: Send + Sync + 'static {
     /// Opaque prepared queue operation that has not exposed transaction bytes.
     type Prepared: Send + 'static;
-
     /// Validate and prepare queue admission without exposing transaction bytes.
     fn prepare<'a>(
         &'a self,
         transaction: SignedTransaction,
     ) -> ProviderIngestFutureV1<'a, Result<Self::Prepared, ProviderIngestIngressPrepareErrorV1>>;
-
     /// Expose the exact transaction only after the durable ambiguous transition.
     fn expose<'a>(
         &'a self,
         prepared: Self::Prepared,
         transaction: SignedTransaction,
     ) -> ProviderIngestFutureV1<'a, ProviderIngestIngressDispositionV1>;
-
     /// Observe one exact retained transaction hash without mutating ingress.
     ///
     /// A committed observation must include the execution result; block/hash
@@ -2498,17 +2322,14 @@ pub trait ProviderIngestTransactionIngressV1: Send + Sync + 'static {
         transaction_hash: [u8; 32],
     ) -> ProviderIngestFutureV1<'a, ProviderIngestTransactionObservationV1>;
 }
-
 /// Runtime clock used only for leases, backoff, and timeouts.
 pub trait ProviderIngestClockV1: Send + Sync + 'static {
     /// Current runtime time in milliseconds.
     fn now_ms(&self) -> u64;
 }
-
 /// Wall-clock implementation for production runtime use.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProviderIngestSystemClockV1;
-
 impl ProviderIngestClockV1 for ProviderIngestSystemClockV1 {
     fn now_ms(&self) -> u64 {
         u64::try_from(
@@ -2520,7 +2341,6 @@ impl ProviderIngestClockV1 for ProviderIngestSystemClockV1 {
         .unwrap_or(u64::MAX)
     }
 }
-
 /// Payload-free counters for one bounded runtime tick.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProviderIngestTickOutcomeV1 {
@@ -2541,7 +2361,6 @@ pub struct ProviderIngestTickOutcomeV1 {
     /// Completion transaction exposure attempts.
     pub completion_submissions: usize,
 }
-
 /// Supervised provider-ingest runtime.
 pub struct ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>
 where
@@ -2569,7 +2388,6 @@ where
     scan_cursor: Option<ProviderIngestFinalizedCursorV1>,
     scan_after_order_id: Option<[u8; 32]>,
 }
-
 impl<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>
     ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>
 where
@@ -2623,7 +2441,6 @@ where
             scan_after_order_id: None,
         })
     }
-
     /// Run until shutdown or a fatal supervised-runtime error.
     pub async fn run(
         mut self,
@@ -2671,14 +2488,12 @@ where
             }
         }
     }
-
     /// Execute one bounded finalized scan and delivery pass.
     pub async fn tick(
         &mut self,
     ) -> Result<ProviderIngestTickOutcomeV1, ProviderIngestRuntimeErrorV1> {
         self.tick_inner(None).await
     }
-
     /// Execute one bounded scan while honoring a cooperative shutdown request.
     ///
     /// The current row always runs to a durable boundary. A request observed
@@ -2691,7 +2506,6 @@ where
     ) -> Result<ProviderIngestTickOutcomeV1, ProviderIngestRuntimeErrorV1> {
         self.tick_inner(Some(shutdown_requested)).await
     }
-
     async fn tick_inner(
         &mut self,
         shutdown_requested: Option<&std::sync::atomic::AtomicBool>,
@@ -2701,7 +2515,6 @@ where
         let mut after = self.scan_after_order_id;
         let mut expected_cursor = self.scan_cursor;
         let mut recovered_interrupted_signing = false;
-
         for _ in 0..self.policy.max_pages_per_tick {
             if shutdown_requested
                 .is_some_and(|requested| requested.load(std::sync::atomic::Ordering::Acquire))
@@ -2735,7 +2548,6 @@ where
                     .recover_expired_completion_signing(self.clock.now_ms(), cursor)?;
                 recovered_interrupted_signing = true;
             }
-
             let finalized_block_time_ms = page.finalized_block_time_ms;
             for row in page.rows {
                 if shutdown_requested
@@ -2753,7 +2565,6 @@ where
                 )
                 .await?;
             }
-
             after = page.next_after_order_id;
             if after.is_none() {
                 self.scan_after_order_id = None;
@@ -2761,12 +2572,10 @@ where
                 return Ok(outcome);
             }
         }
-
         self.scan_after_order_id = after;
         self.scan_cursor = expected_cursor;
         Ok(outcome)
     }
-
     #[allow(clippy::too_many_lines)]
     async fn process_row(
         &self,
@@ -2789,7 +2598,6 @@ where
         )?;
         let job_id = authorization.job_id();
         let provider_id = ProviderId::new(self.provider_id);
-
         if let Some(completion) = row.order.provider_completion(provider_id) {
             self.outbox.reconcile_finalized_completion(
                 authorization,
@@ -2806,7 +2614,6 @@ where
             outcome.jobs_finalized = outcome.jobs_finalized.saturating_add(1);
             return Ok(());
         }
-
         let cancellation_reason = match (&row.pin.manifest.status, &row.order.status) {
             (PinStatus::Retired(_), _) => Some(ProviderIngestCancellationReasonV1::ManifestRetired),
             (_, ReplicationOrderStatus::Expired(_)) => {
@@ -2836,7 +2643,6 @@ where
         {
             return Ok(());
         }
-
         let enqueue = self.outbox.enqueue(authorization.clone())?;
         if matches!(
             enqueue,
@@ -2924,7 +2730,6 @@ where
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     async fn process_source(
         &self,
@@ -2954,7 +2759,6 @@ where
             Err(error) => return Err(error.into()),
         };
         outcome.source_jobs_claimed = outcome.source_jobs_claimed.saturating_add(1);
-
         let verify = self
             .storage
             .verify_existing(authorization.clone(), musubi_archive.clone());
@@ -3007,7 +2811,6 @@ where
                 return Ok(true);
             }
         }
-
         if source_provider_ids.is_empty() {
             self.outbox.schedule_source_retry(
                 &claim,
@@ -3072,7 +2875,6 @@ where
                 return Err(ProviderIngestRuntimeErrorV1::SourceProtocolViolation);
             }
         };
-
         let store = self
             .storage
             .store(authorization.clone(), musubi_archive.clone(), fetched);
@@ -3121,7 +2923,6 @@ where
         }
         Ok(true)
     }
-
     fn handle_storage_failure(
         &self,
         claim: ProviderIngestSourceClaimV1,
@@ -3150,7 +2951,6 @@ where
         }
         Ok(())
     }
-
     async fn await_with_lease<T, Fut>(
         &self,
         mut claim: ProviderIngestSourceClaimV1,
@@ -3192,7 +2992,6 @@ where
             }
         }
     }
-
     /// Await an in-flight atomic storage mutation without ever detaching it.
     ///
     /// The configured operation timeout is a soft diagnostic boundary for
@@ -3247,7 +3046,6 @@ where
             }
         }
     }
-
     #[allow(clippy::too_many_lines)]
     async fn process_completion(
         &self,
@@ -3263,7 +3061,6 @@ where
         let completion_authority = row.completion_authority.as_ref().filter(|binding| {
             binding.is_valid() && row.provider_owner.as_ref() == Some(&binding.provider_owner)
         });
-
         // Bytes that may already have crossed the queue boundary are always
         // reconciled by exact hash before any signer/HSM dependency is queried.
         match &completion {
@@ -3301,7 +3098,6 @@ where
             | ProviderIngestCompletionStateV1::Signing { .. }
             | ProviderIngestCompletionStateV1::Signed { .. } => {}
         }
-
         if let ProviderIngestCompletionStateV1::Signed {
             baseline_finalized_cursor,
             transaction_hash,
@@ -3339,7 +3135,6 @@ where
                 ProviderIngestTransactionObservationV1::Unavailable => return Ok(()),
             }
         }
-
         let mut submission_authority = None;
         let mut checked_signer_policy = None;
         if matches!(
@@ -3790,7 +3585,6 @@ where
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     async fn submit_signed(
         &self,
@@ -3985,7 +3779,6 @@ where
         }
         Ok(())
     }
-
     async fn reconcile_transaction(
         &self,
         job_id: [u8; 32],
@@ -4030,13 +3823,11 @@ where
         Ok(())
     }
 }
-
 struct ValidatedAssignmentV1 {
     authorization: FinalizedProviderIngestAuthorizationV1,
     source_provider_ids: Vec<[u8; 32]>,
     musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
 }
-
 fn local_stored_matches(
     stored: &ProviderIngestLocalStoredV1,
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -4051,7 +3842,6 @@ fn local_stored_matches(
         (None, Some(_)) | (Some(_), None) => false,
     }
 }
-
 fn persisted_receipt_matches(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     claim: Option<&ProviderIngestFinalizedMusubiArchiveClaimV1>,
@@ -4063,7 +3853,6 @@ fn persisted_receipt_matches(
         (None, Some(_)) | (Some(_), None) => false,
     }
 }
-
 fn validate_monotonic_finalized_cursor(
     previous: Option<ProviderIngestFinalizedCursorV1>,
     candidate: ProviderIngestFinalizedCursorV1,
@@ -4076,7 +3865,6 @@ fn validate_monotonic_finalized_cursor(
     }
     Ok(())
 }
-
 fn validate_page(
     page: &ProviderIngestFinalizedAssignmentPageV1,
     after_order_id: Option<[u8; 32]>,
@@ -4108,7 +3896,6 @@ fn validate_page(
     }
     Ok(())
 }
-
 fn validate_assignment(
     row: &ProviderIngestFinalizedAssignmentV1,
     cursor: ProviderIngestFinalizedCursorV1,
@@ -4124,7 +3911,6 @@ fn validate_assignment(
         policy.max_source_providers,
     )
 }
-
 fn validate_assignment_with_source_bound(
     row: &ProviderIngestFinalizedAssignmentV1,
     cursor: ProviderIngestFinalizedCursorV1,
@@ -4319,7 +4105,6 @@ fn validate_assignment_with_source_bound(
         musubi_archive: row.musubi_archive.clone(),
     })
 }
-
 fn authorization_from_status_and_row(
     status: &crate::provider_ingest_outbox::ProviderIngestStatusV1,
     row: &ProviderIngestFinalizedAssignmentV1,
@@ -4363,17 +4148,14 @@ fn authorization_from_status_and_row(
     }
     Ok(authorization)
 }
-
 enum LeaseOperationOutcomeV1<T> {
     Completed(T),
     TimedOut,
 }
-
 enum MutatingStorageOutcomeV1<T> {
     Completed(T),
     CompletedAfterSoftTimeout(T),
 }
-
 /// Fatal supervised-runtime failure.
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 #[derive(Debug, Error)]
@@ -4412,7 +4194,6 @@ pub enum ProviderIngestRuntimeErrorV1 {
     #[error(transparent)]
     Outbox(#[from] ProviderIngestOutboxError),
 }
-
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {

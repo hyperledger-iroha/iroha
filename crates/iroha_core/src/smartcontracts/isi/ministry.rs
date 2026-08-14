@@ -1,15 +1,11 @@
 //! Ministry agenda submission handlers.
-
+use super::prelude::*;
 use iroha_data_model::isi::error::{InstructionExecutionError as Error, InvalidParameterError};
 use iroha_telemetry::metrics;
-
-use super::prelude::*;
-
 /// Execution handlers for Ministry ISIs.
 pub mod isi {
     use super::*;
     use crate::state::StateTransaction;
-
     impl Execute for iroha_data_model::isi::ministry::SubmitAgendaProposal {
         #[metrics(+"submit_agenda_proposal")]
         fn execute(
@@ -23,7 +19,6 @@ pub mod isi {
                     err.to_string().into(),
                 ))
             })?;
-
             let proposal_id = proposal.proposal_id.clone();
             if state_transaction
                 .world
@@ -35,7 +30,6 @@ pub mod isi {
                     format!("Ministry agenda proposal {proposal_id} already exists").into(),
                 ));
             }
-
             let submitted_tx_hash_hex = state_transaction
                 .current_tx_hash
                 .as_ref()
@@ -46,7 +40,6 @@ pub mod isi {
                             .into(),
                     )
                 })?;
-
             state_transaction.world.ministry_agenda_proposals.insert(
                 proposal_id,
                 iroha_data_model::ministry::AgendaProposalRecordV1 {
@@ -56,14 +49,18 @@ pub mod isi {
                     submitted_height: state_transaction.block_height(),
                 },
             );
-
             Ok(())
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
@@ -77,14 +74,6 @@ mod tests {
         transaction::SignedTransaction,
     };
     use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-
     fn sample_proposal(proposal_id: &str) -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,
@@ -121,17 +110,14 @@ mod tests {
             duplicates: vec!["AC-2025-014".into()],
         }
     }
-
     fn tx_hash(seed: [u8; 32]) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed(seed))
     }
-
     fn checked_account_id() -> AccountId {
         let key_pair =
             KeyPair::try_random().expect("ministry fixture key generation should succeed");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn checked_account_id_preserves_default_algorithm() {
         let account_id = checked_account_id();
@@ -140,28 +126,23 @@ mod tests {
             Algorithm::default()
         );
     }
-
     #[test]
     fn submit_agenda_proposal_persists_submission_record() {
         let authority = checked_account_id();
         let proposal = sample_proposal("AC-2026-001");
         let expected_tx_hash = tx_hash([0xAB; 32]);
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.current_tx_hash = Some(expected_tx_hash);
-
         SubmitAgendaProposal {
             proposal: proposal.clone(),
         }
         .execute(&authority, &mut tx)
         .expect("submit agenda proposal");
-
         let stored = tx
             .world
             .ministry_agenda_proposals
@@ -176,27 +157,22 @@ mod tests {
         );
         assert_eq!(stored.submitted_height, tx.block_height());
     }
-
     #[test]
     fn submit_agenda_proposal_rejects_duplicate_proposal_ids() {
         let authority = checked_account_id();
         let proposal = sample_proposal("AC-2026-001");
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.current_tx_hash = Some(tx_hash([0xCD; 32]));
-
         SubmitAgendaProposal {
             proposal: proposal.clone(),
         }
         .execute(&authority, &mut tx)
         .expect("first ministry agenda proposal");
-
         let duplicate_error = SubmitAgendaProposal { proposal }
             .execute(&authority, &mut tx)
             .expect_err("duplicate proposal id must fail");

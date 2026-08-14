@@ -393,6 +393,10 @@ Root {
         ),
         query_max_inflight: 128,
         query_heavy_max_inflight: 32,
+        query_fanout_max_retained_bytes: Bytes(
+            64000000,
+        ),
+        app_api_routed_read_body_read_timeout: 10s,
         query_queue_timeout: 25ms,
         tx_rate_per_authority_per_sec: Some(
             10000,
@@ -436,8 +440,6 @@ Root {
         api_fee_receiver: None,
         soranet_privacy_ingest: SoranetPrivacyIngest {
             enabled: false,
-            require_token: true,
-            tokens: [],
             rate_per_sec: Some(
                 8,
             ),
@@ -486,6 +488,7 @@ Root {
         operator_signatures: ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: true,
+            body_read_timeout: 10s,
             allowed_public_keys: [],
             max_clock_skew: 60s,
             nonce_ttl: 300s,
@@ -532,6 +535,8 @@ Root {
         zk_prover_enabled: false,
         zk_prover_scan_period_secs: 30,
         zk_prover_reports_ttl_secs: 604800,
+        zk_prover_reports_max_count: 4096,
+        zk_prover_reports_max_bytes: 268435456,
         zk_prover_max_inflight: 2,
         zk_prover_max_scan_bytes: 16777216,
         zk_prover_max_scan_millis: 2000,
@@ -579,7 +584,7 @@ Root {
             profiles: [],
             store_dir: None,
             store_retention_secs: 0,
-            store_max_records: 0,
+            store_max_records: 256,
             audit_export_dir: None,
             embedded_signature_policy: None,
             signer: None,
@@ -599,6 +604,8 @@ Root {
         transaction_ingress: TransactionIngress {
             max_concurrent_compute_jobs: 4,
             max_batch_transactions: 512,
+            verified_source_max_concurrent_compiles: 1,
+            verified_source_body_read_timeout: 10s,
         },
         da_ingest: DaIngest {
             replay_cache_capacity: 4096,
@@ -888,7 +895,10 @@ Root {
                 enabled: false,
                 state_dir: None,
                 ipfs_api_url: None,
+                head_mode: "signed_http",
                 signed_head_url: None,
+                ipns_name: None,
+                ipns_key_name: None,
                 ipfs_authenticator_handle: None,
                 ipfs_authenticator_revision: None,
                 ipfs_authenticator_policy_digest: None,

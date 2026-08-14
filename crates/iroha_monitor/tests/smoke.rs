@@ -1,23 +1,19 @@
 //! Smoke tests for the refactored `iroha_monitor` CLI.
-
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
 };
-
 fn monitor_bin() -> Option<PathBuf> {
     std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
 }
-
 #[test]
 fn spawn_lite_smoke_renders_frames() {
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;
     };
-
     let mut child = Command::new(bin)
         .args([
             "--spawn-lite",
@@ -32,14 +28,11 @@ fn spawn_lite_smoke_renders_frames() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn iroha_monitor --spawn-lite");
-
     thread::sleep(Duration::from_millis(1200));
-
     let _ = child.kill();
     let output = child
         .wait_with_output()
         .expect("wait for iroha_monitor output");
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("[headless]"),
@@ -52,14 +45,12 @@ fn spawn_lite_smoke_renders_frames() {
         stdout.chars().take(300).collect::<String>()
     );
 }
-
 #[test]
 fn headless_max_frames_triggers_auto_exit() {
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;
     };
-
     let status = Command::new(bin)
         .args([
             "--spawn-lite",
@@ -75,13 +66,11 @@ fn headless_max_frames_triggers_auto_exit() {
         .env("TERM", "dumb")
         .status()
         .expect("spawn iroha_monitor --spawn-lite with auto-exit");
-
     assert!(
         status.success(),
         "monitor should exit cleanly with capped frames"
     );
 }
-
 #[test]
 fn attach_mode_with_stubs_runs_cleanly() {
     let Some(addr1) = spawn_status_metrics_stub() else {
@@ -92,12 +81,10 @@ fn attach_mode_with_stubs_runs_cleanly() {
         eprintln!("skipping attach_mode_with_stubs_runs_cleanly: no stub addr");
         return;
     };
-
     let Some(bin) = monitor_bin() else {
         eprintln!("skipping: monitor binary path not provided by cargo");
         return;
     };
-
     let mut child = Command::new(bin)
         .args([
             "--attach",
@@ -112,17 +99,13 @@ fn attach_mode_with_stubs_runs_cleanly() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn iroha_monitor --attach <stubs>");
-
     thread::sleep(Duration::from_millis(1500));
-
     let _ = child.kill();
     let output = child
         .wait_with_output()
         .expect("wait for iroha_monitor output");
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-
     assert!(stdout.contains("[headless]"));
     assert!(stdout.contains("telemetry online"));
     assert!(
@@ -130,10 +113,8 @@ fn attach_mode_with_stubs_runs_cleanly() {
         "expected headless fallback notice in stderr: {stderr}"
     );
 }
-
 fn spawn_status_metrics_stub() -> Option<std::net::SocketAddr> {
     use axum::{Router, response::IntoResponse, routing::get};
-
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async move {
         let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await

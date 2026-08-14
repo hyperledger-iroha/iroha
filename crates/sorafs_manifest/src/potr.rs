@@ -1,12 +1,9 @@
 //! Proof-of-Timed Retrieval (PoTR) receipt schemas.
-
+use crate::{AdmissionRecord, proof_stream::ProofStreamTier};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
-
-use crate::{AdmissionRecord, proof_stream::ProofStreamTier};
-
 /// Current PoTR receipt schema version.
 pub const POTR_RECEIPT_VERSION_V1: u8 = 1;
 /// Domain separator prepended to canonical unsigned receipt bytes before signing.
@@ -17,7 +14,8 @@ pub const POTR_RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.potr.receipt.digest.v1
 pub const POTR_REQUEST_SCOPE_DOMAIN_V1: &[u8] = b"sorafs.potr.request-scope.v1\0";
 /// Maximum UTF-8 byte length accepted for an optional receipt note.
 pub const POTR_RECEIPT_MAX_NOTE_BYTES_V1: usize = 1_024;
-
+const POTR_RECEIPT_SIGNING_PAYLOAD_MAX_BYTES_V1: usize = 8 * 1_024;
+const POTR_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 16 * 1_024;
 /// Receipt emitted after completing a timed retrieval probe.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PotrReceiptV1 {
@@ -56,7 +54,6 @@ pub struct PotrReceiptV1 {
     /// Provider attestation over the receipt payload.
     pub provider_signature: Option<PotrSignatureV1>,
 }
-
 /// Detached signature covering a PoTR receipt.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PotrSignatureV1 {
@@ -67,7 +64,111 @@ pub struct PotrSignatureV1 {
     /// Raw signature bytes.
     pub signature: Vec<u8>,
 }
-
+mod borrowed_norito {
+    use norito::core::NoritoSerialize;
+    pub(super) struct Value<'a, T>(pub(super) &'a T);
+    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            T::schema_hash()
+        }
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+}
+#[derive(NoritoSerialize)]
+struct PotrReceiptSigningViewWireV1<'a> {
+    version: u8,
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    tier: ProofStreamTier,
+    deadline_ms: u32,
+    latency_ms: u32,
+    status: PotrStatus,
+    requested_at_ms: u64,
+    responded_at_ms: u64,
+    recorded_at_ms: u64,
+    range_start: u64,
+    range_end: u64,
+    request_id: Option<[u8; 16]>,
+    trace_id: Option<[u8; 16]>,
+    note: Option<borrowed_norito::Value<'a, String>>,
+    gateway_signature: Option<PotrSignatureV1>,
+    provider_signature: Option<PotrSignatureV1>,
+}
+struct PotrReceiptSigningViewV1<'a>(PotrReceiptSigningViewWireV1<'a>);
+impl<'a> PotrReceiptSigningViewV1<'a> {
+    fn from_receipt(receipt: &'a PotrReceiptV1) -> Self {
+        Self(PotrReceiptSigningViewWireV1 {
+            version: receipt.version,
+            manifest_digest: receipt.manifest_digest,
+            provider_id: receipt.provider_id,
+            tier: receipt.tier,
+            deadline_ms: receipt.deadline_ms,
+            latency_ms: receipt.latency_ms,
+            status: receipt.status,
+            requested_at_ms: receipt.requested_at_ms,
+            responded_at_ms: receipt.responded_at_ms,
+            recorded_at_ms: receipt.recorded_at_ms,
+            range_start: receipt.range_start,
+            range_end: receipt.range_end,
+            request_id: receipt.request_id,
+            trace_id: receipt.trace_id,
+            note: receipt.note.as_ref().map(borrowed_norito::Value),
+            gateway_signature: None,
+            provider_signature: None,
+        })
+    }
+}
+impl norito::core::NoritoSerialize for PotrReceiptSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <PotrReceiptV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+struct AdmittedVecWriter<'a> {
+    bytes: &'a mut Vec<u8>,
+    maximum: usize,
+}
+impl std::io::Write for AdmittedVecWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .filter(|next| *next <= self.maximum)
+            .ok_or_else(|| std::io::Error::other("PoTR signing payload exceeded admission"))?;
+        self.bytes.extend_from_slice(bytes);
+        debug_assert_eq!(self.bytes.len(), next);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn signing_payload_encoding_error() -> PotrReceiptValidationError {
+    PotrReceiptValidationError::InvalidSignature {
+        context: "receipt",
+        reason: "failed to encode receipt for signature verification",
+    }
+}
 impl PotrSignatureV1 {
     /// Validate signature lengths for the advertised algorithm.
     pub fn validate(&self, context: &'static str) -> Result<(), PotrReceiptValidationError> {
@@ -112,7 +213,6 @@ impl PotrSignatureV1 {
         }
         Ok(())
     }
-
     /// Verify the signature against the provided receipt payload.
     pub fn verify(
         &self,
@@ -186,7 +286,6 @@ impl PotrSignatureV1 {
         Ok(())
     }
 }
-
 fn ed25519_public_key_error_reason(reason: &str) -> &'static str {
     if reason.contains("all zero") {
         "ed25519 public key and signature material must not be all zero"
@@ -196,7 +295,6 @@ fn ed25519_public_key_error_reason(reason: &str) -> &'static str {
         "invalid public key"
     }
 }
-
 fn ed25519_signature_error_reason(reason: &str) -> &'static str {
     if reason.contains("all zero") {
         "ed25519 public key and signature material must not be all zero"
@@ -208,7 +306,6 @@ fn ed25519_signature_error_reason(reason: &str) -> &'static str {
         "invalid signature material"
     }
 }
-
 /// Supported signature algorithms for PoTR receipts.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(tag = "algorithm")]
@@ -221,7 +318,6 @@ pub enum PotrSignatureAlgorithm {
     #[norito(rename = "ml_dsa_65")]
     MlDsa65 = 2,
 }
-
 impl norito::json::JsonSerialize for PotrSignatureAlgorithm {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -231,26 +327,42 @@ impl norito::json::JsonSerialize for PotrSignatureAlgorithm {
         norito::json::write_json_string(label, out);
     }
 }
-
 impl PotrReceiptV1 {
     /// Return the exact domain-separated bytes covered by both receipt signatures.
     pub fn signing_payload_bytes(&self) -> Result<Vec<u8>, PotrReceiptValidationError> {
-        let mut unsigned = self.clone();
-        unsigned.gateway_signature = None;
-        unsigned.provider_signature = None;
-        let canonical = norito::to_bytes(&unsigned).map_err(|_| {
-            PotrReceiptValidationError::InvalidSignature {
-                context: "receipt",
-                reason: "failed to encode receipt for signature verification",
-            }
-        })?;
-        let mut payload =
-            Vec::with_capacity(POTR_RECEIPT_SIGNATURE_DOMAIN_V1.len() + canonical.len());
+        if self
+            .note
+            .as_ref()
+            .is_some_and(|note| note.len() > POTR_RECEIPT_MAX_NOTE_BYTES_V1)
+        {
+            return Err(PotrReceiptValidationError::NoteTooLong);
+        }
+        let unsigned = PotrReceiptSigningViewV1::from_receipt(self);
+        let frame_len = norito::core::encoded_frame_len(&unsigned)
+            .map_err(|_| signing_payload_encoding_error())?;
+        let payload_len = POTR_RECEIPT_SIGNATURE_DOMAIN_V1
+            .len()
+            .checked_add(frame_len)
+            .filter(|length| *length <= POTR_RECEIPT_SIGNING_PAYLOAD_MAX_BYTES_V1)
+            .ok_or_else(signing_payload_encoding_error)?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(payload_len)
+            .map_err(|_| signing_payload_encoding_error())?;
         payload.extend_from_slice(POTR_RECEIPT_SIGNATURE_DOMAIN_V1);
-        payload.extend_from_slice(&canonical);
+        norito::core::write_frame_to_writer(
+            &unsigned,
+            &mut AdmittedVecWriter {
+                bytes: &mut payload,
+                maximum: payload_len,
+            },
+        )
+        .map_err(|_| signing_payload_encoding_error())?;
+        if payload.len() != payload_len {
+            return Err(signing_payload_encoding_error());
+        }
         Ok(payload)
     }
-
     /// Validate the canonical receipt fields before signatures are attached.
     ///
     /// This is the signing-boundary validator: signers should call it before
@@ -337,7 +449,6 @@ impl PotrReceiptV1 {
         }
         Ok(())
     }
-
     /// Validates invariants required for a final signed PoTR receipt.
     pub fn validate(&self) -> Result<(), PotrReceiptValidationError> {
         self.validate_unsigned()?;
@@ -360,7 +471,6 @@ impl PotrReceiptV1 {
         provider_signature.verify("provider", &payload)?;
         Ok(())
     }
-
     /// Validate both signers against runtime-governed key material.
     ///
     /// Self-advertised receipt keys are never sufficient for production
@@ -404,22 +514,36 @@ impl PotrReceiptV1 {
         }
         Ok(())
     }
-
     /// Return the exact canonical bytes persisted and exported for this receipt.
     pub fn signed_receipt_bytes(&self) -> Result<Vec<u8>, PotrReceiptValidationError> {
         self.validate()?;
-        norito::to_bytes(self).map_err(|_| PotrReceiptValidationError::CanonicalEncoding)
+        norito::core::to_bytes_bounded(self, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1)
+            .map_err(|_| PotrReceiptValidationError::CanonicalEncoding)
     }
-
     /// Derive the authoritative exactly-once identity of the final signed receipt.
     pub fn signed_receipt_digest(&self) -> Result<[u8; 32], PotrReceiptValidationError> {
-        let canonical = self.signed_receipt_bytes()?;
+        self.validate()?;
+        let frame_len = norito::core::encoded_frame_len(self)
+            .map_err(|_| PotrReceiptValidationError::CanonicalEncoding)?;
+        if frame_len > POTR_RECEIPT_MAX_CANONICAL_BYTES_V1 {
+            return Err(PotrReceiptValidationError::CanonicalEncoding);
+        }
+        struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+        impl std::io::Write for Blake3Writer<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.update(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
         let mut hasher = blake3::Hasher::new();
         hasher.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
-        hasher.update(&canonical);
+        norito::core::write_frame_to_writer(self, &mut Blake3Writer(&mut hasher))
+            .map_err(|_| PotrReceiptValidationError::CanonicalEncoding)?;
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Return the stable request scope used to detect reordered or conflicting replay.
     pub fn request_scope_digest(&self) -> Result<[u8; 32], PotrReceiptValidationError> {
         let request_id = self
@@ -432,7 +556,6 @@ impl PotrReceiptV1 {
         ))
     }
 }
-
 /// Derive the authoritative exactly-once identity for one PoTR request scope.
 ///
 /// Gateways can compute this identity before a receipt exists, while
@@ -450,7 +573,6 @@ pub fn potr_request_scope_digest_v1(
     hasher.update(&request_id);
     *hasher.finalize().as_bytes()
 }
-
 /// Outcome classification for PoTR receipts.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub enum PotrStatus {
@@ -465,7 +587,6 @@ pub enum PotrStatus {
     /// Client aborted the request before completion.
     ClientCancelled,
 }
-
 impl norito::json::JsonSerialize for PotrStatus {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -478,7 +599,6 @@ impl norito::json::JsonSerialize for PotrStatus {
         norito::json::write_json_string(label, out);
     }
 }
-
 /// Attach both mandatory signatures to a PoTR receipt using the v1 algorithms.
 pub fn sign_potr_receipt_v1(
     mut receipt: PotrReceiptV1,
@@ -523,7 +643,6 @@ pub fn sign_potr_receipt_v1(
         .map_err(PotrReceiptSigningError::Receipt)?;
     Ok(receipt)
 }
-
 /// Errors while attaching the mandatory v1 PoTR signatures.
 #[derive(Debug, Error)]
 pub enum PotrReceiptSigningError {
@@ -543,7 +662,6 @@ pub enum PotrReceiptSigningError {
     #[error("signed PoTR receipt failed validation: {0}")]
     Receipt(#[source] PotrReceiptValidationError),
 }
-
 /// Validation errors for [`PotrReceiptV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PotrReceiptValidationError {
@@ -611,14 +729,11 @@ pub enum PotrReceiptValidationError {
         reason: &'static str,
     },
 }
-
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
-
     use super::*;
     use crate::proof_stream::ProofStreamTier;
-
+    use ed25519_dalek::{Signer, SigningKey};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -628,7 +743,6 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn unsigned_receipt() -> PotrReceiptV1 {
         PotrReceiptV1 {
             version: POTR_RECEIPT_VERSION_V1,
@@ -650,19 +764,16 @@ mod tests {
             provider_signature: None,
         }
     }
-
     fn base_receipt() -> PotrReceiptV1 {
         let mut receipt = unsigned_receipt();
         resign(&mut receipt);
         receipt
     }
-
     fn resign(receipt: &mut PotrReceiptV1) {
         receipt.gateway_signature =
             Some(sign_receipt(receipt, &SigningKey::from_bytes(&[0x11; 32])));
         receipt.provider_signature = Some(sign_receipt_mldsa(receipt, &[0x31; 32]));
     }
-
     fn sign_receipt(receipt: &PotrReceiptV1, signing_key: &SigningKey) -> PotrSignatureV1 {
         let payload = receipt.signing_payload_bytes().expect("payload bytes");
         let signature = signing_key.sign(&payload);
@@ -672,7 +783,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         }
     }
-
     fn sign_receipt_mldsa(receipt: &PotrReceiptV1, seed: &[u8]) -> PotrSignatureV1 {
         let payload = receipt.signing_payload_bytes().expect("payload bytes");
         let key_pair = iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
@@ -690,13 +800,49 @@ mod tests {
             signature: signature.payload().to_vec(),
         }
     }
-
+    fn supported_layouts() -> [u8; 8] {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+        [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ]
+    }
+    fn historical_signing_payload(receipt: &PotrReceiptV1) -> Vec<u8> {
+        let mut unsigned = receipt.clone();
+        unsigned.gateway_signature = None;
+        unsigned.provider_signature = None;
+        let canonical = norito::to_bytes(&unsigned).expect("historical unsigned receipt frame");
+        let mut payload =
+            Vec::with_capacity(POTR_RECEIPT_SIGNATURE_DOMAIN_V1.len() + canonical.len());
+        payload.extend_from_slice(POTR_RECEIPT_SIGNATURE_DOMAIN_V1);
+        payload.extend_from_slice(&canonical);
+        payload
+    }
+    #[test]
+    fn borrowed_signing_payload_preserves_historical_bytes_for_every_layout() {
+        let receipt = base_receipt();
+        for flags in supported_layouts() {
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                receipt
+                    .signing_payload_bytes()
+                    .expect("bounded signing payload"),
+                historical_signing_payload(&receipt),
+                "borrowed PoTR signing payload changed for flags 0x{flags:02x}"
+            );
+        }
+    }
     #[test]
     fn receipt_validates() {
         let receipt = base_receipt();
         assert_eq!(receipt.validate(), Ok(()));
     }
-
     #[test]
     fn unsigned_receipt_validation_checks_semantics_without_signatures() {
         let mut receipt = unsigned_receipt();
@@ -710,7 +856,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn zero_deadline_rejected() {
         let mut receipt = base_receipt();
@@ -720,7 +865,6 @@ mod tests {
             Err(PotrReceiptValidationError::ZeroDeadline)
         );
     }
-
     #[test]
     fn latency_beyond_deadline_rejected_for_success() {
         let mut receipt = base_receipt();
@@ -736,12 +880,10 @@ mod tests {
                 deadline_ms: receipt.deadline_ms,
             })
         );
-
         receipt.status = PotrStatus::MissedDeadline;
         resign(&mut receipt);
         assert_eq!(receipt.validate(), Ok(()));
     }
-
     #[test]
     fn range_start_beyond_end_rejected() {
         let mut receipt = base_receipt();
@@ -755,7 +897,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn response_before_request_rejected() {
         let mut receipt = base_receipt();
@@ -768,7 +909,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn latency_mismatch_rejected() {
         let mut receipt = base_receipt();
@@ -781,7 +921,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn gateway_signature_verifies() {
         let mut receipt = base_receipt();
@@ -789,14 +928,12 @@ mod tests {
         receipt.gateway_signature = Some(sign_receipt(&receipt, &signing_key));
         assert_eq!(receipt.validate(), Ok(()));
     }
-
     #[test]
     fn provider_signature_verifies_mldsa65() {
         let mut receipt = base_receipt();
         receipt.provider_signature = Some(sign_receipt_mldsa(&receipt, &[0x32; 32]));
         assert_eq!(receipt.validate(), Ok(()));
     }
-
     #[test]
     fn gateway_signature_rejects_invalid_signature() {
         let mut receipt = base_receipt();
@@ -812,7 +949,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn gateway_signature_rejects_malformed_mldsa65_lengths() {
         for label in ["short-public-key", "short-signature", "overlong-signature"] {
@@ -835,7 +971,6 @@ mod tests {
                 _ => unreachable!("covered labels"),
             }
             receipt.provider_signature = Some(signature);
-
             let Err(err) = receipt.validate() else {
                 panic!("{label} ML-DSA signature material must fail validation");
             };
@@ -851,7 +986,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn gateway_signature_rejects_all_zero_signature_material() {
         let mut receipt = base_receipt();
@@ -867,11 +1001,9 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn gateway_signature_rejects_malformed_signature_r() {
         let signing_key = SigningKey::from_bytes(&[0x22; 32]);
-
         for (label, replacement_r, expected_reason) in [
             (
                 "small-order",
@@ -888,7 +1020,6 @@ mod tests {
             let mut signature = sign_receipt(&receipt, &signing_key);
             signature.signature[..32].copy_from_slice(&replacement_r);
             receipt.gateway_signature = Some(signature);
-
             let Err(err) = receipt.validate() else {
                 panic!("{label} signature R must fail validation");
             };
@@ -904,7 +1035,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn gateway_signature_rejects_invalid_length() {
         let mut receipt = base_receipt();
@@ -921,7 +1051,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn manifest_and_provider_must_be_non_zero() {
         let mut receipt = base_receipt();
@@ -937,7 +1066,6 @@ mod tests {
             Err(PotrReceiptValidationError::InvalidProviderId)
         );
     }
-
     #[test]
     fn both_signatures_and_request_id_are_mandatory() {
         let mut receipt = base_receipt();
@@ -946,14 +1074,12 @@ mod tests {
             receipt.validate(),
             Err(PotrReceiptValidationError::MissingGatewaySignature)
         );
-
         let mut receipt = base_receipt();
         receipt.provider_signature = None;
         assert_eq!(
             receipt.validate(),
             Err(PotrReceiptValidationError::MissingProviderSignature)
         );
-
         let mut receipt = base_receipt();
         receipt.request_id = None;
         assert_eq!(
@@ -961,11 +1087,15 @@ mod tests {
             Err(PotrReceiptValidationError::MissingRequestId)
         );
     }
-
     #[test]
     fn signed_digest_binds_both_signatures_and_request_scope_is_stable() {
         let receipt = base_receipt();
         let digest = receipt.signed_receipt_digest().expect("signed digest");
+        let historical_frame = norito::to_bytes(&receipt).expect("historical signed receipt frame");
+        let mut historical = blake3::Hasher::new();
+        historical.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
+        historical.update(&historical_frame);
+        assert_eq!(digest, *historical.finalize().as_bytes());
         assert_ne!(digest, [0; 32]);
         let scope = receipt.request_scope_digest().expect("request scope");
         assert_eq!(
@@ -977,7 +1107,6 @@ mod tests {
             ),
             "pre-receipt request-scope derivation must match the signed receipt"
         );
-
         let mut replay = receipt.clone();
         replay.recorded_at_ms = replay.recorded_at_ms.saturating_add(1);
         replay.gateway_signature =

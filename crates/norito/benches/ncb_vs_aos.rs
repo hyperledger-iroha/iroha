@@ -2,7 +2,6 @@
 //!
 //! Focuses on a representative shape: (u64, String, bool) with varying batch sizes.
 //! Uses bare payloads (no Norito header) for apples-to-apples comparison.
-
 #[cfg(feature = "bench-internal")]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 #[cfg(feature = "bench-internal")]
@@ -11,7 +10,6 @@ use norito::NoritoSerialize as _;
 use norito::codec::{Decode as _, Encode as _};
 #[cfg(feature = "bench-internal")]
 use norito::columnar as ncb;
-
 #[cfg(feature = "bench-internal")]
 fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     // Deterministic data with short and mid-sized names to exercise var-width
@@ -30,7 +28,6 @@ fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     }
     out
 }
-
 #[cfg(feature = "bench-internal")]
 fn bench_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_u64_str_bool");
@@ -40,14 +37,12 @@ fn bench_encode(c: &mut Criterion) {
             .iter()
             .map(|(id, s, b)| (*id, s.as_str(), *b))
             .collect();
-
         group.bench_with_input(BenchmarkId::new("AoS_encode", n), &n, |b, &_n| {
             b.iter(|| {
                 let bytes = aos_owned.encode();
                 std::hint::black_box(bytes)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("AoS_encode_hint", n), &n, |b, &_n| {
             b.iter(|| {
                 let hint = aos_owned.encoded_len_hint().unwrap_or(0);
@@ -56,14 +51,12 @@ fn bench_encode(c: &mut Criterion) {
                 std::hint::black_box(buf)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("NCB_offsets_encode", n), &n, |b, &_n| {
             b.iter(|| {
                 let bytes = ncb::encode_ncb_u64_str_bool_no_dict(&ncb_borrowed);
                 std::hint::black_box(bytes)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("NCB_dict_encode", n), &n, |b, &_n| {
             b.iter(|| {
                 let bytes = ncb::encode_ncb_u64_str_bool_force_dict(&ncb_borrowed);
@@ -73,7 +66,6 @@ fn bench_encode(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[cfg(feature = "bench-internal")]
 fn bench_decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode_u64_str_bool");
@@ -83,13 +75,11 @@ fn bench_decode(c: &mut Criterion) {
             .iter()
             .map(|(id, s, b)| (*id, s.as_str(), *b))
             .collect();
-
         // Pre-encode once per size
         let aos_bytes = aos_owned.encode();
         let ncb_bytes_offsets = ncb::encode_ncb_u64_str_bool_no_dict(&ncb_borrowed);
         let ncb_bytes_dict = ncb::encode_ncb_u64_str_bool_force_dict(&ncb_borrowed);
         let ncb_bytes_delta = ncb::encode_ncb_u64_str_bool_delta(&ncb_borrowed);
-
         group.bench_with_input(
             BenchmarkId::new("AoS_decode_materialize", n),
             &n,
@@ -105,7 +95,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_offsets_decode_view_iter", n),
             &n,
@@ -125,7 +114,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         // Filtered scans: compare dense-iterator over flag==true vs row-wise filter
         group.bench_with_input(
             BenchmarkId::new("NCB_offsets_names_flagtrue_dense", n),
@@ -141,7 +129,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_offsets_names_flagtrue_rowwise", n),
             &n,
@@ -172,7 +159,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_offsets_names_flagtrue_dense_popcnt", n),
             &n,
@@ -187,7 +173,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         // Filtered scans: compare dense-iterator over flag==true vs row-wise filter
         group.bench_with_input(
             BenchmarkId::new("NCB_offsets_names_flagtrue_dense", n),
@@ -307,7 +292,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_offsets_decode_materialize", n),
             &n,
@@ -319,7 +303,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_delta_decode_view_iter", n),
             &n,
@@ -337,7 +320,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_dict_decode_view_iter", n),
             &n,
@@ -356,7 +338,6 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_dict_decode_materialize", n),
             &n,
@@ -371,13 +352,10 @@ fn bench_decode(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[cfg(feature = "bench-internal")]
 criterion_group!(benches, bench_encode, bench_decode);
-
 #[cfg(feature = "bench-internal")]
 criterion_main!(benches);
-
 #[cfg(not(feature = "bench-internal"))]
 fn main() {
     eprintln!("Enable the `bench-internal` feature to run this benchmark.");

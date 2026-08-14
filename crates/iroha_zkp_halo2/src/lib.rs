@@ -18,10 +18,8 @@
 //!   as deterministic implementations mature.
 //! - API is designed to be no-std-friendly in the future, but currently
 //!   targets `std` for simplicity.
-
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
-
 pub mod backend;
 pub mod confidential;
 pub mod envelope;
@@ -35,9 +33,14 @@ mod norito_types;
 mod params;
 mod poly;
 pub mod poseidon;
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "shared test-directory helper is retained for parked storage-backed tests"
+)]
+mod testing;
 mod transcript;
 pub mod vega;
-
 // Re-exports for the default (Pallas) backend.
 #[cfg(feature = "goldilocks_backend")]
 pub use backend::goldilocks::{
@@ -78,7 +81,6 @@ pub use norito_types::{
     ZkCurveId,
 };
 pub use transcript::Transcript;
-
 /// Resource limits for standalone `OpenVerifyEnvelope` decoding.
 ///
 /// Limits are always finite. Runtime callers should construct this value from
@@ -91,13 +93,11 @@ pub struct OpenVerifyLimits {
     /// Maximum allowed transcript label length in bytes.
     max_transcript_label_len: usize,
 }
-
 impl OpenVerifyLimits {
     /// Conservative V1 circuit/domain size exponent ceiling.
     pub const DEFAULT_MAX_K: u32 = 16;
     /// Conservative V1 transcript-label byte ceiling.
     pub const DEFAULT_MAX_TRANSCRIPT_LABEL_LEN: usize = 64;
-
     /// Creates an explicit finite limit set.
     #[must_use]
     pub const fn new(max_k: u32, max_transcript_label_len: usize) -> Self {
@@ -107,33 +107,27 @@ impl OpenVerifyLimits {
         }
     }
 }
-
 impl Default for OpenVerifyLimits {
     fn default() -> Self {
         Self::new(Self::DEFAULT_MAX_K, Self::DEFAULT_MAX_TRANSCRIPT_LABEL_LEN)
     }
 }
-
 /// Crate constants and domain separation tags.
 pub mod constants {
     /// Domain Separation Tag for generator derivation and transcript usage.
     pub const DST: &str = "IROHA-ZK-HALO2-IPA-v1";
 }
-
 // Test module (private)
 #[cfg(test)]
 mod tests;
-
 pub mod norito_helpers {
     //! Conversions between internal types and Norito wire types.
-    use std::sync::Arc;
-
     use super::*;
     use crate::{
         backend::{IpaBackend, pallas::PallasBackend},
         errors::Error,
     };
-
+    use std::sync::Arc;
     /// Encode the selector for a backend's canonical parameters.
     pub fn params_to_wire<B: IpaBackend>(params: &crate::params::Params<B>) -> IpaParams {
         IpaParams {
@@ -142,14 +136,12 @@ pub mod norito_helpers {
             n: params.n() as u32,
         }
     }
-
     /// Decode parameters for a specific backend.
     pub fn params_from_wire<B: IpaBackend + 'static>(
         w: &IpaParams,
     ) -> Result<Arc<crate::params::Params<B>>, Error> {
         crate::params::params_from_wire_backend::<B>(w)
     }
-
     /// Encode an IPA proof for transport.
     pub fn proof_to_wire<B: IpaBackend>(proof: &crate::ipa::IpaProof<B>) -> IpaProofData {
         IpaProofData {
@@ -160,14 +152,12 @@ pub mod norito_helpers {
             b_final: proof.b_final.to_bytes(),
         }
     }
-
     /// Decode an IPA proof for a specific backend.
     pub fn proof_from_wire<B: IpaBackend>(
         w: &IpaProofData,
     ) -> Result<crate::ipa::IpaProof<B>, Error> {
         proof_from_wire_backend::<B>(w)
     }
-
     fn proof_from_wire_backend<B: IpaBackend>(
         w: &IpaProofData,
     ) -> Result<crate::ipa::IpaProof<B>, Error> {
@@ -201,7 +191,6 @@ pub mod norito_helpers {
             b_final,
         })
     }
-
     /// Encode the public portion of a polynomial opening.
     pub fn poly_open_public<B: IpaBackend>(
         n: usize,
@@ -218,12 +207,10 @@ pub mod norito_helpers {
             p_g: p_g.to_bytes(),
         }
     }
-
     /// Decode and dispatch a polynomial opening envelope according to its backend.
     pub fn decode_envelope(env: &OpenVerifyEnvelope) -> Result<DecodedEnvelope, Error> {
         decode_envelope_with_limits(env, OpenVerifyLimits::default())
     }
-
     /// Decode and dispatch a polynomial opening envelope with explicit resource limits.
     pub fn decode_envelope_with_limits(
         env: &OpenVerifyEnvelope,
@@ -251,7 +238,6 @@ pub mod norito_helpers {
         validate_proof_rounds(env.params.n as usize, env.proof.l.len(), env.proof.r.len())?;
         decode_envelope_unchecked(env)
     }
-
     fn validate_envelope_limits(
         env: &OpenVerifyEnvelope,
         limits: OpenVerifyLimits,
@@ -296,7 +282,6 @@ pub mod norito_helpers {
         }
         Ok(())
     }
-
     fn validate_proof_rounds(n: usize, l_rounds: usize, r_rounds: usize) -> Result<(), Error> {
         if l_rounds != r_rounds {
             return Err(Error::InvalidProofShape {
@@ -318,7 +303,6 @@ pub mod norito_helpers {
         }
         Ok(())
     }
-
     fn decode_envelope_unchecked(env: &OpenVerifyEnvelope) -> Result<DecodedEnvelope, Error> {
         if env.params.version != 1 {
             return Err(Error::UnsupportedVersion {
@@ -405,12 +389,10 @@ pub mod norito_helpers {
             backend => Err(Error::UnsupportedBackend { backend }),
         }
     }
-
     /// Convenience wrapper for decoding group bytes under the Pallas backend.
     pub fn group_from_bytes(bytes: &[u8; 32]) -> Result<GroupElem, Error> {
         <PallasBackend as IpaBackend>::Group::from_bytes(bytes)
     }
-
     /// Derive a Pallas verifier witness directly from a transparent opening envelope.
     ///
     /// The witness is reconstructed from the envelope's parameters, public
@@ -435,7 +417,6 @@ pub mod norito_helpers {
             OpenVerifyLimits::default(),
         )
     }
-
     /// Derive a Pallas verifier witness with explicit envelope resource limits.
     ///
     /// This is the bounded form of
@@ -485,7 +466,6 @@ pub mod norito_helpers {
             )?;
         Ok((params, witness))
     }
-
     /// Envelope decoded into backend-specific components.
     #[derive(Debug)]
     pub enum DecodedEnvelope {
@@ -534,11 +514,10 @@ pub mod norito_helpers {
         },
     }
 }
-
 /// Batch verification helpers for OpenVerify envelopes.
 pub mod batch {
+    use super::*;
     use core::num::NonZeroUsize;
-
     use norito_helpers::DecodedEnvelope;
     #[cfg(feature = "parallel")]
     use rayon::prelude::*;
@@ -547,15 +526,11 @@ pub mod batch {
         collections::HashMap,
         sync::{Arc, Mutex, OnceLock},
     };
-
-    use super::*;
-
     #[cfg(feature = "parallel")]
     static LIMITED_POOL_CACHE: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> =
         OnceLock::new();
     #[cfg(feature = "parallel")]
     const LIMITED_POOL_CACHE_MAX_ENTRIES: usize = 16;
-
     #[cfg(feature = "parallel")]
     fn limited_pool(limit: NonZeroUsize) -> Option<Arc<rayon::ThreadPool>> {
         let key = limit.get();
@@ -582,7 +557,6 @@ pub mod batch {
         }
         Some(pool)
     }
-
     /// Execution strategy controls how batch verification work is scheduled.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum Parallelism {
@@ -593,14 +567,12 @@ pub mod batch {
         /// Use at most the provided number of rayon worker threads (>= 1).
         Limited(NonZeroUsize),
     }
-
     /// Options controlling the batch verifier behaviour.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct BatchOptions {
         /// Parallelism strategy for the batch verifier.
         pub parallelism: Parallelism,
     }
-
     impl Default for BatchOptions {
         fn default() -> Self {
             #[cfg(feature = "parallel")]
@@ -617,7 +589,6 @@ pub mod batch {
             }
         }
     }
-
     impl BatchOptions {
         /// Run batch verification sequentially.
         pub const fn sequential() -> Self {
@@ -625,14 +596,12 @@ pub mod batch {
                 parallelism: Parallelism::Sequential,
             }
         }
-
         /// Run batch verification using the ambient rayon pool when available.
         pub const fn auto() -> Self {
             Self {
                 parallelism: Parallelism::Auto,
             }
         }
-
         /// Limit the number of rayon threads used during verification.
         pub const fn limited(max_threads: NonZeroUsize) -> Self {
             Self {
@@ -640,7 +609,6 @@ pub mod batch {
             }
         }
     }
-
     fn verify_single_with_limits(
         env: &OpenVerifyEnvelope,
         limits: OpenVerifyLimits,
@@ -713,7 +681,6 @@ pub mod batch {
             }
         }
     }
-
     fn verify_sequential_with_limits(
         envelopes: &[OpenVerifyEnvelope],
         limits: OpenVerifyLimits,
@@ -723,12 +690,10 @@ pub mod batch {
             .map(|env| verify_single_with_limits(env, limits))
             .collect()
     }
-
     /// Verify multiple `OpenVerifyEnvelope`s and return per-envelope results.
     pub fn verify_open_batch(envelopes: &[OpenVerifyEnvelope]) -> Vec<Result<bool, Error>> {
         verify_open_batch_with_options(envelopes, &BatchOptions::default())
     }
-
     /// Verify multiple `OpenVerifyEnvelope`s using the supplied batch options.
     pub fn verify_open_batch_with_options(
         envelopes: &[OpenVerifyEnvelope],
@@ -736,7 +701,6 @@ pub mod batch {
     ) -> Vec<Result<bool, Error>> {
         verify_open_batch_with_limits(envelopes, options, OpenVerifyLimits::default())
     }
-
     /// Verify multiple `OpenVerifyEnvelope`s with explicit resource limits.
     pub fn verify_open_batch_with_limits(
         envelopes: &[OpenVerifyEnvelope],
@@ -787,11 +751,9 @@ pub mod batch {
             }
         }
     }
-
     #[cfg(all(test, feature = "parallel"))]
     mod tests {
         use super::*;
-
         #[test]
         fn limited_pool_cache_is_bounded() {
             let cache = LIMITED_POOL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));

@@ -1,6 +1,5 @@
 // Unsealed certified-Serve lifecycle worker regression tests.
 // Included lexically by v2_worker::tests to preserve canonical test names.
-
 #[test]
 fn dormant_serve_waiters_fail_stop_without_requester_ordinal_repair() {
     let (service, keys) = fixture_with_block_payload();
@@ -35,7 +34,6 @@ fn dormant_serve_waiters_fail_stop_without_requester_ordinal_repair() {
     let first_scheduler_ordinal = first_carrier.id.0;
     let second_scheduler_ordinal = second_carrier.id.0;
     assert!(first_scheduler_ordinal < second_scheduler_ordinal);
-
     drop(second_carrier);
     drop(first_carrier);
     assert_eq!(
@@ -74,7 +72,6 @@ fn dormant_serve_waiters_fail_stop_without_requester_ordinal_repair() {
         Some(first_scheduler_ordinal.min(second_scheduler_ordinal))
     );
 }
-
 #[test]
 fn fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission() {
     let (mut service, keys) = fixture();
@@ -95,7 +92,6 @@ fn fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission(
         .expect("start finite producer episode")
         .expect("no exact ticket precedes the episode");
     let before = fair_ingress_accounting_snapshot(&ingress);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
         Err(FairV2IngressPushError::Full(_))
@@ -121,7 +117,6 @@ fn fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission(
         );
         assert!(state.producer_episode_active);
     }
-
     drop(producer_episode);
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(request.request(), via)),
@@ -133,13 +128,11 @@ fn fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission(
         assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
         assert!(!state.producer_episode_active);
     }
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire producer-race fixture ticket");
 }
-
 #[test]
 fn fair_ingress_full_prefix_materializes_exact_serve_before_later_churn() {
     let (service, keys) = fixture_with_block_payload();
@@ -174,7 +167,6 @@ fn fair_ingress_full_prefix_materializes_exact_serve_before_later_churn() {
         )),
         Ok(FairV2IngressPushDisposition::Enqueued)
     ));
-
     let mut saw_backpressure = false;
     assert!(
         ingress
@@ -234,7 +226,6 @@ fn fair_ingress_full_prefix_materializes_exact_serve_before_later_churn() {
             Err(V2IoTrySendError::Full(_))
         ));
     }
-
     assert!(matches!(
         command_rx.try_recv(),
         Ok(V2IoCommand::LoadCandidate {
@@ -272,13 +263,11 @@ fn fair_ingress_full_prefix_materializes_exact_serve_before_later_churn() {
             ..
         }) if drained == lifecycle_id
     ));
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire full-prefix fixture gate");
 }
-
 #[test]
 fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
     let (service, keys) = fixture_with_block_payload();
@@ -315,7 +304,6 @@ fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
             )
             .expect("install the frozen I/O predecessor prefix");
     }
-
     let fair_capacity = fair_v2_ingress_required_capacity(service.context.roster.len(), None)
         .expect("fixture roster has representable protected-slot geometry");
     let ingress = FairV2Ingress::new(
@@ -342,7 +330,6 @@ fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
         .bind_certified_serve_gate(gate.clone())
         .expect("bind saturated-prefix Serve gate");
     ingress.open().expect("open saturated-prefix ingress");
-
     let fair_predecessor_height = service.context.height.saturating_add(1);
     let fair_predecessor = InboundBlockMessage::from_transport(
         BlockMessage::V2(wire::ConsensusMessageV2::new(
@@ -403,7 +390,6 @@ fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
             "Fair capacity rejection cannot advance the durable Serve high-watermark"
         );
     }
-
     // The only production transition which removes an undrained carrier
     // from a closed height clears every Fair lane under the same lock.
     // Therefore a dormant head cannot coexist with the saturated volatile
@@ -419,7 +405,6 @@ fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
         Some(first_barrier.scheduler_ordinal())
     );
     assert!(command_tx.queue.lock().serve_ingress_reservation.is_none());
-
     let actor_ordinal_before_retry = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
     let lifecycle_ordinal_before_retry = command_tx.queue.lock().next_serve_admission_ordinal;
     ingress
@@ -450,7 +435,6 @@ fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire fail-stopped saturated-prefix fixture");
 }
-
 #[test]
 fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
     let (service, keys) = fixture_with_block_payload();
@@ -482,7 +466,6 @@ fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
     let predecessor_route = routes.mint_via(predecessor_requester.clone(), via.clone());
     let target_route = routes.mint_via(target_requester.clone(), via.clone());
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
     let predecessor_admission = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::Roster(predecessor_requester.clone()),
@@ -516,7 +499,6 @@ fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
             if lifecycle_id == predecessor_admission.lifecycle_id
     ));
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
@@ -555,7 +537,6 @@ fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
         );
         target_id
     };
-
     command_rx
         .complete_serve_response(predecessor_admission.lifecycle_id, &predecessor_response)
         .expect("seal the frozen predecessor response");
@@ -580,7 +561,6 @@ fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
         );
         assert!(state.serve_barrier_predecessors.is_empty());
     }
-
     let (target_admission, committed) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,
@@ -594,7 +574,6 @@ fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire Serve-only prefix fixture gate");
 }
-
 #[test]
 fn fair_ingress_terminal_retry_replays_without_lifecycle_resurrection() {
     let (service, keys) = fixture_with_block_payload();
@@ -621,7 +600,6 @@ fn fair_ingress_terminal_retry_replays_without_lifecycle_resurrection() {
     );
     let (command_tx, command_rx, _admission) = test_io_command_channel(2);
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             request.request(),
@@ -651,7 +629,6 @@ fn fair_ingress_terminal_retry_replays_without_lifecycle_resurrection() {
             V2IoServeTerminal::Response(response.clone()),
         )
         .expect("terminalize original exact lifecycle");
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             request.request(),
@@ -692,13 +669,11 @@ fn fair_ingress_terminal_retry_replays_without_lifecycle_resurrection() {
         );
         assert!(state.commands.is_empty());
     }
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire terminal replay fixture gate");
 }
-
 #[test]
 fn fair_ingress_higher_view_waits_out_active_family_before_admission() {
     let (service, keys) = fixture_with_block_payload();
@@ -736,7 +711,6 @@ fn fair_ingress_higher_view_waits_out_active_family_before_admission() {
     );
     let (command_tx, command_rx, _admission) = test_io_command_channel(2);
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             original.request(),
@@ -780,7 +754,6 @@ fn fair_ingress_higher_view_waits_out_active_family_before_admission() {
             V2IoServeTerminal::Response(response),
         )
         .expect("terminalize original family");
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             higher.request(),
@@ -826,13 +799,11 @@ fn fair_ingress_higher_view_waits_out_active_family_before_admission() {
             "the logical higher-view owner remains without resurrecting a drained ticket"
         );
     }
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire active-family fixture gate");
 }
-
 #[test]
 fn durable_serve_restart_before_terminal_seal_locally_completes_without_retry() {
     let (service, keys) = fixture_with_block_payload();
@@ -859,7 +830,6 @@ fn durable_serve_restart_before_terminal_seal_locally_completes_without_retry() 
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact body before serving");
     assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
     let first_lifecycle = {
         let (command_tx, command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -891,7 +861,6 @@ fn durable_serve_restart_before_terminal_seal_locally_completes_without_retry() 
             .expect("retire unsealed crash fixture gate");
         admission.lifecycle_id
     };
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -937,7 +906,6 @@ fn durable_serve_restart_before_terminal_seal_locally_completes_without_retry() 
         "startup consumes no new physical scheduler ordinal"
     );
 }
-
 #[test]
 fn durable_new_physical_drain_before_commit_restarts_into_local_completion() {
     let (service, keys) = fixture_with_block_payload();
@@ -963,7 +931,6 @@ fn durable_new_physical_drain_before_commit_restarts_into_local_completion() {
     let _ = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact body before pre-commit crash");
-
     let lifecycle_id = {
         let (command_tx, _command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1053,7 +1020,6 @@ fn durable_new_physical_drain_before_commit_restarts_into_local_completion() {
             .expect("retire pre-commit crash gate");
         admission.lifecycle_id
     };
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -1084,7 +1050,6 @@ fn durable_new_physical_drain_before_commit_restarts_into_local_completion() {
             .is_some()
     );
 }
-
 #[test]
 fn drained_prepared_teardown_never_restores_a_waiter() {
     let (service, keys) = fixture_with_block_payload();
@@ -1099,7 +1064,6 @@ fn drained_prepared_teardown_never_restores_a_waiter() {
     );
     let requester = request.request().requester.clone();
     let via = context.roster[0].validator.clone();
-
     for close_receiver in [false, true] {
         let body_root = TempDir::new().expect("drained teardown body root");
         let serve_root = TempDir::new().expect("drained teardown Serve root");
@@ -1145,7 +1109,6 @@ fn drained_prepared_teardown_never_restores_a_waiter() {
             .as_ref()
             .expect("retain teardown admission")
             .lifecycle_id;
-
         if close_receiver {
             drop(command_rx.take());
         } else {
@@ -1189,7 +1152,6 @@ fn drained_prepared_teardown_never_restores_a_waiter() {
             .expect("retire drained teardown fixture gate");
     }
 }
-
 #[test]
 fn durable_coalesced_retransmission_restart_locally_completes_without_retry() {
     let (service, keys) = fixture_with_block_payload();
@@ -1218,7 +1180,6 @@ fn durable_coalesced_retransmission_restart_locally_completes_without_retry() {
     let _ = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact body before coalesced crash");
-
     let (lifecycle_id, coalesced_ingress_ordinal) = {
         let (command_tx, _command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1243,7 +1204,6 @@ fn durable_coalesced_retransmission_restart_locally_completes_without_retry() {
             &request,
         );
         assert!(matches!(first_commit, CertifiedServeCommit::Queued));
-
         assert!(matches!(
             ingress.try_push(certified_serve_inbound_with_route(
                 request.request(),
@@ -1329,7 +1289,6 @@ fn durable_coalesced_retransmission_restart_locally_completes_without_retry() {
             coalesced_barrier.scheduler_ordinal(),
         )
     };
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -1363,7 +1322,6 @@ fn durable_coalesced_retransmission_restart_locally_completes_without_retry() {
             .is_some()
     );
 }
-
 #[test]
 fn restored_serve_waiter_advances_shared_runtime_source() {
     let (service, keys) = fixture_with_block_payload();
@@ -1408,7 +1366,6 @@ fn restored_serve_waiter_advances_shared_runtime_source() {
     store
         .persist(&persisted)
         .expect("persist exact undrained waiter high-watermark");
-
     let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
     let admission = V2IoAdmission::unbounded_for_tests();
     let (command_tx, _command_rx) = persistent_v2_io_command_channel(
@@ -1440,7 +1397,6 @@ fn restored_serve_waiter_advances_shared_runtime_source() {
         42
     );
 }
-
 #[test]
 fn durable_serve_abort_before_commit_restarts_into_local_completion() {
     let (service, keys) = fixture_with_block_payload();
@@ -1466,7 +1422,6 @@ fn durable_serve_abort_before_commit_restarts_into_local_completion() {
     let _ = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact body before abort crash");
-
     let lifecycle_id = {
         let (command_tx, _command_rx, admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1519,7 +1474,6 @@ fn durable_serve_abort_before_commit_restarts_into_local_completion() {
             .expect("retire abort-before-commit fixture gate");
         lifecycle_id
     };
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -1561,7 +1515,6 @@ fn durable_serve_abort_before_commit_restarts_into_local_completion() {
             .is_some()
     );
 }
-
 #[test]
 fn durable_serve_seal_before_completion_post_restores_terminal_replay() {
     let (service, keys) = fixture_with_block_payload();
@@ -1598,7 +1551,6 @@ fn durable_serve_seal_before_completion_post_restores_terminal_replay() {
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact body before serving");
     assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
     let lifecycle_id = {
         let (command_tx, command_rx, admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1638,7 +1590,6 @@ fn durable_serve_seal_before_completion_post_restores_terminal_replay() {
             .expect("retire sealed-before-post fixture gate");
         prepared.lifecycle_id
     };
-
     let (command_tx, _command_rx, admission) =
         persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
             .expect("restore sealed completion without its channel item");
@@ -1683,7 +1634,6 @@ fn durable_serve_seal_before_completion_post_restores_terminal_replay() {
     drop(gate);
     drop(command_tx);
     drop(_command_rx);
-
     let (command_tx, _command_rx, _admission) =
         persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
             .expect("restart after the terminal replay drained its physical ingress");
@@ -1736,7 +1686,6 @@ fn durable_serve_seal_before_completion_post_restores_terminal_replay() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire post-replay restart fixture gate");
 }
-
 #[test]
 fn durable_serve_seal_survives_post_before_physical_ack() {
     let (service, keys) = fixture_with_block_payload();
@@ -1770,7 +1719,6 @@ fn durable_serve_seal_survives_post_before_physical_ack() {
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact body before serving");
     assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
     let lifecycle_id = {
         let (command_tx, command_rx, admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1824,7 +1772,6 @@ fn durable_serve_seal_survives_post_before_physical_ack() {
         prepared.lifecycle_id
     };
     drop(service);
-
     let (command_tx, _command_rx, admission) =
         persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
             .expect("restore after external post before physical ack");
@@ -1857,7 +1804,6 @@ fn durable_serve_seal_survives_post_before_physical_ack() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire restored post-before-ack fixture gate");
 }
-
 #[test]
 fn durable_serve_state_v5_rejects_v4_header_and_payload_layouts() {
     let (service, _) = fixture();
@@ -1874,7 +1820,6 @@ fn durable_serve_state_v5_rejects_v4_header_and_payload_layouts() {
         5,
         "negative terminal outcomes own a new fixed codec version"
     );
-
     let mut v4_header = frame;
     v4_header[version_offset..version_offset + 2].copy_from_slice(&4_u16.to_le_bytes());
     let header_error = decode_certified_serve_state_frame(&v4_header, u64::MAX)
@@ -1883,7 +1828,6 @@ fn durable_serve_state_v5_rejects_v4_header_and_payload_layouts() {
         header_error.contains("unsupported version 4"),
         "unexpected former-header rejection: {header_error}"
     );
-
     let mut v4_payload = state;
     v4_payload.format_version = 4;
     let v4_payload_frame = encode_certified_serve_state_frame(&v4_payload, u64::MAX)
@@ -1895,7 +1839,6 @@ fn durable_serve_state_v5_rejects_v4_header_and_payload_layouts() {
         "unexpected former-payload rejection: {payload_error}"
     );
 }
-
 #[test]
 fn durable_serve_corruption_fails_closed_without_highwater_reset() {
     let (service, keys) = fixture_with_block_payload();
@@ -1934,7 +1877,6 @@ fn durable_serve_corruption_fails_closed_without_highwater_reset() {
         .expect("durable Serve frame has a checksum-protected payload");
     *last ^= 0xA5;
     fs::write(&state_path, &corrupted).expect("publish corrupt durable Serve state fixture");
-
     let error =
         match persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store) {
             Ok(_) => panic!("corrupt durable Serve state must fail closed"),
@@ -1952,7 +1894,6 @@ fn durable_serve_corruption_fails_closed_without_highwater_reset() {
         "startup failure cannot silently replace the lost ordinal high-watermark"
     );
 }
-
 #[test]
 fn durable_serve_frame_bound_covers_max_layout_manifest_hashes() {
     let (service, keys) = fixture();
@@ -2032,7 +1973,6 @@ fn durable_serve_frame_bound_covers_max_layout_manifest_hashes() {
         expected
     );
 }
-
 #[test]
 fn durable_raw_higher_view_drop_restarts_into_local_successor_completion() {
     let (service, keys) = fixture_with_block_payload();
@@ -2086,7 +2026,6 @@ fn durable_raw_higher_view_drop_restarts_into_local_successor_completion() {
     let _ = body_store
         .store(higher_manifest, canonical_wire)
         .expect("persist higher exact body");
-
     let (lower_id, higher_id, higher_scheduler_ordinal) = {
         let (command_tx, command_rx, _admission) =
             persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
@@ -2117,7 +2056,6 @@ fn durable_raw_higher_view_drop_restarts_into_local_successor_completion() {
                 V2IoServeTerminal::Response(response.clone()),
             )
             .expect("terminalize lower family");
-
         assert!(matches!(
             ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
             Ok(FairV2IngressPushDisposition::Enqueued)
@@ -2146,7 +2084,6 @@ fn durable_raw_higher_view_drop_restarts_into_local_successor_completion() {
                 .serve_replacements
                 .contains_key(&higher_admission.lifecycle_id)
         );
-
         // Closing fair ingress drops the still-undrained raw carrier. This
         // is a rollback to durable retry ownership, not a pre-gate abort.
         ingress.close();
@@ -2218,7 +2155,6 @@ fn durable_raw_higher_view_drop_restarts_into_local_successor_completion() {
             barrier.scheduler_ordinal(),
         )
     };
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         4,
         serve_root.path(),
@@ -2252,7 +2188,6 @@ fn durable_raw_higher_view_drop_restarts_into_local_successor_completion() {
             .is_some()
     );
 }
-
 #[test]
 fn durable_higher_view_abort_republishes_displaced_terminal_before_restart() {
     let (service, keys) = fixture_with_block_payload();
@@ -2296,7 +2231,6 @@ fn durable_higher_view_abort_republishes_displaced_terminal_before_restart() {
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist lower exact body");
     assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
     let lower_id = {
         let (command_tx, command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -2340,7 +2274,6 @@ fn durable_higher_view_abort_republishes_displaced_terminal_before_restart() {
         }
         lower_id
     };
-
     let (command_tx, _command_rx, _admission) =
         persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
             .expect("restore displaced terminal after higher abort");
@@ -2376,7 +2309,6 @@ fn durable_higher_view_abort_republishes_displaced_terminal_before_restart() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire durable replacement-abort replay gate");
 }
-
 #[test]
 fn durable_higher_view_admission_crash_locally_completes_successor_union() {
     let (service, keys) = fixture_with_block_payload();
@@ -2445,7 +2377,6 @@ fn durable_higher_view_admission_crash_locally_completes_successor_union() {
     let _ = body_store
         .store(higher_manifest, canonical_wire)
         .expect("persist higher exact body");
-
     let (lower_id, higher_id, other_id) = {
         let (command_tx, command_rx, _admission) =
             persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
@@ -2480,7 +2411,6 @@ fn durable_higher_view_admission_crash_locally_completes_successor_union() {
                 V2IoServeTerminal::Response(response.clone()),
             )
             .expect("terminalize lower family");
-
         assert!(matches!(
             ingress.try_push(certified_serve_inbound_with_route(
                 higher.request(),
@@ -2505,7 +2435,6 @@ fn durable_higher_view_admission_crash_locally_completes_successor_union() {
                 .contains_key(&higher_admission.lifecycle_id),
             "committed replacement retains the old tombstone until its own seal"
         );
-
         // Force one more durable high-watermark rewrite after the lower
         // tombstone left `serves`. The displaced record must still be
         // projected from `serve_replacements`.
@@ -2532,7 +2461,6 @@ fn durable_higher_view_admission_crash_locally_completes_successor_union() {
             other_id,
         )
     };
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         4,
         serve_root.path(),
@@ -2571,7 +2499,6 @@ fn durable_higher_view_admission_crash_locally_completes_successor_union() {
             .is_some()
     );
 }
-
 #[test]
 fn durable_serve_restore_rejects_capacity_owner_swap_across_replacement() {
     let (service, keys) = fixture_with_block_payload();
@@ -2647,7 +2574,6 @@ fn durable_serve_restore_rejects_capacity_owner_swap_across_replacement() {
             }],
         })
         .expect("publish canonically checksummed owner-swap mutation");
-
     let error =
         match persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store) {
             Ok(_) => panic!("replacement cannot switch its retained capacity owner"),
@@ -2658,7 +2584,6 @@ fn durable_serve_restore_rejects_capacity_owner_swap_across_replacement() {
         "unexpected owner-swap rejection: {error}"
     );
 }
-
 #[test]
 fn durable_serve_state_is_pruned_only_with_successor_rollover_root() {
     let (service, keys) = fixture_with_block_payload();
@@ -2692,7 +2617,6 @@ fn durable_serve_state_is_pruned_only_with_successor_rollover_root() {
     }
     let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
     assert!(state_path.is_file());
-
     // `ProductionV2Services::finish_height` removes this exact per-context
     // root only after typed successor rollover authority is established.
     fs::remove_dir_all(serve_root.path()).expect("simulate established successor cleanup");

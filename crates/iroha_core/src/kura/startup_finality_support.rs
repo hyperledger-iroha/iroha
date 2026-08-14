@@ -56,7 +56,6 @@ const CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY: usize = 64;
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
-
 #[derive(Debug, Clone)]
 struct VerifiedV2FinalityCacheEntry {
     height: u64,
@@ -64,16 +63,13 @@ struct VerifiedV2FinalityCacheEntry {
     bytes_hash: Hash,
     metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug, Clone)]
 struct VerifiedRetainedBlockCacheEntry {
     bytes_hash: Hash,
     metadata: StableSidecarMetadata,
 }
-
 const V2_STARTUP_INHERITED_AUTHORITY_DOMAIN: &[u8] =
     b"iroha:kura:v2-startup-inherited-authority:v1\0";
-
 /// Exact predecessor-controlled inputs of one Sumeragi-v2 height context.
 ///
 /// `next_epoch_snapshot` is projected into the successor's current election
@@ -97,10 +93,8 @@ struct V2StartupInheritedAuthoritySeal {
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
 }
-
 impl V2StartupInheritedAuthoritySeal {
     const VERSION: u16 = 1;
-
     fn from_context(context: &HeightContext, validator_set_pops: &[Vec<u8>]) -> Self {
         Self {
             version: Self::VERSION,
@@ -119,7 +113,6 @@ impl V2StartupInheritedAuthoritySeal {
             leader_seed: context.leader_seed,
         }
     }
-
     fn expected_successor(artifact: &V2FinalityArtifact) -> Option<Self> {
         let height = artifact.height.checked_add(1)?;
         let (epoch, epoch_end_height, mode, roster, validator_set_pops, quorum, leader_seed) =
@@ -168,13 +161,11 @@ impl V2StartupInheritedAuthoritySeal {
             leader_seed,
         })
     }
-
     fn hash(&self) -> Hash {
         let encoded = self.encode();
         Hash::new_from_chunks(&[V2_STARTUP_INHERITED_AUTHORITY_DOMAIN, &encoded])
     }
 }
-
 /// Small immutable projection of one fully verified finality artifact.
 ///
 /// Retaining complete historical artifacts would allow a maximum-size roster
@@ -196,7 +187,6 @@ pub(crate) struct V2StartupFinalityProjection {
     successor_authority_hash: Option<Hash>,
     snapshot_bootstrap: Option<(u64, HashOf<BlockHeader>)>,
 }
-
 impl V2StartupFinalityProjection {
     fn from_artifact(artifact: &V2FinalityArtifact) -> Self {
         let execution = artifact.commit_qc.execution_commitment;
@@ -226,7 +216,6 @@ impl V2StartupFinalityProjection {
                 .map(|anchor| (anchor.snapshot_height, anchor.snapshot_block_hash)),
         }
     }
-
     pub(crate) fn binds_manifest(&self, manifest: &CommitManifest) -> bool {
         manifest.height == self.height
             && manifest.block_hash == self.block_hash
@@ -236,35 +225,28 @@ impl V2StartupFinalityProjection {
             && manifest.commit_qc_hash == Some(self.commit_qc_hash)
             && manifest.commit_authority_hash == Some(self.commit_authority_hash)
     }
-
     pub(crate) const fn commit_qc_hash(&self) -> Hash {
         self.commit_qc_hash
     }
-
     pub(crate) const fn parent_commit_qc_hash(&self) -> Option<Hash> {
         self.parent_commit_qc_hash
     }
-
     pub(crate) const fn inherited_authority_hash(&self) -> Hash {
         self.inherited_authority_hash
     }
-
     pub(crate) const fn successor_authority_hash(&self) -> Option<Hash> {
         self.successor_authority_hash
     }
-
     pub(crate) const fn snapshot_bootstrap(&self) -> Option<(u64, HashOf<BlockHeader>)> {
         self.snapshot_bootstrap
     }
 }
-
 #[derive(Debug, Clone)]
 struct VerifiedV2StartupFinalityEntry {
     finality: VerifiedV2FinalityCacheEntry,
     retained_block: VerifiedRetainedBlockCacheEntry,
     projection: V2StartupFinalityProjection,
 }
-
 #[derive(Debug, Clone)]
 struct StableCanonicalBlockStoreMetadata {
     data: StableSidecarMetadata,
@@ -272,32 +254,27 @@ struct StableCanonicalBlockStoreMetadata {
     hashes: StableSidecarMetadata,
     commit_marker: StableSidecarMetadata,
 }
-
 #[derive(Debug, Clone)]
 struct StableSidecarDirectoryMetadata {
     expected_path: PathBuf,
     canonical_path: Option<PathBuf>,
     metadata: Option<std::fs::Metadata>,
 }
-
 #[derive(Debug, Clone)]
 struct StableSidecarDirectoryInventory {
     directory: StableSidecarDirectoryMetadata,
     files: BTreeMap<PathBuf, StableSidecarMetadata>,
 }
-
 #[derive(Debug, Clone)]
 struct V2StartupReplaySidecar<T> {
     value: T,
     metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug, Clone, Default)]
 struct V2StartupReplaySidecarsAtHeight {
     checkpoint: Option<V2StartupReplaySidecar<WsvCheckpoint>>,
     manifest: Option<V2StartupReplaySidecar<CommitManifest>>,
 }
-
 #[derive(Debug)]
 struct V2StartupFinalityVerificationInventory {
     boundary: ExactReplayBoundary,
@@ -312,7 +289,6 @@ struct V2StartupFinalityVerificationInventory {
     replay_sidecars: Vec<V2StartupReplaySidecarsAtHeight>,
     durable_tip_artifact: Option<V2FinalityArtifact>,
 }
-
 /// Kura-minted identity binding carried from replay planning into active-height
 /// recovery.
 ///
@@ -325,13 +301,11 @@ struct V2StartupFinalityVerificationInventory {
 pub(crate) struct V2StartupReplayStorageBinding {
     inventory: Arc<V2StartupFinalityVerificationInventory>,
 }
-
 impl V2StartupReplayStorageBinding {
     pub(crate) fn replay_boundary(&self) -> &ExactReplayBoundary {
         &self.inventory.boundary
     }
 }
-
 /// Mutation-closed view of the startup finality inventory used by one replay
 /// planning pass.
 ///
@@ -343,35 +317,30 @@ pub(crate) struct V2StartupFinalityVerificationSession<'a> {
     _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
     inventory: Arc<V2StartupFinalityVerificationInventory>,
 }
-
 #[derive(Debug, Clone)]
 struct StableSidecarMetadata {
     canonical_path: PathBuf,
     file: std::fs::Metadata,
     directory: std::fs::Metadata,
 }
-
 #[derive(Debug)]
 struct StableSidecarRead {
     bytes: Vec<u8>,
     bytes_hash: Hash,
     metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug, Clone)]
 struct CertifiedFrontierPairDurabilityAttestation {
     artifact_hash: HashOf<CertifiedLaneBlockArtifact>,
     data_metadata: StableSidecarMetadata,
     index_metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug, Clone)]
 struct CertifiedFrontierArtifactValidationAttestation {
     artifact_hash: HashOf<CertifiedLaneBlockArtifact>,
     bytes_hash: Hash,
     frontier_metadata: StableSidecarMetadata,
 }
-
 #[derive(Debug)]
 struct BoundProgressDirectory {
     expected_path: PathBuf,
@@ -381,7 +350,6 @@ struct BoundProgressDirectory {
     file: std::fs::File,
     metadata: std::fs::Metadata,
 }
-
 #[derive(Debug)]
 struct BoundProgressNamespace {
     data_path: PathBuf,

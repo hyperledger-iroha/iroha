@@ -1,13 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Native AMX multidataspace routing integration coverage.
-
-use std::{
-    collections::BTreeSet,
-    fs,
-    num::{NonZeroU32, NonZeroUsize},
-    time::{Duration, Instant},
-};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -120,17 +112,21 @@ use sorafs_manifest::{
     ReplicationOrderV1, StorageClass as ManifestStorageClass,
     chunker_registry::{MANIFEST_DAG_CODEC, default_descriptor},
 };
+use std::{
+    collections::BTreeSet,
+    fs,
+    num::{NonZeroU32, NonZeroUsize},
+    time::{Duration, Instant},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
-
 #[path = "native_amx_routing/qualification_scenarios.rs"]
 mod qualification_scenarios;
 #[path = "native_amx_routing/selectable_publication_gate.rs"]
 mod selectable_publication_gate;
-
 const PEERS: usize = 4;
 const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
 const RUN_IGNORED_ENV: &str = "IROHA_RUN_IGNORED";
@@ -163,16 +159,13 @@ const MUSUBI_FAULT_PACKAGE: &str = "atomic-replay";
 const MUSUBI_FAULT_NAMESPACE: &str = "musubifault.acme";
 const MUSUBI_FAULT_RETENTION_EPOCH: u64 = 1_000;
 const MUSUBI_FAULT_RENEW_EPOCH: u64 = 500;
-
 #[derive(Clone)]
 struct ConfigLayer(Table);
-
 impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
 }
-
 fn validator_account(index: usize) -> AccountId {
     let mut seed = b"integration_tests::native_amx_routing::validator".to_vec();
     seed.extend_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
@@ -180,7 +173,6 @@ fn validator_account(index: usize) -> AccountId {
         KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("fixture Native AMX validator key");
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn gas_account() -> AccountId {
     let key_pair = KeyPair::try_from_seed(
         b"integration_tests::native_amx_routing::gas".to_vec(),
@@ -189,7 +181,6 @@ fn gas_account() -> AccountId {
     .expect("fixture Native AMX gas key");
     AccountId::new(key_pair.public_key().clone())
 }
-
 #[test]
 fn native_amx_account_fixtures_use_checked_seed_derivation() {
     let mut validator_seed = b"integration_tests::native_amx_routing::validator".to_vec();
@@ -200,7 +191,6 @@ fn native_amx_account_fixtures_use_checked_seed_derivation() {
         validator_account(0),
         AccountId::new(expected_validator.public_key().clone()),
     );
-
     let expected_gas = KeyPair::try_from_seed(
         b"integration_tests::native_amx_routing::gas".to_vec(),
         Algorithm::Ed25519,
@@ -211,21 +201,18 @@ fn native_amx_account_fixtures_use_checked_seed_derivation() {
         AccountId::new(expected_gas.public_key().clone())
     );
 }
-
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
 }
-
 fn native_amx_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("lane count");
     let lanes = vec![
@@ -253,13 +240,11 @@ fn native_amx_lane_catalog() -> LaneCatalog {
     ];
     LaneCatalog::new(lane_count, lanes).expect("lane catalog")
 }
-
 fn da_proof_policy_bundle() -> DaProofPolicyBundle {
     let catalog = native_amx_lane_catalog();
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-
 fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = fee_asset_definition_id();
@@ -271,7 +256,6 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
     ];
     let stake_per_validator =
         VALIDATOR_STAKE.saturating_mul(u32::try_from(lane_ids.len()).expect("lane count fits"));
-
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
@@ -347,10 +331,8 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
                 .push(ActivatePublicLaneValidator::new(lane_id, validator_id.clone()).into());
         }
     }
-
     vec![bootstrap_tx, validator_tx]
 }
-
 fn lane_descriptor(index: u32, alias: &str, dataspace: &str) -> Table {
     let mut lane = Table::new();
     lane.insert("index".into(), TomlValue::Integer(i64::from(index)));
@@ -360,7 +342,6 @@ fn lane_descriptor(index: u32, alias: &str, dataspace: &str) -> Table {
     lane.insert("metadata".into(), TomlValue::Table(Table::new()));
     lane
 }
-
 fn dataspace_descriptor(alias: &str, id: u64) -> Table {
     let mut dataspace = Table::new();
     dataspace.insert("alias".into(), TomlValue::String(alias.to_owned()));
@@ -384,7 +365,6 @@ fn dataspace_descriptor(alias: &str, id: u64) -> Table {
     dataspace.insert("fault_tolerance".into(), TomlValue::Integer(1));
     dataspace
 }
-
 fn routing_policy() -> Table {
     let mut policy = Table::new();
     policy.insert("default_lane".into(), TomlValue::Integer(0));
@@ -395,7 +375,6 @@ fn routing_policy() -> Table {
     policy.insert("rules".into(), TomlValue::Array(Vec::new()));
     policy
 }
-
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_literal = gas_account()
         .canonical_i105()
@@ -407,7 +386,6 @@ fn localnet_builder() -> NetworkBuilder {
     npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
     npos.vrf_commit_window_blocks = 100;
     npos.vrf_reveal_window_blocks = 40;
-
     NetworkBuilder::new()
         .with_peers(PEERS)
         .with_auto_populated_trusted_peers()
@@ -481,11 +459,9 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "staking", "max_validators"], PEERS as i64);
         })
 }
-
 fn musubi_fault_provider() -> ProviderId {
     ProviderId::new([0xD7; 32])
 }
-
 fn musubi_fault_replica_providers() -> [ProviderId; 3] {
     [
         ProviderId::new([0xD7; 32]),
@@ -493,7 +469,6 @@ fn musubi_fault_replica_providers() -> [ProviderId; 3] {
         ProviderId::new([0xD9; 32]),
     ]
 }
-
 fn musubi_fault_localnet_builder() -> NetworkBuilder {
     let owner = ALICE_ID
         .canonical_i105()
@@ -514,7 +489,6 @@ fn musubi_fault_localnet_builder() -> NetworkBuilder {
         );
     })
 }
-
 fn musubi_fault_package() -> MusubiPackageIdV1 {
     MusubiPackageIdV1::new(
         DataSpaceId::new(ACME_DATASPACE),
@@ -528,7 +502,6 @@ fn musubi_fault_package() -> MusubiPackageIdV1 {
             .expect("Musubi fault package name"),
     )
 }
-
 fn musubi_fault_namespace_binding() -> MusubiNamespaceBindingV1 {
     MusubiNamespaceBindingV1 {
         namespace: MUSUBI_FAULT_NAMESPACE
@@ -539,7 +512,6 @@ fn musubi_fault_namespace_binding() -> MusubiNamespaceBindingV1 {
         generation: 1,
     }
 }
-
 fn musubi_fault_archive_commitment() -> MusubiArchiveCommitmentV1 {
     MusubiArchiveCommitmentV1 {
         root_cid: ManifestRootCid::from_blake3_digest([0x81; 32])
@@ -563,7 +535,6 @@ fn musubi_fault_archive_commitment() -> MusubiArchiveCommitmentV1 {
         chunk_count: 1,
     }
 }
-
 fn musubi_fault_release_manifest_and_lock() -> (MusubiReleaseManifestV1, MusubiVerificationLockV1) {
     let release = MusubiReleaseIdV1::new(
         musubi_fault_package(),
@@ -589,14 +560,12 @@ fn musubi_fault_release_manifest_and_lock() -> (MusubiReleaseManifestV1, MusubiV
     };
     (manifest, lock)
 }
-
 const fn musubi_fault_page() -> MusubiPageRequestV1 {
     MusubiPageRequestV1 {
         limit: 50,
         cursor: None,
     }
 }
-
 fn musubi_fault_completion_authority(
     owner: &AccountId,
     provider: ProviderId,
@@ -612,7 +581,6 @@ fn musubi_fault_completion_authority(
         },
     )
 }
-
 fn musubi_fault_pin_manifest(
     commitment: &MusubiArchiveCommitmentV1,
 ) -> Result<(ManifestV1, ManifestDigest)> {
@@ -645,7 +613,6 @@ fn musubi_fault_pin_manifest(
         .wrap_err("derive selectable Musubi SoraFS manifest digest")?;
     Ok((manifest, digest))
 }
-
 fn musubi_fault_replication_order(
     commitment: &MusubiArchiveCommitmentV1,
     manifest_digest: ManifestDigest,
@@ -676,7 +643,6 @@ fn musubi_fault_replication_order(
         metadata: Vec::new(),
     }
 }
-
 fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinalizedAnchorV1> {
     let blocks = client.query(FindBlocks).execute_all()?;
     // `FindBlocks` is newest-first, so the first row is the exact finalized
@@ -689,7 +655,6 @@ fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinali
         block_hash: *latest.hash().as_ref(),
     })
 }
-
 fn musubi_fault_provider_attestations(
     client: &Client,
     _genesis_hash: [u8; 32],
@@ -737,7 +702,6 @@ fn musubi_fault_provider_attestations(
         })
         .collect()
 }
-
 async fn submit_and_wait_for_approval(
     submitter: &Client,
     transaction: SignedTransaction,
@@ -749,14 +713,12 @@ async fn submit_and_wait_for_approval(
     )
     .await
     .map_err(|_| eyre!("timed out opening transaction event stream"))??;
-
     let submitter_for_submit = submitter.clone();
     let transaction_for_submit = transaction.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
         .await
         .map_err(|err| eyre!("submit task join error: {err}"))?
         .map_err(|err| eyre!("failed to submit native AMX transaction: {err}"))?;
-
     let outcome = match timeout(STATUS_WAIT_TIMEOUT, async {
         while let Some(next) = events.next().await {
             let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
@@ -785,11 +747,9 @@ async fn submit_and_wait_for_approval(
             return Ok(None);
         }
     };
-
     events.close().await;
     Ok(outcome)
 }
-
 async fn wait_for_block_with_entrypoint(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -819,7 +779,6 @@ async fn wait_for_block_with_entrypoint(
         "{context}: timed out waiting for committed entrypoint {entrypoint_hash}{suffix}"
     ))
 }
-
 async fn submit_approved_and_wait_for_all_peers(
     network: &sandbox::SerializedNetwork,
     submitter: &Client,
@@ -828,7 +787,6 @@ async fn submit_approved_and_wait_for_all_peers(
 ) -> Result<SignedBlock> {
     let entrypoint_hash = transaction.hash_as_entrypoint();
     submit_and_wait_for_approval(submitter, transaction).await?;
-
     let mut canonical: Option<SignedBlock> = None;
     for (index, peer) in network.peers().iter().enumerate() {
         let block = wait_for_block_with_entrypoint(
@@ -848,7 +806,6 @@ async fn submit_approved_and_wait_for_all_peers(
     }
     canonical.ok_or_else(|| eyre!("{context}: four-peer network returned no committed block"))
 }
-
 fn assert_musubi_universal_home_execution_context(
     block: &SignedBlock,
     transaction: &SignedTransaction,
@@ -913,7 +870,6 @@ fn assert_musubi_universal_home_execution_context(
     );
     Ok(receipt.clone())
 }
-
 async fn wait_for_rejected_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -952,7 +908,6 @@ async fn wait_for_rejected_transaction(
         "{context}: timed out waiting for rejection; last status={last_status:?}"
     ))
 }
-
 fn musubi_fault_snapshot_and_time(
     client: &Client,
 ) -> Result<(MusubiRegistrySnapshotV1, [u8; 32], u64)> {
@@ -974,7 +929,6 @@ fn musubi_fault_snapshot_and_time(
         .wrap_err("Musubi fault fixture block time overflows u64")?;
     Ok((resolver.snapshot, resolver.genesis_hash, latest_time_ms))
 }
-
 fn musubi_fault_staging_receipt(
     client: &Client,
     _genesis_block_hash: [u8; 32],
@@ -1013,7 +967,6 @@ fn musubi_fault_staging_receipt(
         payload,
     }
 }
-
 struct SelectableMusubiPublicationFixture {
     transaction: SignedTransaction,
     binding: MusubiNamespaceBindingV1,
@@ -1024,7 +977,6 @@ struct SelectableMusubiPublicationFixture {
     pin_manifest: ManifestDigest,
     replication_order: ReplicationOrderId,
 }
-
 async fn prepare_selectable_musubi_publication(
     network: &sandbox::SerializedNetwork,
     submitter: &Client,
@@ -1053,7 +1005,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: register three replica providers"),
     )
     .await?;
-
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let domain =
         DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
@@ -1072,7 +1023,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: establish namespace home"),
     )
     .await?;
-
     let binding = musubi_fault_namespace_binding();
     let binding_transaction = submitter.build_transaction(
         [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
@@ -1090,7 +1040,6 @@ async fn prepare_selectable_musubi_publication(
     )
     .await?;
     assert_musubi_universal_home_execution_context(&binding_block, &binding_transaction)?;
-
     let commitment = musubi_fault_archive_commitment();
     let archive_id = commitment.archive_id();
     let (manifest, lock) = musubi_fault_release_manifest_and_lock();
@@ -1118,7 +1067,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: register archive"),
     )
     .await?;
-
     let (pin_manifest, pin_manifest_digest) = musubi_fault_pin_manifest(&commitment)?;
     let pin_transaction = submitter.build_transaction(
         [InstructionBox::from(RegisterPinManifest::new(
@@ -1138,7 +1086,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: register registry-grade pin"),
     )
     .await?;
-
     let replication_order = ReplicationOrderId::new([0xDA; 32]);
     let canonical_order =
         musubi_fault_replication_order(&commitment, pin_manifest_digest, replication_order);
@@ -1166,7 +1113,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: issue three-replica order"),
     )
     .await?;
-
     let anchor = musubi_fault_finalized_anchor(submitter)?;
     let completion_transaction = submitter.build_transaction(
         musubi_fault_replica_providers().map(|provider| {
@@ -1189,7 +1135,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: finalize three distinct replicas"),
     )
     .await?;
-
     let location_id = MusubiArchiveLocationIdV1::new([0xDB; 32]);
     let provider_attestations = musubi_fault_provider_attestations(
         submitter,
@@ -1246,7 +1191,6 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: bind selectable archive location"),
     )
     .await?;
-
     let (snapshot, _, _) = musubi_fault_snapshot_and_time(submitter)?;
     let publication = MusubiPublicationV1 {
         manifest: manifest.clone(),
@@ -1277,14 +1221,12 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
     })
 }
-
 fn is_query_not_found(error: &QueryError) -> bool {
     matches!(
         error,
         QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
     )
 }
-
 fn assert_musubi_publication_absent(
     client: &Client,
     release: &MusubiReleaseIdV1,
@@ -1300,7 +1242,6 @@ fn assert_musubi_publication_absent(
         is_query_not_found(&package_error),
         "{context}: exact package query failed unexpectedly: {package_error:?}"
     );
-
     let release_error = client
         .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
             release: release.clone(),
@@ -1310,7 +1251,6 @@ fn assert_musubi_publication_absent(
         is_query_not_found(&release_error),
         "{context}: exact release query failed unexpectedly: {release_error:?}"
     );
-
     let resolver =
         client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: release.package.clone(),
@@ -1321,7 +1261,6 @@ fn assert_musubi_publication_absent(
         resolver.items.is_empty() && resolver.next_cursor.is_none(),
         "{context}: faulted publication left a universal resolver row"
     );
-
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
     let directory =
         client.query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
@@ -1335,7 +1274,6 @@ fn assert_musubi_publication_absent(
             && directory.next_cursor.is_none(),
         "{context}: faulted publication changed its binding or public-directory projection"
     );
-
     let locations = client.query_single(FindMusubiArchiveLocationsV1::new(
         MusubiArchiveLocationQueryV1 {
             archive_id,
@@ -1348,7 +1286,6 @@ fn assert_musubi_publication_absent(
             && locations.next_cursor.is_none(),
         "{context}: fault fixture archive registration or location state changed"
     );
-
     let retention = client.query_single(FindMusubiArchiveRetentionV1::new(
         MusubiArchiveRetentionQueryV1 {
             archive_ids: vec![archive_id],
@@ -1380,7 +1317,6 @@ fn assert_musubi_publication_absent(
     );
     Ok(resolver.snapshot)
 }
-
 fn assert_selectable_musubi_archive_without_release(
     client: &Client,
     fixture: &SelectableMusubiPublicationFixture,
@@ -1404,7 +1340,6 @@ fn assert_selectable_musubi_archive_without_release(
         is_query_not_found(&release_error),
         "{context}: exact release query failed unexpectedly: {release_error:?}"
     );
-
     let resolver =
         client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: fixture.release.package.clone(),
@@ -1481,7 +1416,6 @@ fn assert_selectable_musubi_archive_without_release(
     );
     Ok(resolver.snapshot)
 }
-
 fn assert_selectable_musubi_publication_present(
     client: &Client,
     fixture: &SelectableMusubiPublicationFixture,
@@ -1509,7 +1443,6 @@ fn assert_selectable_musubi_publication_present(
             && !release.home_release.yank.yanked,
         "{context}: home release record is incomplete: {release:?}"
     );
-
     let resolver =
         client.query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
             package: fixture.release.package.clone(),
@@ -1608,7 +1541,6 @@ fn assert_selectable_musubi_publication_present(
     );
     Ok(resolver.snapshot)
 }
-
 fn assert_native_amx_execution_context(
     block: &SignedBlock,
     transaction: &SignedTransaction,
@@ -1622,7 +1554,6 @@ fn assert_native_amx_execution_context(
         .iter()
         .find(|context| context.entrypoint_hash == entrypoint_hash)
         .ok_or_else(|| eyre!("native AMX block missing execution context for submitted tx"))?;
-
     ensure!(
         context.lane_id == LaneId::new(ACME_LANE)
             && context.dataspace_id == DataSpaceId::new(ACME_DATASPACE),
@@ -1652,7 +1583,6 @@ fn assert_native_amx_execution_context(
         "native AMX execution context did not preserve coordinator-first full plan legs: {:?}",
         context.routing_plan_legs
     );
-
     let receipt = context
         .native_amx_receipt
         .as_ref()
@@ -1680,7 +1610,6 @@ fn assert_native_amx_execution_context(
         "expected AMX receipt for two participant legs, got {}",
         receipt.legs.len()
     );
-
     let expected_legs = [
         (LaneId::new(ACME_LANE), DataSpaceId::new(ACME_DATASPACE)),
         (LaneId::new(BANK_LANE), DataSpaceId::new(BANK_DATASPACE)),
@@ -1728,7 +1657,6 @@ fn assert_native_amx_execution_context(
     }
     Ok(receipt.clone())
 }
-
 #[derive(Clone)]
 struct GroupedNativeAmxEvidence {
     block: SignedBlock,
@@ -1737,13 +1665,11 @@ struct GroupedNativeAmxEvidence {
     bank_leg: NativeAmxLegRecordV2,
     ordered_sources: Vec<[u8; Hash::LENGTH]>,
 }
-
 fn native_amx_source_id(transaction: &SignedTransaction) -> [u8; Hash::LENGTH] {
     let mut source_id = [0_u8; Hash::LENGTH];
     source_id.copy_from_slice(transaction.hash().as_ref());
     source_id
 }
-
 fn next_universal_autonomous_lane_author_peer(
     peers: &[NetworkPeer],
     context: &str,
@@ -1839,7 +1765,6 @@ fn next_universal_autonomous_lane_author_peer(
     };
     Ok(*target_index)
 }
-
 fn bank_participant_leg(receipt: &NativeAmxReceipt) -> Result<&NativeAmxLegRecordV2> {
     receipt
         .legs
@@ -1850,7 +1775,6 @@ fn bank_participant_leg(receipt: &NativeAmxReceipt) -> Result<&NativeAmxLegRecor
         })
         .ok_or_else(|| eyre!("Native AMX receipt omitted the separate BANK participant leg"))
 }
-
 fn assert_grouped_native_amx_execution(
     block: &SignedBlock,
     transactions: &[SignedTransaction],
@@ -1869,7 +1793,6 @@ fn assert_grouped_native_amx_execution(
     );
     let mut ordered_sources = source_set.into_iter().collect::<Vec<_>>();
     ordered_sources.sort_unstable();
-
     let submitted_entrypoints = transactions
         .iter()
         .map(|transaction| Hash::from(transaction.hash_as_entrypoint()))
@@ -1889,7 +1812,6 @@ fn assert_grouped_native_amx_execution(
                 == submitted_entrypoints,
         "the exact grouped Native AMX sources did not share one canonical application block"
     );
-
     let receipts = transactions
         .iter()
         .map(|transaction| assert_native_amx_execution_context(block, transaction))
@@ -1938,7 +1860,6 @@ fn assert_grouped_native_amx_execution(
                 .is_empty(),
         "BANK participant settlement must remain zero-effect and contain no nested receipts"
     );
-
     for (transaction, receipt) in transactions.iter().zip(&receipts) {
         let leg = bank_participant_leg(receipt)?;
         ensure!(
@@ -1971,7 +1892,6 @@ fn assert_grouped_native_amx_execution(
             );
         }
     }
-
     Ok(GroupedNativeAmxEvidence {
         block: block.clone(),
         transactions: transactions.to_vec(),
@@ -1980,7 +1900,6 @@ fn assert_grouped_native_amx_execution(
         ordered_sources,
     })
 }
-
 async fn wait_for_grouped_native_amx_durable_application(
     client: &Client,
     evidence: &GroupedNativeAmxEvidence,
@@ -2038,7 +1957,6 @@ async fn wait_for_grouped_native_amx_durable_application(
         "{context}: timed out waiting for exact grouped Native AMX durable application{suffix}"
     ))
 }
-
 async fn wait_for_all_peers_to_observe_block(
     network: &sandbox::SerializedNetwork,
     transaction: &SignedTransaction,
@@ -2065,7 +1983,6 @@ async fn wait_for_all_peers_to_observe_block(
     }
     Ok(())
 }
-
 fn audit_native_amx_relay(
     relay: &LaneRelayEnvelope,
     expected_commitment: &LaneBlockCommitment,
@@ -2100,7 +2017,6 @@ fn audit_native_amx_relay(
     );
     Ok(())
 }
-
 fn assert_native_amx_relay_tamper_rejected<F>(
     label: &str,
     baseline: &LaneRelayEnvelope,
@@ -2126,7 +2042,6 @@ where
     );
     Ok(())
 }
-
 fn assert_native_amx_relay_tamper_matrix(
     relay: &LaneRelayEnvelope,
     expected_receipt: &NativeAmxReceipt,
@@ -2241,7 +2156,6 @@ fn assert_native_amx_relay_tamper_matrix(
     )?;
     Ok(())
 }
-
 async fn wait_for_diagnostics_native_amx_evidence(
     client: &Client,
     receipt: &NativeAmxReceipt,
@@ -2294,7 +2208,6 @@ async fn wait_for_diagnostics_native_amx_evidence(
         "{context}: timed out waiting for exact native AMX commitment and relay diagnostics{suffix}"
     ))
 }
-
 async fn wait_for_all_peers_to_observe_native_amx_evidence(
     network: &sandbox::SerializedNetwork,
     transaction: &SignedTransaction,
@@ -2310,7 +2223,6 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         expected_receipt,
     )
     .await?;
-
     let mut canonical: Option<(LaneBlockCommitment, LaneRelayEnvelope)> = None;
     for (index, peer) in network.peers().iter().enumerate() {
         let observed = wait_for_diagnostics_native_amx_evidence(
@@ -2336,7 +2248,6 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         .map(|(_, relay)| relay)
         .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
-
 async fn fetch_sumeragi_diagnostics_json(client: &Client) -> Result<JsonValue> {
     let diagnostics_url = client.torii_url.join("v1/sumeragi/diagnostics")?;
     let response = reqwest::Client::new()
@@ -2355,7 +2266,6 @@ async fn fetch_sumeragi_diagnostics_json(client: &Client) -> Result<JsonValue> {
     );
     json::from_str(&body).wrap_err("parse Sumeragi diagnostics JSON")
 }
-
 fn diagnostics_contain_native_amx_receipt(
     diagnostics: &JsonValue,
     receipt: &NativeAmxReceipt,
@@ -2448,7 +2358,6 @@ fn diagnostics_contain_native_amx_receipt(
         })
     })
 }
-
 fn native_amx_diagnostics_summary(diagnostics: &JsonValue) -> String {
     let Some(commitments) = diagnostics
         .get("lane_settlement_commitments")
@@ -2507,7 +2416,6 @@ fn native_amx_diagnostics_summary(diagnostics: &JsonValue) -> String {
         first
     )
 }
-
 async fn wait_for_diagnostics_native_amx_receipt(
     client: &Client,
     receipt: &NativeAmxReceipt,
@@ -2537,7 +2445,6 @@ async fn wait_for_diagnostics_native_amx_receipt(
         "{context}: timed out waiting for native AMX receipt in Sumeragi diagnostics{suffix}"
     ))
 }
-
 fn native_amx_soak_iterations() -> Result<usize> {
     let raw = std::env::var(NATIVE_AMX_SOAK_ITERATIONS_ENV)
         .unwrap_or_else(|_| NATIVE_AMX_SOAK_ITERATIONS_DEFAULT.to_string());
@@ -2550,7 +2457,6 @@ fn native_amx_soak_iterations() -> Result<usize> {
     );
     Ok(iterations)
 }
-
 fn native_amx_bootstrap_transaction(submitter: &Client) -> Result<SignedTransaction> {
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
@@ -2574,7 +2480,6 @@ fn native_amx_bootstrap_transaction(submitter: &Client) -> Result<SignedTransact
         Metadata::default(),
     ))
 }
-
 fn native_amx_soak_transactions(
     submitter: &Client,
     iteration: usize,
@@ -2611,7 +2516,6 @@ fn native_amx_soak_transactions(
     transactions.sort_by_key(native_amx_source_id);
     Ok(transactions)
 }
-
 async fn submit_grouped_native_amx_transactions(
     submitter: &Client,
     transactions: Vec<SignedTransaction>,
@@ -2629,7 +2533,6 @@ async fn submit_grouped_native_amx_transactions(
         .submit_prepared_transaction_payload_batch_async(&payloads)
         .await
         .wrap_err_with(|| format!("{context}: submit exact two-source Torii batch"))?;
-
     let first_entrypoint = transactions[0].hash_as_entrypoint();
     let block = wait_for_block_with_entrypoint(submitter, first_entrypoint, context).await?;
     for transaction in &transactions {
@@ -2643,7 +2546,6 @@ async fn submit_grouped_native_amx_transactions(
     assert_grouped_native_amx_execution(&block, &transactions)
         .wrap_err_with(|| format!("{context}: validate grouped Native AMX carrier evidence"))
 }
-
 async fn advance_past_native_amx_eviction_tail(
     submitter: &Client,
     target_height: u64,
@@ -2677,7 +2579,6 @@ async fn advance_past_native_amx_eviction_tail(
     );
     final_barrier.ok_or_else(|| eyre!("{context}: no eviction-tail barrier was committed"))
 }
-
 fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
     KuraConfig {
         init_mode: InitMode::Strict,
@@ -2693,7 +2594,6 @@ fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
-
 fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
     ensure!(height > 0, "block index height must be positive");
     let index = usize::try_from(height.saturating_sub(1))?;
@@ -2710,27 +2610,23 @@ fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
     let length = u64::from_le_bytes(entry[8..].try_into().expect("index length is eight bytes"));
     Ok((offset, length))
 }
-
 fn native_amx_primary_blocks_dir(peer: &NetworkPeer) -> std::path::PathBuf {
     ActualLaneConfig::from_catalog(&native_amx_lane_catalog())
         .primary()
         .blocks_dir(peer.kura_store_dir())
 }
-
 fn native_amx_block_index_entry(peer: &NetworkPeer, height: u64) -> Result<(u64, u64)> {
     decode_block_index_entry(
         &fs::read(native_amx_primary_blocks_dir(peer).join("blocks.index"))?,
         height,
     )
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NativeAmxArtifactSelection {
     All,
     Receipts,
     Manifests,
 }
-
 fn canonical_native_amx_height_artifact(name: &str) -> Option<(NativeAmxArtifactSelection, u64)> {
     for (prefix, selection) in [
         (
@@ -2759,7 +2655,6 @@ fn canonical_native_amx_height_artifact(name: &str) -> Option<(NativeAmxArtifact
     }
     None
 }
-
 fn native_amx_artifact_snapshot(
     peer: &NetworkPeer,
     selection: NativeAmxArtifactSelection,
@@ -2819,7 +2714,6 @@ fn native_amx_artifact_snapshot(
     snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Ok(snapshot)
 }
-
 fn native_amx_evidence_artifact_snapshot(peer: &NetworkPeer) -> Result<Vec<(String, Hash)>> {
     let snapshot = native_amx_artifact_snapshot(peer, NativeAmxArtifactSelection::All)?;
     ensure!(
@@ -2842,7 +2736,6 @@ fn native_amx_evidence_artifact_snapshot(peer: &NetworkPeer) -> Result<Vec<(Stri
     );
     Ok(snapshot)
 }
-
 fn evict_native_amx_carrier_body_offline(peer: &NetworkPeer, height: u64) -> Result<u64> {
     let catalog = native_amx_lane_catalog();
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
@@ -2866,7 +2759,6 @@ fn evict_native_amx_carrier_body_offline(peer: &NetworkPeer, height: u64) -> Res
     );
     kura.remove_evicted_block_sidecar_for_testing(height)?;
     drop(kura);
-
     let height_u64 = u64::try_from(height.get())?;
     let (offset, retained_len) = native_amx_block_index_entry(peer, height_u64)?;
     ensure!(
@@ -2882,7 +2774,6 @@ fn evict_native_amx_carrier_body_offline(peer: &NetworkPeer, height: u64) -> Res
     );
     Ok(payload_len)
 }
-
 fn remove_latest_native_amx_manifest_offline(
     peer: &NetworkPeer,
     evidence: &GroupedNativeAmxEvidence,
@@ -2902,7 +2793,6 @@ fn remove_latest_native_amx_manifest_offline(
     drop(kura);
     Ok(())
 }
-
 fn ensure_entrypoint_committed_once(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -2926,28 +2816,23 @@ fn ensure_entrypoint_committed_once(
     );
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result<()> {
     qualification_scenarios::run_mixed_dataspace_native_amx_routes_and_commits_with_receipts().await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
     qualification_scenarios::run_native_amx_queue_journal_replays_plan_after_restart().await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tuple_absent()
 -> Result<()> {
     qualification_scenarios::run_musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tuple_absent().await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn musubi_selectable_publication_phase_cut_matrix_is_atomic_after_replay() -> Result<()> {
     selectable_publication_gate::run().await
 }
-
 fn multilane_release_gate_requested(context: &str) -> Result<bool> {
     let release = std::env::var(MULTILANE_RELEASE_MODE_ENV).ok();
     let developer = std::env::var(RUN_IGNORED_ENV).ok();
@@ -2972,7 +2857,6 @@ fn multilane_release_gate_requested(context: &str) -> Result<bool> {
     }
     Ok(requested)
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs()
 -> Result<()> {

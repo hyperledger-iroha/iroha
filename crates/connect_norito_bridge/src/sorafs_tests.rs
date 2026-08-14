@@ -2,13 +2,10 @@
 #[cfg(test)]
 mod sorafs_tests {
     use std::{ffi::CString, fs, ptr, slice};
-
     use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_plan_to_string};
     use sorafs_chunker::ChunkProfile;
     use tempfile::tempdir;
-
     use super::*;
-
     fn transport_hint_json(priority: JsonValue) -> JsonValue {
         let mut hint = JsonMap::new();
         hint.insert("protocol".into(), JsonValue::from("quic"));
@@ -16,7 +13,6 @@ mod sorafs_tests {
         hint.insert("priority".into(), priority);
         JsonValue::Array(vec![JsonValue::Object(hint)])
     }
-
     #[test]
     fn transport_hint_priority_rejects_u8_wrapping() {
         for (priority, expected) in [(0_u64, 0), (u64::from(u8::MAX), u8::MAX)] {
@@ -25,7 +21,6 @@ mod sorafs_tests {
             assert_eq!(hints.len(), 1);
             assert_eq!(hints[0].priority, expected);
         }
-
         for (label, priority) in [
             ("negative", JsonValue::from(-1_i64)),
             ("overflow", JsonValue::from(u64::from(u8::MAX) + 1)),
@@ -39,7 +34,6 @@ mod sorafs_tests {
             );
         }
     }
-
     #[test]
     fn sorafs_local_fetch_via_ffi() {
         let tempdir = tempdir().expect("tempdir");
@@ -49,10 +43,8 @@ mod sorafs_tests {
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json render");
-
         let alpha_path = tempdir.path().join("alpha.bin");
         fs::write(&alpha_path, &payload).expect("write payload");
-
         let mut provider = JsonMap::new();
         provider.insert("name".into(), JsonValue::from("alpha"));
         provider.insert(
@@ -61,20 +53,16 @@ mod sorafs_tests {
         );
         provider.insert("max_concurrent".into(), JsonValue::from(2u64));
         provider.insert("weight".into(), JsonValue::from(1u64));
-
         let providers_json =
             norito::json::to_string(&JsonValue::Array(vec![JsonValue::Object(provider)]))
                 .expect("providers json render");
-
         let plan_c = CString::new(plan_json).expect("plan cstring");
         let providers_c = CString::new(providers_json).expect("providers cstring");
         let options_c = CString::new("{}").expect("options cstring");
-
         let mut out_payload_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_payload_len: c_ulong = 0;
         let mut out_report_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_report_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_local_fetch(
                 plan_c.as_ptr(),
@@ -90,18 +78,15 @@ mod sorafs_tests {
             )
         };
         assert_eq!(rc, 0, "ffi call should succeed");
-
         let assembled = unsafe {
             let bytes = slice::from_raw_parts(out_payload_ptr, out_payload_len as usize);
             bytes.to_vec()
         };
         assert_eq!(assembled, payload, "payload must match input bytes");
-
         let report_value: JsonValue = unsafe {
             let bytes = slice::from_raw_parts(out_report_ptr, out_report_len as usize);
             norito::json::from_slice(bytes).expect("report json")
         };
-
         let chunk_count = report_value
             .get("chunk_count")
             .and_then(JsonValue::as_u64)
@@ -111,7 +96,6 @@ mod sorafs_tests {
             plan.try_chunk_fetch_specs().expect("valid CAR plan").len(),
             "chunk count matches plan"
         );
-
         let reports = report_value
             .get("provider_reports")
             .and_then(JsonValue::as_array)
@@ -132,7 +116,6 @@ mod sorafs_tests {
                 .expect("failures"),
             0
         );
-
         let receipts = report_value
             .get("chunk_receipts")
             .and_then(JsonValue::as_array)
@@ -148,7 +131,6 @@ mod sorafs_tests {
                 .map(|name| name == "alpha")
                 .unwrap_or(false)
         }));
-
         assert!(
             report_value
                 .get("scoreboard")
@@ -156,7 +138,6 @@ mod sorafs_tests {
                 .unwrap_or(false),
             "scoreboard should be null when not requested"
         );
-
         if !out_payload_ptr.is_null() {
             connect_norito_free(out_payload_ptr);
         }
@@ -164,12 +145,10 @@ mod sorafs_tests {
             connect_norito_free(out_report_ptr);
         }
     }
-
     fn repo_fixture(path: &str) -> Vec<u8> {
         fs::read(format!("{}/../../{}", env!("CARGO_MANIFEST_DIR"), path))
             .expect("read repository fixture")
     }
-
     unsafe fn take_bridge_json(ptr_: *mut c_uchar, len: c_ulong) -> JsonValue {
         let value: JsonValue = unsafe {
             let bytes = slice::from_raw_parts(ptr_, len as usize);
@@ -180,7 +159,6 @@ mod sorafs_tests {
         }
         value
     }
-
     unsafe fn take_bridge_json_usize(ptr_: *mut c_uchar, len: usize) -> JsonValue {
         let value: JsonValue = unsafe {
             let bytes = slice::from_raw_parts(ptr_, len);
@@ -191,14 +169,12 @@ mod sorafs_tests {
         }
         value
     }
-
     #[test]
     fn sorafs_reference_orderbook_validator_via_bridge_ffi() {
         let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
         let label = b"order-request.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_orderbook_json(
                 sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
@@ -222,7 +198,6 @@ mod sorafs_tests {
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn sorafs_reference_orderbook_validator_rejects_bad_signature_via_bridge_ffi() {
         let payload = repo_fixture(
@@ -231,7 +206,6 @@ mod sorafs_tests {
         let label = b"order_request_bad_signature_v1.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_orderbook_json(
                 sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
@@ -272,7 +246,6 @@ mod sorafs_tests {
             Some("order_request_bad_signature_v1.to")
         );
     }
-
     #[test]
     fn sorafs_reference_appeal_finance_cancel_asset_lock_profiles_via_bridge_ffi() {
         for (relative_path, status, code, category) in [
@@ -303,7 +276,6 @@ mod sorafs_tests {
                 .as_bytes();
             let mut out_ptr: *mut c_uchar = ptr::null_mut();
             let mut out_len: c_ulong = 0;
-
             let rc = unsafe {
                 connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
                     payload.as_ptr(),
@@ -339,7 +311,6 @@ mod sorafs_tests {
             );
         }
     }
-
     #[test]
     fn sorafs_reference_pop_validator_via_bridge_ffi() {
         let payload = norito::to_bytes(&sorafs_manifest::PopEnrollmentRequestV1 {
@@ -356,7 +327,6 @@ mod sorafs_tests {
         let label = b"pop-enrollment-request.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_pop_json(
                 sorafs_reference_ffi::SORAFS_REFERENCE_POP_KIND_ENROLLMENT_REQUEST,
@@ -380,7 +350,6 @@ mod sorafs_tests {
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn sorafs_reference_hedging_validator_via_bridge_ffi() {
         let payload = norito::to_bytes(&sorafs_manifest::HedgingPriceFeedV1 {
@@ -397,7 +366,6 @@ mod sorafs_tests {
         let label = b"hedging-price-feed.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_hedging_json(
                 sorafs_reference_ffi::SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED,
@@ -421,7 +389,6 @@ mod sorafs_tests {
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn sorafs_reference_bundle_validator_via_bridge_ffi() {
         let order = repo_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
@@ -446,7 +413,6 @@ mod sorafs_tests {
         ];
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len = 0usize;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_bundle_json(
                 payloads.as_ptr(),
@@ -472,14 +438,12 @@ mod sorafs_tests {
             Some(126)
         );
     }
-
     #[test]
     fn sorafs_reference_governance_dag_block_validator_via_bridge_ffi() {
         let payload = [0xA5];
         let label = b"governance-block.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len = 0usize;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_governance_dag_block_json(
                 payload.as_ptr(),
@@ -508,7 +472,6 @@ mod sorafs_tests {
             Some(124)
         );
     }
-
     #[test]
     fn sorafs_reference_governance_log_node_validator_via_bridge_ffi() {
         let payload = repo_fixture("fixtures/sorafs_manifest/moderation/governance_node_v1.to");
@@ -518,7 +481,6 @@ mod sorafs_tests {
         let label = b"moderation/governance_node_v1.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len = 0usize;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_governance_json(
                 payload.as_ptr(),
@@ -547,7 +509,6 @@ mod sorafs_tests {
             Some(1_700_001_234)
         );
     }
-
     #[test]
     fn sorafs_reference_governance_dag_head_chain_validator_via_bridge_ffi() {
         let head = [0xA5];
@@ -562,7 +523,6 @@ mod sorafs_tests {
         }];
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len = 0usize;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_governance_dag_head_chain_json(
                 head.as_ptr(),
@@ -592,14 +552,12 @@ mod sorafs_tests {
             Some("governance-block-0.to")
         );
     }
-
     #[test]
     fn sorafs_reference_orderbook_signing_via_bridge_ffi() {
         let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
         let private_key = [0xB7; 32];
         let mut signed_ptr: *mut c_uchar = ptr::null_mut();
         let mut signed_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_sign_orderbook_payload(
                 sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
@@ -621,7 +579,6 @@ mod sorafs_tests {
         if !signed_ptr.is_null() {
             connect_norito_free(signed_ptr);
         }
-
         let label = b"signed-order-request.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
@@ -644,14 +601,12 @@ mod sorafs_tests {
             Some("Ok")
         );
     }
-
     #[test]
     fn sorafs_reference_orderbook_signing_rejects_retired_snapshot_selector_via_bridge_ffi() {
         let payload = b"retired runtime snapshot";
         let private_key = [0xB7; 32];
         let mut signed_ptr: *mut c_uchar = ptr::null_mut();
         let mut signed_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_sign_orderbook_payload(
                 6,
@@ -667,7 +622,6 @@ mod sorafs_tests {
         assert!(signed_ptr.is_null());
         assert_eq!(signed_len, 0);
     }
-
     fn validate_signed_orderbook_payload(kind: u32, payload: &[u8], label: &[u8]) -> JsonValue {
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
@@ -686,7 +640,6 @@ mod sorafs_tests {
         assert_eq!(validate_rc, 0, "signed payload should validate");
         unsafe { take_bridge_json(out_ptr, out_len) }
     }
-
     #[test]
     fn sorafs_reference_orderbook_field_builders_via_bridge_ffi() {
         let private_key = [0xB7; 32];
@@ -709,7 +662,6 @@ mod sorafs_tests {
         assert_eq!(derived_order_id, order_id);
         let mut order_ptr: *mut c_uchar = ptr::null_mut();
         let mut order_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_request(
                 order_id.as_ptr(),
@@ -749,7 +701,6 @@ mod sorafs_tests {
             order_outcome.get("status").and_then(JsonValue::as_str),
             Some("Ok")
         );
-
         let provider_id = [0x72; 32];
         let ask_order_id = derive_orderbook_order_id_v1(owner, 8);
         order_ptr = ptr::null_mut();
@@ -790,7 +741,6 @@ mod sorafs_tests {
             ask_outcome.get("status").and_then(JsonValue::as_str),
             Some("Ok")
         );
-
         let mut cancel_ptr: *mut c_uchar = ptr::null_mut();
         let mut cancel_len: c_ulong = 0;
         let cancel_rc = unsafe {
@@ -822,7 +772,6 @@ mod sorafs_tests {
             cancel_outcome.get("status").and_then(JsonValue::as_str),
             Some("Ok")
         );
-
         let debit = b"340282366920938463463374607431768211456.000000001";
         let credit = b"340282366920938463463374607431768211456";
         let fee = b"0.000000001";
@@ -870,7 +819,6 @@ mod sorafs_tests {
             Some("Ok")
         );
     }
-
     #[test]
     fn sorafs_reference_order_id_bridge_rejects_noncanonical_inputs() {
         let owner = b"merchant@paynet";
@@ -923,7 +871,6 @@ mod sorafs_tests {
             },
             ERR_SORAFS_REFERENCE
         );
-
         let price = b"1000000";
         let private_key = [0xB7; 32];
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
@@ -956,7 +903,6 @@ mod sorafs_tests {
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
-
     #[test]
     fn sorafs_reference_orderbook_bridge_enforces_provider_side_binding() {
         let owner = b"merchant@paynet";
@@ -966,7 +912,6 @@ mod sorafs_tests {
         let order_id = derive_orderbook_order_id_v1(owner, 17);
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
         let bid_with_provider = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_request(
                 order_id.as_ptr(),
@@ -994,7 +939,6 @@ mod sorafs_tests {
         assert_eq!(bid_with_provider, ERR_SORAFS_REFERENCE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
-
         let ask_without_provider = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_request(
                 order_id.as_ptr(),
@@ -1023,7 +967,6 @@ mod sorafs_tests {
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
-
     #[test]
     fn sorafs_reference_xor_quantity_bridge_requires_canonical_exact_text() {
         const MAX_SCALED: &[u8] = b"6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
@@ -1051,7 +994,6 @@ mod sorafs_tests {
             Err(ERR_SORAFS_REFERENCE)
         );
     }
-
     #[test]
     fn sorafs_reference_orderbook_bridge_enforces_owner_account_v1_byte_ceiling() {
         let owner = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
@@ -1072,7 +1014,6 @@ mod sorafs_tests {
             0
         );
         assert_eq!(derived_order_id, order_id);
-
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
         assert_eq!(
@@ -1107,7 +1048,6 @@ mod sorafs_tests {
         connect_norito_free(out_ptr);
         out_ptr = ptr::null_mut();
         out_len = 0;
-
         assert_eq!(
             unsafe {
                 connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
@@ -1128,7 +1068,6 @@ mod sorafs_tests {
         assert!(!out_ptr.is_null());
         assert!(out_len > 0);
         connect_norito_free(out_ptr);
-
         let oversized = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
         let oversized_order_id = derive_orderbook_order_id_v1(&oversized, 1);
         assert_eq!(
@@ -1143,7 +1082,6 @@ mod sorafs_tests {
             },
             ERR_SORAFS_REFERENCE
         );
-
         out_ptr = ptr::null_mut();
         out_len = 0;
         assert_eq!(
@@ -1175,7 +1113,6 @@ mod sorafs_tests {
         );
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
-
         assert_eq!(
             unsafe {
                 connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
@@ -1196,7 +1133,6 @@ mod sorafs_tests {
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
-
     #[test]
     fn sorafs_reference_orderbook_field_builder_rejects_imbalanced_receipt_via_bridge_ffi() {
         let private_key = [0xB7; 32];
@@ -1205,7 +1141,6 @@ mod sorafs_tests {
         let fee = b"10";
         let mut receipt_ptr: *mut c_uchar = ptr::null_mut();
         let mut receipt_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
                 [0x31; 32].as_ptr(),
@@ -1236,7 +1171,6 @@ mod sorafs_tests {
         assert!(receipt_ptr.is_null());
         assert_eq!(receipt_len, 0);
     }
-
     #[test]
     fn sorafs_reference_pdp_bundle_validator_via_bridge_ffi() {
         let commitment = repo_fixture("fixtures/sorafs_manifest/pdp/commitment_v1.to");
@@ -1247,7 +1181,6 @@ mod sorafs_tests {
         let proof_label = b"proof.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
         let rc = unsafe {
             connect_norito_sorafs_reference_validate_pdp_bundle_json(
                 commitment.as_ptr(),

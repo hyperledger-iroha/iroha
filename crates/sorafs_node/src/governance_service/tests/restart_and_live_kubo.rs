@@ -1,5 +1,4 @@
 const KUBO_IPNS_KEY_ALIAS: &str = "sorafs-gdag-integration";
-
 fn real_kubo_ipns_service_view(
     source: &SourceSnapshot,
     source_dir: &Path,
@@ -67,7 +66,6 @@ listen_addr = "127.0.0.1:0"
     fs::write(&config_path, config).expect("write standalone IPNS G-DAG service config");
     load_service_config(&config_path).expect("parse standalone IPNS G-DAG service config")
 }
-
 async fn kubo_key_generate(endpoint: &PinnedEndpoint, alias: &str) -> String {
     let url = endpoint
         .ipfs_url(
@@ -101,7 +99,6 @@ async fn kubo_key_generate(endpoint: &PinnedEndpoint, alias: &str) -> String {
     )
     .expect("Kubo returns a canonical IPNS key id")
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires SORAFS_RUN_KUBO_INTEGRATION=1 and a local Kubo binary"]
 async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
@@ -109,7 +106,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
     let endpoint = kubo.endpoint();
     assert_kubo_has_no_swarm_peers(&endpoint).await;
     let ipns_name = kubo_key_generate(&endpoint, KUBO_IPNS_KEY_ALIAS).await;
-
     let direct_payload = b"sorafs-governance-dag-real-kubo-integration-v1";
     let direct_cid = ipfs_add_verified(
         &endpoint,
@@ -159,19 +155,16 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
             .is_err(),
         "unknown content-addressed bytes must fail closed"
     );
-
     let work = secure_temp_dir();
     let source_dir = work.path().join("source");
     let state_dir = work.path().join("state");
     let checkpoint_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
-
     let first_timestamp = current_unix_timestamp_seconds().saturating_sub(5);
     let mut source = signed_source(3, 0x72, first_timestamp);
     materialize_source_snapshot(&source_dir, &mut source);
     seed_producer_checkpoint(&checkpoint_store, &source_dir, &source);
     let view =
         real_kubo_ipns_service_view(&source, &source_dir, &state_dir, &kubo.api_url, &ipns_name);
-
     let mut service = Service::from_view(
         view.clone(),
         test_runtime_providers(&view, checkpoint_store.clone()),
@@ -188,9 +181,8 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         .expect("first reconciliation persists checkpoint");
     assert_eq!(checkpoint.block_count, source.blocks.len() as u64);
     assert_eq!(checkpoint.mirror_blocks.len(), source.blocks.len());
-    let (_, mirror_payload) =
-        load_mirror_index_store(&service.config, &service.mirror_store)
-            .expect("load committed mirror store");
+    let (_, mirror_payload) = load_mirror_index_store(&service.config, &service.mirror_store)
+        .expect("load committed mirror store");
     assert!(!mirror_payload.is_empty());
     assert!(
         checkpoint_store
@@ -228,7 +220,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         PublicHead::Present { bytes, token }
             if bytes == &source.head_bytes && token == &checkpoint.head_ipfs_cid
     ));
-
     let mirror_snapshot = service
         .mirror_store
         .load()
@@ -243,11 +234,9 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         .reconcile_once()
         .await
         .expect("steady-state reconciliation rebuilds missing mirror");
-    let (_, recovered_mirror) =
-        load_mirror_index_store(&service.config, &service.mirror_store)
-            .expect("load recovered mirror store");
+    let (_, recovered_mirror) = load_mirror_index_store(&service.config, &service.mirror_store)
+        .expect("load recovered mirror store");
     assert!(!recovered_mirror.is_empty());
-
     kubo_unpin(&service.ipfs, &checkpoint.head_ipfs_cid).await;
     let missing_pin = service
         .reconcile_once()
@@ -261,7 +250,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         .reconcile_once()
         .await
         .expect("steady state recovers after head repin");
-
     let checkpoint_record = checkpoint_store
         .load(GovernanceDagSealedStateSlot::Checkpoint)
         .expect("read sealed checkpoint")
@@ -294,7 +282,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         .reconcile_once()
         .await
         .expect("restored authenticated checkpoint reconciles");
-
     drop(service);
     let restart_providers = test_runtime_providers(&view, checkpoint_store);
     let mut restarted = Service::from_view(view, restart_providers)
@@ -313,7 +300,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         checkpoint.generation
     );
     assert!(restarted.api.0.read().await.ready);
-
     let attacker_bytes = b"concurrent-authorized-but-unexpected-ipns-head";
     let attacker_cid = ipfs_add_verified(
         &restarted.ipfs,
@@ -346,7 +332,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         .await
         .expect_err("checkpoint reconciliation must reject unexpected IPNS movement");
     assert!(matches!(moved, GovernanceDagServiceError::Conflict(_)));
-
     let attacker = resolve_ipns_head(&restarted.ipfs, &ipns_name, 1024 * 1024)
         .await
         .expect("resolve adversarial IPNS value");
@@ -368,7 +353,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
         .reconcile_once()
         .await
         .expect("restored IPNS head returns service to steady state");
-
     eprintln!(
         "real Kubo G-DAG lane passed: direct_cid={direct_cid} head_cid={} ipns_name={ipns_name}",
         checkpoint.head_ipfs_cid
@@ -376,7 +360,6 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
     drop(restarted);
     kubo.shutdown();
 }
-
 #[test]
 fn durable_restart_state_preserves_every_publish_phase() {
     let source = signed_source(2, 0x3b, 1_800_000_000);
@@ -400,7 +383,6 @@ fn durable_restart_state_preserves_every_publish_phase() {
             .count(),
         0
     );
-
     intent.blocks[0].ipfs_cid = Some(TEST_CID_BLOCK.to_owned());
     intent_revision =
         save_publish_intent(&store, Some(intent_revision), &intent).expect("persist partial pins");
@@ -414,7 +396,6 @@ fn durable_restart_state_preserves_every_publish_phase() {
             .as_deref(),
         Some(TEST_CID_BLOCK)
     );
-
     intent.blocks[1].ipfs_cid = Some(TEST_CID_PAYLOAD.to_owned());
     intent.head_ipfs_cid = Some(TEST_CID_HEAD.to_owned());
     intent_revision =
@@ -424,7 +405,6 @@ fn durable_restart_state_preserves_every_publish_phase() {
         .0
         .expect("head intent exists");
     assert_eq!(loaded.head_ipfs_cid.as_deref(), Some(TEST_CID_HEAD));
-
     let target = PublicHead::Present {
         bytes: intent.target_head_bytes.clone(),
         token: "\"target\"".to_owned(),
@@ -434,7 +414,6 @@ fn durable_restart_state_preserves_every_publish_phase() {
         Some(intent.target_head_blake3),
         "restart recognizes a public head already at the durable target"
     );
-
     let checkpoint = checkpoint_from_source(&source);
     save_checkpoint(&store, None, &checkpoint).expect("persist checkpoint before cleanup");
     assert!(
@@ -457,7 +436,6 @@ fn durable_restart_state_preserves_every_publish_phase() {
             .is_none()
     );
 }
-
 #[test]
 fn publish_intent_progress_is_monotonic_within_one_generation() {
     let source = signed_source(2, 0x3b, 1_800_000_000);
@@ -475,14 +453,12 @@ fn publish_intent_progress_is_monotonic_within_one_generation() {
         &prepared,
         &progressed
     ));
-
     let mut regressed = progressed.clone();
     regressed.blocks[0].ipfs_cid = None;
     assert!(!publish_intent_is_monotonic_refinement(
         &progressed,
         &regressed
     ));
-
     let mut equivocated = progressed.clone();
     equivocated.target_head_blake3[0] ^= 0x80;
     assert!(!publish_intent_is_monotonic_refinement(
@@ -490,11 +466,9 @@ fn publish_intent_progress_is_monotonic_within_one_generation() {
         &equivocated
     ));
 }
-
 #[test]
 fn checkpoint_and_intent_sequence_validation_rejects_u64_exhaustion() {
     let source = signed_source(2, 0x3c, 1_800_000_000);
-
     let mut checkpoint = checkpoint_from_source(&source);
     checkpoint.mirror_blocks[0].sequence = u64::MAX;
     checkpoint.mirror_blocks[1].sequence = 0;
@@ -504,7 +478,6 @@ fn checkpoint_and_intent_sequence_validation_rejects_u64_exhaustion() {
         checkpoint_error,
         GovernanceDagServiceError::State(_)
     ));
-
     let mut intent = intent_from_source(&source);
     intent.blocks[0].sequence = u64::MAX;
     intent.blocks[1].sequence = 0;
@@ -512,7 +485,6 @@ fn checkpoint_and_intent_sequence_validation_rejects_u64_exhaustion() {
         .expect_err("publish-intent sequence exhaustion must fail closed");
     assert!(matches!(intent_error, GovernanceDagServiceError::State(_)));
 }
-
 #[tokio::test]
 async fn metrics_expose_exact_values_and_payload_kind_counts() {
     let mut block = JsonMap::new();
@@ -560,7 +532,6 @@ async fn metrics_expose_exact_values_and_payload_kind_counts() {
         assert!(body.contains(expected), "missing metric row: {expected}");
     }
 }
-
 #[tokio::test]
 async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
     #[derive(Default)]
@@ -573,16 +544,13 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
         reject_add: bool,
         add_count: u64,
     }
-
     type RecoveryHttpState = Arc<Mutex<RecoveryHttpInner>>;
-
     fn query_arg(raw: Option<&str>) -> Option<&str> {
         raw?.split('&').find_map(|pair| {
             let (key, value) = pair.split_once('=')?;
             (key == "arg").then_some(value)
         })
     }
-
     async fn add(
         State(state): State<RecoveryHttpState>,
         headers: HeaderMap,
@@ -618,11 +586,9 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
         state.add_count = state.add_count.saturating_add(1);
         test_response(StatusCode::OK, format!(r#"{{"Hash":"{cid}"}}"#))
     }
-
     async fn pin_add() -> Response {
         test_response(StatusCode::OK, "{}")
     }
-
     async fn pin_ls(
         State(state): State<RecoveryHttpState>,
         axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -638,7 +604,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
         };
         test_response(StatusCode::OK, body)
     }
-
     async fn cat(
         State(state): State<RecoveryHttpState>,
         axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -651,7 +616,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
             |bytes| test_response(StatusCode::OK, bytes),
         )
     }
-
     async fn head_get(State(state): State<RecoveryHttpState>) -> Response {
         let state = state.lock().await;
         let Some(bytes) = &state.head else {
@@ -665,7 +629,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
         );
         response
     }
-
     async fn head_put(
         State(state): State<RecoveryHttpState>,
         headers: HeaderMap,
@@ -689,7 +652,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
         state.head_generation = state.head_generation.saturating_add(1);
         test_response(StatusCode::NO_CONTENT, Body::empty())
     }
-
     let http_state = RecoveryHttpState::default();
     let router = Router::new()
         .route("/api/v0/add", post(add))
@@ -705,7 +667,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
     let http_task = tokio::spawn(async move {
         let _ = axum::serve(listener, router.into_make_service()).await;
     });
-
     let work = secure_temp_dir();
     let source_dir = work.path().join("source");
     let state_dir = work.path().join("state");
@@ -728,7 +689,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
     )
     .expect("seal a crash-resumed intent with every CID already filled");
     http_state.lock().await.required_cids = required_cids.clone();
-
     let base_url = format!("http://{address}");
     let signed_head_url = format!("{base_url}/head");
     let view = real_kubo_service_view(
@@ -744,7 +704,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
     )
     .await
     .expect("construct crash-recovery service");
-
     http_state.lock().await.reject_add = true;
     service
         .reconcile_once()
@@ -771,7 +730,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
             "only a checkpoint-coherent successful reconciliation clears mirror drift"
         );
     }
-
     let state = http_state.lock().await;
     assert!(
         !state.early_head_put,
@@ -789,7 +747,6 @@ async fn failed_object_repair_latches_mirror_drift_until_coherent_retry() {
     assert!(service.intent.is_none());
     http_task.abort();
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires SORAFS_RUN_KUBO_INTEGRATION=1 and a local Kubo binary"]
 async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
@@ -799,7 +756,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
     let (head_endpoint, head_state, head_task) =
         spawn_signed_head(SignedHeadInner::default()).await;
     let signed_head_url = head_endpoint.url.to_string();
-
     let mut over_chunk_conformance = None;
     for (label, size) in [
         ("below-chunk", IPFS_UNIXFS_CHUNK_BYTES - 1),
@@ -868,12 +824,10 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
             .is_err(),
         "unknown content-addressed bytes must fail closed"
     );
-
     let work = secure_temp_dir();
     let source_dir = work.path().join("source");
     let state_dir = work.path().join("state");
     let checkpoint_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
-
     let first_timestamp = current_unix_timestamp_seconds().saturating_sub(5);
     let mut source = signed_source(3, 0x72, first_timestamp);
     materialize_source_snapshot(&source_dir, &mut source);
@@ -885,7 +839,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
         &kubo.api_url,
         &signed_head_url,
     );
-
     let mut service = Service::from_view(
         view.clone(),
         test_runtime_providers(&view, checkpoint_store.clone()),
@@ -946,7 +899,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
                 &HeaderValue::from_str(token).expect("signed-head ETag remains a header value")
             ).as_deref() == Some(token.as_str())
     ));
-
     let (mirror_snapshot, mirror_payload) =
         load_mirror_index_store(&service.config, &service.mirror_store)
             .expect("load published mirror payload");
@@ -969,7 +921,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
         checkpoint.generation
     );
     assert_eq!(recovered_payload.mirror_blake3, checkpoint.mirror_blake3);
-
     kubo_unpin(&service.ipfs, &checkpoint.head_ipfs_cid).await;
     service
         .reconcile_once()
@@ -978,7 +929,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
     ipfs_verify_pin(&service.ipfs, &checkpoint.head_ipfs_cid, 1024 * 1024)
         .await
         .expect("steady-state repair restores the recursive head pin");
-
     let checkpoint_record = checkpoint_store
         .load(GovernanceDagSealedStateSlot::Checkpoint)
         .expect("read sealed checkpoint")
@@ -1011,7 +961,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
         .reconcile_once()
         .await
         .expect("restored authenticated checkpoint reconciles");
-
     drop(service);
     let mut restarted = Service::from_view(
         view.clone(),
@@ -1032,7 +981,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
         checkpoint.generation
     );
     assert!(restarted.api.0.read().await.ready);
-
     let attacker_bytes = b"concurrent-authorized-but-unexpected-signed-head";
     {
         let mut state = head_state.0.lock().await;
@@ -1044,7 +992,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
         .await
         .expect_err("checkpoint reconciliation must reject unexpected signed-head movement");
     assert!(matches!(moved, GovernanceDagServiceError::Conflict(_)));
-
     {
         let mut state = head_state.0.lock().await;
         state.bytes = Some(source.head_bytes.clone());
@@ -1054,7 +1001,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
         .reconcile_once()
         .await
         .expect("restored signed head returns service to steady state");
-
     eprintln!(
         "real Kubo G-DAG lane passed: direct_cid={direct_cid} head_cid={}",
         checkpoint.head_ipfs_cid
@@ -1063,7 +1009,6 @@ async fn real_kubo_publication_signed_head_restart_and_tamper_lane() {
     head_task.abort();
     kubo.shutdown();
 }
-
 #[test]
 fn remote_head_validates_complete_prefix_and_rejects_checkpoint_tamper() {
     let source = signed_source(2, 0x39, current_unix_timestamp_seconds().saturating_sub(1));
@@ -1071,7 +1016,6 @@ fn remote_head_validates_complete_prefix_and_rejects_checkpoint_tamper() {
     let config = test_runtime_config(&source, dir.path());
     validate_remote_head(&source.head_bytes, &source, &config)
         .expect("canonical public head binds the complete source prefix");
-
     let signer = TestSigner::new(0x39);
     let mut tampered = source.head.clone();
     tampered.checkpoint_cid = Some(source.blocks[0].block.block_cid.clone());
@@ -1086,7 +1030,6 @@ fn remote_head_validates_complete_prefix_and_rejects_checkpoint_tamper() {
         "a validly signed head with a noncanonical checkpoint must fail"
     );
 }
-
 #[test]
 fn remote_head_rejects_future_timestamp() {
     let now = current_unix_timestamp_seconds();

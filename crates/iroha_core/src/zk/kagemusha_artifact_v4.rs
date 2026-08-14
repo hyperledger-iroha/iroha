@@ -5,18 +5,6 @@
 //! descriptor, and framing check. Framed bytes are first authenticated against
 //! the canonical manifest; production constructors then require a separately
 //! authenticated [`KagemushaAuthenticatedReleaseV4`].
-
-use std::{
-    collections::BTreeSet,
-    fs::{self, DirBuilder, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
 use iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4;
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4,
@@ -40,7 +28,15 @@ use iroha_data_model::offline::{
     KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
 };
 use sha2::{Digest as _, Sha256};
-
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::BTreeSet,
+    fs::{self, DirBuilder, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 /// Framing magic for a streamed ABI-21 artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4: &[u8; 8] =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4;
@@ -50,13 +46,10 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4: usize =
 /// Fixed scratch used while authenticating a framed artifact without retaining
 /// its release-sized payload.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_STREAM_SCRATCH_BYTES_V4: usize = 64 * 1024;
-
 /// Bounded public carrier used by the core-owned KRV4 framing and parser.
 pub type KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 =
     KagemushaPastaCycleFramedArtifactHeaderV4;
-
 static NEXT_EXPORT_TEMP_ID_V4: AtomicU64 = AtomicU64::new(0);
-
 /// Return the canonical file name for one of the eight V4 artifact roles.
 #[must_use]
 pub const fn kagemusha_artifact_file_name_v4(
@@ -92,13 +85,11 @@ pub const fn kagemusha_artifact_file_name_v4(
         ) => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
     }
 }
-
 fn validate_header_v4(
     header: &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
 ) -> Result<(), String> {
     header.validate().map_err(|error| error.to_string())
 }
-
 fn validate_header_against_manifest_v4(
     header: &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -108,7 +99,6 @@ fn validate_header_against_manifest_v4(
         .validate_against_manifest(manifest, descriptor)
         .map_err(|error| error.to_string())
 }
-
 fn export_header_from_identity_v4(
     generation: &str,
     profile: &KagemushaPastaCycleProofProfileV4,
@@ -153,7 +143,6 @@ fn export_header_from_identity_v4(
     validate_header_v4(&header)?;
     Ok(header)
 }
-
 fn export_header_v4(
     generation: &str,
     profile: &KagemushaPastaCycleProofProfileV4,
@@ -169,7 +158,6 @@ fn export_header_v4(
         Sha256::digest(payload).into(),
     )
 }
-
 struct KagemushaStreamingArtifactPayloadWriterV4<'a, W> {
     writer: &'a mut W,
     remaining: u64,
@@ -177,7 +165,6 @@ struct KagemushaStreamingArtifactPayloadWriterV4<'a, W> {
     framed_hasher: Sha256,
     failed: bool,
 }
-
 impl<W: Write> Write for KagemushaStreamingArtifactPayloadWriterV4<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if self.failed {
@@ -236,7 +223,6 @@ impl<W: Write> Write for KagemushaStreamingArtifactPayloadWriterV4<'_, W> {
             }
         }
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         if self.failed {
             return Err(std::io::Error::other(
@@ -246,7 +232,6 @@ impl<W: Write> Write for KagemushaStreamingArtifactPayloadWriterV4<'_, W> {
         self.writer.flush().inspect_err(|_| self.failed = true)
     }
 }
-
 /// Stream one pre-authenticated payload into its canonical KRV4 frame.
 ///
 /// `payload_size_bytes` and `payload_sha256` must describe the exact bytes
@@ -296,7 +281,6 @@ where
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
         ));
     }
-
     let mut framed_hasher = Sha256::new();
     for bytes in [
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.as_slice(),
@@ -341,7 +325,6 @@ where
     descriptor.validate().map_err(|error| error.to_string())?;
     Ok(descriptor)
 }
-
 /// Stream a pre-authenticated payload into one canonical KRV4 package.
 ///
 /// The declared identity must come from the same bounded writer that produced
@@ -386,7 +369,6 @@ pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
         ));
     }
-
     let mut framed_hasher = Sha256::new();
     for bytes in [
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.as_slice(),
@@ -398,7 +380,6 @@ pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
             .map_err(|error| format!("failed to write Kagemusha V4 artifact: {error}"))?;
         framed_hasher.update(bytes);
     }
-
     let mut payload_hasher = Sha256::new();
     let mut remaining = payload_size_bytes;
     let mut buffer = vec![0_u8; 1024 * 1024];
@@ -431,7 +412,6 @@ pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
     if <[u8; 32]>::from(payload_hasher.finalize()) != payload_sha256 {
         return Err("Kagemusha V4 payload digest changed while framing".to_owned());
     }
-
     let descriptor = KagemushaPastaCycleArtifactV4 {
         kind,
         file_name: kagemusha_artifact_file_name_v4(profile.parity, kind).to_owned(),
@@ -443,7 +423,6 @@ pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
     descriptor.validate().map_err(|error| error.to_string())?;
     Ok(descriptor)
 }
-
 /// Stream one canonical KRV4 package and return its exact manifest descriptor.
 ///
 /// The supplied profile is the measured profile being assembled; its inline
@@ -472,28 +451,24 @@ pub fn write_kagemusha_pasta_cycle_artifact_v4<W: Write>(
         },
     )
 }
-
 /// One atomically published KRV4 file and its exact manifest descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaExportedArtifactV4 {
     path: PathBuf,
     descriptor: KagemushaPastaCycleArtifactV4,
 }
-
 impl KagemushaExportedArtifactV4 {
     /// Final canonical file path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
-
     /// Descriptor to insert into the corresponding V4 manifest profile.
     #[must_use]
     pub const fn descriptor(&self) -> &KagemushaPastaCycleArtifactV4 {
         &self.descriptor
     }
 }
-
 fn ensure_private_export_directory_v4(directory: &Path) -> Result<(), String> {
     match fs::symlink_metadata(directory) {
         Ok(metadata) => {
@@ -530,7 +505,6 @@ fn ensure_private_export_directory_v4(directory: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn create_private_temp_v4(directory: &Path, final_name: &str) -> Result<(PathBuf, File), String> {
     for _ in 0..128 {
         let id = NEXT_EXPORT_TEMP_ID_V4.fetch_add(1, Ordering::Relaxed);
@@ -551,7 +525,6 @@ fn create_private_temp_v4(directory: &Path, final_name: &str) -> Result<(PathBuf
     }
     Err("failed to reserve a unique Kagemusha V4 temporary file".to_owned())
 }
-
 /// Atomically publish one owner-only KRV4 file without overwriting any path.
 ///
 /// The output directory is created with mode `0700` on Unix, or rejected when
@@ -616,7 +589,6 @@ pub fn export_kagemusha_pasta_cycle_artifact_v4(
         descriptor,
     })
 }
-
 /// Fully authenticated unframed bytes from one V4 artifact role.
 ///
 /// Construction is private to the bounded framed reader, preventing callers
@@ -626,7 +598,6 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
     header: KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     payload: Vec<u8>,
 }
-
 /// Trust mode attached to one parsed ABI-21 inventory.
 ///
 /// The candidate variant authenticates pre-promotion qualification inputs.
@@ -642,12 +613,10 @@ enum KagemushaArtifactManifestBindingV4 {
         manifest_sha256: [u8; 32],
     },
 }
-
 impl KagemushaArtifactManifestBindingV4 {
     fn authenticated_release(release: &KagemushaAuthenticatedReleaseV4) -> Self {
         Self::AuthenticatedRelease(release.clone())
     }
-
     fn candidate_evidence(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         expected_candidate_sha256: [u8; 32],
@@ -672,14 +641,12 @@ impl KagemushaArtifactManifestBindingV4 {
             manifest_sha256,
         })
     }
-
     fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest(),
             Self::CandidateEvidence { candidate, .. } => &candidate.manifest,
         }
     }
-
     fn manifest_sha256(&self) -> [u8; 32] {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest_sha256(),
@@ -688,11 +655,9 @@ impl KagemushaArtifactManifestBindingV4 {
             } => *manifest_sha256,
         }
     }
-
     fn is_candidate_evidence_lab(&self) -> bool {
         matches!(self, Self::CandidateEvidence { .. })
     }
-
     fn validate(&self) -> Result<(), String> {
         match self {
             Self::AuthenticatedRelease(release) => {
@@ -729,7 +694,6 @@ impl KagemushaArtifactManifestBindingV4 {
             }
         }
     }
-
     fn validate_header(
         &self,
         header: &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
@@ -748,20 +712,17 @@ impl KagemushaArtifactManifestBindingV4 {
         }
     }
 }
-
 impl KagemushaValidatedArtifactPayloadV4 {
     /// Return the authenticated role header.
     #[must_use]
     pub fn header(&self) -> &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 {
         &self.header
     }
-
     /// Return the exact authenticated unframed payload bytes.
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     fn validate_payload(&self) -> Result<(), String> {
         validate_header_v4(&self.header)?;
         if u64::try_from(self.payload.len())
@@ -774,7 +735,6 @@ impl KagemushaValidatedArtifactPayloadV4 {
         Ok(())
     }
 }
-
 /// Locate one exact role in a validated Eq-then-Ep V4 manifest inventory.
 pub fn kagemusha_artifact_descriptor_v4(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -794,7 +754,6 @@ pub fn kagemusha_artifact_descriptor_v4(
         })
         .ok_or_else(|| "Kagemusha V4 artifact manifest role is absent".to_owned())
 }
-
 /// Authenticated byte layout of one complete KRV4 artifact in a pinned reader.
 ///
 /// This value contains only the bounded public header and offsets. Construction
@@ -805,32 +764,27 @@ pub struct KagemushaAuthenticatedArtifactInspectionV4 {
     header: KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     payload_offset: u64,
 }
-
 impl KagemushaAuthenticatedArtifactInspectionV4 {
     /// Return the authenticated role header.
     #[must_use]
     pub fn header(&self) -> &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 {
         &self.header
     }
-
     /// Return the byte offset of the exact unframed payload.
     #[must_use]
     pub const fn payload_offset(&self) -> u64 {
         self.payload_offset
     }
-
     /// Return the exact authenticated payload length.
     #[must_use]
     pub const fn payload_size_bytes(&self) -> u64 {
         self.header.payload_size_bytes
     }
 }
-
 struct KagemushaArtifactPrefixV4 {
     inspection: KagemushaAuthenticatedArtifactInspectionV4,
     framed_hasher: Sha256,
 }
-
 fn read_kagemusha_pasta_cycle_artifact_prefix_v4<R, V>(
     reader: &mut R,
     descriptor: &KagemushaPastaCycleArtifactV4,
@@ -853,7 +807,6 @@ where
     if &magic != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4 {
         return Err("Kagemusha V4 artifact magic mismatch".to_owned());
     }
-
     let mut header_len_bytes = [0_u8; 4];
     reader
         .read_exact(&mut header_len_bytes)
@@ -874,7 +827,6 @@ where
     {
         return Err("Kagemusha V4 artifact header length is invalid".to_owned());
     }
-
     let mut header_bytes = vec![0_u8; header_len];
     reader
         .read_exact(&mut header_bytes)
@@ -918,7 +870,6 @@ where
         framed_hasher,
     })
 }
-
 fn inspect_kagemusha_pasta_cycle_artifact_content_v4<R, V>(
     reader: &mut R,
     descriptor: &KagemushaPastaCycleArtifactV4,
@@ -969,7 +920,6 @@ where
     }
     Ok(inspection)
 }
-
 /// Stream-authenticate one framed artifact from a pinned seekable reader
 /// without retaining its payload.
 pub fn inspect_kagemusha_pasta_cycle_artifact_v4<R: Read + Seek>(
@@ -983,14 +933,12 @@ pub fn inspect_kagemusha_pasta_cycle_artifact_v4<R: Read + Seek>(
         binding.validate_header(header, descriptor)
     })
 }
-
 struct KagemushaPayloadHashingReaderV4<R> {
     inner: R,
     payload_hasher: Sha256,
     framed_hasher: Sha256,
     bytes_read: u64,
 }
-
 impl<R: Read> Read for KagemushaPayloadHashingReaderV4<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buffer)?;
@@ -1004,7 +952,6 @@ impl<R: Read> Read for KagemushaPayloadHashingReaderV4<R> {
         Ok(read)
     }
 }
-
 fn with_kagemusha_pasta_cycle_artifact_payload_content_v4<R, T, V, F>(
     reader: &mut R,
     descriptor: &KagemushaPastaCycleArtifactV4,
@@ -1036,7 +983,6 @@ where
         parse,
     )
 }
-
 fn with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4<R, T, V, F>(
     reader: &mut R,
     descriptor: &KagemushaPastaCycleArtifactV4,
@@ -1095,7 +1041,6 @@ where
     }
     Ok(parsed)
 }
-
 /// Authenticate one complete KRV4 file, then expose its exact payload through
 /// a bounded reader for zero-copy typed parsing.
 ///
@@ -1124,7 +1069,6 @@ where
         parse,
     )
 }
-
 /// Parse one pinned artifact whose complete frame was authenticated earlier.
 ///
 /// The cached inspection is only an optimization hint: this pass validates the
@@ -1156,7 +1100,6 @@ where
         parse,
     )
 }
-
 /// Read and authenticate one complete framed V4 artifact from a pinned handle.
 ///
 /// Header and payload lengths are checked against hard limits and the exact
@@ -1170,7 +1113,6 @@ pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
     let binding = KagemushaArtifactManifestBindingV4::authenticated_release(release);
     read_kagemusha_pasta_cycle_artifact_with_binding_v4(reader, &binding, descriptor)
 }
-
 /// Parse one exact KRV4 artifact against a clean, canonical pre-promotion
 /// candidate. This authenticates qualification inputs but does not manufacture
 /// an authenticated production release.
@@ -1188,7 +1130,6 @@ pub fn read_kagemusha_pasta_cycle_candidate_artifact_v4<R: Read>(
     )?;
     read_kagemusha_pasta_cycle_artifact_with_binding_v4(reader, &binding, descriptor)
 }
-
 fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
     reader: &mut R,
     binding: &KagemushaArtifactManifestBindingV4,
@@ -1196,7 +1137,6 @@ fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
 ) -> Result<KagemushaValidatedArtifactPayloadV4, String> {
     binding.validate()?;
     descriptor.validate().map_err(|error| error.to_string())?;
-
     let mut framed_hasher = Sha256::new();
     let mut magic = [0_u8; KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.len()];
     reader
@@ -1206,7 +1146,6 @@ fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
     if &magic != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4 {
         return Err("Kagemusha V4 artifact magic mismatch".to_owned());
     }
-
     let mut header_len_bytes = [0_u8; 4];
     reader
         .read_exact(&mut header_len_bytes)
@@ -1227,7 +1166,6 @@ fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
     {
         return Err("Kagemusha V4 artifact header length is invalid".to_owned());
     }
-
     let mut header_bytes = vec![0_u8; header_len];
     reader
         .read_exact(&mut header_bytes)
@@ -1258,7 +1196,6 @@ fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
     {
         return Err("Kagemusha V4 artifact payload length mismatch".to_owned());
     }
-
     let payload_len = usize::try_from(header.payload_size_bytes)
         .map_err(|_| "Kagemusha V4 payload length does not fit usize".to_owned())?;
     if payload_len == 0
@@ -1287,7 +1224,6 @@ fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
     }
     Ok(KagemushaValidatedArtifactPayloadV4 { header, payload })
 }
-
 fn validate_role(
     binding: &KagemushaArtifactManifestBindingV4,
     artifact: &KagemushaValidatedArtifactPayloadV4,
@@ -1313,7 +1249,6 @@ fn validate_role(
         .ok_or_else(|| "Kagemusha V4 artifact manifest role is absent".to_owned())?;
     binding.validate_header(&artifact.header, descriptor)
 }
-
 /// Exact six-role verifier material bound to one authenticated V4 release.
 ///
 /// Bootstrap witnesses remain opaque here; the recursion adapter is the sole
@@ -1328,7 +1263,6 @@ pub struct KagemushaPastaCycleVerifierArtifactsV4 {
     step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
     step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
 }
-
 impl KagemushaPastaCycleVerifierArtifactsV4 {
     /// Bind all six verifier roles to one authenticated release.
     pub fn new(
@@ -1350,7 +1284,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
             step_ep_bootstrap_witness,
         )
     }
-
     /// Bind all six verifier roles to one clean candidate in a non-shipping
     /// evidence-lab build without relabelling it as a promoted release.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -1380,7 +1313,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
             step_ep_bootstrap_witness,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new_with_binding(
         binding: KagemushaArtifactManifestBindingV4,
@@ -1441,54 +1373,43 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
             step_ep_bootstrap_witness,
         })
     }
-
     /// SHA-256 of the exact authenticated manifest selecting every role.
     #[must_use]
     pub fn manifest_sha256(&self) -> [u8; 32] {
         self.binding.manifest_sha256()
     }
-
     /// Authenticated manifest selecting every verifier role.
     #[must_use]
     pub(crate) fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         self.binding.manifest()
     }
-
     #[must_use]
     pub(crate) fn is_candidate_evidence_lab(&self) -> bool {
         self.binding.is_candidate_evidence_lab()
     }
-
     /// Exact release-specific proof-pair cap.
     #[must_use]
     pub fn max_proof_bytes(&self) -> u32 {
         self.binding.manifest().max_proof_bytes
     }
-
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
         self.step_eq_parameters.payload()
     }
-
     pub(crate) fn step_eq_verifying_key(&self) -> &[u8] {
         self.step_eq_verifying_key.payload()
     }
-
     pub(crate) fn step_eq_bootstrap_witness(&self) -> &[u8] {
         self.step_eq_bootstrap_witness.payload()
     }
-
     pub(crate) fn step_ep_parameters(&self) -> &[u8] {
         self.step_ep_parameters.payload()
     }
-
     pub(crate) fn step_ep_verifying_key(&self) -> &[u8] {
         self.step_ep_verifying_key.payload()
     }
-
     pub(crate) fn step_ep_bootstrap_witness(&self) -> &[u8] {
         self.step_ep_bootstrap_witness.payload()
     }
-
     fn payload_digests(&self) -> [[u8; 32]; 6] {
         [
             self.step_eq_parameters.header.payload_sha256,
@@ -1500,7 +1421,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
         ]
     }
 }
-
 /// Exact eight-role prover material bound to one authenticated V4 release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaPastaCycleProverArtifactsV4 {
@@ -1508,7 +1428,6 @@ pub struct KagemushaPastaCycleProverArtifactsV4 {
     step_eq_proving_key: KagemushaValidatedArtifactPayloadV4,
     step_ep_proving_key: KagemushaValidatedArtifactPayloadV4,
 }
-
 impl KagemushaPastaCycleProverArtifactsV4 {
     /// Bind the complete eight-artifact inventory to one authenticated release.
     #[allow(clippy::too_many_arguments)]
@@ -1535,7 +1454,6 @@ impl KagemushaPastaCycleProverArtifactsV4 {
             step_ep_bootstrap_witness,
         )
     }
-
     /// Bind the exact eight-role inventory to one clean candidate in an
     /// explicitly selected, non-shipping evidence-lab build.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -1569,7 +1487,6 @@ impl KagemushaPastaCycleProverArtifactsV4 {
             step_ep_bootstrap_witness,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new_with_binding(
         binding: KagemushaArtifactManifestBindingV4,
@@ -1616,29 +1533,24 @@ impl KagemushaPastaCycleProverArtifactsV4 {
             step_ep_proving_key,
         })
     }
-
     /// SHA-256 of the exact authenticated manifest selecting all eight roles.
     #[must_use]
     pub fn manifest_sha256(&self) -> [u8; 32] {
         self.verifier.manifest_sha256()
     }
-
     /// Exact release-specific proof-pair cap.
     #[must_use]
     pub fn max_proof_bytes(&self) -> u32 {
         self.verifier.max_proof_bytes()
     }
-
     #[must_use]
     pub(crate) fn verifier(&self) -> &KagemushaPastaCycleVerifierArtifactsV4 {
         &self.verifier
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
+    use super::*;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
         KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
@@ -1647,16 +1559,13 @@ mod tests {
         KagemushaStepCircuitParamsV4,
     };
     use sha2::Digest as _;
-
-    use super::*;
-
+    use std::io::Cursor;
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout Kagemusha artifact value")
     }
-
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout =
@@ -1674,7 +1583,6 @@ mod tests {
             max_parent_proof_bytes: 4096,
         }
     }
-
     fn profile() -> KagemushaPastaCycleProofProfileV4 {
         let circuit_params = circuit_params();
         KagemushaPastaCycleProofProfileV4 {
@@ -1688,7 +1596,6 @@ mod tests {
             artifacts: Vec::new(),
         }
     }
-
     fn framed_fixture(payload: &[u8]) -> (Vec<u8>, KagemushaPastaCycleArtifactV4) {
         let mut bytes = Vec::new();
         let descriptor = write_kagemusha_pasta_cycle_artifact_v4(
@@ -1701,12 +1608,10 @@ mod tests {
         .expect("write framed artifact fixture");
         (bytes, descriptor)
     }
-
     struct CountingCursor {
         inner: Cursor<Vec<u8>>,
         bytes_read: u64,
     }
-
     impl std::io::Read for CountingCursor {
         fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
             let count = self.inner.read(buffer)?;
@@ -1714,31 +1619,26 @@ mod tests {
             Ok(count)
         }
     }
-
     impl std::io::Seek for CountingCursor {
         fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
             self.inner.seek(position)
         }
     }
-
     #[derive(Default)]
     struct ShortWriteSink {
         bytes: Vec<u8>,
         maximum_write: usize,
     }
-
     impl std::io::Write for ShortWriteSink {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             let written = bytes.len().min(self.maximum_write);
             self.bytes.extend_from_slice(&bytes[..written]);
             Ok(written)
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-
     #[test]
     fn streaming_writer_matches_canonical_frame_and_rejects_inexact_payloads() {
         let payload = b"streamed authenticated artifact payload";
@@ -1779,7 +1679,6 @@ mod tests {
         .expect("stream exact authenticated payload");
         assert_eq!(streamed_frame, expected_frame);
         assert_eq!(streamed_descriptor, expected_descriptor);
-
         let mut short_sink = ShortWriteSink {
             bytes: Vec::new(),
             maximum_write: 3,
@@ -1796,7 +1695,6 @@ mod tests {
         .expect("partial underlying writes must preserve exact framing");
         assert_eq!(short_sink.bytes, expected_frame);
         assert_eq!(short_write_descriptor, expected_descriptor);
-
         let truncated = write_kagemusha_pasta_cycle_artifact_streaming_v4(
             &mut Vec::new(),
             "test-generation-v4",
@@ -1812,7 +1710,6 @@ mod tests {
         )
         .expect_err("truncated streaming payload must fail closed");
         assert!(truncated.contains("truncated"));
-
         let changed = write_kagemusha_pasta_cycle_artifact_streaming_v4(
             &mut Vec::new(),
             "test-generation-v4",
@@ -1824,7 +1721,6 @@ mod tests {
         )
         .expect_err("changed streaming payload must fail authentication");
         assert!(changed.contains("digest mismatch"));
-
         let swallowed_excess = write_kagemusha_pasta_cycle_artifact_streaming_v4(
             &mut Vec::new(),
             "test-generation-v4",
@@ -1840,14 +1736,12 @@ mod tests {
         .expect_err("a swallowed excess-write error must still fail closed");
         assert!(swallowed_excess.contains("writer failed"));
     }
-
     fn accept_test_binding(
         _: &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
         _: &KagemushaPastaCycleArtifactV4,
     ) -> Result<(), String> {
         Ok(())
     }
-
     #[test]
     fn streaming_inspection_and_bounded_payload_reject_tamper_and_trailing_bytes() {
         let payload = b"streamed proving-key payload fixture";
@@ -1864,7 +1758,6 @@ mod tests {
             inspection.header().payload_sha256,
             descriptor.payload_sha256
         );
-
         let parsed = with_kagemusha_pasta_cycle_artifact_payload_content_v4(
             &mut cursor,
             &descriptor,
@@ -1879,7 +1772,6 @@ mod tests {
         )
         .expect("read bounded payload");
         assert_eq!(parsed, payload);
-
         let partial = with_kagemusha_pasta_cycle_artifact_payload_content_v4(
             &mut cursor,
             &descriptor,
@@ -1893,7 +1785,6 @@ mod tests {
             },
         );
         assert!(partial.is_err());
-
         let mut zero_header = bytes.clone();
         zero_header[8..12].copy_from_slice(&0_u32.to_le_bytes());
         assert!(
@@ -1904,7 +1795,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut oversized_header = bytes.clone();
         oversized_header[8..12].copy_from_slice(
             &(u32::try_from(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4)
@@ -1920,7 +1810,6 @@ mod tests {
             )
             .is_err()
         );
-
         let original_header_len = usize::try_from(u32::from_le_bytes(
             bytes[8..12].try_into().expect("header length fixture"),
         ))
@@ -1955,7 +1844,6 @@ mod tests {
             .expect_err("alternate-layout header must be rejected"),
             "Kagemusha V4 artifact header is not canonical"
         );
-
         let mut noncanonical_header = bytes.clone();
         noncanonical_header.insert(12 + original_header_len, 0);
         noncanonical_header[8..12].copy_from_slice(
@@ -1974,7 +1862,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut payload_tamper = bytes.clone();
         *payload_tamper.last_mut().expect("non-empty fixture") ^= 0x80;
         assert!(
@@ -1985,7 +1872,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut trailing = bytes.clone();
         trailing.push(0x55);
         assert!(
@@ -1996,7 +1882,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut wrong_descriptor = descriptor.clone();
         wrong_descriptor.sha256[0] ^= 1;
         assert!(
@@ -2008,7 +1893,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn cached_inspection_payload_parse_is_one_authenticated_pass() {
         let payload = b"cached inspection proving-key payload fixture";
@@ -2039,7 +1923,6 @@ mod tests {
         .expect("parse from authenticated inspection");
         assert_eq!(parsed, payload);
         assert_eq!(reader.bytes_read, descriptor.size_bytes);
-
         let mut stale = inspection;
         stale.header.payload_sha256[0] ^= 1;
         let error = with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4(

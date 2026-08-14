@@ -1,15 +1,3 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    error::Error,
-    fmt::Write,
-    fs,
-    io::{self, Write as _},
-    num::NonZeroU32,
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
-
 use arrow_array::{
     ArrayRef, BooleanArray, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array,
 };
@@ -42,8 +30,18 @@ use norito::{
     json::{self as serde_json, Map as JsonMap, Value as JsonValue},
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+use std::{
+    collections::{BTreeSet, HashMap},
+    error::Error,
+    fmt::Write,
+    fs,
+    io::{self, Write as _},
+    num::NonZeroU32,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 const NEXUS_CONNECT_FIXTURE_OUTPUT: &str = "fixtures/sdk/nexus_connect_transfer_v1.json";
 const NEXUS_CONNECT_FIXTURE_NETWORK_ID: &str =
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
@@ -54,7 +52,6 @@ const NEXUS_CONNECT_FIXTURE_TTL_MS: u64 = 30_000;
 const NEXUS_CONNECT_FIXTURE_NONCE: u32 = 7;
 const NEXUS_CONNECT_FIXTURE_AUTHORITY_SEED: [u8; 32] = [0x51; 32];
 const NEXUS_CONNECT_FIXTURE_DESTINATION_SEED: [u8; 32] = [0x52; 32];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Requested operation for the Rust-owned Nexus Connect fixture.
 pub enum NexusConnectFixtureMode {
@@ -63,7 +60,6 @@ pub enum NexusConnectFixtureMode {
     /// Compare the rendered bytes with an existing output tree.
     Check,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 /// Closed command-line options for the Nexus Connect fixture owner.
 pub struct NexusConnectFixtureOptions {
@@ -72,10 +68,8 @@ pub struct NexusConnectFixtureOptions {
     /// Absolute root containing `fixtures/sdk/nexus_connect_transfer_v1.json`.
     pub output_root: PathBuf,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct NexusConnectFixtureSubmitter;
-
 impl NexusToriiSubmitter for NexusConnectFixtureSubmitter {
     fn quote_fee_payment(
         &self,
@@ -83,7 +77,6 @@ impl NexusToriiSubmitter for NexusConnectFixtureSubmitter {
     ) -> Result<FeePaymentIntent, NexusAppError> {
         Ok(payload.fee_payment.clone())
     }
-
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -96,7 +89,6 @@ impl NexusToriiSubmitter for NexusConnectFixtureSubmitter {
         })
     }
 }
-
 /// Parse the exact `--write|--check --output-root <absolute>` surface.
 pub fn parse_nexus_connect_fixture_options(
     arguments: impl IntoIterator<Item = String>,
@@ -141,13 +133,11 @@ pub fn parse_nexus_connect_fixture_options(
             }
         }
     }
-
     Ok(NexusConnectFixtureOptions {
         mode: mode.ok_or("expected exactly one of --write or --check")?,
         output_root: output_root.ok_or("--output-root is required")?,
     })
 }
-
 /// Build and either stage or verify the Rust-owned Nexus Connect fixture.
 pub fn run_nexus_connect_fixture(
     options: &NexusConnectFixtureOptions,
@@ -160,13 +150,11 @@ pub fn run_nexus_connect_fixture(
     let rendered = build_nexus_connect_fixture()?;
     sync_nexus_connect_fixture(&output, &rendered, options.mode)
 }
-
 fn nexus_connect_workspace_root() -> Result<&'static Path, Box<dyn Error>> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .ok_or_else(|| "xtask manifest directory has no workspace parent".into())
 }
-
 fn nexus_connect_staging_root(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         format!(
@@ -181,7 +169,6 @@ fn nexus_connect_staging_root(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
         )
         .into());
     }
-
     let canonical = fs::canonicalize(path)?;
     let workspace = fs::canonicalize(nexus_connect_workspace_root()?)?;
     if canonical.starts_with(&workspace) {
@@ -203,7 +190,6 @@ fn nexus_connect_staging_root(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     }
     Ok(canonical)
 }
-
 fn nexus_connect_json_object(
     fields: impl IntoIterator<Item = (&'static str, JsonValue)>,
 ) -> JsonValue {
@@ -213,7 +199,6 @@ fn nexus_connect_json_object(
     }
     JsonValue::Object(map)
 }
-
 fn nexus_connect_network_id() -> Result<NetworkId, Box<dyn Error>> {
     let network_id: NetworkId = NEXUS_CONNECT_FIXTURE_NETWORK_ID.parse()?;
     if network_id.to_string() != NEXUS_CONNECT_FIXTURE_NETWORK_ID {
@@ -221,13 +206,11 @@ fn nexus_connect_network_id() -> Result<NetworkId, Box<dyn Error>> {
     }
     Ok(network_id)
 }
-
 fn nexus_connect_fixture_account(seed: [u8; 32]) -> Result<(KeyPair, AccountId), Box<dyn Error>> {
     let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)?;
     let account = AccountId::new(key_pair.public_key().clone());
     Ok((key_pair, account))
 }
-
 fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
     let _chain_discriminant =
         ChainDiscriminantGuard::enter(NEXUS_CONNECT_FIXTURE_CHAIN_DISCRIMINANT);
@@ -244,7 +227,6 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
     let mut metadata = Metadata::default();
     metadata.insert("purpose".parse::<Name>()?, Json::from("nexus-app-fixture"));
     let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
-
     let config = NexusAppConfig {
         signing_public_key: Some(authority_key_pair.public_key().clone()),
         ..NexusAppConfig::new(NEXUS_CONNECT_FIXTURE_CHAIN_ID.into(), network_id)
@@ -280,11 +262,9 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
         },
         NexusFinalizeOptions::default(),
     )?;
-
     let (_, public_key_bytes) = authority_key_pair.public_key().to_bytes();
     let authority_text = authority.to_string();
     let destination_text = destination.to_string();
-
     let approval_frame = nexus_connect_json_object([
         ("account_id", authority_text.clone().into()),
         (
@@ -392,7 +372,6 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
             ("expected_code", "status_wait_failed".into()),
         ]),
     ]);
-
     let root = nexus_connect_json_object([
         ("fixture", "nexus_connect_transfer_v1".into()),
         ("version", 1_u64.into()),
@@ -408,7 +387,6 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
     let rendered = json::to_json_pretty(&root)?;
     Ok(format!("{rendered}\n").into_bytes())
 }
-
 fn sync_nexus_connect_fixture(
     path: &Path,
     expected: &[u8],
@@ -467,24 +445,19 @@ fn sync_nexus_connect_fixture(
     }
     Ok(())
 }
-
 pub fn write_lane_commitment_fixtures(output: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(output)?;
-
     for fixture in sample_commitments() {
         let json_value = json::to_value(&fixture.payload)?;
         let rendered = canonical_json(&json_value)?;
         let json_path = output.join(format!("{}.json", fixture.file_stem));
         fs::write(&json_path, rendered)?;
-
         let to_path = output.join(format!("{}.to", fixture.file_stem));
         let bytes = norito::to_bytes(&fixture.payload)?;
         fs::write(&to_path, bytes)?;
     }
-
     Ok(())
 }
-
 pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>> {
     let fixtures = sample_commitments();
     let mut expected_entries = BTreeSet::new();
@@ -492,7 +465,6 @@ pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>>
         expected_entries.insert(format!("{}.json", fixture.file_stem));
         expected_entries.insert(format!("{}.to", fixture.file_stem));
     }
-
     for fixture in fixtures {
         let json_path = dir.join(format!("{}.json", fixture.file_stem));
         if !json_path.is_file() {
@@ -516,7 +488,6 @@ pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>>
             )
             .into());
         }
-
         let to_path = dir.join(format!("{}.to", fixture.file_stem));
         if !to_path.is_file() {
             return Err(format!("missing lane commitment Norito bytes {:?}", to_path).into());
@@ -541,7 +512,6 @@ pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>>
             .into());
         }
     }
-
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -559,10 +529,8 @@ pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>>
         )
         .into());
     }
-
     Ok(())
 }
-
 fn load_lane_compliance_map(
     path: &Path,
 ) -> Result<HashMap<u32, LaneComplianceEvidence>, Box<dyn Error>> {
@@ -620,16 +588,13 @@ fn load_lane_compliance_map(
     }
     Ok(map)
 }
-
 fn canonical_json(value: &JsonValue) -> Result<String, Box<dyn Error>> {
     Ok(format!("{}\n", json::to_string_pretty(value)?))
 }
-
 struct CommitmentFixture {
     file_stem: &'static str,
     payload: LaneBlockCommitment,
 }
-
 fn sample_commitments() -> Vec<CommitmentFixture> {
     vec![
         CommitmentFixture {
@@ -719,7 +684,6 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
         },
     ]
 }
-
 #[derive(Debug)]
 pub struct LaneAuditOptions {
     pub status_path: PathBuf,
@@ -729,7 +693,6 @@ pub struct LaneAuditOptions {
     pub captured_at: Option<String>,
     pub lane_compliance: Option<PathBuf>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct LaneComplianceEvidence {
     pub policy: JsonValue,
@@ -740,7 +703,6 @@ pub struct LaneComplianceEvidence {
     #[norito(default)]
     pub audit_log: Vec<JsonValue>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct LaneComplianceReviewerSignature {
     pub reviewer: String,
@@ -752,12 +714,10 @@ pub struct LaneComplianceReviewerSignature {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct LaneComplianceEvidenceFile {
     lanes: Vec<LaneComplianceEvidenceRecord>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct LaneComplianceEvidenceRecord {
     lane_id: u32,
@@ -769,11 +729,9 @@ struct LaneComplianceEvidenceRecord {
     #[norito(default)]
     audit_log: Vec<JsonValue>,
 }
-
 fn json_null() -> JsonValue {
     JsonValue::Null
 }
-
 #[derive(Clone, JsonSerialize)]
 struct LaneAuditRow {
     lane_id: u32,
@@ -803,7 +761,6 @@ struct LaneAuditRow {
     captured_at: String,
     status_height: u64,
 }
-
 impl LaneAuditRow {
     fn compliance_json_string(&self) -> Result<Option<String>, serde_json::Error> {
         self.lane_compliance
@@ -812,7 +769,6 @@ impl LaneAuditRow {
             .transpose()
     }
 }
-
 pub fn run_lane_audit(options: &LaneAuditOptions) -> Result<(), Box<dyn Error>> {
     let raw = fs::read_to_string(&options.status_path).map_err(|err| {
         format!(
@@ -892,7 +848,6 @@ pub fn run_lane_audit(options: &LaneAuditOptions) -> Result<(), Box<dyn Error>> 
     );
     Ok(())
 }
-
 fn write_json_rows(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
@@ -901,7 +856,6 @@ fn write_json_rows(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn Err
     fs::write(path, rendered)?;
     Ok(())
 }
-
 fn write_parquet_rows(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
@@ -954,7 +908,6 @@ fn write_parquet_rows(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn 
     writer.close()?;
     Ok(())
 }
-
 fn write_markdown_summary(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
@@ -969,7 +922,6 @@ fn write_markdown_summary(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<
         fs::write(path, rendered)?;
         return Ok(());
     }
-
     let captured_at = &rows[0].captured_at;
     let status_height = rows[0].status_height;
     let total = rows.len();
@@ -995,7 +947,6 @@ fn write_markdown_summary(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<
         .map(|row| row.finality_lag_slots)
         .max()
         .unwrap_or(0);
-
     writeln!(rendered)?;
     writeln!(rendered, "- Captured at: {captured_at}")?;
     writeln!(rendered, "- Status height: {status_height}")?;
@@ -1011,7 +962,6 @@ fn write_markdown_summary(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<
         "| Lane | Dataspace | Height | Finality Lag | Backlog (XOR) | TEU Util (%) | Flags |"
     )?;
     writeln!(rendered, "| --- | --- | --- | --- | --- | --- | --- |")?;
-
     for row in rows {
         let lane_label = format!("{} (#{})", row.lane_alias, row.lane_id);
         let dataspace_label = match row.dataspace_alias.as_deref() {
@@ -1050,11 +1000,9 @@ fn write_markdown_summary(path: &Path, rows: &[LaneAuditRow]) -> Result<(), Box<
             row.teu_utilization_pct
         )?;
     }
-
     fs::write(path, rendered)?;
     Ok(())
 }
-
 fn arrow_schema() -> Schema {
     Schema::new(vec![
         Field::new("lane_id", DataType::UInt32, false),
@@ -1084,57 +1032,48 @@ fn arrow_schema() -> Schema {
         Field::new("status_height", DataType::UInt64, false),
     ])
 }
-
 fn make_u32_array<I>(values: I) -> ArrayRef
 where
     I: IntoIterator<Item = u32>,
 {
     Arc::new(UInt32Array::from_iter_values(values))
 }
-
 fn make_u64_array<I>(values: I) -> ArrayRef
 where
     I: IntoIterator<Item = u64>,
 {
     Arc::new(UInt64Array::from_iter_values(values))
 }
-
 fn make_f64_array<I>(values: I) -> ArrayRef
 where
     I: IntoIterator<Item = f64>,
 {
     Arc::new(Float64Array::from_iter_values(values))
 }
-
 fn make_bool_array<I>(values: I) -> ArrayRef
 where
     I: IntoIterator<Item = bool>,
 {
     Arc::new(BooleanArray::from_iter(values.into_iter().map(Some)))
 }
-
 fn make_string_array<'a, I>(values: I) -> ArrayRef
 where
     I: IntoIterator<Item = Option<&'a str>>,
 {
     Arc::new(StringArray::from_iter(values))
 }
-
 fn compute_teu_utilization_pct(capacity: u64, committed: u64) -> f64 {
     if capacity == 0 {
         return 0.0;
     }
     (committed as f64 / capacity as f64) * 100.0
 }
-
 fn micro_xor_to_units(value: u128) -> f64 {
     (value as f64) / 1_000_000.0
 }
-
 fn quantity(value: &str) -> Quantity {
     value.parse().expect("canonical quantity fixture")
 }
-
 fn receipt(
     source_hex: &str,
     local_amount: &str,
@@ -1157,7 +1096,6 @@ fn receipt(
         timestamp_ms,
     }
 }
-
 fn hex32(input: &str) -> [u8; 32] {
     let bytes = decode(input).expect("fixture hex payload");
     assert_eq!(
@@ -1169,28 +1107,23 @@ fn hex32(input: &str) -> [u8; 32] {
     out.copy_from_slice(&bytes);
     out
 }
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
+    use super::*;
     use arrow_array::{Array, BooleanArray, Float64Array, StringArray, UInt32Array, UInt64Array};
     use iroha_data_model::{
         metadata::Metadata,
         nexus::{AuditControls, JurisdictionSet, LaneCompliancePolicyId},
     };
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::fs;
     use tempfile::{NamedTempFile, tempdir};
-
-    use super::*;
-
     #[test]
     fn teu_utilization_helper_handles_zero_capacity() {
         assert_eq!(compute_teu_utilization_pct(0, 10), 0.0);
         let pct = compute_teu_utilization_pct(200, 100);
         assert!((pct - 50.0).abs() < 1e-6);
     }
-
     #[test]
     fn parquet_writer_round_trips_rows() {
         let dir = tempdir().expect("tempdir");
@@ -1251,9 +1184,7 @@ mod tests {
                 status_height: 99,
             },
         ];
-
         write_parquet_rows(&parquet_path, &rows).expect("parquet writer");
-
         let file = fs::File::open(&parquet_path).expect("parquet exists");
         let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
             .expect("reader builder")
@@ -1261,54 +1192,45 @@ mod tests {
             .build()
             .expect("reader");
         let batch = reader.next().expect("one batch").expect("batch ok");
-
         assert_eq!(batch.num_rows(), rows.len());
-
         let lane_ids = batch
             .column_by_name("lane_id")
             .and_then(|array| array.as_any().downcast_ref::<UInt32Array>())
             .expect("lane_id column");
         assert_eq!(lane_ids.value(0), rows[0].lane_id);
         assert_eq!(lane_ids.value(1), rows[1].lane_id);
-
         let dataspace_alias = batch
             .column_by_name("dataspace_alias")
             .and_then(|array| array.as_any().downcast_ref::<StringArray>())
             .expect("dataspace alias");
         assert_eq!(dataspace_alias.value(0), "payments");
         assert!(dataspace_alias.is_null(1));
-
         let utilization = batch
             .column_by_name("teu_utilization_pct")
             .and_then(|array| array.as_any().downcast_ref::<Float64Array>())
             .expect("utilization column");
         assert!((utilization.value(0) - rows[0].teu_utilization_pct).abs() < 1e-6);
-
         let backlog = batch
             .column_by_name("settlement_backlog_xor")
             .and_then(|array| array.as_any().downcast_ref::<Float64Array>())
             .expect("backlog column");
         assert!((backlog.value(0) - rows[0].settlement_backlog_xor).abs() < 1e-6);
-
         let manifest_required = batch
             .column_by_name("manifest_required")
             .and_then(|array| array.as_any().downcast_ref::<BooleanArray>())
             .expect("manifest_required column");
         assert!(manifest_required.value(0));
         assert!(!manifest_required.value(1));
-
         let status_height = batch
             .column_by_name("status_height")
             .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
             .expect("status height");
         assert_eq!(status_height.value(1), rows[1].status_height);
-
         let trigger_level = batch
             .column_by_name("trigger_level")
             .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
             .expect("trigger level");
         assert_eq!(trigger_level.value(1), rows[1].trigger_level);
-
         let compliance = batch
             .column_by_name("lane_compliance")
             .and_then(|array| array.as_any().downcast_ref::<StringArray>())
@@ -1324,13 +1246,11 @@ mod tests {
                 .map(|arr| arr.len()),
             Some(1)
         );
-
         assert!(
             reader.next().is_none(),
             "parquet reader should yield a single batch"
         );
     }
-
     #[test]
     fn lane_compliance_loader_rejects_mismatched_lane_ids() {
         let file = NamedTempFile::new().expect("temp file");
@@ -1347,7 +1267,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn lane_compliance_loader_rejects_duplicate_entries() {
         let file = NamedTempFile::new().expect("temp file");
@@ -1360,7 +1279,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn lane_compliance_loader_accepts_valid_entries() {
         let file = NamedTempFile::new().expect("temp file");
@@ -1372,7 +1290,6 @@ mod tests {
         assert!(map.contains_key(&4));
         assert!(map.contains_key(&9));
     }
-
     #[test]
     fn markdown_summary_includes_flags_and_counts() {
         let dir = tempdir().expect("tempdir");
@@ -1433,7 +1350,6 @@ mod tests {
                 status_height: 81,
             },
         ];
-
         write_markdown_summary(&path, &rows).expect("markdown writer ok");
         let rendered = fs::read_to_string(&path).expect("markdown exists");
         assert!(rendered.contains("# Nexus Lane Audit"));
@@ -1445,7 +1361,6 @@ mod tests {
         ));
         assert!(rendered.contains("| lane-9 (#9) | #11 | 7 | 0 | 0.000000 | 80.0 | ok |"));
     }
-
     #[test]
     fn canonical_json_renders_lane_commitment_value() {
         let fixture = sample_commitments()
@@ -1453,9 +1368,7 @@ mod tests {
             .next()
             .expect("lane commitment fixture");
         let value = json::to_value(&fixture.payload).expect("lane commitment json value");
-
         let rendered = canonical_json(&value).expect("canonical JSON");
-
         assert!(
             rendered.ends_with('\n'),
             "canonical lane commitment JSON should end with a newline"
@@ -1463,7 +1376,6 @@ mod tests {
         let parsed: LaneBlockCommitment = json::from_str(&rendered).expect("parse canonical JSON");
         assert_eq!(parsed, fixture.payload);
     }
-
     #[test]
     fn nexus_connect_fixture_options_require_one_mode_and_absolute_root() {
         let staging = tempdir().expect("temporary staging root");
@@ -1480,7 +1392,6 @@ mod tests {
                 output_root: PathBuf::from(&root),
             }
         );
-
         for invalid in [
             vec![],
             vec!["--write".to_owned()],
@@ -1505,13 +1416,11 @@ mod tests {
             assert!(parse_nexus_connect_fixture_options(invalid).is_err());
         }
     }
-
     #[test]
     fn nexus_connect_fixture_is_deterministic_and_has_closed_domain_fields() {
         let first = build_nexus_connect_fixture().expect("build Nexus fixture once");
         let second = build_nexus_connect_fixture().expect("build Nexus fixture twice");
         assert_eq!(first, second);
-
         let parsed: JsonValue = json::from_slice(&first).expect("parse generated Nexus fixture");
         let root = parsed.as_object().expect("Nexus fixture root object");
         assert_eq!(
@@ -1526,7 +1435,6 @@ mod tests {
                 "version",
             ])
         );
-
         let connect = root
             .get("connect")
             .and_then(JsonValue::as_object)
@@ -1545,7 +1453,6 @@ mod tests {
             connect.get("chain_id").and_then(JsonValue::as_str),
             Some(NEXUS_CONNECT_FIXTURE_CHAIN_ID)
         );
-
         let transfer = root
             .get("transfer_input")
             .and_then(JsonValue::as_object)
@@ -1572,7 +1479,6 @@ mod tests {
         for retired in ["chain", "chainId", "chain_id"] {
             assert!(!transfer.contains_key(retired));
         }
-
         let expected = root
             .get("expected")
             .and_then(JsonValue::as_object)
@@ -1594,7 +1500,6 @@ mod tests {
             Some(11)
         );
     }
-
     #[test]
     fn nexus_connect_fixture_writes_only_to_external_staging_root() {
         let staging = tempdir().expect("temporary staging root");
@@ -1605,13 +1510,11 @@ mod tests {
         run_nexus_connect_fixture(&write).expect("write staged Nexus fixture");
         let output = staging.path().join(NEXUS_CONNECT_FIXTURE_OUTPUT);
         assert!(output.is_file());
-
         run_nexus_connect_fixture(&NexusConnectFixtureOptions {
             mode: NexusConnectFixtureMode::Check,
             output_root: staging.path().to_path_buf(),
         })
         .expect("check staged Nexus fixture");
-
         let error = run_nexus_connect_fixture(&NexusConnectFixtureOptions {
             mode: NexusConnectFixtureMode::Write,
             output_root: nexus_connect_workspace_root()
@@ -1621,7 +1524,6 @@ mod tests {
         .expect_err("write mode must refuse the live workspace");
         assert!(error.to_string().contains("refuses the live workspace"));
     }
-
     fn sample_compliance(lane_id: u32, dataspace_id: u64) -> LaneComplianceEvidence {
         let policy = LaneCompliancePolicy {
             id: LaneCompliancePolicyId::default(),
@@ -1657,7 +1559,6 @@ mod tests {
             })],
         }
     }
-
     fn record_from_evidence(
         evidence: LaneComplianceEvidence,
         lane_id: u32,
@@ -1670,7 +1571,6 @@ mod tests {
             audit_log: evidence.audit_log,
         }
     }
-
     fn write_compliance_file(path: &Path, records: Vec<LaneComplianceEvidenceRecord>) {
         let file = LaneComplianceEvidenceFile { lanes: records };
         let value = serde_json::to_value(&file).expect("lane compliance value");
@@ -1679,7 +1579,6 @@ mod tests {
         rendered.push('\n');
         fs::write(path, rendered).expect("write compliance file");
     }
-
     fn policy_to_json_value(policy: &LaneCompliancePolicy) -> JsonValue {
         let norito_value = json::to_value(policy).expect("policy json value");
         let rendered = json::to_string(&norito_value).expect("policy json encode");

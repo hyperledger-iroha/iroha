@@ -172,9 +172,16 @@ validation phase is not `3`, or if the validity window is inconsistent
 `valid_after_unix <= now < valid_until_unix`.
 Embedded issuer keys prove only signature self-consistency; the independently
 obtained exact snapshot digest authenticates the issuer set. SRCv2 decoding
-rejects oversized containers before allocation: at most 16 endpoints, 8 tags
-per endpoint, 2 handshake suites, 2,048 UTF-8 bytes per URL, 64 bytes per tag,
-56 KiB per certificate, and 64 KiB per signed bundle.
+rejects oversized containers before allocation. The first-release directory
+envelope is limited to 5 MiB, 16 issuers, 64 relays, 1,952 bytes per issuer
+ML-DSA-65 public key, and 64 KiB per signed bundle; each bundle permits at most
+16 endpoints, 8 tags per endpoint, 2 handshake suites, 2,048 UTF-8 bytes per
+URL, 64 bytes per tag, and a 56 KiB certificate. Local node, relay, and CLI
+consumers open only a direct regular file without following its final path
+component, pin file identity and length across a max-plus-one bounded read, and
+then enter the schema-specific Norito decode budget. CLI HTTP fetches reject a
+declared `Content-Length` above 5 MiB before reading and apply the same
+max-plus-one bound while streaming chunked or otherwise lengthless responses.
 
 The CLI verifies every bundle against the declared issuer keys before merging the directory with
 

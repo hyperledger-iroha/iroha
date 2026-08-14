@@ -4,26 +4,21 @@
 //! every redundant protocol, context, height, subject, and block-hash binding,
 //! but deliberately leaves aggregate-signature verification to the consensus
 //! cryptography adapter.
-
-use core::fmt;
-use std::vec::Vec;
-
-use iroha_crypto::{Algorithm, HashOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
-
 use super::{
     BlockSubject, ConsensusMode, DualQuorum, GlobalPhase, Height, HeightContext, HeightContextId,
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
 };
 use crate::block::BlockHeader;
-
+use core::fmt;
+use iroha_crypto::{Algorithm, HashOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::vec::Vec;
+use thiserror::Error;
 /// Current Norito layout version of [`V2FinalityArtifact`].
 pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 4;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
 pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
-
 /// Election inputs finalized for the epoch immediately following a block.
 ///
 /// The snapshot is optional because most blocks do not finalize an epoch
@@ -51,7 +46,6 @@ pub struct FinalizedNextEpochSnapshot {
     /// Finalized seed used for deterministic leader rotation in this epoch.
     pub leader_seed: [u8; 32],
 }
-
 impl FinalizedNextEpochSnapshot {
     pub(super) fn validate_against(&self, context: &HeightContext) -> Result<(), ValidationError> {
         let expected_epoch = context
@@ -94,7 +88,6 @@ impl FinalizedNextEpochSnapshot {
         Ok(())
     }
 }
-
 /// Canonical, versioned finality evidence persisted alongside one block.
 ///
 /// Redundant fields are intentional: they make a malformed or mis-associated
@@ -128,7 +121,6 @@ pub struct V2FinalityArtifact {
     /// mutable world state.
     pub validator_set_pops: Vec<Vec<u8>>,
 }
-
 impl V2FinalityArtifact {
     /// Construct the canonical current-layout artifact.
     #[must_use]
@@ -149,13 +141,11 @@ impl V2FinalityArtifact {
             validator_set_pops,
         }
     }
-
     /// Return the frozen context identifier authenticated by this artifact.
     #[must_use]
     pub fn context_id(&self) -> HeightContextId {
         self.height_context.id()
     }
-
     /// Validate all structural bindings within this artifact.
     ///
     /// This validates certificate quorum structure and signature presence, but
@@ -250,7 +240,6 @@ impl V2FinalityArtifact {
         }
         Ok(())
     }
-
     /// Validate this artifact against an externally selected canonical block.
     ///
     /// # Errors
@@ -274,7 +263,6 @@ impl V2FinalityArtifact {
         }
         Ok(())
     }
-
     /// Validate this artifact against a complete canonical block header.
     ///
     /// In addition to height and header-hash association, this binds the
@@ -304,14 +292,12 @@ impl V2FinalityArtifact {
         }
         Ok(())
     }
-
     /// Return whether the authenticated decision round covers the immutable
     /// body-construction view carried by a complete block header.
     #[must_use]
     pub(crate) fn decision_round_covers_header_view(&self, header: &BlockHeader) -> bool {
         self.commit_qc.round.view >= header.view_change_index()
     }
-
     /// Verify the artifact's commit certificate against its frozen roster and
     /// roster-aligned BLS proofs of possession.
     ///
@@ -348,7 +334,6 @@ impl V2FinalityArtifact {
         Ok(())
     }
 }
-
 /// Cryptographic verification failure for one Sumeragi-v2 quorum certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum V2QuorumCertificateVerificationError {
@@ -392,7 +377,6 @@ pub enum V2QuorumCertificateVerificationError {
     #[error("invalid Sumeragi-v2 quorum-certificate aggregate signature")]
     InvalidAggregateSignature,
 }
-
 /// Verify a Sumeragi-v2 quorum certificate against its immutable height context
 /// and roster-aligned BLS proofs of possession.
 ///
@@ -465,7 +449,6 @@ pub fn verify_quorum_certificate_with_validator_pops(
         public_keys.push(entry.validator.public_key());
         pops.push(validator_set_pops[index].as_slice());
     }
-
     for (signer, (public_key, pop)) in certificate
         .signers
         .iter()
@@ -483,7 +466,6 @@ pub fn verify_quorum_certificate_with_validator_pops(
     )
     .map_err(|_| V2QuorumCertificateVerificationError::InvalidAggregateSignature)
 }
-
 /// Verify every BLS key and proof of possession in one frozen v2 roster.
 ///
 /// # Errors
@@ -496,7 +478,6 @@ pub fn verify_validator_roster_pops(
 ) -> Result<(), V2QuorumCertificateVerificationError> {
     verify_validator_power_roster_pops(&context.roster, validator_set_pops)
 }
-
 /// Verify BLS keys and proofs for one canonical powered roster.
 ///
 /// # Errors
@@ -509,7 +490,6 @@ pub fn verify_validator_power_roster_pops(
 ) -> Result<(), V2QuorumCertificateVerificationError> {
     verify_validator_power_roster_pops_except(roster, validator_set_pops, &[])
 }
-
 fn verify_validator_power_roster_pops_except(
     roster: &[ValidatorPower],
     validator_set_pops: &[Vec<u8>],
@@ -549,7 +529,6 @@ fn verify_validator_power_roster_pops_except(
     }
     Ok(())
 }
-
 /// Structural validation failure for a [`V2FinalityArtifact`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum V2FinalityValidationError {
@@ -637,7 +616,6 @@ pub enum V2FinalityValidationError {
         block: u64,
     },
 }
-
 impl fmt::Display for V2FinalityValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -713,28 +691,22 @@ impl fmt::Display for V2FinalityValidationError {
         }
     }
 }
-
 impl std::error::Error for V2FinalityValidationError {}
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::codec::{DecodeAll, Encode};
-
     use super::*;
     use crate::block::consensus_v2::{
         ConsensusRound, DataAvailabilityLayout, PayloadEncoding, ValidatorIndex,
     };
     use crate::{NetworkId, peer::PeerId};
-
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::codec::{DecodeAll, Encode};
+    use std::num::NonZeroU64;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     fn roster() -> Vec<ValidatorPower> {
         let mut peers = (1_u8..=4)
             .map(|seed| {
@@ -752,7 +724,6 @@ mod tests {
             })
             .collect()
     }
-
     fn context() -> HeightContext {
         let roster = roster();
         let next_epoch_snapshot = FinalizedNextEpochSnapshot {
@@ -789,7 +760,6 @@ mod tests {
             leader_seed: [0x5A; 32],
         }
     }
-
     fn subject(seed: u8) -> BlockSubject {
         BlockSubject {
             parent_block_hash: None,
@@ -797,7 +767,6 @@ mod tests {
             payload_hash: Hash::new([seed, 2]),
         }
     }
-
     fn execution_commitment(seed: u8) -> super::super::ExecutionCommitment {
         super::super::ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
@@ -810,7 +779,6 @@ mod tests {
         )
         .expect("canonical fixture execution commitment")
     }
-
     fn artifact() -> V2FinalityArtifact {
         let context = context();
         let subject = subject(3);
@@ -832,7 +800,6 @@ mod tests {
         let validator_set_pops = vec![vec![0x5C]; context.roster.len()];
         V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
-
     fn artifact_bound_to_header(
         header_view: u64,
         decision_view: u64,
@@ -853,25 +820,20 @@ mod tests {
         artifact.commit_qc.proposal_round = artifact.commit_qc.round;
         (artifact, header)
     }
-
     #[test]
     fn artifact_roundtrip_preserves_validated_bindings() {
         let artifact = artifact();
         artifact.validate().expect("fixture is valid");
-
         let encoded = artifact.encode();
         let mut cursor = encoded.as_slice();
         let decoded = V2FinalityArtifact::decode_all(&mut cursor).expect("decode artifact");
-
         assert_eq!(decoded, artifact);
         decoded.validate().expect("roundtrip remains valid");
     }
-
     #[test]
     fn artifact_rejects_legacy_v3_layout() {
         let mut legacy = artifact();
         legacy.format_version = 3;
-
         assert_eq!(
             legacy.validate(),
             Err(V2FinalityValidationError::UnsupportedFormatVersion {
@@ -880,14 +842,12 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round() {
         let (delayed, header) = artifact_bound_to_header(3, 5);
         delayed
             .validate_for_header(&header)
             .expect("a later same-round CommitQC can certify unchanged body bytes");
-
         let (substituted, header) = artifact_bound_to_header(3, 2);
         assert_eq!(
             substituted.validate_for_header(&header),
@@ -897,7 +857,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn genesis_header_binding_accepts_a_later_first_decision_round() {
         let (delayed_genesis, header) = artifact_bound_to_header(0, 3);
@@ -905,7 +864,6 @@ mod tests {
             .validate_for_header(&header)
             .expect("canonical genesis bytes retain view zero across a delayed first proposal");
     }
-
     #[test]
     fn decoded_artifact_rejects_protocol_context_height_subject_and_phase_mismatches() {
         let cases = [
@@ -936,7 +894,6 @@ mod tests {
                 value
             },
         ];
-
         for invalid in cases {
             let encoded = invalid.encode();
             let mut cursor = encoded.as_slice();
@@ -948,7 +905,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn next_epoch_snapshot_must_be_canonical_and_immediate() {
         let mut wrong_epoch = artifact();
@@ -964,7 +920,6 @@ mod tests {
                 ValidationError::InvalidNextEpoch
             ))
         ));
-
         let mut wrong_quorum = artifact();
         wrong_quorum
             .height_context
@@ -980,7 +935,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn epoch_snapshot_is_present_exactly_at_the_frozen_boundary() {
         let mut missing = artifact();
@@ -991,7 +945,6 @@ mod tests {
                 ValidationError::MissingNextEpochSnapshot
             ))
         );
-
         let mut premature = artifact();
         premature.height_context.epoch_end_height = premature.height + 1;
         assert_eq!(
@@ -1001,7 +954,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn durable_validator_pops_are_exactly_aligned_nonempty_and_bounded() {
         let mut missing = artifact();
@@ -1010,14 +962,12 @@ mod tests {
             missing.validate(),
             Err(V2FinalityValidationError::ProofOfPossessionCount { .. })
         ));
-
         let mut empty = artifact();
         empty.validator_set_pops[1].clear();
         assert_eq!(
             empty.validate(),
             Err(V2FinalityValidationError::MissingProofOfPossession { index: 1 })
         );
-
         let mut oversized = artifact();
         oversized.validator_set_pops[2] = vec![0xA4; MAX_VALIDATOR_POP_BYTES + 1];
         assert_eq!(
@@ -1028,7 +978,6 @@ mod tests {
                 max: MAX_VALIDATOR_POP_BYTES,
             })
         );
-
         let mut oversized_future = artifact();
         oversized_future
             .height_context
@@ -1043,7 +992,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn artifact_rejects_an_oversized_commit_aggregate_before_cryptography() {
         let mut oversized = artifact();
@@ -1056,12 +1004,10 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn commit_qc_context_id_authenticates_the_exact_epoch_transition() {
         let canonical = artifact();
         canonical.validate().expect("canonical artifact");
-
         let mut forged_seed = canonical.clone();
         forged_seed
             .height_context
@@ -1069,7 +1015,6 @@ mod tests {
             .as_mut()
             .expect("boundary snapshot")
             .leader_seed[0] ^= 0x80;
-
         let mut forged_roster = canonical.clone();
         let snapshot = forged_roster
             .height_context
@@ -1083,7 +1028,6 @@ mod tests {
             .roster
             .sort_by(|left, right| left.validator.cmp(&right.validator));
         snapshot.quorum = DualQuorum::from_roster(&snapshot.roster).expect("mutated valid roster");
-
         for forged in [forged_seed, forged_roster] {
             assert_ne!(forged.height_context.id(), canonical.height_context.id());
             assert_eq!(

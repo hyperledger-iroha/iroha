@@ -1,7 +1,5 @@
 //! Domain endorsement helpers (committees, policies, submissions).
-
 use std::{fs, path::PathBuf, str::FromStr};
-
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     domain::DomainId,
@@ -17,13 +15,10 @@ use iroha::data_model::{
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey, PublicKey, Signature};
 use norito::json;
-
 use crate::{Run, RunContext};
-
 fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
     DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Build a domain endorsement (optionally signing it) and emit JSON to stdout.
@@ -41,7 +36,6 @@ pub enum Command {
     /// Set or replace the endorsement policy for a domain.
     SetPolicy(SetPolicyArgs),
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PrepareArgs {
     /// Domain identifier being endorsed.
@@ -72,35 +66,30 @@ pub struct PrepareArgs {
     #[arg(long = "signer-key", value_name = "PRIVATE_KEY", num_args = 0..)]
     pub signer_keys: Vec<String>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubmitArgs {
     /// Path to the endorsement JSON. If omitted, read from stdin.
     #[arg(long, value_name = "PATH")]
     pub file: Option<PathBuf>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Domain to query.
     #[arg(long, value_parser = parse_domain_id_literal)]
     pub domain: DomainId,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PolicyArgs {
     /// Domain to query.
     #[arg(long, value_parser = parse_domain_id_literal)]
     pub domain: DomainId,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct CommitteeArgs {
     /// Committee identifier to fetch.
     #[arg(long)]
     pub committee_id: String,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RegisterCommitteeArgs {
     /// New committee identifier.
@@ -116,7 +105,6 @@ pub struct RegisterCommitteeArgs {
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SetPolicyArgs {
     /// Domain requiring endorsements.
@@ -132,7 +120,6 @@ pub struct SetPolicyArgs {
     #[arg(long, default_value_t = true)]
     pub required: bool,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -149,7 +136,6 @@ impl Run for Command {
         }
     }
 }
-
 fn build_endorsement(args: &PrepareArgs) -> Result<DomainEndorsement> {
     let scope = DomainEndorsementScope {
         dataspace: args.dataspace.map(DataSpaceId::new),
@@ -179,7 +165,6 @@ fn build_endorsement(args: &PrepareArgs) -> Result<DomainEndorsement> {
             args.issued_at_height
         ));
     }
-
     let body_hash = endorsement.body_hash();
     for signer in &args.signer_keys {
         let private: PrivateKey = signer
@@ -196,10 +181,8 @@ fn build_endorsement(args: &PrepareArgs) -> Result<DomainEndorsement> {
                 signature,
             });
     }
-
     Ok(endorsement)
 }
-
 fn submit_endorsement<C: RunContext>(args: SubmitArgs, context: &mut C) -> Result<()> {
     let endorsement: DomainEndorsement = if let Some(path) = args.file {
         let buf = fs::read_to_string(&path)
@@ -210,12 +193,10 @@ fn submit_endorsement<C: RunContext>(args: SubmitArgs, context: &mut C) -> Resul
         // Reuse the standard JSON parser to read from stdin
         crate::parse_json_stdin(context)?
     };
-
     let instruction: iroha::data_model::isi::endorsement::SubmitDomainEndorsement =
         isi_endorsement::SubmitDomainEndorsement { endorsement };
     context.finish([InstructionBox::from(instruction)])
 }
-
 fn list_endorsements<C: RunContext>(args: ListArgs, context: &mut C) -> Result<()> {
     let client = context.client_from_config();
     let records = client
@@ -225,7 +206,6 @@ fn list_endorsements<C: RunContext>(args: ListArgs, context: &mut C) -> Result<(
         .wrap_err("failed to fetch domain endorsements")?;
     context.print_data(&records)
 }
-
 fn show_policy<C: RunContext>(args: PolicyArgs, context: &mut C) -> Result<()> {
     let client = context.client_from_config();
     let policy = client
@@ -235,7 +215,6 @@ fn show_policy<C: RunContext>(args: PolicyArgs, context: &mut C) -> Result<()> {
         .wrap_err("failed to fetch domain endorsement policy")?;
     context.print_data(&policy)
 }
-
 fn show_committee<C: RunContext>(args: CommitteeArgs, context: &mut C) -> Result<()> {
     let client = context.client_from_config();
     let committee = client
@@ -245,7 +224,6 @@ fn show_committee<C: RunContext>(args: CommitteeArgs, context: &mut C) -> Result
         .wrap_err("failed to fetch domain committee")?;
     context.print_data(&committee)
 }
-
 fn register_committee<C: RunContext>(args: RegisterCommitteeArgs, context: &mut C) -> Result<()> {
     let members = parse_public_keys(&args.members)?;
     let metadata = if let Some(path) = &args.metadata {
@@ -269,7 +247,6 @@ fn register_committee<C: RunContext>(args: RegisterCommitteeArgs, context: &mut 
     let instruction = isi_endorsement::RegisterDomainCommittee { committee };
     context.finish([InstructionBox::from(instruction)])
 }
-
 fn set_policy<C: RunContext>(args: SetPolicyArgs, context: &mut C) -> Result<()> {
     let policy = DomainEndorsementPolicy {
         committee_id: args.committee_id,
@@ -282,13 +259,11 @@ fn set_policy<C: RunContext>(args: SetPolicyArgs, context: &mut C) -> Result<()>
     };
     context.finish([InstructionBox::from(instruction)])
 }
-
 fn read_metadata(path: &PathBuf) -> Result<Metadata> {
     let buf = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read metadata file {}", path.display()))?;
     json::from_json(&buf).map_err(|err| eyre!("failed to parse metadata JSON from file: {err}"))
 }
-
 fn parse_public_keys(values: &[String]) -> Result<Vec<PublicKey>> {
     let mut keys = Vec::with_capacity(values.len());
     for raw in values {
@@ -298,17 +273,14 @@ fn parse_public_keys(values: &[String]) -> Result<Vec<PublicKey>> {
     }
     Ok(keys)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
-
     fn checked_endorsement_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked endorsement Ed25519 signing key fixture")
     }
-
     #[test]
     fn endorsement_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_endorsement_ed25519_key_fixture();
@@ -316,10 +288,8 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("endorsement fixture signer key advertises a valid algorithm");
-
         assert_eq!(algorithm, Algorithm::Ed25519);
     }
-
     #[test]
     fn prepare_signs_payload_and_keeps_body_hash_stable() {
         let kp_a = checked_endorsement_ed25519_key_fixture();

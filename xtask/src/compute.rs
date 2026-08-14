@@ -1,12 +1,8 @@
 //! Compute lane SLO harness and SDK/CLI parity fixtures.
-
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
+use crate::compute_harness::{
+    ComputeHarnessError, SloTargets, build_call_for_route, charge_units, default_manifest,
+    execute_entrypoint, meter, payload_with_len, slo_targets,
 };
-
 use eyre::{Result, WrapErr};
 use iroha_config::parameters::defaults::compute as compute_defaults;
 use iroha_data_model::compute::{
@@ -16,12 +12,12 @@ use norito::{
     derive::{JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize},
     json::{self, JsonSerialize},
 };
-
-use crate::compute_harness::{
-    ComputeHarnessError, SloTargets, build_call_for_route, charge_units, default_manifest,
-    execute_entrypoint, meter, payload_with_len, slo_targets,
+use std::{
+    collections::BTreeMap,
+    fs,
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
 };
-
 /// Options for generating an SLO report.
 #[derive(Debug, Clone)]
 pub struct ComputeSloReportOptions {
@@ -34,14 +30,12 @@ pub struct ComputeSloReportOptions {
     /// Number of samples per route.
     pub samples: NonZeroUsize,
 }
-
 /// Options for generating cross-SDK fixtures.
 #[derive(Debug, Clone)]
 pub struct ComputeFixtureOptions {
     /// Destination directory for fixtures.
     pub output_dir: PathBuf,
 }
-
 /// Run a deterministic SLO check against a manifest and write JSON/Markdown reports.
 pub fn run_slo_report(options: ComputeSloReportOptions) -> Result<()> {
     let manifest = load_manifest(&options.manifest)?;
@@ -53,7 +47,6 @@ pub fn run_slo_report(options: ComputeSloReportOptions) -> Result<()> {
     }
     Ok(())
 }
-
 /// Emit compute fixtures for SDK/CLI parity (call + receipt + rejection catalog).
 pub fn write_fixtures(options: ComputeFixtureOptions) -> Result<()> {
     fs::create_dir_all(&options.output_dir)
@@ -86,21 +79,18 @@ pub fn write_fixtures(options: ComputeFixtureOptions) -> Result<()> {
         metering,
         outcome,
     };
-
     let call_path = options.output_dir.join("call_compute_payments_parity.json");
     let receipt_path = options
         .output_dir
         .join("receipt_compute_payments_parity.json");
     write_json(&call_path, &call)?;
     write_json(&receipt_path, &receipt)?;
-
     // Rejection catalog is static and mirrors the gateway error mapping.
     let catalog_path = options.output_dir.join("rejection_compute_catalog.json");
     let catalog = rejection_catalog(&manifest.routes[0].id);
     write_json(&catalog_path, &catalog)?;
     Ok(())
 }
-
 fn build_report(
     manifest: &ComputeManifest,
     targets: SloTargets,
@@ -126,7 +116,6 @@ fn build_report(
         pass,
     })
 }
-
 fn route_report(
     manifest: &ComputeManifest,
     route: &iroha_data_model::compute::ComputeRoute,
@@ -142,7 +131,6 @@ fn route_report(
     let mut egress_bytes = Vec::with_capacity(samples);
     let mut outcomes: BTreeMap<String, usize> = BTreeMap::new();
     let receipts = Vec::new();
-
     for idx in 0..samples {
         let payload = payload_with_len(sample_payload_len(idx));
         let call = build_call_for_route(
@@ -170,12 +158,10 @@ fn route_report(
             &call,
             &mut metering,
         );
-
         *outcomes.entry(format!("{:?}", outcome.kind)).or_default() += 1;
         durations.push(metering.duration_ms);
         egress_bytes.push(metering.egress_bytes);
     }
-
     let p50 = percentile(&durations, 0.50);
     let p95 = percentile(&durations, 0.95);
     let p99 = percentile(&durations, 0.99);
@@ -185,11 +171,9 @@ fn route_report(
     } else {
         samples as f64 / (total_duration_ms as f64 / 1_000.0)
     };
-
     let pass = p50 <= targets.target_p50_latency_ms.get()
         && p95 <= targets.target_p95_latency_ms.get()
         && p99 <= targets.target_p99_latency_ms.get();
-
     Ok(RouteReport {
         id: route.id.clone(),
         samples,
@@ -204,7 +188,6 @@ fn route_report(
         pass,
     })
 }
-
 #[derive(Debug, Clone, DeriveJsonSerialize, DeriveJsonDeserialize)]
 struct ComputeSloReport {
     manifest_namespace: String,
@@ -213,7 +196,6 @@ struct ComputeSloReport {
     routes: Vec<RouteReport>,
     pass: bool,
 }
-
 #[derive(Debug, Clone, DeriveJsonSerialize, DeriveJsonDeserialize)]
 struct RouteReport {
     id: ComputeRouteId,
@@ -230,7 +212,6 @@ struct RouteReport {
     receipts: Vec<ComputeReceipt>,
     pass: bool,
 }
-
 #[derive(Debug, Clone, DeriveJsonSerialize, DeriveJsonDeserialize)]
 struct TargetsView {
     max_inflight_per_route: usize,
@@ -240,7 +221,6 @@ struct TargetsView {
     target_p95_latency_ms: u64,
     target_p99_latency_ms: u64,
 }
-
 impl From<SloTargets> for TargetsView {
     fn from(targets: SloTargets) -> Self {
         Self {
@@ -253,14 +233,12 @@ impl From<SloTargets> for TargetsView {
         }
     }
 }
-
 #[derive(Debug, Clone, DeriveJsonSerialize, DeriveJsonDeserialize)]
 struct RejectionCase {
     case: String,
     status: u16,
     message: String,
 }
-
 fn load_manifest(path: &Path) -> Result<ComputeManifest> {
     if path.exists() {
         let bytes =
@@ -269,7 +247,6 @@ fn load_manifest(path: &Path) -> Result<ComputeManifest> {
     }
     Ok(default_manifest())
 }
-
 fn write_json<T: JsonSerialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).wrap_err_with(|| {
@@ -280,7 +257,6 @@ fn write_json<T: JsonSerialize>(path: &Path, value: &T) -> Result<()> {
     fs::write(path, json).wrap_err_with(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
-
 fn write_markdown(path: &Path, report: &ComputeSloReport) -> Result<()> {
     let mut md = String::new();
     md.push_str("# Compute SLO Report\n\n");
@@ -317,7 +293,6 @@ fn write_markdown(path: &Path, report: &ComputeSloReport) -> Result<()> {
     fs::write(path, md).wrap_err_with(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
-
 fn percentile(values: &[u64], quantile: f64) -> u64 {
     if values.is_empty() {
         return 0;
@@ -328,12 +303,10 @@ fn percentile(values: &[u64], quantile: f64) -> u64 {
     let idx = (((len as f64 - 1.0) * quantile).ceil() as usize).min(len - 1);
     sorted[idx]
 }
-
 fn sample_payload_len(idx: usize) -> usize {
     const PAYLOAD_LADDER: [usize; 6] = [0, 8, 64, 256, 512, 1024];
     PAYLOAD_LADDER[idx % PAYLOAD_LADDER.len()]
 }
-
 fn rejection_catalog(route: &ComputeRouteId) -> Vec<RejectionCase> {
     vec![
         RejectionCase {
@@ -363,21 +336,17 @@ fn rejection_catalog(route: &ComputeRouteId) -> Vec<RejectionCase> {
         },
     ]
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::compute::ComputeCall;
     use tempfile::TempDir;
-
-    use super::*;
-
     #[test]
     fn percentile_handles_small_sets() {
         assert_eq!(percentile(&[], 0.5), 0);
         assert_eq!(percentile(&[10], 0.5), 10);
         assert_eq!(percentile(&[10, 20, 30, 40], 0.75), 40);
     }
-
     #[test]
     fn slo_report_writes_outputs() {
         let tmp = TempDir::new().expect("tempdir");
@@ -397,7 +366,6 @@ mod tests {
         assert!(!parsed.routes.is_empty());
         assert!(parsed.pass);
     }
-
     #[test]
     fn fixtures_are_emitted() {
         let tmp = TempDir::new().expect("tempdir");

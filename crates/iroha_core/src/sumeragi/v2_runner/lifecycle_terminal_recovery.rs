@@ -9,7 +9,6 @@ struct LaneApplicationEvidenceRepairQueueFence {
     snapshot: crate::queue::LaneQueueReservationReconciliationSnapshotV1,
     quarantine: bool,
 }
-
 impl LaneApplicationEvidenceRepairQueueFence {
     fn capture(queue: &Queue) -> Result<Self, V2RunnerError> {
         let snapshot = queue
@@ -27,7 +26,6 @@ impl LaneApplicationEvidenceRepairQueueFence {
             quarantine,
         })
     }
-
     fn revalidate(&self, queue: &Queue) -> Result<(), V2RunnerError> {
         let snapshot = queue
             .lane_reservation_reconciliation_snapshot()
@@ -43,7 +41,6 @@ impl LaneApplicationEvidenceRepairQueueFence {
         Ok(())
     }
 }
-
 fn reconcile_lifecycle_terminal_outcomes_before_queue_planning(
     output_guard: &ConsensusOutputGuard,
     state: &State,

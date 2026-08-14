@@ -796,13 +796,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             .store(manifest.clone(), canonical_wire.clone())
             .expect("persist production marker-replay body");
         if persist_matching_outcome {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Ok::<_, String>(semantic_commitment)
                 })
                 .expect("persist matching semantic marker");
         } else {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Err::<wire::ExecutionCommitment, _>(
                         "deliberately mismatched recovered rejection".to_owned(),

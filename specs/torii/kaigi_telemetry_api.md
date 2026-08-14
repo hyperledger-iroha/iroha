@@ -13,9 +13,9 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 
 | Route | Method | Feature Gate | Description | Response |
 |-------|--------|--------------|-------------|----------|
-| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical I105 relay identifiers. | `KaigiRelaySummaryListDto` |
-| `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Returns metadata for a single relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical I105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
-| `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Aggregated relay health totals across all domains plus per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
+| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Operator-signed expensive read listing registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical I105 relay identifiers. | `KaigiRelaySummaryListDto` |
+| `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Operator-signed bounded lookup for one relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical I105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
+| `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Operator-signed expensive aggregation of relay health totals and per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
 | `/v1/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
 
 > **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and the metrics counters backing Local-8 cutover dashboards.
@@ -102,14 +102,28 @@ Query parameters allow optional filtering by `domain`, `relay`, and `kind`
 (`registration` or `health`). Unsupported events are dropped with an SSE
 comment (`"ignored"`), and filter mismatches yield `"filtered"` comments.
 
-### Rate Limiting and Access Control
+### Diagnostic authentication and bounds
 
-- Handlers reuse `limits::rate_limit_key` with route-specific labels
-  (`"v1/kaigi/relays"`, `"v1/kaigi/relays/health"`, etc.).
-- All routes leverage `MaybeTelemetry`; requests are rejected with
-  `TelemetryProfileRestricted` when the active profile disables metrics.
-- Endpoints follow the same authentication/routing rules as other `app_api`
-  surfaces (API token where configured, CIDR allow-list bypass).
+- The three snapshot reads require all four fresh operator-signature headers.
+  The signature binds the immutable, exact `NetworkId`, `GET`, encoded path,
+  sorted query, empty body hash, timestamp, and nonce. API tokens, legacy auth
+  headers, and caller-precomputed operator headers are not substitutes.
+- SDK callers dispatch each signed request once with redirects and automatic
+  retries disabled. A retry must be a newly signed logical request.
+- List and health are catalogued as `ExpensiveCompute`; detail is `ReadOnly`.
+  Authentication runs before any relay-world scan or response materialization.
+- List and health fail closed with `422` after
+  `KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS` relay records. They use a single bounded
+  pass rather than collecting the full registry or every Prometheus label
+  series. Detail derives the metadata key and performs direct per-domain lookup.
+- Call-signal history uses the core bounded committed-transaction visitor,
+  validates `offset + limit` against the canonical fetch budget, retains only
+  the requested heap window, and caps retained page JSON at
+  `KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES`.
+- The SSE route retains its separate streaming protocol and is not converted to
+  snapshot-style operator request signing by this contract.
+- All routes still reject with `TelemetryProfileRestricted` when the active
+  profile disables metrics.
 
 ### Metrics Backing
 
@@ -118,12 +132,19 @@ The handlers consume the Kaigi counters exported by
 
 - `kaigi_relay_registered_total`
 - `kaigi_relay_manifest_updates_total`
+- `kaigi_relay_manifest_updates_by_domain_total`
 - `kaigi_relay_failover_total`
+- `kaigi_relay_failovers_by_domain_total`
 - `kaigi_relay_health_reports_total`
+- `kaigi_relay_health_reports_by_domain_total`
 - `kaigi_relay_health_state`
 
-`prometheus::core::Collector` is used to gather consistent snapshots prior to
-rendering the DTOs.
+The `*_by_domain_total` counters are updated beside their dimensioned source
+counters and expose exactly one label, `domain`. Snapshot handlers read only
+those aggregates for the bounded set of active relay domains; they never
+collect the unbounded action, call, or status label families. Canonical
+on-chain relay feedback supplies health status, avoiding an unbounded clone of
+the Prometheus label registry.
 
 ### Tests & Verification
 
@@ -131,9 +152,10 @@ rendering the DTOs.
   detail, and health responses using an in-memory state fixture.
 - SSE coverage: `convert_kaigi_event` filters are indirectly exercised by the
   integration test (relay events accepted, non-Kaigi events ignored).
-- Router wiring: existing router smoke tests continue to assert feature-gated
-  route registration; additional parity checks will be added as SDKs adopt the
-  surface.
+- Router/auth coverage verifies missing, wrong-network, wrong-path, and
+  wrong-query signatures fail before the handlers run. Python and JavaScript
+  transport tests verify generated exact-target signatures and one-shot
+  dispatch.
 
 ### Follow-up
 

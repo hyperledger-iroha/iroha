@@ -3,10 +3,16 @@
 //! The recorded agreement is an immutable, one-shot economic contract. Exact
 //! consent-selected balance scopes and terminal settlement status are retained
 //! so maturity settlement cannot infer or substitute caller-controlled terms.
-
+use crate::{
+    Identifiable, Name,
+    asset::prelude::{AssetDefinitionId, AssetId},
+    metadata::Metadata,
+    prelude::AccountId,
+};
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
@@ -14,19 +20,9 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
-
-use crate::{
-    Identifiable, Name,
-    asset::prelude::{AssetDefinitionId, AssetId},
-    metadata::Metadata,
-    prelude::AccountId,
-};
-use iroha_primitives::numeric::Quantity;
-
 #[model]
 mod model {
     use super::*;
-
     /// Identifier for a repo agreement lifecycle.
     #[derive(
         Debug,
@@ -53,11 +49,8 @@ mod model {
         pub name: Name,
     }
 }
-
 pub use self::model::RepoAgreementId;
-
 string_id!(RepoAgreementId);
-
 /// Cash leg definition used by repo instructions.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -68,7 +61,6 @@ pub struct RepoCashLeg {
     /// Quantity of the cash asset exchanged at initiation.
     pub quantity: Quantity,
 }
-
 impl RepoCashLeg {
     /// Construct a cash leg with a nominal non-negative quantity.
     pub fn new(asset_definition_id: AssetDefinitionId, quantity: impl Into<Quantity>) -> Self {
@@ -78,7 +70,6 @@ impl RepoCashLeg {
         }
     }
 }
-
 /// Collateral leg definition used by repo instructions.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -91,7 +82,6 @@ pub struct RepoCollateralLeg {
     /// Optional metadata (e.g., ISIN/series) attached at admission time.
     pub metadata: Metadata,
 }
-
 impl RepoCollateralLeg {
     /// Construct a collateral leg without metadata.
     pub fn new(asset_definition_id: AssetDefinitionId, quantity: impl Into<Quantity>) -> Self {
@@ -102,7 +92,6 @@ impl RepoCollateralLeg {
         }
     }
 }
-
 /// Governance knobs captured with each agreement.
 #[derive(
     Copy, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Decode, Encode, IntoSchema,
@@ -115,7 +104,6 @@ pub struct RepoGovernance {
     /// Cadence (seconds) between mandatory margin checks.
     pub margin_frequency_secs: u64,
 }
-
 impl RepoGovernance {
     /// Governance defaults used when configuration omits explicit values.
     pub fn with_defaults(haircut_bps: u16, margin_frequency_secs: u64) -> Self {
@@ -124,13 +112,11 @@ impl RepoGovernance {
             margin_frequency_secs,
         }
     }
-
     /// Return the cadence between margin checks in milliseconds.
     pub fn margin_frequency_millis(&self) -> Option<u64> {
         (self.margin_frequency_secs != 0).then(|| self.margin_frequency_secs.saturating_mul(1_000))
     }
 }
-
 /// End-to-end repo agreement envelope recorded on-chain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -175,7 +161,6 @@ pub struct RepoAgreement {
     /// can never be replayed.
     pub settlement_timestamp_ms: Option<u64>,
 }
-
 impl RepoAgreement {
     /// Builder-style helper for constructing a repo agreement.
     #[allow(clippy::too_many_arguments)]
@@ -210,12 +195,10 @@ impl RepoAgreement {
             settlement_timestamp_ms: None,
         }
     }
-
     /// Return whether the agreement is still open for margining or maturity settlement.
     pub fn is_active(&self) -> bool {
         self.settlement_timestamp_ms.is_none()
     }
-
     /// Close this agreement at its pre-agreed maturity.
     ///
     /// Returns `false` when the agreement was already settled.
@@ -226,7 +209,6 @@ impl RepoAgreement {
         self.settlement_timestamp_ms = Some(self.maturity_timestamp_ms);
         true
     }
-
     /// Compute the next margin check timestamp after the provided moment.
     ///
     /// Returns `None` when the governance policy disables margin sweeps
@@ -236,18 +218,15 @@ impl RepoAgreement {
     /// (initially the initiation timestamp).
     pub fn next_margin_check_after(&self, after_timestamp_ms: u64) -> Option<u64> {
         let freq_ms = self.governance.margin_frequency_millis()?;
-
         let start = self.last_margin_check_timestamp_ms;
         if after_timestamp_ms < start {
             return Some(start);
         }
-
         let elapsed = after_timestamp_ms.saturating_sub(start);
         let periods_elapsed = elapsed / freq_ms;
         let next_period = periods_elapsed.saturating_add(1);
         start.checked_add(freq_ms.saturating_mul(next_period))
     }
-
     /// Determine whether a margin check is due at the supplied timestamp.
     ///
     /// Returns `false` when margining is disabled. When margining is enabled,
@@ -260,62 +239,51 @@ impl RepoAgreement {
         };
         at_timestamp_ms >= next_due
     }
-
     /// Record completion of a margin check at the supplied timestamp.
     pub fn record_margin_check(&mut self, timestamp_ms: u64) {
         self.last_margin_check_timestamp_ms = timestamp_ms;
     }
 }
-
 impl Identifiable for RepoAgreement {
     type Id = RepoAgreementId;
-
     fn id(&self) -> &Self::Id {
         &self.id
     }
 }
-
 /// Common re-exports for repo-related types.
 pub mod prelude {
     pub use super::{
         RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance,
     };
 }
-
 #[cfg(feature = "json")]
 impl JsonKeyCodec for RepoAgreementId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         encoded
             .parse()
             .map_err(|err| norito::json::Error::Message(format!("{err}")))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode, Encode};
-
     use super::*;
     use crate::domain::DomainId;
-
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
     #[derive(Encode)]
     struct ForgedRepoCashLeg {
         asset_definition_id: AssetDefinitionId,
         quantity: Numeric,
     }
-
     #[derive(Encode)]
     struct ForgedRepoCollateralLeg {
         asset_definition_id: AssetDefinitionId,
         quantity: Numeric,
         metadata: Metadata,
     }
-
     const ALICE_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     fn sample_agreement(initiated_ms: u64, margin_frequency_secs: u64) -> RepoAgreement {
         let initiator = AccountId::parse_encoded(ALICE_ID_STR)
@@ -367,14 +335,12 @@ mod tests {
             None,
         )
     }
-
     #[test]
     fn margin_schedule_disabled_when_frequency_zero() {
         let agreement = sample_agreement(1_000, 0);
         assert!(agreement.next_margin_check_after(1_000).is_none());
         assert!(!agreement.is_margin_check_due(1_000));
     }
-
     #[test]
     fn margin_schedule_returns_start_before_initiation() {
         let agreement = sample_agreement(10_000, 60);
@@ -384,7 +350,6 @@ mod tests {
             "margin checks should start at the initiation timestamp"
         );
     }
-
     #[test]
     fn margin_schedule_advances_in_cadence() {
         let agreement = sample_agreement(10_000, 60);
@@ -403,7 +368,6 @@ mod tests {
         assert!(agreement.is_margin_check_due(70_001));
         assert!(!agreement.is_margin_check_due(69_999));
     }
-
     #[test]
     fn record_margin_check_updates_schedule() {
         let mut agreement = sample_agreement(10_000, 60);
@@ -413,7 +377,6 @@ mod tests {
         assert!(agreement.is_margin_check_due(130_000));
         assert!(agreement.is_margin_check_due(130_001));
     }
-
     #[test]
     fn settlement_status_is_one_way() {
         let mut agreement = sample_agreement(10_000, 60);
@@ -424,7 +387,6 @@ mod tests {
         assert!(!agreement.settle());
         assert_eq!(agreement.settlement_timestamp_ms(), &Some(86_410_000));
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_repo_leg_quantities() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -432,7 +394,6 @@ mod tests {
             AssetDefinitionId::derive_from_components(domain.clone(), "usd".parse().expect("name"));
         let collateral =
             AssetDefinitionId::derive_from_components(domain, "bond".parse().expect("name"));
-
         let encoded = ForgedRepoCashLeg {
             asset_definition_id: cash,
             quantity: Numeric::new(-1_i32, 0),
@@ -442,7 +403,6 @@ mod tests {
             RepoCashLeg::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a repo cash quantity"
         );
-
         let encoded = ForgedRepoCollateralLeg {
             asset_definition_id: collateral,
             quantity: Numeric::new(-1_i32, 0),

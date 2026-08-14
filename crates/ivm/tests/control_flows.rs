@@ -1,9 +1,7 @@
 use ivm::{IVM, encoding, instruction};
 mod common;
 use common::assemble;
-
 const HALT_WORD: u32 = encoding::wide::encode_halt();
-
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);
     for &word in words {
@@ -11,11 +9,9 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     assemble(&bytes)
 }
-
 fn enc_branch(op: u8, rs1: u8, rs2: u8, offset_words: i8) -> u32 {
     encoding::wide::encode_branch(op, rs1, rs2, offset_words)
 }
-
 #[test]
 fn test_jumps_and_branches() {
     // 1. Test JAL: jump forward and link
@@ -38,7 +34,6 @@ fn test_jumps_and_branches() {
         0x00000004,
         "x2 should contain link address (4)"
     );
-
     // 2. Test JALR: jump to address in register and link
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, 1); // initial x1 = 1
@@ -64,7 +59,6 @@ fn test_jumps_and_branches() {
         "x3 should remain 1 (second addi skipped)"
     );
     assert_eq!(vm2.register(2), 0, "JR should not set link register");
-
     // 3. Test BEQ and BNE:
     // If x1 == x2, skip the increment; otherwise increment.
     let mut vm3 = IVM::new(u64::MAX);
@@ -87,7 +81,6 @@ fn test_jumps_and_branches() {
         5,
         "x1 should remain 5 when equal (branch taken)"
     );
-
     // Case B: x1 != x2
     let mut vm4 = IVM::new(u64::MAX);
     vm4.set_register(1, 5);
@@ -99,7 +92,6 @@ fn test_jumps_and_branches() {
         6,
         "x1 should increment to 6 when not equal (branch not taken)"
     );
-
     // 4. Test HALT returns Ok and stops execution
     let mut vm5 = IVM::new(u64::MAX);
     let prog = assemble_words(&[HALT_WORD]);
@@ -107,7 +99,6 @@ fn test_jumps_and_branches() {
     let res = vm5.run();
     assert!(res.is_ok(), "HALT should result in Ok(())");
 }
-
 #[test]
 fn test_bge_and_bgeu() {
     let mut vm = IVM::new(u64::MAX);
@@ -121,7 +112,6 @@ fn test_bge_and_bgeu() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("BGE failed");
     assert_eq!(vm.register(1) as i64, -1);
-
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, 1);
     vm2.set_register(2, u64::MAX);
@@ -134,7 +124,6 @@ fn test_bge_and_bgeu() {
     vm2.run().expect("BGEU failed");
     assert_eq!(vm2.register(1), 2);
 }
-
 #[test]
 fn test_backwards_branch_loop() {
     let mut vm = IVM::new(u64::MAX);

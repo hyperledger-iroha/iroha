@@ -8,13 +8,10 @@
 //! duplicating values in code or documentation.
 //!
 //! The parameter table mirrors the one rendered in `nexus.md`.
-
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-
 pub mod params;
 pub mod poseidon;
-
 pub use params::{
     CANONICAL_PARAMETER_SETS, FieldDescriptor, HashDescriptor, StarkParameterSet, find_by_name,
 };

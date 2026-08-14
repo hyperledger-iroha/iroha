@@ -1,7 +1,4 @@
 //! Canonical decoder for unsigned verifying-key transaction drafts.
-
-use std::str::FromStr;
-
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -16,16 +13,14 @@ use pyo3::{
     pyfunction,
     types::{PyBytes, PyDict, PyDictMethods},
 };
-
+use std::str::FromStr;
 #[derive(Clone, Copy)]
 enum VerifyingKeyOperation {
     Register,
     Update,
 }
-
 impl FromStr for VerifyingKeyOperation {
     type Err = String;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "register" => Ok(Self::Register),
@@ -34,13 +29,11 @@ impl FromStr for VerifyingKeyOperation {
         }
     }
 }
-
 #[derive(Debug)]
 struct DecodedVerifyingKeyInstruction {
     id: VerifyingKeyId,
     record: VerifyingKeyRecord,
 }
-
 fn decode_bound_verifying_key_instruction(
     payload: &[u8],
     expected_network: &NetworkId,
@@ -99,7 +92,6 @@ fn decode_bound_verifying_key_instruction(
             }),
     }
 }
-
 fn set_optional_string(
     py: Python<'_>,
     mapping: &Bound<'_, PyDict>,
@@ -111,7 +103,6 @@ fn set_optional_string(
         None => mapping.set_item(key, py.None()),
     }
 }
-
 fn set_optional_u64(
     py: Python<'_>,
     mapping: &Bound<'_, PyDict>,
@@ -123,7 +114,6 @@ fn set_optional_u64(
         None => mapping.set_item(key, py.None()),
     }
 }
-
 fn record_to_python(py: Python<'_>, record: VerifyingKeyRecord) -> PyResult<Py<PyDict>> {
     let mapping = PyDict::new(py);
     mapping.set_item("version", record.version)?;
@@ -162,7 +152,6 @@ fn record_to_python(py: Python<'_>, record: VerifyingKeyRecord) -> PyResult<Py<P
     )?;
     Ok(mapping.unbind())
 }
-
 /// Decode one exact canonical unsigned VK transaction and bind its immutable
 /// network, authority, and requested operation before returning registry data.
 #[pyfunction]
@@ -192,30 +181,24 @@ pub(crate) fn decode_zk_vk_transaction_payload_py(
     result.set_item("record", record_to_python(py, decoded.record)?)?;
     Ok(result.unbind())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader, proof::VerifyingKeyBox, transaction::FeePaymentIntent, zk::BackendTag,
     };
-
-    use super::*;
-
     const CANONICAL_GENESIS_HASH: [u8; 32] = [0xA5; 32];
-
     fn network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(CANONICAL_GENESIS_HASH),
         ))
     }
-
     fn authority(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("valid deterministic key");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn record() -> VerifyingKeyRecord {
         let mut record = VerifyingKeyRecord::new(
             1,
@@ -235,21 +218,18 @@ mod tests {
         record.status = ConfidentialStatus::Active;
         record
     }
-
     fn register() -> RegisterVerifyingKey {
         RegisterVerifyingKey {
             id: VerifyingKeyId::new("halo2/ipa", "vk-transfer"),
             record: record(),
         }
     }
-
     fn update() -> UpdateVerifyingKey {
         UpdateVerifyingKey {
             id: VerifyingKeyId::new("halo2/ipa", "vk-transfer"),
             record: record(),
         }
     }
-
     fn payload(
         authority: AccountId,
         instructions: impl IntoIterator<Item = RegisterVerifyingKey>,
@@ -262,7 +242,6 @@ mod tests {
         .with_instructions(instructions)
         .encode_payload()
     }
-
     #[test]
     fn accepts_exact_canonical_bound_register_transaction() {
         let authority = authority(7);
@@ -277,7 +256,6 @@ mod tests {
         assert_eq!(decoded.id.name, "vk-transfer");
         assert_eq!(decoded.record, record());
     }
-
     #[test]
     fn accepts_exact_canonical_bound_update_transaction() {
         let authority = authority(7);
@@ -298,7 +276,6 @@ mod tests {
         assert_eq!(decoded.id.name, "vk-transfer");
         assert_eq!(decoded.record, record());
     }
-
     #[test]
     fn rejects_wrong_network_authority_operation_and_instruction_count() {
         let expected_authority = authority(7);
@@ -358,7 +335,6 @@ mod tests {
             .contains("exactly one")
         );
     }
-
     #[test]
     fn rejects_noncanonical_transaction_payload() {
         let authority = authority(7);

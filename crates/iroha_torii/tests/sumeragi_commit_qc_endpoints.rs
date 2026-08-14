@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for Sumeragi commit QC endpoints.
 #![cfg(feature = "telemetry")]
-
-use std::{collections::HashSet, sync::Arc};
-
 use axum::http::{HeaderValue, StatusCode};
 use http_body_util::BodyExt;
 use iroha_core::{
@@ -17,13 +14,12 @@ use iroha_data_model::{
     consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
 };
 use nonzero_ext::nonzero;
-
+use std::{collections::HashSet, sync::Arc};
 fn seed_commit_qc_state() -> (Arc<CoreState>, HashOf<BlockHeader>, iroha_crypto::Hash, Qc) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-
     let subject_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
     let post_state_root = Hash::prehashed([0xB2; Hash::LENGTH]);
@@ -48,7 +44,6 @@ fn seed_commit_qc_state() -> (Arc<CoreState>, HashOf<BlockHeader>, iroha_crypto:
             bls_aggregate_signature: vec![0xCC, 0xDD, 0xEE],
         },
     };
-
     {
         let mut block = state.block(header);
         block
@@ -60,15 +55,12 @@ fn seed_commit_qc_state() -> (Arc<CoreState>, HashOf<BlockHeader>, iroha_crypto:
             .insert(subject_hash, qc.clone());
         block.commit().expect("commit exec state");
     }
-
     (state, subject_hash, post_state_root, qc)
 }
-
 #[tokio::test]
 async fn sumeragi_commit_qc_endpoint_returns_record() {
     let (state, subject_hash, post_state_root, qc) = seed_commit_qc_state();
     let hash_hex = format!("{subject_hash}");
-
     let resp = iroha_torii::handle_v1_sumeragi_commit_qc(
         axum::extract::State(state.clone()),
         axum::extract::Path(hash_hex.clone()),
@@ -141,7 +133,6 @@ async fn sumeragi_commit_qc_endpoint_returns_record() {
         hex::encode(&qc.aggregate.bls_aggregate_signature)
     );
 }
-
 #[tokio::test]
 async fn sumeragi_commit_qc_endpoint_returns_null_for_unknown_hash() {
     let (state, _, _, _) = seed_commit_qc_state();
@@ -163,7 +154,6 @@ async fn sumeragi_commit_qc_endpoint_returns_null_for_unknown_hash() {
             .is_some_and(norito::json::Value::is_null)
     );
 }
-
 #[tokio::test]
 async fn sumeragi_commit_qc_endpoint_supports_norito_payload() {
     let (state, subject_hash, _, qc) = seed_commit_qc_state();

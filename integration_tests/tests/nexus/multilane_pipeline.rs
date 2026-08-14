@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multi-lane routing and storage provisioning integration.
-
-use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
-
 use eyre::Result;
 use iroha_config::{
     kura::{FsyncMode, InitMode},
@@ -36,20 +33,17 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 use tempfile::tempdir;
-
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
-
 fn test_chain_id() -> ChainId {
     ChainId::from(TEST_CHAIN_ID)
 }
-
 fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
         iroha_crypto::Hash::new(b"multilane-pipeline-test-genesis"),
     ))
 }
-
 fn sample_transaction(
     authority: &AccountId,
     signer: &iroha_crypto::PrivateKey,
@@ -82,7 +76,6 @@ fn sample_transaction(
     )
     .expect("transaction should be accepted")
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
@@ -132,7 +125,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
     )
     .expect("static multi-lane catalog");
     let lane_config = LaneDerivedConfig::from_catalog(&lane_catalog);
-
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -149,7 +141,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         },
     ])
     .expect("static multi-dataspace catalog");
-
     let temp = tempdir()?;
     let kura_cfg = KuraConfig {
         init_mode: InitMode::Strict,
@@ -164,7 +155,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
-
     let (kura, block_count) =
         Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, &lane_catalog)?;
     assert_eq!(block_count.0, 0, "fresh Kura should have no blocks");
@@ -187,7 +177,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         routing_policy: LaneRoutingPolicy::default(),
         ..Default::default()
     })?;
-
     for entry in lane_config.entries() {
         let blocks_dir = entry.blocks_dir(temp.path());
         assert!(
@@ -204,11 +193,9 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             merge_log.display()
         );
     }
-
     let (core_account, core_keys) = gen_account_in("core");
     let (gov_account, gov_keys) = gen_account_in("governance");
     let (zk_account, zk_keys) = gen_account_in("zk");
-
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
         default_dataspace: DataSpaceId::UNIVERSAL,
@@ -233,7 +220,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             },
         ],
     };
-
     let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
         routing_policy.clone(),
         dataspace_catalog,
@@ -266,24 +252,20 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             Json::new("zv"),
         ))],
     );
-
     let decision_core = router.route(&tx_core);
     assert_eq!(
         decision_core,
         RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
     );
-
     let decision_gov = router.route(&tx_gov);
     assert_eq!(
         decision_gov,
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1))
     );
-
     let decision_zk = router.route(&tx_zk);
     assert_eq!(
         decision_zk,
         RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
     );
-
     Ok(())
 }

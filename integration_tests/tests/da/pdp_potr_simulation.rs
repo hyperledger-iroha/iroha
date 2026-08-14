@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! PDP/PoTR simulation tests ensuring the shared harness remains deterministic.
-
 use integration_tests::da::pdp_potr::{DEFAULT_SEED, SimulationConfig, run_simulation};
-
 #[test]
 fn harness_initialises_and_runs() {
     let stats = run_simulation(SimulationConfig::default(), DEFAULT_SEED);
@@ -20,7 +18,6 @@ fn harness_initialises_and_runs() {
         "PoTR challenges should produce failures when adversaries exist"
     );
 }
-
 #[test]
 fn partition_heavy_scenario_triggers_repairs() {
     let stats = run_simulation(
@@ -41,7 +38,6 @@ fn partition_heavy_scenario_triggers_repairs() {
         "partitions must yield undetected failures when collectors fall behind"
     );
 }
-
 #[test]
 fn deterministic_summary_matches_expected() {
     let stats = run_simulation(SimulationConfig::default(), DEFAULT_SEED);
@@ -56,7 +52,6 @@ fn deterministic_summary_matches_expected() {
         "p95 latency should remain near the configured 30 s interval"
     );
 }
-
 #[test]
 fn partition_probability_influences_detection() {
     let baseline = run_simulation(
@@ -75,7 +70,6 @@ fn partition_probability_influences_detection() {
         },
         DEFAULT_SEED,
     );
-
     let baseline_detected: usize = baseline
         .epochs
         .iter()
@@ -86,7 +80,6 @@ fn partition_probability_influences_detection() {
         .iter()
         .map(|epoch| epoch.detected_failures)
         .sum();
-
     assert!(
         partition_detected > baseline_detected,
         "high partition probability should increase detected failures"

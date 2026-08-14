@@ -1,16 +1,13 @@
-use std::fs;
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::fs;
 use tempfile::tempdir;
-
 #[test]
 fn soranet_chaos_kit_and_report_round_trip() {
     let temp = tempdir().expect("tempdir");
     let kit_dir = temp.path().join("kit");
     let log_path = kit_dir.join("chaos_events.ndjson");
     let summary_path = temp.path().join("summary.json");
-
     let mut kit_cmd = cargo_bin_cmd!("xtask");
     let kit_output = kit_cmd
         .args([
@@ -35,12 +32,10 @@ fn soranet_chaos_kit_and_report_round_trip() {
         kit_output.status.success(),
         "chaos kit command failed: {kit_output:?}"
     );
-
     let plan_json = kit_dir.join("plan.json");
     let plan_md = kit_dir.join("plan.md");
     assert!(plan_json.exists(), "plan.json missing");
     assert!(plan_md.exists(), "plan.md missing");
-
     let plan: Value = json::from_reader(fs::File::open(&plan_json).expect("open plan.json"))
         .expect("decode plan");
     assert_eq!(
@@ -65,7 +60,6 @@ fn soranet_chaos_kit_and_report_round_trip() {
     assert!(kit_dir.join("scripts/resolver_brownout.sh").exists());
     assert!(kit_dir.join("scripts/log_event.sh").exists());
     assert!(log_path.exists(), "log file stub missing");
-
     let log_entries = [
         r#"{"ts_ms":1000,"scenario":"prefix-withdrawal","action":"inject"}"#,
         r#"{"ts_ms":1300,"scenario":"prefix-withdrawal","action":"detect"}"#,
@@ -77,7 +71,6 @@ fn soranet_chaos_kit_and_report_round_trip() {
     ]
     .join("\n");
     fs::write(&log_path, format!("{log_entries}\n")).expect("write log");
-
     let mut report_cmd = cargo_bin_cmd!("xtask");
     let report_output = report_cmd
         .args([
@@ -94,7 +87,6 @@ fn soranet_chaos_kit_and_report_round_trip() {
         report_output.status.success(),
         "chaos report command failed: {report_output:?}"
     );
-
     let summary: Value = json::from_reader(fs::File::open(&summary_path).expect("open summary"))
         .expect("decode summary");
     let scenarios = summary

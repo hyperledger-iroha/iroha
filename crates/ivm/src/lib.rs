@@ -24,7 +24,6 @@
 //! more exhaustive view. The generated `instruction` module provides detailed
 //! commentary on every opcode constant and is summarised in
 //! [`docs/opcodes.md`](../docs/opcodes.md).
-
 mod aes;
 pub mod analysis;
 mod argument_record;
@@ -93,9 +92,8 @@ mod vector;
 pub mod zk;
 mod zk_poseidon;
 pub mod zk_verify;
-use std::sync::{Mutex, OnceLock};
-
 use iroha_telemetry::metrics::{StackSettingsSnapshot, record_stack_limits};
+use std::sync::{Mutex, OnceLock};
 // Deterministic parallel execution utilities.
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
@@ -136,6 +134,7 @@ pub use crate::metadata::{
     VECTOR_LENGTH_MAX, contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
 };
 pub use crate::prepared::PreparedContract;
+pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{
     aes::{
         aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
@@ -183,24 +182,6 @@ pub use crate::{
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
-pub use iroha_crypto::{MerkleProof, MerkleTree};
-/// Syscall policy determined by `ProgramMetadata.abi_version`.
-pub use ivm_abi::SyscallPolicy;
-/// Canonical Kotodama V1 dynamic state-access hint validation.
-pub use ivm_abi::access_hints;
-/// Canonical Norito framing helpers shared by ABI producers and consumers.
-pub use ivm_abi::codec;
-/// Stable V1 typed core-query tags, projections, and bounded page records.
-pub use ivm_abi::core_query;
-/// Exact schemas and typed nested-return records encoded at public contract boundaries.
-pub use ivm_abi::entrypoint::{
-    EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
-    EntrypointValueTypeV1,
-};
-/// Canonical schemas and records used for durable Kotodama V1 state values.
-pub use ivm_abi::state_value;
-
-pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{
     mock_wsv::{
         AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
@@ -221,13 +202,26 @@ pub use crate::{
     },
     zk::{MemEvent, RegEvent, RegisterState},
 };
-
-/// Public Norito-typed request envelopes for VRF syscalls.
-pub mod vrf;
-
+pub use iroha_crypto::{MerkleProof, MerkleTree};
+/// Syscall policy determined by `ProgramMetadata.abi_version`.
+pub use ivm_abi::SyscallPolicy;
+/// Canonical Kotodama V1 dynamic state-access hint validation.
+pub use ivm_abi::access_hints;
+/// Canonical Norito framing helpers shared by ABI producers and consumers.
+pub use ivm_abi::codec;
+/// Stable V1 typed core-query tags, projections, and bounded page records.
+pub use ivm_abi::core_query;
+/// Exact schemas and typed nested-return records encoded at public contract boundaries.
+pub use ivm_abi::entrypoint::{
+    EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
+    EntrypointValueTypeV1,
+};
+/// Canonical schemas and records used for durable Kotodama V1 state values.
+pub use ivm_abi::state_value;
 #[cfg(test)]
 mod ptx_tests;
-
+/// Public Norito-typed request envelopes for VRF syscalls.
+pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.
 ///
 /// By default, the VM will use all available hardware backends (SIMD, Metal, CUDA)
@@ -253,7 +247,6 @@ pub struct AccelerationConfig {
     pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
     pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
 }
-
 impl Default for AccelerationConfig {
     fn default() -> Self {
         Self {
@@ -269,26 +262,22 @@ impl Default for AccelerationConfig {
         }
     }
 }
-
 fn acceleration_config_store() -> &'static Mutex<AccelerationConfig> {
     static STORE: OnceLock<Mutex<AccelerationConfig>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(AccelerationConfig::default()))
 }
-
 fn read_acceleration_config() -> AccelerationConfig {
     let guard = acceleration_config_store()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     *guard
 }
-
 fn write_acceleration_config(cfg: AccelerationConfig) {
     let mut guard = acceleration_config_store()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     *guard = cfg;
 }
-
 /// Apply acceleration configuration. Optional; when not called the VM
 /// automatically uses all available hardware, subject to golden self-tests.
 pub fn set_acceleration_config(cfg: AccelerationConfig) {
@@ -327,14 +316,12 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
         crate::byte_merkle_tree::set_prefer_cpu_sha2_max_leaves_x86(v);
     }
 }
-
 /// Return the most recently applied [`AccelerationConfig`]. When
 /// `set_acceleration_config` has not been called, this returns the default.
 #[must_use]
 pub fn acceleration_config() -> AccelerationConfig {
     read_acceleration_config()
 }
-
 /// Runtime status for a single acceleration backend.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BackendRuntimeStatus {
@@ -348,7 +335,6 @@ pub struct BackendRuntimeStatus {
     /// parity/golden-vector self-tests.
     pub parity_ok: bool,
 }
-
 /// Runtime status for acceleration backends.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AccelerationRuntimeStatus {
@@ -359,13 +345,11 @@ pub struct AccelerationRuntimeStatus {
     /// CUDA backend status.
     pub cuda: BackendRuntimeStatus,
 }
-
 /// Retrieve the latest acceleration runtime status including parity checks.
 #[must_use]
 pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
     let cfg = acceleration_config();
     let mut status = AccelerationRuntimeStatus::default();
-
     // SIMD status (always compiled; may be forced to scalar).
     {
         let detected = crate::vector::detected_simd_choice();
@@ -378,7 +362,6 @@ pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
             parity_ok: true,
         };
     }
-
     // Metal status (macOS + `metal` feature)
     #[cfg(all(target_os = "macos", feature = "metal"))]
     {
@@ -406,7 +389,6 @@ pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
             parity_ok: false,
         };
     }
-
     // CUDA status (`cuda` feature)
     #[cfg(feature = "cuda")]
     {
@@ -427,10 +409,8 @@ pub fn acceleration_runtime_status() -> AccelerationRuntimeStatus {
             parity_ok: false,
         };
     }
-
     status
 }
-
 /// Last reported error or disable reason for each acceleration backend.
 #[derive(Clone, Debug, Default)]
 pub struct AccelerationErrorStatus {
@@ -441,7 +421,6 @@ pub struct AccelerationErrorStatus {
     /// Most recent CUDA error/disable message, if any.
     pub cuda: Option<String>,
 }
-
 /// Retrieve sticky error messages associated with acceleration backends.
 ///
 /// These messages are cleared when the backend is re-enabled or reset via
@@ -450,7 +429,6 @@ pub struct AccelerationErrorStatus {
 #[must_use]
 pub fn acceleration_runtime_errors() -> AccelerationErrorStatus {
     use crate::vector::SimdChoice;
-
     let simd_error = if !crate::vector::simd_policy_enabled() {
         Some("disabled by config".to_string())
     } else if matches!(
@@ -469,7 +447,6 @@ pub fn acceleration_runtime_errors() -> AccelerationErrorStatus {
             None
         }
     };
-
     let cuda_error = {
         let explicit = crate::cuda::cuda_last_error_message();
         if explicit.is_some() {
@@ -485,19 +462,16 @@ pub fn acceleration_runtime_errors() -> AccelerationErrorStatus {
             None
         }
     };
-
     AccelerationErrorStatus {
         simd: simd_error,
         metal: crate::vector::metal_last_error_message(),
         cuda: cuda_error,
     }
 }
-
 /// Minimum native stack size applied to scheduler and prover workers.
 pub const MIN_STACK_BYTES: usize = 64 * 1024;
 /// Maximum native stack size applied to scheduler and prover workers.
 pub const MAX_STACK_BYTES: usize = 1024 * 1024 * 1024;
-
 /// Outcome of applying native worker stack configuration, including clamping flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StackSizeOutcome {
@@ -514,7 +488,6 @@ pub struct StackSizeOutcome {
     /// Whether the prover stack request was clamped.
     pub prover_clamped: bool,
 }
-
 /// Configure the default scheduler thread limits used by `IVM::new`.
 ///
 /// Hosts should call this early in process startup (before creating VMs) to
@@ -524,7 +497,6 @@ pub struct StackSizeOutcome {
 pub fn set_scheduler_thread_limits(min_threads: Option<usize>, max_threads: Option<usize>) {
     crate::parallel::set_default_scheduler_limits(min_threads, max_threads);
 }
-
 /// Validate and apply native stack sizes for scheduler and prover pools.
 ///
 /// Guest stack geometry is fixed by [`IvmStackPolicy::V1`] and is deliberately
@@ -559,7 +531,6 @@ pub fn apply_stack_sizes(scheduler_bytes: usize, prover_bytes: usize) -> StackSi
     });
     outcome
 }
-
 /// Initialize the global Rayon thread pool with `num_threads` workers.
 ///
 /// Safe to call once; if a global pool already exists, the request returns
@@ -571,21 +542,17 @@ pub fn init_global_rayon(num_threads: usize) -> Result<(), rayon::ThreadPoolBuil
         .stack_size(crate::parallel::thread_stack_size())
         .build_global()
 }
-
 /// Override the stack size used by scheduler Rayon pools.
 pub fn set_scheduler_stack_size(bytes: usize) {
     crate::parallel::set_thread_stack_size(bytes);
 }
-
 /// Override the stack size used by prover Rayon pools.
 pub fn set_prover_stack_size(bytes: usize) {
     crate::zk::set_prover_stack_size(bytes);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn acceleration_runtime_errors_default_none_or_hw_reason() {
         let status = acceleration_runtime_status();
@@ -612,7 +579,6 @@ mod tests {
             assert!(errors.cuda.is_none());
         }
     }
-
     #[test]
     fn cuda_status_never_reports_parity_without_availability() {
         let status = acceleration_runtime_status();
@@ -629,11 +595,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn apply_stack_sizes_clamps_and_records_snapshot() {
         record_stack_limits(StackSettingsSnapshot::default());
-
         let outcome = apply_stack_sizes(1, usize::MAX);
         assert!(
             outcome.scheduler_clamped,
@@ -643,7 +607,6 @@ mod tests {
             outcome.prover_clamped,
             "prover stack should clamp high values"
         );
-
         let snapshot = iroha_telemetry::metrics::stack_settings_snapshot();
         assert_eq!(
             snapshot.scheduler_bytes, MIN_STACK_BYTES as u64,
@@ -663,10 +626,8 @@ mod tests {
             IvmStackPolicy::V1.bytes_per_gas(),
             "telemetry must expose the fixed V1 gas policy"
         );
-
         let _ = apply_stack_sizes(32 * 1024 * 1024, 32 * 1024 * 1024);
     }
-
     #[test]
     fn init_global_rayon_reports_existing_pool() {
         let threads = num_cpus::get_physical().max(1);
@@ -682,19 +643,15 @@ mod tests {
             "expected existing-pool error, got {err}"
         );
     }
-
     #[test]
     fn native_stack_settings_cannot_change_guest_policy() {
         let gas_limit = 100_000;
         let expected = IvmStackPolicy::V1.stack_limit_for_gas(gas_limit);
-
         let _ = apply_stack_sizes(MIN_STACK_BYTES, MAX_STACK_BYTES);
         assert_eq!(IvmStackPolicy::V1.stack_limit_for_gas(gas_limit), expected);
-
         let _ = apply_stack_sizes(MAX_STACK_BYTES, MIN_STACK_BYTES);
         assert_eq!(IvmStackPolicy::V1.stack_limit_for_gas(gas_limit), expected);
     }
-
     #[test]
     fn metal_api_exports_are_available_on_all_targets() {
         release_metal_state();

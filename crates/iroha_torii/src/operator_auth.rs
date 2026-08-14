@@ -1,5 +1,28 @@
-//! WebAuthn/mTLS operator authentication for Torii operator endpoints.
-
+//! Optional WebAuthn/mTLS second-factor authentication for Torii operator endpoints.
+//!
+//! Exact-network operator request signatures remain mandatory at the route
+//! middleware boundary; sessions and bootstrap tokens never authorize a route
+//! by themselves.
+use crate::{
+    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
+    routing::MaybeTelemetry,
+};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use ciborium::{de::from_reader, value::Value as CborValue};
+use dashmap::DashMap;
+use iroha_config::parameters::actual::{
+    OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
+    OperatorWebAuthnConfig, ToriiOperatorAuth,
+};
+use iroha_crypto::{Algorithm, PublicKey, Signature};
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
+use rand::rand_core::{TryCryptoRng, TryRngCore as _};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::HashSet,
     fs,
@@ -10,33 +33,7 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-use axum::{
-    body::Body,
-    extract::{ConnectInfo, State},
-    http::{HeaderMap, StatusCode},
-    middleware::Next,
-    response::{IntoResponse, Response},
-};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use ciborium::{de::from_reader, value::Value as CborValue};
-use dashmap::DashMap;
-use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
-use rand::rand_core::{TryCryptoRng, TryRngCore as _};
-use sha2::{Digest as _, Sha256};
 use url::Url;
-
-use iroha_config::parameters::actual::{
-    OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
-    OperatorWebAuthnConfig, ToriiOperatorAuth,
-};
-use iroha_crypto::{Algorithm, PublicKey, Signature};
-
-use crate::{
-    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
-    routing::MaybeTelemetry,
-};
-
 const HEADER_OPERATOR_SESSION: &str = "x-iroha-operator-session";
 const HEADER_OPERATOR_TOKEN: &str = "x-iroha-operator-token";
 const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
@@ -45,22 +42,18 @@ const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
 const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
-
 const ACTION_GATE: &str = "gate";
 const ACTION_REGISTER_OPTIONS: &str = "register_options";
 const ACTION_REGISTER_VERIFY: &str = "register_verify";
 const ACTION_LOGIN_OPTIONS: &str = "login_options";
 const ACTION_LOGIN_VERIFY: &str = "login_verify";
-
 const FLAG_USER_PRESENT: u8 = 0x01;
 const FLAG_USER_VERIFIED: u8 = 0x04;
 const FLAG_ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
-
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     key: String,
 }
-
 #[derive(Debug, Clone)]
 pub struct OperatorAuthError {
     status: StatusCode,
@@ -68,7 +61,6 @@ pub struct OperatorAuthError {
     message: String,
     metric_label: &'static str,
 }
-
 impl OperatorAuthError {
     fn new(
         status: StatusCode,
@@ -83,11 +75,9 @@ impl OperatorAuthError {
             metric_label,
         }
     }
-
     fn metric_label(&self) -> &'static str {
         self.metric_label
     }
-
     fn disabled() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
@@ -96,7 +86,6 @@ impl OperatorAuthError {
             "disabled",
         )
     }
-
     fn missing_mtls() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
@@ -105,7 +94,6 @@ impl OperatorAuthError {
             "missing_mtls",
         )
     }
-
     fn rate_limited() -> Self {
         Self::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -114,7 +102,6 @@ impl OperatorAuthError {
             "rate_limited",
         )
     }
-
     fn locked_out() -> Self {
         Self::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -123,7 +110,6 @@ impl OperatorAuthError {
             "locked_out",
         )
     }
-
     fn missing_session() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -132,7 +118,6 @@ impl OperatorAuthError {
             "missing_session",
         )
     }
-
     fn invalid_session() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -141,7 +126,6 @@ impl OperatorAuthError {
             "invalid_session",
         )
     }
-
     fn missing_token() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -150,7 +134,6 @@ impl OperatorAuthError {
             "missing_token",
         )
     }
-
     fn invalid_token() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -159,7 +142,6 @@ impl OperatorAuthError {
             "invalid_token",
         )
     }
-
     fn webauthn_disabled() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
@@ -168,7 +150,6 @@ impl OperatorAuthError {
             "webauthn_disabled",
         )
     }
-
     fn no_credentials() -> Self {
         Self::new(
             StatusCode::CONFLICT,
@@ -177,7 +158,6 @@ impl OperatorAuthError {
             "no_credentials",
         )
     }
-
     fn invalid_payload(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::BAD_REQUEST,
@@ -186,7 +166,6 @@ impl OperatorAuthError {
             "invalid_payload",
         )
     }
-
     fn challenge_invalid() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -195,7 +174,6 @@ impl OperatorAuthError {
             "challenge_invalid",
         )
     }
-
     fn origin_denied() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -204,7 +182,6 @@ impl OperatorAuthError {
             "origin_denied",
         )
     }
-
     fn credential_unknown() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -213,7 +190,6 @@ impl OperatorAuthError {
             "credential_unknown",
         )
     }
-
     fn signature_invalid() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -222,7 +198,6 @@ impl OperatorAuthError {
             "signature_invalid",
         )
     }
-
     fn credential_not_allowed() -> Self {
         Self::new(
             StatusCode::BAD_REQUEST,
@@ -231,7 +206,6 @@ impl OperatorAuthError {
             "credential_not_allowed",
         )
     }
-
     fn rp_id_mismatch() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -240,7 +214,6 @@ impl OperatorAuthError {
             "rp_id_mismatch",
         )
     }
-
     fn user_verification_required() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -249,7 +222,6 @@ impl OperatorAuthError {
             "user_verification_required",
         )
     }
-
     fn user_presence_required() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -258,7 +230,6 @@ impl OperatorAuthError {
             "user_presence_required",
         )
     }
-
     fn persistence_failure(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -267,7 +238,6 @@ impl OperatorAuthError {
             "persist_failed",
         )
     }
-
     fn random_bytes_failure(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -277,13 +247,11 @@ impl OperatorAuthError {
         )
     }
 }
-
 impl IntoResponse for OperatorAuthError {
     fn into_response(self) -> Response {
         operator_auth_error_response(self.status, self.code, &self.message)
     }
 }
-
 fn operator_auth_error_response(status: StatusCode, code: &'static str, message: &str) -> Response {
     let payload = json_object(vec![
         json_entry("code", code),
@@ -293,14 +261,12 @@ fn operator_auth_error_response(status: StatusCode, code: &'static str, message:
     *resp.status_mut() = status;
     resp
 }
-
 #[derive(Debug)]
 pub enum OperatorAuthInitError {
     MissingWebAuthn,
     InvalidWebAuthn(String),
     CredentialLoad(String),
 }
-
 impl std::fmt::Display for OperatorAuthInitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -310,7 +276,6 @@ impl std::fmt::Display for OperatorAuthInitError {
         }
     }
 }
-
 #[derive(Clone)]
 struct WebAuthnPolicy {
     rp_id: String,
@@ -325,7 +290,6 @@ struct WebAuthnPolicy {
     allowed_algorithms: Vec<OperatorWebAuthnAlgorithm>,
     rp_id_hash: [u8; 32],
 }
-
 impl WebAuthnPolicy {
     fn from_config(config: OperatorWebAuthnConfig) -> Result<Self, OperatorAuthInitError> {
         if config.allowed_algorithms.is_empty() {
@@ -350,7 +314,6 @@ impl WebAuthnPolicy {
             rp_id_hash,
         })
     }
-
     fn challenge_timeout_ms(&self) -> u64 {
         self.challenge_ttl
             .as_millis()
@@ -358,7 +321,6 @@ impl WebAuthnPolicy {
             .unwrap_or(u64::MAX)
     }
 }
-
 #[derive(Clone, Debug)]
 struct StoredCredential {
     id: Vec<u8>,
@@ -367,39 +329,33 @@ struct StoredCredential {
     sign_count: u32,
     created_at_ms: u64,
 }
-
 #[derive(Clone, Debug)]
 struct SessionEntry {
     expires_at: Instant,
     credential_id: Vec<u8>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ChallengeKind {
     Registration,
     Authentication,
 }
-
 #[derive(Clone, Debug)]
 struct ChallengeEntry {
     kind: ChallengeKind,
     expires_at: Instant,
     bytes: Vec<u8>,
 }
-
 #[derive(Clone)]
 struct LockoutTracker {
     config: OperatorAuthLockout,
     entries: DashMap<String, FailureEntry>,
 }
-
 #[derive(Clone, Debug)]
 struct FailureEntry {
     failures: u32,
     window_start: Instant,
     locked_until: Option<Instant>,
 }
-
 impl LockoutTracker {
     fn new(config: OperatorAuthLockout) -> Self {
         Self {
@@ -407,7 +363,6 @@ impl LockoutTracker {
             entries: DashMap::new(),
         }
     }
-
     fn is_locked(&self, key: &str) -> bool {
         let Some(mut entry) = self.entries.get_mut(key) else {
             return false;
@@ -423,7 +378,6 @@ impl LockoutTracker {
         }
         true
     }
-
     fn record_failure(&self, key: &str) -> bool {
         let Some(limit) = self.config.failures else {
             return false;
@@ -448,12 +402,10 @@ impl LockoutTracker {
         }
         false
     }
-
     fn clear(&self, key: &str) {
         self.entries.remove(key);
     }
 }
-
 pub struct OperatorAuth {
     enabled: bool,
     require_mtls: bool,
@@ -471,12 +423,10 @@ pub struct OperatorAuth {
     telemetry: MaybeTelemetry,
     credentials_path: PathBuf,
 }
-
 fn rate_per_minute_to_per_sec(rate: NonZeroU32) -> u32 {
     let rate = rate.get();
     rate.saturating_add(59) / 60
 }
-
 impl OperatorAuth {
     pub(crate) fn new(
         config: ToriiOperatorAuth,
@@ -525,17 +475,14 @@ impl OperatorAuth {
             credentials_path,
         })
     }
-
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
-
     fn webauthn_policy(&self) -> Result<&WebAuthnPolicy, OperatorAuthError> {
         self.webauthn
             .as_ref()
             .ok_or_else(OperatorAuthError::webauthn_disabled)
     }
-
     fn credentials_read(&self) -> RwLockReadGuard<'_, Vec<StoredCredential>> {
         match self.credentials.read() {
             Ok(guard) => guard,
@@ -545,7 +492,6 @@ impl OperatorAuth {
             }
         }
     }
-
     fn credentials_write(&self) -> RwLockWriteGuard<'_, Vec<StoredCredential>> {
         match self.credentials.write() {
             Ok(guard) => guard,
@@ -555,15 +501,12 @@ impl OperatorAuth {
             }
         }
     }
-
     fn has_credentials(&self) -> bool {
         !self.credentials_read().is_empty()
     }
-
     fn token_allowed_for_operator(&self) -> bool {
         matches!(self.token_fallback, OperatorTokenFallback::Always)
     }
-
     fn token_allowed_for_bootstrap(&self) -> bool {
         match self.token_fallback {
             OperatorTokenFallback::Always => true,
@@ -571,7 +514,6 @@ impl OperatorAuth {
             OperatorTokenFallback::Disabled => false,
         }
     }
-
     async fn check_common(
         &self,
         headers: &HeaderMap,
@@ -596,7 +538,6 @@ impl OperatorAuth {
         }
         Ok(AuthContext { key })
     }
-
     pub(crate) async fn authorize_operator_endpoint(
         &self,
         headers: &HeaderMap,
@@ -617,7 +558,6 @@ impl OperatorAuth {
                 return Err(err);
             }
         }
-
         if self.token_allowed_for_operator() {
             match self.check_token(headers) {
                 TokenCheck::Valid(kind) => {
@@ -636,12 +576,10 @@ impl OperatorAuth {
                 }
             }
         }
-
         let err = OperatorAuthError::missing_session();
         self.record_failure(&ctx, ACTION_GATE, err.metric_label());
         Err(err)
     }
-
     pub(crate) async fn authorize_bootstrap(
         &self,
         headers: &HeaderMap,
@@ -659,7 +597,6 @@ impl OperatorAuth {
                 return Ok(ctx);
             }
         }
-
         if self.token_allowed_for_bootstrap() {
             match self.check_token(headers) {
                 TokenCheck::Valid(_) => return Ok(ctx),
@@ -675,7 +612,6 @@ impl OperatorAuth {
                 }
             }
         }
-
         let err = if session_from_headers(headers).is_some() {
             OperatorAuthError::invalid_session()
         } else {
@@ -684,7 +620,6 @@ impl OperatorAuth {
         self.record_failure(&ctx, action, err.metric_label());
         Err(err)
     }
-
     pub(crate) async fn authorize_login(
         &self,
         headers: &HeaderMap,
@@ -698,7 +633,6 @@ impl OperatorAuth {
         }
         self.check_common(headers, remote_ip, action).await
     }
-
     pub(crate) fn webauthn_registration_options(
         &self,
         ctx: &AuthContext,
@@ -706,7 +640,6 @@ impl OperatorAuth {
         let mut rng = rand::rngs::OsRng;
         self.webauthn_registration_options_with_rng(ctx, &mut rng)
     }
-
     fn webauthn_registration_options_with_rng<R: TryCryptoRng + ?Sized>(
         &self,
         ctx: &AuthContext,
@@ -730,7 +663,6 @@ impl OperatorAuth {
             },
         );
         let user_id_b64 = encode_b64url(&policy.user_id);
-
         let mut params = Vec::new();
         for alg in &policy.allowed_algorithms {
             params.push(json_object(vec![
@@ -745,7 +677,6 @@ impl OperatorAuth {
                 json_entry("id", encode_b64url(&credential.id)),
             ]));
         }
-
         let mut public_key = norito::json::Map::new();
         public_key.insert(
             "rp".into(),
@@ -783,14 +714,12 @@ impl OperatorAuth {
                 json_value(&exclude_credentials),
             );
         }
-
         self.record_success(ctx, ACTION_REGISTER_OPTIONS, "ok");
         Ok(json_object(vec![json_entry(
             "publicKey",
             norito::json::Value::Object(public_key),
         )]))
     }
-
     fn webauthn_finish_registration(
         &self,
         ctx: &AuthContext,
@@ -846,7 +775,6 @@ impl OperatorAuth {
             credentials_total: total,
         })
     }
-
     pub(crate) fn webauthn_authentication_options(
         &self,
         ctx: &AuthContext,
@@ -854,7 +782,6 @@ impl OperatorAuth {
         let mut rng = rand::rngs::OsRng;
         self.webauthn_authentication_options_with_rng(ctx, &mut rng)
     }
-
     fn webauthn_authentication_options_with_rng<R: TryCryptoRng + ?Sized>(
         &self,
         ctx: &AuthContext,
@@ -909,7 +836,6 @@ impl OperatorAuth {
             norito::json::Value::Object(public_key),
         )]))
     }
-
     fn webauthn_finish_authentication(
         &self,
         ctx: &AuthContext,
@@ -918,7 +844,6 @@ impl OperatorAuth {
         let mut rng = rand::rngs::OsRng;
         self.webauthn_finish_authentication_with_rng(ctx, payload, &mut rng)
     }
-
     fn webauthn_finish_authentication_with_rng<R: TryCryptoRng + ?Sized>(
         &self,
         ctx: &AuthContext,
@@ -995,7 +920,6 @@ impl OperatorAuth {
         self.record_success(ctx, ACTION_LOGIN_VERIFY, "ok");
         Ok(outcome)
     }
-
     fn issue_session_with_rng<R: TryCryptoRng + ?Sized>(
         &self,
         credential_id: &[u8],
@@ -1019,7 +943,6 @@ impl OperatorAuth {
             credential_id: encode_b64url(credential_id),
         })
     }
-
     fn upsert_credential(&self, credential: StoredCredential) -> Result<usize, OperatorAuthError> {
         let mut credentials = self.credentials_write();
         let mut updated = credentials.clone();
@@ -1032,7 +955,6 @@ impl OperatorAuth {
         *credentials = updated;
         Ok(credentials.len())
     }
-
     fn take_challenge(
         &self,
         challenge: &str,
@@ -1052,7 +974,6 @@ impl OperatorAuth {
             None => Err(OperatorAuthError::challenge_invalid()),
         }
     }
-
     fn check_token(&self, headers: &HeaderMap) -> TokenCheck {
         match self.token_source {
             OperatorTokenSource::OperatorTokens => operator_token(headers)
@@ -1092,31 +1013,26 @@ impl OperatorAuth {
             }
         }
     }
-
     fn record_event(&self, action: &'static str, result: &'static str, reason: &'static str) {
         self.telemetry.with_metrics(|telemetry| {
             telemetry.inc_torii_operator_auth(action, result, reason);
         });
     }
-
     fn record_lockout(&self, action: &'static str, reason: &'static str) {
         self.telemetry.with_metrics(|telemetry| {
             telemetry.inc_torii_operator_auth_lockout(action, reason);
         });
     }
-
     fn record_failure(&self, ctx: &AuthContext, action: &'static str, reason: &'static str) {
         self.record_event(action, "denied", reason);
         if self.lockout.record_failure(&ctx.key) {
             self.record_lockout(action, reason);
         }
     }
-
     fn record_success(&self, ctx: &AuthContext, action: &'static str, reason: &'static str) {
         self.lockout.clear(&ctx.key);
         self.record_event(action, "allowed", reason);
     }
-
     fn prune_sessions(&self) {
         let now = Instant::now();
         let expired: Vec<String> = self
@@ -1129,7 +1045,6 @@ impl OperatorAuth {
             self.sessions.remove(&key);
         }
     }
-
     fn prune_challenges(&self) {
         let now = Instant::now();
         let expired: Vec<String> = self
@@ -1142,7 +1057,6 @@ impl OperatorAuth {
             self.challenges.remove(&key);
         }
     }
-
     fn session_valid(&self, token: &str) -> bool {
         self.prune_sessions();
         self.sessions
@@ -1150,69 +1064,57 @@ impl OperatorAuth {
             .is_some_and(|entry| entry.expires_at > Instant::now())
     }
 }
-
 /// Result of a successful WebAuthn registration ceremony.
 pub struct RegistrationOutcome {
     credential_id: String,
     credentials_total: usize,
 }
-
 /// Result of a successful WebAuthn authentication ceremony.
 pub struct SessionOutcome {
     session_token: String,
     expires_in_secs: u64,
     credential_id: String,
 }
-
 struct RegistrationInput {
     raw_id: Vec<u8>,
     client_data_json: Vec<u8>,
     attestation_object: Vec<u8>,
 }
-
 struct AssertionInput {
     raw_id: Vec<u8>,
     client_data_json: Vec<u8>,
     authenticator_data: Vec<u8>,
     signature: Vec<u8>,
 }
-
 struct ClientData {
     challenge: String,
     origin: String,
 }
-
 struct AttestationObject {
     auth_data: Vec<u8>,
 }
-
 struct CoseKey {
     alg: OperatorWebAuthnAlgorithm,
     public_key: Vec<u8>,
 }
-
 struct AuthDataRegistration {
     credential_id: Vec<u8>,
     cose_key: CoseKey,
     sign_count: u32,
 }
-
 struct AuthDataAssertion {
     sign_count: u32,
 }
-
 enum TokenCheck {
     Valid(TokenKind),
     Missing,
     Invalid,
 }
-
 #[derive(Clone, Copy)]
 enum TokenKind {
     Operator,
     Api,
 }
-
 impl TokenKind {
     fn label(self) -> &'static str {
         match self {
@@ -1221,11 +1123,9 @@ impl TokenKind {
         }
     }
 }
-
 fn operator_credentials_path(base: &Path) -> PathBuf {
     base.join("operator_auth").join(CREDENTIALS_FILENAME)
 }
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1234,7 +1134,6 @@ fn now_ms() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
-
 #[cfg(test)]
 fn random_bytes(len: usize) -> Result<Vec<u8>, OperatorAuthError> {
     let mut buf = vec![0u8; len];
@@ -1242,7 +1141,6 @@ fn random_bytes(len: usize) -> Result<Vec<u8>, OperatorAuthError> {
     random_bytes_with_rng_into(&mut buf, &mut rng)?;
     Ok(buf)
 }
-
 fn random_bytes_with_rng<R: TryCryptoRng + ?Sized>(
     len: usize,
     rng: &mut R,
@@ -1251,7 +1149,6 @@ fn random_bytes_with_rng<R: TryCryptoRng + ?Sized>(
     random_bytes_with_rng_into(&mut buf, rng)?;
     Ok(buf)
 }
-
 fn random_bytes_with_rng_into<R: TryCryptoRng + ?Sized>(
     buf: &mut [u8],
     rng: &mut R,
@@ -1262,11 +1159,9 @@ fn random_bytes_with_rng_into<R: TryCryptoRng + ?Sized>(
         ))
     })
 }
-
 fn encode_b64url(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
-
 fn decode_b64url(label: &'static str, value: &str) -> Result<Vec<u8>, OperatorAuthError> {
     if value.trim().is_empty() {
         return Err(OperatorAuthError::invalid_payload(format!(
@@ -1277,13 +1172,11 @@ fn decode_b64url(label: &'static str, value: &str) -> Result<Vec<u8>, OperatorAu
         .decode(value.as_bytes())
         .map_err(|_| OperatorAuthError::invalid_payload(format!("{label} must be base64url")))
 }
-
 fn auth_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
     limits::effective_remote_ip(headers, remote)
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "anon".to_string())
 }
-
 fn mtls_present(
     headers: &HeaderMap,
     remote: Option<IpAddr>,
@@ -1291,28 +1184,24 @@ fn mtls_present(
 ) -> bool {
     limits::has_trusted_forwarded_header(headers, remote, trusted_proxies, HEADER_MTLS_FORWARD)
 }
-
 fn session_from_headers(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(HEADER_OPERATOR_SESSION)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
 }
-
 fn operator_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(HEADER_OPERATOR_TOKEN)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.trim().is_empty())
 }
-
 fn api_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(HEADER_API_TOKEN)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.trim().is_empty())
 }
-
 fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
         return false;
@@ -1325,7 +1214,6 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
         .iter()
         .any(|candidate| candidate.origin() == parsed_origin)
 }
-
 fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
     let raw = match fs::read_to_string(path) {
         Ok(content) => content,
@@ -1393,7 +1281,6 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
     }
     Ok(result)
 }
-
 fn persist_credentials(
     path: &Path,
     credentials: &[StoredCredential],
@@ -1440,7 +1327,6 @@ fn persist_credentials(
     })?;
     Ok(())
 }
-
 fn parse_registration_payload(
     payload: &norito::json::Value,
 ) -> Result<RegistrationInput, OperatorAuthError> {
@@ -1470,7 +1356,6 @@ fn parse_registration_payload(
         attestation_object: decode_b64url("attestationObject", attestation)?,
     })
 }
-
 fn parse_assertion_payload(
     payload: &norito::json::Value,
 ) -> Result<AssertionInput, OperatorAuthError> {
@@ -1505,7 +1390,6 @@ fn parse_assertion_payload(
         signature: decode_b64url("signature", signature)?,
     })
 }
-
 fn parse_client_data(bytes: &[u8], expected_type: &str) -> Result<ClientData, OperatorAuthError> {
     let value: norito::json::Value = norito::json::from_slice(bytes)
         .map_err(|_| OperatorAuthError::invalid_payload("clientDataJSON must be valid JSON"))?;
@@ -1534,7 +1418,6 @@ fn parse_client_data(bytes: &[u8], expected_type: &str) -> Result<ClientData, Op
         origin: origin.to_string(),
     })
 }
-
 fn parse_attestation_object(bytes: &[u8]) -> Result<AttestationObject, OperatorAuthError> {
     let value: CborValue = from_reader(bytes)
         .map_err(|_| OperatorAuthError::invalid_payload("attestationObject must be CBOR"))?;
@@ -1549,7 +1432,6 @@ fn parse_attestation_object(bytes: &[u8]) -> Result<AttestationObject, OperatorA
     let auth_data = expect_cbor_bytes(&map, "authData")?;
     Ok(AttestationObject { auth_data })
 }
-
 fn parse_auth_data_registration(
     auth_data: &[u8],
     policy: &WebAuthnPolicy,
@@ -1600,7 +1482,6 @@ fn parse_auth_data_registration(
         sign_count,
     })
 }
-
 fn parse_auth_data_assertion(
     auth_data: &[u8],
     policy: &WebAuthnPolicy,
@@ -1625,7 +1506,6 @@ fn parse_auth_data_assertion(
         u32::from_be_bytes(auth_data[33..37].try_into().expect("slice length verified"));
     Ok(AuthDataAssertion { sign_count })
 }
-
 fn parse_cose_key(
     value: &CborValue,
     allowed: &[OperatorWebAuthnAlgorithm],
@@ -1672,7 +1552,6 @@ fn parse_cose_key(
         )),
     }
 }
-
 fn verify_signature(
     alg: OperatorWebAuthnAlgorithm,
     public_key: &[u8],
@@ -1708,7 +1587,6 @@ fn verify_signature(
         }
     }
 }
-
 fn parse_es256_public_key(public_key: &[u8]) -> Result<P256Key, OperatorAuthError> {
     if p256_public_key_has_zero_coordinate_material(public_key) {
         return Err(OperatorAuthError::invalid_payload(
@@ -1720,13 +1598,11 @@ fn parse_es256_public_key(public_key: &[u8]) -> Result<P256Key, OperatorAuthErro
     P256Key::from_encoded_point(&encoded)
         .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key"))
 }
-
 fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
     public_key.len() == P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN
         && public_key.first().copied() == Some(0x04)
         && public_key[1..].iter().all(|byte| *byte == 0)
 }
-
 fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
     match value {
         CborValue::Integer(value) => Ok(i128::from(value.clone())),
@@ -1735,7 +1611,6 @@ fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
         )),
     }
 }
-
 fn expect_cbor_value(
     map: &[(CborValue, CborValue)],
     key: i128,
@@ -1748,7 +1623,6 @@ fn expect_cbor_value(
         .map(|(_, value)| value)
         .ok_or_else(|| OperatorAuthError::invalid_payload("missing COSE key entry"))
 }
-
 fn expect_cbor_bytes(
     map: &[(CborValue, CborValue)],
     key: &str,
@@ -1761,7 +1635,6 @@ fn expect_cbor_bytes(
         })
         .ok_or_else(|| OperatorAuthError::invalid_payload("missing CBOR bytes entry"))
 }
-
 fn expect_cbor_bytes_i(
     map: &[(CborValue, CborValue)],
     key: i128,
@@ -1773,26 +1646,6 @@ fn expect_cbor_bytes_i(
         )),
     }
 }
-
-pub async fn enforce_operator_auth(
-    State(app): State<SharedAppState>,
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<Response, std::convert::Infallible> {
-    let remote_ip = req
-        .extensions()
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|connect_info| connect_info.0.ip());
-    if let Err(err) = app
-        .operator_auth
-        .authorize_operator_endpoint(req.headers(), remote_ip)
-        .await
-    {
-        return Ok(err.into_response());
-    }
-    Ok(next.run(req).await)
-}
-
 pub async fn handle_operator_register_options(
     State(app): State<SharedAppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
@@ -1805,7 +1658,6 @@ pub async fn handle_operator_register_options(
     let payload = app.operator_auth.webauthn_registration_options(&ctx)?;
     Ok(JsonBody(payload))
 }
-
 pub async fn handle_operator_register_verify(
     State(app): State<SharedAppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
@@ -1826,7 +1678,6 @@ pub async fn handle_operator_register_verify(
     ]);
     Ok(JsonBody(response))
 }
-
 pub async fn handle_operator_login_options(
     State(app): State<SharedAppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
@@ -1839,7 +1690,6 @@ pub async fn handle_operator_login_options(
     let payload = app.operator_auth.webauthn_authentication_options(&ctx)?;
     Ok(JsonBody(payload))
 }
-
 pub async fn handle_operator_login_verify(
     State(app): State<SharedAppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
@@ -1861,11 +1711,9 @@ pub async fn handle_operator_login_verify(
     ]);
     Ok(JsonBody(response))
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::{collections::HashSet, sync::Arc};
-
+    use super::*;
     use axum::http::HeaderValue;
     use ciborium::ser::into_writer;
     use ed25519_dalek::Signer as _;
@@ -1874,9 +1722,7 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
     };
     use rand::rand_core::{TryCryptoRng, TryRngCore};
-
-    use super::*;
-
+    use std::{collections::HashSet, sync::Arc};
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1886,39 +1732,29 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     #[derive(Debug)]
     struct FailingOperatorAuthRng;
-
     #[derive(Debug)]
     struct FailingOperatorAuthRngError;
-
     impl std::fmt::Display for FailingOperatorAuthRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing operator auth RNG")
         }
     }
-
     impl std::error::Error for FailingOperatorAuthRngError {}
-
     impl TryRngCore for FailingOperatorAuthRng {
         type Error = FailingOperatorAuthRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingOperatorAuthRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingOperatorAuthRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingOperatorAuthRngError)
         }
     }
-
     impl TryCryptoRng for FailingOperatorAuthRng {}
-
     fn base_webauthn_config(algorithms: Vec<OperatorWebAuthnAlgorithm>) -> OperatorWebAuthnConfig {
         OperatorWebAuthnConfig {
             rp_id: "example.com".to_owned(),
@@ -1933,7 +1769,6 @@ mod tests {
             allowed_algorithms: algorithms,
         }
     }
-
     fn base_operator_auth_config(
         token_fallback: OperatorTokenFallback,
         token_source: OperatorTokenSource,
@@ -1955,7 +1790,6 @@ mod tests {
             webauthn: Some(base_webauthn_config(algorithms)),
         }
     }
-
     fn build_operator_auth(
         config: ToriiOperatorAuth,
         api_tokens: HashSet<String>,
@@ -1969,7 +1803,6 @@ mod tests {
         )
         .expect("operator auth")
     }
-
     fn base_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1978,15 +1811,12 @@ mod tests {
         );
         headers
     }
-
     fn loopback_ip() -> Option<IpAddr> {
         Some("127.0.0.1".parse().expect("loopback ip"))
     }
-
     fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
         ConnectInfo("127.0.0.1:8080".parse().expect("loopback socket"))
     }
-
     #[test]
     fn origin_allows_default_port_and_trailing_slash() {
         let allowed = vec![Url::parse("https://example.com").expect("origin")];
@@ -1994,7 +1824,6 @@ mod tests {
         assert!(origin_allowed("https://example.com:443", &allowed));
         assert!(!origin_allowed("https://example.com:444", &allowed));
     }
-
     #[test]
     fn credentials_lock_recovers_from_poison() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2026,7 +1855,6 @@ mod tests {
         }));
         assert!(auth.has_credentials());
     }
-
     #[test]
     fn rate_per_minute_to_per_sec_rounds_up() {
         assert_eq!(
@@ -2042,7 +1870,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn registration_options_reports_challenge_rng_failure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2057,16 +1884,13 @@ mod tests {
         let ctx = AuthContext {
             key: "registration-rng".to_owned(),
         };
-
         let err = auth
             .webauthn_registration_options_with_rng(&ctx, &mut FailingOperatorAuthRng)
             .expect_err("registration challenge RNG failure");
-
         assert_eq!(err.code, "operator_auth_random_bytes_failed");
         assert!(err.message.contains("failing operator auth RNG"));
         assert!(auth.challenges.is_empty());
     }
-
     #[test]
     fn authentication_options_reports_challenge_rng_failure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2088,16 +1912,13 @@ mod tests {
         let ctx = AuthContext {
             key: "authentication-rng".to_owned(),
         };
-
         let err = auth
             .webauthn_authentication_options_with_rng(&ctx, &mut FailingOperatorAuthRng)
             .expect_err("authentication challenge RNG failure");
-
         assert_eq!(err.code, "operator_auth_random_bytes_failed");
         assert!(err.message.contains("failing operator auth RNG"));
         assert!(auth.challenges.is_empty());
     }
-
     #[test]
     fn issue_session_reports_token_rng_failure() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2109,7 +1930,6 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let err = match auth.issue_session_with_rng(
             b"credential-id",
             Duration::from_secs(60),
@@ -2118,12 +1938,10 @@ mod tests {
             Ok(_) => panic!("session token RNG failure must be reported"),
             Err(err) => err,
         };
-
         assert_eq!(err.code, "operator_auth_random_bytes_failed");
         assert!(err.message.contains("failing operator auth RNG"));
         assert!(auth.sessions.is_empty());
     }
-
     fn headers_with_operator_token(token: &str) -> HeaderMap {
         let mut headers = base_headers();
         headers.insert(
@@ -2132,7 +1950,6 @@ mod tests {
         );
         headers
     }
-
     fn headers_with_api_token(token: &str) -> HeaderMap {
         let mut headers = base_headers();
         headers.insert(
@@ -2141,7 +1958,6 @@ mod tests {
         );
         headers
     }
-
     fn extract_challenge(payload: &norito::json::Value) -> String {
         let obj = payload.as_object().expect("payload object");
         let public_key = obj
@@ -2154,7 +1970,6 @@ mod tests {
             .expect("challenge")
             .to_string()
     }
-
     fn build_client_data(challenge: &str, origin: &str, ty: &str) -> Vec<u8> {
         let payload = json_object(vec![
             json_entry("type", ty),
@@ -2164,7 +1979,6 @@ mod tests {
         let json = norito::json::to_json(&payload).expect("clientDataJSON");
         json.into_bytes()
     }
-
     fn build_attestation_object(auth_data: Vec<u8>) -> Vec<u8> {
         let map = vec![(
             CborValue::Text("authData".to_owned()),
@@ -2174,7 +1988,6 @@ mod tests {
         into_writer(&CborValue::Map(map), &mut bytes).expect("attestationObject");
         bytes
     }
-
     fn build_cose_key_es256(signing_key: &SigningKey) -> Vec<u8> {
         let verifying_key = signing_key.verifying_key();
         let point = verifying_key.to_encoded_point(false);
@@ -2197,7 +2010,6 @@ mod tests {
         into_writer(&CborValue::Map(map), &mut bytes).expect("cose key");
         bytes
     }
-
     fn build_auth_data_registration(
         policy: &WebAuthnPolicy,
         credential_id: &[u8],
@@ -2218,7 +2030,6 @@ mod tests {
         auth_data.extend_from_slice(cose_key);
         auth_data
     }
-
     fn build_auth_data_assertion(policy: &WebAuthnPolicy, sign_count: u32) -> Vec<u8> {
         let mut auth_data = Vec::new();
         auth_data.extend_from_slice(&policy.rp_id_hash);
@@ -2230,7 +2041,6 @@ mod tests {
         auth_data.extend_from_slice(&sign_count.to_be_bytes());
         auth_data
     }
-
     fn build_registration_payload(
         credential_id: &[u8],
         client_data_json: &[u8],
@@ -2245,7 +2055,6 @@ mod tests {
             json_entry("response", response),
         ])
     }
-
     fn build_assertion_payload(
         credential_id: &[u8],
         client_data_json: &[u8],
@@ -2262,7 +2071,6 @@ mod tests {
             json_entry("response", response),
         ])
     }
-
     #[tokio::test]
     async fn operator_auth_registration_login_and_rollover_es256() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2274,7 +2082,6 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let headers = headers_with_operator_token("bootstrap");
         let ctx = auth
             .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
@@ -2282,7 +2089,6 @@ mod tests {
             .expect("bootstrap allowed");
         let options = auth.webauthn_registration_options(&ctx).expect("options");
         let challenge = extract_challenge(&options);
-
         let signing_key = SigningKey::random(&mut OsRng);
         let credential_id = random_bytes(16).expect("credential id");
         let policy = auth.webauthn_policy().expect("policy");
@@ -2297,13 +2103,11 @@ mod tests {
             .webauthn_finish_registration(&ctx, &payload)
             .expect("registration");
         assert_eq!(outcome.credentials_total, 1);
-
         let err = auth
             .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
             .expect_err("token bootstrap denied after enrollment");
         assert_eq!(err.code, "operator_session_missing");
-
         let login_ctx = auth
             .authorize_login(&base_headers(), loopback_ip(), ACTION_LOGIN_OPTIONS)
             .await
@@ -2331,7 +2135,6 @@ mod tests {
             .webauthn_finish_authentication(&login_ctx, &payload)
             .expect("login verify");
         assert!(auth.session_valid(&session.session_token));
-
         let mut session_headers = base_headers();
         session_headers.insert(
             HEADER_OPERATOR_SESSION,
@@ -2340,7 +2143,6 @@ mod tests {
         auth.authorize_operator_endpoint(&session_headers, loopback_ip())
             .await
             .expect("session accepted");
-
         let ctx = auth
             .authorize_bootstrap(&session_headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
@@ -2361,7 +2163,6 @@ mod tests {
             .expect("rollover registration");
         assert_eq!(outcome.credentials_total, 2);
     }
-
     #[tokio::test]
     async fn operator_auth_accepts_operator_token_when_fallback_always() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2373,13 +2174,11 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let headers = headers_with_operator_token("operator-token");
         auth.authorize_operator_endpoint(&headers, loopback_ip())
             .await
             .expect("operator token allowed");
     }
-
     #[tokio::test]
     async fn operator_auth_accepts_api_token_when_configured() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2393,13 +2192,11 @@ mod tests {
         let mut api_tokens = HashSet::new();
         api_tokens.insert("api-token".to_owned());
         let auth = build_operator_auth(config, api_tokens, tempdir.path());
-
         let headers = headers_with_api_token("api-token");
         auth.authorize_operator_endpoint(&headers, loopback_ip())
             .await
             .expect("api token allowed");
     }
-
     #[tokio::test]
     async fn operator_auth_enforces_mtls_and_lockout() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2416,13 +2213,11 @@ mod tests {
         );
         config.require_mtls = true;
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let err = auth
             .authorize_login(&base_headers(), None, ACTION_LOGIN_OPTIONS)
             .await
             .expect_err("missing mTLS");
         assert_eq!(err.code, "operator_mtls_required");
-
         let mut headers = base_headers();
         headers.insert(
             HEADER_MTLS_FORWARD,
@@ -2440,7 +2235,6 @@ mod tests {
             .expect_err("locked out");
         assert_eq!(err.code, "operator_auth_locked");
     }
-
     #[tokio::test]
     async fn operator_auth_rejects_forwarded_mtls_from_untrusted_proxy() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2453,7 +2247,6 @@ mod tests {
         );
         config.require_mtls = true;
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let mut headers = base_headers();
         headers.insert(
             HEADER_MTLS_FORWARD,
@@ -2469,7 +2262,6 @@ mod tests {
             .expect_err("untrusted proxy must not satisfy mTLS");
         assert_eq!(err.code, "operator_mtls_required");
     }
-
     #[tokio::test]
     async fn operator_auth_key_uses_remote_ip_when_internal_header_missing() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2481,16 +2273,13 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let remote_ip: IpAddr = "198.51.100.33".parse().expect("remote ip");
         let ctx = auth
             .authorize_login(&HeaderMap::new(), Some(remote_ip), ACTION_LOGIN_OPTIONS)
             .await
             .expect("login key derivation should succeed");
-
         assert_eq!(ctx.key, remote_ip.to_string());
     }
-
     #[tokio::test]
     async fn operator_auth_key_prefers_injected_header_over_transport_remote_ip() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -2502,7 +2291,6 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
-
         let mut headers = HeaderMap::new();
         headers.insert(
             limits::REMOTE_ADDR_HEADER,
@@ -2516,10 +2304,8 @@ mod tests {
             )
             .await
             .expect("login key derivation should succeed");
-
         assert_eq!(ctx.key, "203.0.113.77");
     }
-
     #[test]
     fn ed25519_cose_key_and_signature_verify() {
         let mut rng = OsRng;
@@ -2545,7 +2331,6 @@ mod tests {
             .expect("parse cose key");
         assert_eq!(parsed.alg, OperatorWebAuthnAlgorithm::Ed25519);
         assert_eq!(parsed.public_key, public_key.to_vec());
-
         let message = b"operator-auth-test";
         let signature = signing_key.sign(message).to_bytes();
         verify_signature(
@@ -2556,7 +2341,6 @@ mod tests {
         )
         .expect("signature ok");
     }
-
     #[test]
     fn es256_cose_key_rejects_all_zero_public_key_material() {
         let map = vec![
@@ -2583,17 +2367,14 @@ mod tests {
             Ok(_) => panic!("all-zero ES256 public key material must be rejected"),
             Err(err) => err,
         };
-
         assert_eq!(err.code, "operator_webauthn_payload_invalid");
         assert_eq!(err.metric_label, "invalid_payload");
     }
-
     #[test]
     fn es256_signature_verify_rejects_all_zero_signature_material() {
         let signing_key = SigningKey::random(&mut OsRng);
         let public_key = signing_key.verifying_key().to_encoded_point(false);
         let signature = [0u8; 64];
-
         let err = verify_signature(
             OperatorWebAuthnAlgorithm::Es256,
             public_key.as_bytes(),
@@ -2601,11 +2382,9 @@ mod tests {
             &signature,
         )
         .expect_err("all-zero ES256 signature material must be rejected");
-
         assert_eq!(err.code, "operator_webauthn_signature_invalid");
         assert_eq!(err.metric_label, "signature_invalid");
     }
-
     #[test]
     fn es256_signature_verify_rejects_all_zero_public_key_material() {
         let signing_key = SigningKey::random(&mut OsRng);
@@ -2614,7 +2393,6 @@ mod tests {
         let mut public_key = Vec::with_capacity(P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN);
         public_key.push(0x04);
         public_key.extend_from_slice(&[0u8; 64]);
-
         let err = verify_signature(
             OperatorWebAuthnAlgorithm::Es256,
             &public_key,
@@ -2622,11 +2400,9 @@ mod tests {
             signature.to_der().as_bytes(),
         )
         .expect_err("all-zero ES256 public key material must be rejected");
-
         assert_eq!(err.code, "operator_webauthn_payload_invalid");
         assert_eq!(err.metric_label, "invalid_payload");
     }
-
     #[test]
     fn es256_signature_verify_rejects_high_s_signature_material() {
         const P256_ORDER: [u8; 32] = [
@@ -2634,7 +2410,6 @@ mod tests {
             0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
             0xfc, 0x63, 0x25, 0x51,
         ];
-
         let signing_key = SigningKey::random(&mut OsRng);
         let public_key = signing_key.verifying_key().to_encoded_point(false);
         let message = b"operator-auth-test-high-s";
@@ -2645,7 +2420,6 @@ mod tests {
         let low_s_bytes = low_s.to_bytes();
         let mut high_s_bytes = [0_u8; 64];
         high_s_bytes[..32].copy_from_slice(&low_s_bytes[..32]);
-
         let mut borrow = 0_u16;
         for i in (0..32).rev() {
             let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow as u8);
@@ -2661,7 +2435,6 @@ mod tests {
         assert_eq!(borrow, 0);
         let high_s = P256Signature::from_slice(&high_s_bytes).expect("high-S signature");
         assert!(high_s.normalize_s().is_some());
-
         let err = verify_signature(
             OperatorWebAuthnAlgorithm::Es256,
             public_key.as_bytes(),
@@ -2669,18 +2442,15 @@ mod tests {
             high_s.to_der().as_bytes(),
         )
         .expect_err("high-S ES256 signature material must be rejected");
-
         assert_eq!(err.code, "operator_webauthn_signature_invalid");
         assert_eq!(err.metric_label, "signature_invalid");
     }
-
     #[test]
     fn ed25519_signature_verify_rejects_all_zero_signature_material() {
         let mut rng = OsRng;
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
         let public_key = signing_key.verifying_key().to_bytes();
         let signature = [0u8; 64];
-
         let err = verify_signature(
             OperatorWebAuthnAlgorithm::Ed25519,
             &public_key,
@@ -2688,18 +2458,15 @@ mod tests {
             &signature,
         )
         .expect_err("all-zero signature material must be rejected");
-
         assert_eq!(err.code, "operator_webauthn_signature_invalid");
         assert_eq!(err.metric_label, "signature_invalid");
     }
-
     #[test]
     fn ed25519_signature_verify_rejects_all_zero_public_key_material() {
         let mut rng = OsRng;
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
         let message = b"operator-auth-test";
         let signature = signing_key.sign(message).to_bytes();
-
         let err = verify_signature(
             OperatorWebAuthnAlgorithm::Ed25519,
             &[0u8; 32],
@@ -2707,18 +2474,15 @@ mod tests {
             &signature,
         )
         .expect_err("all-zero Ed25519 public key material must be rejected");
-
         assert_eq!(err.code, "operator_webauthn_signature_invalid");
         assert_eq!(err.metric_label, "signature_invalid");
     }
-
     #[test]
     fn ed25519_signature_verify_rejects_weak_or_noncanonical_public_key_material() {
         let mut rng = OsRng;
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
         let message = b"operator-auth-test";
         let signature = signing_key.sign(message).to_bytes();
-
         for (label, public_key_bytes) in [
             ("small-order", ED25519_SMALL_ORDER_POINT),
             ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
@@ -2730,7 +2494,6 @@ mod tests {
                 &signature,
             )
             .expect_err("malformed Ed25519 public key material must be rejected");
-
             assert_eq!(
                 err.code, "operator_webauthn_signature_invalid",
                 "{label} public key should fail"
@@ -2741,21 +2504,18 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn ed25519_signature_verify_rejects_malformed_signature_r() {
         let mut rng = OsRng;
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
         let public_key = signing_key.verifying_key().to_bytes();
         let message = b"operator-auth-test";
-
         for (label, replacement_r) in [
             ("small-order", ED25519_SMALL_ORDER_POINT),
             ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
         ] {
             let mut signature = signing_key.sign(message).to_bytes();
             signature[..32].copy_from_slice(&replacement_r);
-
             let err = verify_signature(
                 OperatorWebAuthnAlgorithm::Ed25519,
                 &public_key,
@@ -2763,7 +2523,6 @@ mod tests {
                 &signature,
             )
             .expect_err("malformed Ed25519 signature R must be rejected");
-
             assert_eq!(
                 err.code, "operator_webauthn_signature_invalid",
                 "{label} signature R should fail"
@@ -2774,7 +2533,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test]
     async fn operator_auth_handlers_reject_when_disabled() {
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
@@ -2788,7 +2546,6 @@ mod tests {
         .err()
         .expect("register options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
-
         let err = handle_operator_login_options(
             State(app.clone()),
             loopback_connect_info(),
@@ -2799,7 +2556,6 @@ mod tests {
         .expect("login options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
     }
-
     #[test]
     fn operator_auth_error_response_sets_status() {
         let response = OperatorAuthError::missing_token().into_response();

@@ -1,5 +1,4 @@
 //! Peer utils.
-
 pub type PeerName = String;
 pub type P2pApiPorts = [u16; 2];
 pub type ExposedKeyPair = (
@@ -7,7 +6,6 @@ pub type ExposedKeyPair = (
     Option<iroha_crypto::ExposedPrivateKey>,
 );
 pub type PeerPop = Vec<u8>;
-
 #[derive(Debug)]
 pub(crate) struct PeerInfo {
     pub(crate) name: PeerName,
@@ -16,12 +14,9 @@ pub(crate) struct PeerInfo {
     pub(crate) soranet_transport_key_pair: ExposedKeyPair,
     pub(crate) pop: PeerPop,
 }
-
 pub const SERVICE_NAME: &str = "irohad";
-
 type Result<T> = std::result::Result<T, iroha_crypto::Error>;
 const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:swarm:soranet-transport:v1|";
-
 /// Peer overrides supplied by higher-level tooling.
 #[derive(Clone, Debug)]
 pub struct PeerOverride {
@@ -32,7 +27,6 @@ pub struct PeerOverride {
     /// External API port exposed by Docker for this peer service.
     pub api_port: u16,
 }
-
 #[cfg(test)]
 pub fn generate_key_pair(base_seed: Option<&[u8]>, extra_seed: &[u8]) -> Result<ExposedKeyPair> {
     let key_pair = match base_seed {
@@ -48,7 +42,6 @@ pub fn generate_key_pair(base_seed: Option<&[u8]>, extra_seed: &[u8]) -> Result<
         Some(iroha_crypto::ExposedPrivateKey(private_key)),
     ))
 }
-
 pub fn generate_bls_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
@@ -72,7 +65,6 @@ pub fn generate_bls_key_pair(
         pop,
     ))
 }
-
 pub(crate) fn generate_soranet_transport_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
@@ -94,7 +86,6 @@ pub(crate) fn generate_soranet_transport_key_pair(
         Some(iroha_crypto::ExposedPrivateKey(private_key)),
     ))
 }
-
 pub fn network(
     count: u16,
     key_seed: Option<&[u8]>,
@@ -119,11 +110,9 @@ pub fn network(
         })
         .collect()
 }
-
 pub fn chain() -> iroha_data_model::ChainId {
     iroha_data_model::ChainId::from(crate::CHAIN_ID)
 }
-
 pub fn peer(
     name: &str,
     port: u16,
@@ -138,7 +127,6 @@ pub fn peer(
         public_key,
     )
 }
-
 #[allow(single_use_lifetimes)]
 pub fn topology<'a>(
     peers: impl Iterator<Item = &'a PeerInfo>,

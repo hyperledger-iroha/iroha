@@ -3,7 +3,6 @@
 //! - fixed-size: u32, [u8; 16]
 //! - self-delimiting: String
 //! - option/result presence
-
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct Hints {
     a: u32,
@@ -11,5 +10,4 @@ struct Hints {
     c: String,
     d: Option<u64>,
 }
-
 fn main() {}

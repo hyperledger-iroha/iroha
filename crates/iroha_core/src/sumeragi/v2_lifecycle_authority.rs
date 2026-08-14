@@ -1,14 +1,4 @@
 //! Verified height authority for lifecycle scheduler episodes and rollover.
-
-use std::collections::BTreeSet;
-
-#[cfg(test)]
-use std::path::PathBuf;
-
-use iroha_config::parameters::actual::SumeragiV2Config;
-use iroha_crypto::Hash;
-use norito::codec::Encode;
-
 use super::schema;
 #[cfg(test)]
 use crate::sumeragi::v2_certified_serve_payload_store::DurableCertifiedServeNegativeReceipt;
@@ -16,13 +6,17 @@ use crate::sumeragi::{
     v2::VerifiedHeightContext, v2_core::MAX_EFFECTS_PER_STEP,
     v2_worker::certified_serve_family_capacity,
 };
+use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_crypto::Hash;
+use norito::codec::Encode;
 use schema::{
     CapacityClass, CapacityGeometry, LifecycleContext, LifecycleDigest, LifecycleKey,
     MAX_LIFECYCLE_RECORDS_PER_HEIGHT, PhysicalSlotId, SchedulerEpisodeUniverse,
 };
-
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::path::PathBuf;
 const ROSTER_IDENTITY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:roster-identity:v1";
-
 /// Opaque, verified source of every scheduler-episode universe for one height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AuthenticatedEpisodeAuthority {
@@ -31,7 +25,6 @@ pub(super) struct AuthenticatedEpisodeAuthority {
     leader_start: usize,
     capacity_geometry: CapacityGeometry,
 }
-
 impl AuthenticatedEpisodeAuthority {
     /// Derive authority exclusively from a cryptographically verified height context.
     fn from_verified_height_context(
@@ -56,7 +49,6 @@ impl AuthenticatedEpisodeAuthority {
         let leader_start = usize::try_from(wire_context.leader(0)).ok()?;
         Self::from_authenticated_parts(context, ordered_roster, leader_start, capacity_geometry)
     }
-
     #[cfg(test)]
     pub(super) fn test(
         context: LifecycleContext,
@@ -66,7 +58,6 @@ impl AuthenticatedEpisodeAuthority {
     ) -> Option<Self> {
         Self::from_authenticated_parts(context, ordered_roster, leader_start, capacity_geometry)
     }
-
     fn from_authenticated_parts(
         context: LifecycleContext,
         ordered_roster: impl IntoIterator<Item = LifecycleDigest>,
@@ -99,15 +90,12 @@ impl AuthenticatedEpisodeAuthority {
             capacity_geometry,
         })
     }
-
     pub(super) const fn context(&self) -> LifecycleContext {
         self.context
     }
-
     pub(super) const fn capacity_geometry(&self) -> &CapacityGeometry {
         &self.capacity_geometry
     }
-
     pub(super) fn universe_for(&self, key: LifecycleKey) -> Option<SchedulerEpisodeUniverse> {
         if key.context != self.context.id
             || key.round.height != self.context.height
@@ -134,7 +122,6 @@ impl AuthenticatedEpisodeAuthority {
             capacity_geometry: self.capacity_geometry.limits.clone(),
         })
     }
-
     pub(super) fn admits_slots(
         &self,
         class: CapacityClass,
@@ -146,7 +133,6 @@ impl AuthenticatedEpisodeAuthority {
         })
     }
 }
-
 fn capacity_geometry_from_limits(
     roster_len: usize,
     effect_work_capacity: usize,
@@ -181,7 +167,6 @@ fn capacity_geometry_from_limits(
         .is_some_and(|sum| sum <= MAX_LIFECYCLE_RECORDS_PER_HEIGHT);
     (finite_classes && bounded_live_records).then_some(geometry)
 }
-
 fn production_capacity_geometry(
     verified: &VerifiedHeightContext,
     config: &SumeragiV2Config,
@@ -194,7 +179,6 @@ fn production_capacity_geometry(
         reply_route_source_capacity,
     )
 }
-
 /// Derive the complete production episode authority without accepting caller
 /// supplied capacity geometry.
 pub(super) fn production_authority(
@@ -206,7 +190,6 @@ pub(super) fn production_authority(
         production_capacity_geometry(verified, config, reply_route_source_capacity)?;
     AuthenticatedEpisodeAuthority::from_verified_height_context(verified, capacity_geometry)
 }
-
 /// Build the smallest exact authority needed by focused recovered-WAL open
 /// tests. Production always uses [`production_authority`] and configured
 /// capacity geometry.
@@ -222,7 +205,6 @@ pub(super) fn recovered_wal_test_authority(
     ]);
     AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
 }
-
 /// Build exact bounded capacity for focused consuming storage-owner tests.
 #[cfg(test)]
 pub(super) fn lifecycle_storage_owner_test_authority(
@@ -238,7 +220,6 @@ pub(super) fn lifecycle_storage_owner_test_authority(
     ]);
     AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
 }
-
 /// Typed height rollover snapshot carrying an opaque verified successor authority.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,7 +234,6 @@ pub(crate) struct RolloverSnapshot {
     pub(super) retire_ordinals: BTreeSet<u128>,
     pub(super) retire_admission_keys: BTreeSet<LifecycleKey>,
 }
-
 #[cfg(test)]
 pub(super) fn test_authority(
     context: LifecycleContext,
@@ -263,16 +243,13 @@ pub(super) fn test_authority(
 ) -> Option<AuthenticatedEpisodeAuthority> {
     AuthenticatedEpisodeAuthority::test(context, ordered_roster, leader_start, capacity_geometry)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn production_capacity_geometry_matches_shared_runtime_resources() {
         let geometry = capacity_geometry_from_limits(4, 8, 3, 2)
             .expect("bounded production limits produce finite geometry");
-
         assert_eq!(geometry.limit(CapacityClass::Consensus), 16);
         assert_eq!(geometry.limit(CapacityClass::Effect), 8);
         assert_eq!(geometry.limit(CapacityClass::Serve), 20);

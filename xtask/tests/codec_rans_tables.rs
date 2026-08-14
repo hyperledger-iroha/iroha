@@ -1,9 +1,3 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::streaming::{
     EntropyMode,
@@ -12,15 +6,18 @@ use norito::streaming::{
         BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame, default_bundle_tables,
     },
 };
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tempfile::TempDir;
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf()
 }
-
 fn generate_tables(path: &Path, seed: u64, bundle_width: u8) {
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
@@ -38,16 +35,13 @@ fn generate_tables(path: &Path, seed: u64, bundle_width: u8) {
     ]);
     cmd.assert().success();
 }
-
 #[test]
 fn rans_tables_generation_is_deterministic() {
     let temp = TempDir::new().expect("temp dir");
     let first = temp.path().join("tables_one.toml");
     let second = temp.path().join("tables_two.toml");
-
     generate_tables(&first, 7, 3);
     generate_tables(&second, 7, 3);
-
     let first_text = fs::read_to_string(first).expect("first tables");
     let second_text = fs::read_to_string(second).expect("second tables");
     assert_eq!(
@@ -55,13 +49,11 @@ fn rans_tables_generation_is_deterministic() {
         "rans table generation must be deterministic for a given seed and width"
     );
 }
-
 #[test]
 fn verify_tables_detects_tampering() {
     let temp = TempDir::new().expect("temp dir");
     let good_path = temp.path().join("tables.toml");
     generate_tables(&good_path, 13, 4);
-
     let mut verify_good = cargo_bin_cmd!("xtask");
     verify_good.current_dir(workspace_root());
     verify_good.args([
@@ -70,7 +62,6 @@ fn verify_tables_detects_tampering() {
         good_path.to_str().expect("utf8 tables path"),
     ]);
     verify_good.assert().success();
-
     let mut tampered = fs::read_to_string(&good_path).expect("tables text");
     assert!(
         tampered.contains("bundle_width"),
@@ -79,7 +70,6 @@ fn verify_tables_detects_tampering() {
     tampered = tampered.replace("bundle_width = 4", "bundle_width = 3");
     let tampered_path = temp.path().join("tables_tampered.toml");
     fs::write(&tampered_path, tampered).expect("write tampered tables");
-
     let mut verify_bad = cargo_bin_cmd!("xtask");
     verify_bad.current_dir(workspace_root());
     verify_bad.args([
@@ -89,11 +79,9 @@ fn verify_tables_detects_tampering() {
     ]);
     verify_bad.assert().failure();
 }
-
 #[test]
 fn bundled_tables_enable_roundtrip() {
     let tables = default_bundle_tables();
-
     let dimensions = FrameDimensions::new(8, 8);
     let frame_duration_ns = 25_000_000;
     let timeline_start_ns = 1_000;
@@ -101,7 +89,6 @@ fn bundled_tables_enable_roundtrip() {
         RawFrame::new(dimensions, vec![0x11; dimensions.pixel_count()]).expect("frame 0"),
         RawFrame::new(dimensions, vec![0x22; dimensions.pixel_count()]).expect("frame 1"),
     ];
-
     let mut encoder = BaselineEncoder::new(BaselineEncoderConfig {
         frame_dimensions: dimensions,
         frame_duration_ns,
@@ -115,7 +102,6 @@ fn bundled_tables_enable_roundtrip() {
         .encode_segment(7, timeline_start_ns, 5, &frames, None)
         .expect("encode segment");
     assert_eq!(segment.header.entropy_mode, EntropyMode::RansBundled);
-
     let decoder = BaselineDecoder::new(dimensions, frame_duration_ns);
     let decoded = decoder
         .decode_segment(&segment)

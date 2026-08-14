@@ -18,7 +18,6 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         DeferredAdmissionOrdinalSource::new(1),
     )
     .expect("open replayed adapter without status publication");
-
     assert!(startup.is_empty());
     assert!(
         crate::sumeragi::status::v2_status().is_none(),
@@ -40,7 +39,6 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         "preparing a snapshot is not publication"
     );
     crate::sumeragi::status::set_v2_status(prepared);
-
     let stale_tag = reducer::EventTag::new(
         context.height,
         0,
@@ -63,7 +61,6 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
     ));
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[test]
 fn executable_leader_rotation_matches_the_canonical_wire_context() {
     let wire_context = context();
@@ -71,7 +68,6 @@ fn executable_leader_rotation_matches_the_canonical_wire_context() {
     let core_context = registry
         .core_context(&wire_context)
         .expect("executable context");
-
     for view in 0..=100 {
         let wire_leader = wire_context.leader(view);
         assert_eq!(
@@ -83,13 +79,11 @@ fn executable_leader_rotation_matches_the_canonical_wire_context() {
         );
     }
 }
-
 #[test]
 fn core_context_rejects_same_label_foreign_genesis_network() {
     let display_label = iroha_data_model::ChainId::from("shared-display-label");
     let foreign_display_label = iroha_data_model::ChainId::from("shared-display-label");
     assert_eq!(display_label, foreign_display_label);
-
     let canonical = context();
     let mut foreign = canonical.clone();
     foreign.network_id = test_network_id(0x7B);
@@ -98,7 +92,6 @@ fn core_context_rejects_same_label_foreign_genesis_network() {
         .expect("foreign context remains structural");
     assert_ne!(canonical.network_id, foreign.network_id);
     assert_ne!(canonical.id(), foreign.id());
-
     let mut registry = WireRegistry::new(&canonical).expect("canonical wire registry");
     let core = registry
         .core_context(&canonical)
@@ -114,7 +107,6 @@ fn core_context_rejects_same_label_foreign_genesis_network() {
         ))
     ));
 }
-
 #[test]
 fn successor_core_context_preserves_the_parent_certificate_binding() {
     let parent_context = context();
@@ -137,7 +129,6 @@ fn successor_core_context_preserves_the_parent_certificate_binding() {
     successor.parent_commit_qc = Some(parent_qc);
     successor.validate().expect("structural successor context");
     let successor_id = successor.id();
-
     let mut registry = WireRegistry::new(&successor).expect("successor wire registry");
     let core_context = registry
         .core_context(&successor)
@@ -145,12 +136,10 @@ fn successor_core_context_preserves_the_parent_certificate_binding() {
     let core_parent = core_context
         .parent_commit()
         .expect("successor retains its parent CommitQC");
-
     assert_eq!(core_parent.context_id(), context_id(parent_context.id()));
     assert_ne!(core_parent.context_id(), context_id(successor_id));
     assert_eq!(core_parent.round().height(), parent_context.height);
     assert_eq!(core_parent.proposal_round().view(), parent_round.view);
-
     let parent_reference = successor
         .parent_commit_qc
         .as_ref()

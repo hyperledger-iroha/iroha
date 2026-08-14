@@ -5,9 +5,10 @@
 //! two-pass [`SubmitPrivacyProofV1`] transaction. There is no caller-selected
 //! backend, verifying key, proof attachment, generic `OpenVerify` envelope, or
 //! alternate action wire.
-
 use core::{num::NonZeroU32, time::Duration};
-
+pub use iroha_core::privacy_engines::zk_ace::{
+    ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
+};
 use iroha_core::{
     privacy_engines::zk_ace::{
         ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZkAceNativeErrorV1, ZkAceTryCryptoRngV1,
@@ -34,11 +35,6 @@ use iroha_data_model::{
     },
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
-
-pub use iroha_core::privacy_engines::zk_ace::{
-    ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
-};
-
 /// Exact public transfer authorized by one native ZK-ACE action.
 ///
 /// The governed policy is owned and validated at construction. Its asset,
@@ -52,7 +48,6 @@ pub struct ZkAcePrivacyTransferV1 {
     public_balance_scope: AssetBalanceScope,
     amount: u128,
 }
-
 impl ZkAcePrivacyTransferV1 {
     /// Construct the only admitted first-release transparent transfer.
     ///
@@ -96,38 +91,32 @@ impl ZkAcePrivacyTransferV1 {
             amount,
         })
     }
-
     /// Governed policy selected by this transfer.
     #[must_use]
     pub const fn policy(&self) -> &PrivacyZkAcePolicyRecordV1 {
         &self.policy
     }
-
     /// Exact transparent source account.
     #[must_use]
     pub const fn source(&self) -> &AccountId {
         &self.source
     }
-
     /// Exact transparent destination account.
     #[must_use]
     pub const fn destination(&self) -> &AccountId {
         &self.destination
     }
-
     /// Exact transparent balance partition authorized by this transfer.
     #[must_use]
     pub const fn public_balance_scope(&self) -> AssetBalanceScope {
         self.public_balance_scope
     }
-
     /// Exact atomic amount.
     #[must_use]
     pub const fn amount(&self) -> u128 {
         self.amount
     }
 }
-
 /// Exact signature-bound transaction fields for one direct ZK-ACE action.
 #[derive(Clone, Debug)]
 pub struct ZkAcePrivacyActionTransactionContextV1 {
@@ -146,7 +135,6 @@ pub struct ZkAcePrivacyActionTransactionContextV1 {
     /// Exact transaction metadata.
     pub metadata: Metadata,
 }
-
 /// Validator-visible effect authorized by a prepared ZK-ACE transfer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAcePrivacyTransferEffectV1 {
@@ -167,7 +155,6 @@ pub struct ZkAcePrivacyTransferEffectV1 {
     /// Replay marker consumed atomically with the transfer.
     pub replay_nullifier: PrivacyNullifierV1,
 }
-
 /// Pure proving output ready for exact-authority signing.
 ///
 /// The final payload remains private so callers cannot add instructions,
@@ -182,7 +169,6 @@ pub struct ZkAcePreparedPrivacyTransferV1 {
     encoded_proof_envelope_bytes: u32,
     effect: ZkAcePrivacyTransferEffectV1,
 }
-
 impl core::fmt::Debug for ZkAcePreparedPrivacyTransferV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -200,51 +186,43 @@ impl core::fmt::Debug for ZkAcePreparedPrivacyTransferV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAcePreparedPrivacyTransferV1 {
     /// Canonical proof-empty transaction projection digest.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Digest of the complete protocol-tagged final statement.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact canonical proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Exact native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// Exact validator-visible transfer and replay effect.
     #[must_use]
     pub const fn effect(&self) -> &ZkAcePrivacyTransferEffectV1 {
         &self.effect
     }
 }
-
 /// Complete signed result produced by the canonical ZK-ACE path.
 pub struct SignedZkAcePrivacyTransferV1 {
     signed_transaction: SignedTransaction,
@@ -258,7 +236,6 @@ pub struct SignedZkAcePrivacyTransferV1 {
     encoded_proof_envelope_bytes: u32,
     effect: ZkAcePrivacyTransferEffectV1,
 }
-
 impl core::fmt::Debug for SignedZkAcePrivacyTransferV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -281,75 +258,63 @@ impl core::fmt::Debug for SignedZkAcePrivacyTransferV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SignedZkAcePrivacyTransferV1 {
     /// Borrow the exact signed transaction.
     #[must_use]
     pub const fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed_transaction
     }
-
     /// Consume the result and return the exact signed transaction.
     #[must_use]
     pub fn into_signed_transaction(self) -> SignedTransaction {
         self.signed_transaction
     }
-
     /// Canonical signed transaction hash.
     #[must_use]
     pub const fn transaction_hash(&self) -> [u8; 32] {
         self.transaction_hash
     }
-
     /// Canonical adaptive signed-transaction byte count.
     #[must_use]
     pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
-
     /// Canonical transaction intent.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Canonical proof envelope hash.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical typed-statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Exact native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical encoded envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// Exact validator-visible transfer and replay effect.
     #[must_use]
     pub const fn effect(&self) -> &ZkAcePrivacyTransferEffectV1 {
         &self.effect
     }
 }
-
 /// Closed failure set for canonical ZK-ACE preparation and signing.
 #[derive(Debug)]
 pub enum ZkAcePrivacyActionBuildErrorV1 {
@@ -406,7 +371,6 @@ pub enum ZkAcePrivacyActionBuildErrorV1 {
     /// The signed payload no longer carries the prepared intent.
     SignedIntentMismatch,
 }
-
 impl core::fmt::Display for ZkAcePrivacyActionBuildErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -474,7 +438,6 @@ impl core::fmt::Display for ZkAcePrivacyActionBuildErrorV1 {
         }
     }
 }
-
 impl std::error::Error for ZkAcePrivacyActionBuildErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -484,13 +447,11 @@ impl std::error::Error for ZkAcePrivacyActionBuildErrorV1 {
         }
     }
 }
-
 impl From<ZkAceNativeErrorV1> for ZkAcePrivacyActionBuildErrorV1 {
     fn from(error: ZkAceNativeErrorV1) -> Self {
         Self::Native(error)
     }
 }
-
 fn validate_transaction_context_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
 ) -> Result<(), ZkAcePrivacyActionBuildErrorV1> {
@@ -507,7 +468,6 @@ fn validate_transaction_context_v1(
         .map(|_| ())
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
-
 fn transaction_payload_without_instructions_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
 ) -> Result<TransactionPayload, ()> {
@@ -526,7 +486,6 @@ fn transaction_payload_without_instructions_v1(
     }
     builder.into_payload().map_err(|_| ())
 }
-
 fn validate_signing_authority_v1(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -540,7 +499,6 @@ fn validate_signing_authority_v1(
     }
     Ok(())
 }
-
 fn transaction_payload_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -563,7 +521,6 @@ fn transaction_payload_v1(
         .into_payload()
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::InvalidTransactionContext)
 }
-
 fn placeholder_envelope_v1(
     profile: CompiledPrivacyProfileV1,
     statement: PrivacyStatementV1,
@@ -582,7 +539,6 @@ fn placeholder_envelope_v1(
         proof: PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(Vec::new())),
     }
 }
-
 fn prepare_zk_ace_privacy_transfer_with_prover_v1<F>(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -613,7 +569,6 @@ where
     if witness.identity_commitment_v1() != transfer.policy.identity_commitment {
         return Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch);
     }
-
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     let native_statement = ZkAcePqAuthorizationStatementV1 {
@@ -644,7 +599,6 @@ where
     let transaction_intent_digest = draft_payload
         .privacy_transaction_intent_digest_v1()
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::TransactionIntent)?;
-
     let mut final_statement = native_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let authorization_inputs =
@@ -653,7 +607,6 @@ where
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::AuthorizationDigest)?;
     final_statement.replay_nullifier =
         witness.replay_nullifier_v1(&authorization_digest, &context.network_id);
-
     let typed_statement = PrivacyStatementV1::ZkAcePqAuthorizationV0(final_statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -700,7 +653,6 @@ where
     if validated_intent != transaction_intent_digest {
         return Err(ZkAcePrivacyActionBuildErrorV1::FinalIntentBinding);
     }
-
     let effect = ZkAcePrivacyTransferEffectV1 {
         policy_id: transfer.policy.policy_id,
         authorization_epoch: transfer.policy.authorization_epoch,
@@ -722,7 +674,6 @@ where
         effect,
     })
 }
-
 /// Prepare and prove one canonical direct ZK-ACE transfer with injected
 /// fallible cryptographic randomness.
 ///
@@ -748,7 +699,6 @@ pub fn prepare_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Siz
         },
     )
 }
-
 /// Prepare and prove one canonical direct transfer with operating-system
 /// entropy, without receiving a signing key.
 pub fn prepare_zk_ace_privacy_transfer_v1(
@@ -765,7 +715,6 @@ pub fn prepare_zk_ace_privacy_transfer_v1(
         prove_zk_ace_privacy_v1,
     )
 }
-
 /// Sign an exact prepared ZK-ACE payload.
 pub fn sign_prepared_zk_ace_privacy_transfer_v1(
     prepared: ZkAcePreparedPrivacyTransferV1,
@@ -811,7 +760,6 @@ pub fn sign_prepared_zk_ace_privacy_transfer_v1(
         effect: prepared.effect,
     })
 }
-
 /// Build, prove, bind, and sign with injected cryptographic randomness.
 pub fn build_signed_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Sized>(
     context: ZkAcePrivacyActionTransactionContextV1,
@@ -831,7 +779,6 @@ pub fn build_signed_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 +
     )?;
     sign_prepared_zk_ace_privacy_transfer_v1(prepared, private_key)
 }
-
 /// Build, prove, bind, and sign with operating-system entropy.
 pub fn build_signed_zk_ace_privacy_transfer_v1(
     context: ZkAcePrivacyActionTransactionContextV1,
@@ -845,11 +792,9 @@ pub fn build_signed_zk_ace_privacy_transfer_v1(
         prepare_zk_ace_privacy_transfer_v1(context, transfer, witness, canonical_genesis_hash)?;
     sign_prepared_zk_ace_privacy_transfer_v1(prepared, private_key)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
+    use super::*;
     use iroha_core::privacy_engines::zk_ace::{ZkAceTryRngCoreV1, verify_zk_ace_privacy_v1};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -861,25 +806,20 @@ mod tests {
         },
         transaction::Executable,
     };
-
-    use super::*;
-
+    use std::str::FromStr as _;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic ZK-ACE test key")
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(key_pair(seed).public_key().clone())
     }
-
     fn asset(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("test domain"),
             Name::from_str(name).expect("asset name"),
         )
     }
-
     fn witness(seed: u8) -> ZkAcePrivacyWitnessV1 {
         ZkAcePrivacyWitnessV1::try_new(
             [seed; 32],
@@ -888,7 +828,6 @@ mod tests {
         )
         .expect("valid test witness")
     }
-
     fn policy(witness: &ZkAcePrivacyWitnessV1, source: AccountId) -> PrivacyZkAcePolicyRecordV1 {
         PrivacyZkAcePolicyRecordV1::new(
             PrivacyPolicyIdV1::new([0x41; 32]),
@@ -901,7 +840,6 @@ mod tests {
         )
         .expect("valid ZK-ACE policy")
     }
-
     fn context(authority: AccountId) -> ZkAcePrivacyActionTransactionContextV1 {
         ZkAcePrivacyActionTransactionContextV1 {
             network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -917,7 +855,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn transfer_and_witness() -> (ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1) {
         let source = account(1);
         let witness = witness(0x11);
@@ -931,41 +868,33 @@ mod tests {
         .expect("valid transfer");
         (transfer, witness)
     }
-
     #[derive(Debug)]
     struct InjectedEntropyError;
-
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected entropy failure")
         }
     }
-
     enum EntropyMode {
         Panic,
         Fail,
         Constant,
     }
-
     struct AdversarialRng(EntropyMode);
-
     impl ZkAceTryRngCoreV1 for AdversarialRng {
         type Error = InjectedEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             match self.0 {
                 EntropyMode::Panic => panic!("invalid input reached entropy"),
                 EntropyMode::Fail | EntropyMode::Constant => Err(InjectedEntropyError),
             }
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             match self.0 {
                 EntropyMode::Panic => panic!("invalid input reached entropy"),
                 EntropyMode::Fail | EntropyMode::Constant => Err(InjectedEntropyError),
             }
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 EntropyMode::Panic => panic!("invalid input reached entropy"),
@@ -977,16 +906,12 @@ mod tests {
             }
         }
     }
-
     impl ZkAceTryCryptoRngV1 for AdversarialRng {}
-
     struct TestRng(u64);
-
     impl TestRng {
         const fn new(seed: u64) -> Self {
             Self(seed)
         }
-
         fn next_word(&mut self) -> u64 {
             let mut value = self.0;
             value ^= value << 13;
@@ -996,18 +921,14 @@ mod tests {
             value
         }
     }
-
     impl ZkAceTryRngCoreV1 for TestRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(self.next_word() as u32)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(self.next_word())
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for chunk in destination.chunks_mut(8) {
                 let word = self.next_word().to_le_bytes();
@@ -1016,9 +937,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl ZkAceTryCryptoRngV1 for TestRng {}
-
     #[test]
     fn witness_is_closed_nonzero_secret_state() {
         for (root, blinding, replay, expected) in [
@@ -1047,14 +966,12 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn transfer_constructor_rejects_policy_and_action_ambiguity() {
         let source = account(1);
         let destination = account(2);
         let witness = witness(0x11);
         let active = policy(&witness, source.clone());
-
         assert!(matches!(
             ZkAcePrivacyTransferV1::try_new(
                 active.clone(),
@@ -1095,7 +1012,6 @@ mod tests {
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope)
         ));
-
         let revoked = PrivacyZkAcePolicyRecordV1::new(
             active.policy_id,
             active.identity_commitment,
@@ -1116,7 +1032,6 @@ mod tests {
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::PolicyNotActive)
         ));
-
         let mut tampered = active;
         tampered.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0xA5; 32]);
         assert!(matches!(
@@ -1130,7 +1045,6 @@ mod tests {
             Err(ZkAcePrivacyActionBuildErrorV1::InvalidPolicy(_))
         ));
     }
-
     #[test]
     fn deterministic_failures_precede_entropy_and_signing_key_is_preflighted() {
         let authority = account(1);
@@ -1146,7 +1060,6 @@ mod tests {
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch)
         ));
-
         let (transfer, witness) = transfer_and_witness();
         assert!(matches!(
             prepare_zk_ace_privacy_transfer_with_rng_v1(
@@ -1158,7 +1071,6 @@ mod tests {
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::ZeroGenesisHash)
         ));
-
         let (transfer, witness) = transfer_and_witness();
         assert!(matches!(
             build_signed_zk_ace_privacy_transfer_with_rng_v1(
@@ -1172,7 +1084,6 @@ mod tests {
             Err(ZkAcePrivacyActionBuildErrorV1::AuthorityKeyMismatch)
         ));
     }
-
     #[test]
     fn entropy_failure_and_health_failure_remain_distinct() {
         let (transfer, witness) = transfer_and_witness();
@@ -1188,7 +1099,6 @@ mod tests {
                 ZkAceNativeErrorV1::RandomnessUnavailable
             ))
         ));
-
         let (transfer, witness) = transfer_and_witness();
         assert!(matches!(
             prepare_zk_ace_privacy_transfer_with_rng_v1(
@@ -1203,7 +1113,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn prepared_action_is_exact_typed_two_pass_and_adversarially_bound() {
         let (transfer, witness) = transfer_and_witness();
@@ -1220,7 +1129,6 @@ mod tests {
             &mut rng,
         )
         .expect("canonical ZK-ACE transfer");
-
         assert_eq!(prepared.proof_bytes(), ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1);
         assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
         assert_ne!(prepared.statement_digest(), [0; 32]);
@@ -1250,7 +1158,6 @@ mod tests {
             }
             other => panic!("unexpected executable: {other:?}"),
         }
-
         let observed = prepared
             .payload
             .privacy_transaction_intent_binding_if_present_v1()
@@ -1273,7 +1180,6 @@ mod tests {
             envelope.engine_manifest_digest,
             profile.engine_manifest_digest
         );
-
         let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &envelope.statement else {
             panic!("typed ZK-ACE statement changed variant");
         };
@@ -1289,7 +1195,6 @@ mod tests {
             PrivacyConsensusLimitsV1::taira_default().max_proof_bytes_per_action,
         )
         .expect("prepared native proof verifies");
-
         let mut adversarial_inputs = Vec::new();
         let mut wrong_intent = statement.clone();
         let mut wrong_intent_bytes = *wrong_intent.context.transaction_intent_digest.as_bytes();
@@ -1336,7 +1241,6 @@ mod tests {
             )
             .is_err()
         );
-
         let envelope_bytes = norito::to_bytes(&envelope).expect("encode final envelope");
         for secret in [identity_root, identity_blinding, replay_secret] {
             assert!(
@@ -1346,7 +1250,6 @@ mod tests {
                 "private witness bytes must not persist in the action"
             );
         }
-
         let mut mismatched_profile = envelope;
         let mut mismatched_parameter = *mismatched_profile.parameter_digest.as_bytes();
         mismatched_parameter[0] ^= 1;
@@ -1357,7 +1260,6 @@ mod tests {
                 .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
                 .is_err()
         );
-
         let mut tampered_payload = prepared.payload.clone();
         tampered_payload.nonce = NonZeroU32::new(8);
         assert!(
@@ -1381,7 +1283,6 @@ mod tests {
                 .expect("bounded signed bytes")
         );
     }
-
     #[test]
     fn explicit_policy_commitment_fixture_is_nonzero() {
         let witness = witness(0x21);

@@ -1,6 +1,5 @@
 //! Minimal example: encode and execute a simple add program on IVM.
 use ivm::{IVM, encoding, instruction};
-
 fn main() {
     // Initialize the VM
     let mut vm = IVM::new(u64::MAX);

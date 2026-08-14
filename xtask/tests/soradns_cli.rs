@@ -1,5 +1,3 @@
-use std::{fs, path::PathBuf};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::hash as blake3_hash;
 use data_encoding::BASE32_NOPAD;
@@ -8,20 +6,18 @@ use iroha_primitives::soradns::{
     derive_gateway_hosts_with_profile,
 };
 use norito::json::{self as serde_json, Value};
+use std::{fs, path::PathBuf};
 use tempfile::TempDir;
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf()
 }
-
 #[test]
 fn soradns_hosts_reports_expected_derivations() {
     let temp = TempDir::new().expect("temp dir");
     let output_path = temp.path().join("hosts.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -32,7 +28,6 @@ fn soradns_hosts_reports_expected_derivations() {
         output_path.to_str().expect("utf8 path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(&output_path).expect("host summary output");
     let parsed: Value = serde_json::from_str(&raw).expect("host summary json");
     let entries = parsed
@@ -46,7 +41,6 @@ fn soradns_hosts_reports_expected_derivations() {
     let entry = entries[0]
         .as_object()
         .expect("each entry should be a JSON object");
-
     let bindings = derive_gateway_hosts("docs.sora").expect("derive gateway hosts");
     assert_eq!(entry["name"].as_str(), Some("docs.sora"));
     assert_eq!(
@@ -63,12 +57,10 @@ fn soradns_hosts_reports_expected_derivations() {
         Some(GatewayHostBindings::canonical_wildcard())
     );
 }
-
 #[test]
 fn soradns_hosts_supports_taira_mon_pretty_suffix() {
     let temp = TempDir::new().expect("temp dir");
     let output_path = temp.path().join("hosts.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -81,7 +73,6 @@ fn soradns_hosts_supports_taira_mon_pretty_suffix() {
         output_path.to_str().expect("utf8 path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(&output_path).expect("host summary output");
     let parsed: Value = serde_json::from_str(&raw).expect("host summary json");
     let entries = parsed
@@ -99,17 +90,14 @@ fn soradns_hosts_supports_taira_mon_pretty_suffix() {
         Some("solswap-indexer.sora.mon.taira.sora.net")
     );
 }
-
 #[test]
 fn soradns_binding_template_writes_payload_and_headers() {
     let temp = TempDir::new().expect("temp dir");
     let manifest_path = temp.path().join("manifest.json");
     fs::write(&manifest_path, r#"{ "root_cid_hex": "0123456789abcdef" }"#).expect("write manifest");
-
     let json_out = temp.path().join("binding.json");
     let headers_out = temp.path().join("binding.headers");
     let timestamp = "2025-01-02T03:04:05Z";
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -132,21 +120,18 @@ fn soradns_binding_template_writes_payload_and_headers() {
         headers_out.to_str().expect("utf8 header path"),
     ]);
     cmd.assert().success();
-
     let payload_raw = fs::read_to_string(&json_out).expect("binding payload");
     let payload: Value = serde_json::from_str(&payload_raw).expect("binding json");
     assert_eq!(payload["alias"].as_str(), Some("docs.sora"));
     assert_eq!(payload["hostname"].as_str(), Some("docs.sora.gw.sora.name"));
     assert_eq!(payload["proofStatus"].as_str(), Some("ok"));
     assert_eq!(payload["generatedAt"].as_str(), Some(timestamp));
-
     let expected_cid = {
         let root = hex::decode("0123456789abcdef").expect("root hex");
         let encoded = BASE32_NOPAD.encode(&root).to_ascii_lowercase();
         format!("b{encoded}")
     };
     assert_eq!(payload["contentCid"].as_str(), Some(expected_cid.as_str()));
-
     let headers = payload["headers"]
         .as_object()
         .expect("headers block should be an object");
@@ -178,7 +163,6 @@ fn soradns_binding_template_writes_payload_and_headers() {
         route_binding.contains("label=docs"),
         "route binding must include the route label"
     );
-
     let headers_template =
         fs::read_to_string(&headers_out).expect("binding header template output");
     assert!(
@@ -190,13 +174,11 @@ fn soradns_binding_template_writes_payload_and_headers() {
         "header template should include CSP defaults"
     );
 }
-
 #[test]
 fn soradns_gar_template_renders_payload() {
     let temp = TempDir::new().expect("temp dir");
     let output_path = temp.path().join("gar.json");
     let manifest_digest = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -217,10 +199,8 @@ fn soradns_gar_template_renders_payload() {
         output_path.to_str().expect("utf8 output path"),
     ]);
     cmd.assert().success();
-
     let payload_raw = fs::read_to_string(&output_path).expect("gar payload");
     let payload: Value = serde_json::from_str(&payload_raw).expect("gar json");
-
     assert_eq!(payload["version"].as_u64(), Some(2));
     let bindings = derive_gateway_hosts("docs.sora").expect("derive gateway hosts");
     assert_eq!(payload["name"].as_str(), Some(bindings.normalized_name()));
@@ -235,7 +215,6 @@ fn soradns_gar_template_renders_payload() {
         payload["valid_until_epoch"].as_u64(),
         Some(1_750_000_000u64)
     );
-
     let host_patterns = payload["host_patterns"]
         .as_array()
         .expect("host_patterns array");
@@ -265,7 +244,6 @@ fn soradns_gar_template_renders_payload() {
         )),
         "GAR should include the default Permissions-Policy template"
     );
-
     let telemetry_labels = payload["telemetry_labels"]
         .as_array()
         .expect("telemetry label array");
@@ -276,13 +254,11 @@ fn soradns_gar_template_renders_payload() {
         "GAR payload should inherit CLI telemetry labels"
     );
 }
-
 #[test]
 fn soradns_gar_template_derives_manifest_metadata() {
     let temp = TempDir::new().expect("temp dir");
     let manifest_path = temp.path().join("manifest.json");
     fs::write(&manifest_path, r#"{ "root_cid_hex": "0123456789abcdef" }"#).expect("write manifest");
-
     let output_path = temp.path().join("gar.json");
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
@@ -298,7 +274,6 @@ fn soradns_gar_template_derives_manifest_metadata() {
         output_path.to_str().expect("utf8 output path"),
     ]);
     cmd.assert().success();
-
     let payload_raw = fs::read_to_string(&output_path).expect("gar payload");
     let payload: Value = serde_json::from_str(&payload_raw).expect("gar json");
     let expected_root = hex::decode("0123456789abcdef").expect("root hex");
@@ -318,12 +293,10 @@ fn soradns_gar_template_derives_manifest_metadata() {
         Some(expected_digest.as_str())
     );
 }
-
 #[test]
 fn soradns_cache_plan_renders_targets() {
     let temp = TempDir::new().expect("temp dir");
     let output_path = temp.path().join("cache_plan.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -342,21 +315,17 @@ fn soradns_cache_plan_renders_targets() {
         output_path.to_str().expect("utf8 path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(&output_path).expect("cache plan output");
     let plan: Value = serde_json::from_str(&raw).expect("cache plan json");
-
     assert_eq!(plan["http_method"].as_str(), Some("PURGE"));
     assert_eq!(plan["auth_header"].as_str(), Some("Authorization"));
     assert_eq!(plan["auth_env"].as_str(), Some("CACHE_PURGE_TOKEN"));
-
     let entries = plan["entries"]
         .as_array()
         .expect("plan entries should be an array");
     assert_eq!(entries.len(), 1, "single alias should yield a single entry");
     let entry = entries[0].as_object().expect("entry must be a JSON object");
     assert_eq!(entry["name"].as_str(), Some("docs.sora"));
-
     let canonical_host = entry["canonical_host"]
         .as_str()
         .expect("canonical host string");
@@ -387,12 +356,10 @@ fn soradns_cache_plan_renders_targets() {
         );
     }
 }
-
 #[test]
 fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
     let temp = TempDir::new().expect("temp dir");
     let output_path = temp.path().join("acme_plan.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -407,10 +374,8 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         output_path.to_str().expect("utf8 path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(&output_path).expect("acme plan output");
     let plan: Value = serde_json::from_str(&raw).expect("acme plan json");
-
     assert_eq!(
         plan["directory_url"].as_str(),
         Some("https://acme.example/soranet"),
@@ -421,7 +386,6 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         Some("2025-01-02T03:04:05Z"),
         "ACME plan should record the supplied timestamp"
     );
-
     let hosts = plan["hosts"].as_array().expect("hosts array should exist");
     assert_eq!(hosts.len(), 1, "single alias should render a single entry");
     let entry = hosts[0]
@@ -439,7 +403,6 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         Some(canonical_wildcard.as_str())
     );
     assert_eq!(entry["pretty_host"].as_str(), Some(bindings.pretty_host()));
-
     let certificates = entry["certificates"]
         .as_array()
         .expect("certificate plans must be an array");
@@ -448,7 +411,6 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         2,
         "plan should cover canonical wildcard and pretty host"
     );
-
     let canonical = certificates[0]
         .as_object()
         .expect("canonical certificate entry");
@@ -485,7 +447,6 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         label_values,
         vec![format!("_acme-challenge.{}", bindings.canonical_host())]
     );
-
     let pretty = certificates[1].as_object().expect("pretty certificate");
     assert_eq!(pretty["kind"].as_str(), Some("pretty_host"));
     let pretty_san = pretty["san"].as_array().expect("pretty SAN array");
@@ -514,12 +475,10 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         "pretty host plans should omit dns-01 labels"
     );
 }
-
 #[test]
 fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
     let temp = TempDir::new().expect("temp dir");
     let output_path = temp.path().join("acme_plan.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -532,7 +491,6 @@ fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
         output_path.to_str().expect("utf8 path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(&output_path).expect("acme plan output");
     let plan: Value = serde_json::from_str(&raw).expect("acme plan json");
     let hosts = plan["hosts"].as_array().expect("hosts array should exist");

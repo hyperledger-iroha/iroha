@@ -2,11 +2,9 @@ use ivm::{
     self, PointerType, SyscallPolicy, is_type_allowed_for_policy,
     render_pointer_types_markdown_table,
 };
-
 fn all_pointer_types() -> Vec<PointerType> {
     PointerType::all().to_vec()
 }
-
 #[test]
 fn pointer_types_markdown_is_consistent_with_policy() {
     let md = render_pointer_types_markdown_table();
@@ -34,7 +32,6 @@ fn pointer_types_markdown_is_consistent_with_policy() {
     for w in rows.windows(2) {
         assert!(w[0].0 < w[1].0, "ids must be ascending");
     }
-
     // For each row, cross-check policy with actual implementation
     let variants = all_pointer_types();
     for (id, name, abi_v1) in rows {
@@ -53,7 +50,6 @@ fn pointer_types_markdown_is_consistent_with_policy() {
         assert_eq!(abi_v1, expected_v1, "policy mismatch for {name}");
     }
 }
-
 #[test]
 fn pointer_types_markdown_pairs_match_enum_variants() {
     // Build expected (id, name) pairs from enum variants, sorted by id
@@ -62,7 +58,6 @@ fn pointer_types_markdown_pairs_match_enum_variants() {
         .map(|t| (t as u16, format!("{t:?}")))
         .collect();
     expected.sort_by_key(|(id, _)| *id);
-
     // Parse actual (id, name) pairs from rendered markdown, in order
     let md = render_pointer_types_markdown_table();
     let mut actual: Vec<(u16, String)> = Vec::new();
@@ -80,13 +75,11 @@ fn pointer_types_markdown_pairs_match_enum_variants() {
         let name = parts[1].to_string();
         actual.push((id, name));
     }
-
     assert_eq!(
         actual, expected,
         "pointer types table must match enum variants pairwise"
     );
 }
-
 #[test]
 fn pointer_types_markdown_header_and_row_count_ok() {
     let md = render_pointer_types_markdown_table();
@@ -95,7 +88,6 @@ fn pointer_types_markdown_header_and_row_count_ok() {
     assert!(header.contains("| ID |"));
     assert!(header.contains("| Name |"));
     assert!(header.contains("| ABI v1 |"));
-
     // Count data rows (exclude header and separator)
     let rows = md
         .lines()

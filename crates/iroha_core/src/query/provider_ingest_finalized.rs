@@ -19,21 +19,10 @@
 //! archive bytes that lack that field also use a retired state-root domain and
 //! cannot pass canonical decode/validation; operators must reset that
 //! disposable archive namespace rather than migrate it.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt, fs,
-    io::{self, Read},
-    num::NonZeroUsize,
-    path::{Component, Path, PathBuf},
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+use crate::{
+    kura::{Kura, KuraV2CommitReceipt},
+    state::{StateReadOnly, WorldReadOnly as _},
 };
-
-#[cfg(unix)]
-use std::ffi::{OsStr, OsString};
-#[cfg(unix)]
-use std::io::Write as _;
-
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -53,13 +42,19 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
-use thiserror::Error;
-
-use crate::{
-    kura::{Kura, KuraV2CommitReceipt},
-    state::{StateReadOnly, WorldReadOnly as _},
+#[cfg(unix)]
+use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
+use std::io::Write as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt, fs,
+    io::{self, Read},
+    num::NonZeroUsize,
+    path::{Component, Path, PathBuf},
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
+use thiserror::Error;
 const ARCHIVE_VERSION_V1: u16 = 1;
 const RECORDS_DIRECTORY: &str = "records";
 const CHECKPOINTS_DIRECTORY: &str = "checkpoints";
@@ -100,7 +95,6 @@ const RETENTION_APPROVAL_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1 * 4,
     32,
 );
-
 /// Resource ceilings applied to startup, capture, reconstruction, and paging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestFinalizedArchiveBoundsV1 {
@@ -112,7 +106,6 @@ pub struct ProviderIngestFinalizedArchiveBoundsV1 {
     max_total_orders_per_anchor: NonZeroUsize,
     max_page_rows: NonZeroUsize,
 }
-
 impl ProviderIngestFinalizedArchiveBoundsV1 {
     /// Construct explicit archive and query ceilings.
     ///
@@ -209,49 +202,41 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
             max_page_rows,
         })
     }
-
     /// Maximum canonical bytes accepted for one immutable record.
     #[must_use]
     pub const fn max_record_bytes(self) -> u64 {
         self.max_record_bytes
     }
-
     /// Maximum immutable anchor records retained in the archive.
     #[must_use]
     pub const fn max_archive_entries(self) -> usize {
         self.max_archive_entries.get()
     }
-
     /// Maximum aggregate canonical bytes retained by the archive.
     #[must_use]
     pub const fn max_total_bytes(self) -> u64 {
         self.max_total_bytes
     }
-
     /// Maximum provider projections accepted at one anchor.
     #[must_use]
     pub const fn max_providers_per_anchor(self) -> usize {
         self.max_providers_per_anchor.get()
     }
-
     /// Maximum replication orders accepted for one provider at one anchor.
     #[must_use]
     pub const fn max_orders_per_provider(self) -> usize {
         self.max_orders_per_provider.get()
     }
-
     /// Maximum aggregate provider/order rows accepted at one anchor.
     #[must_use]
     pub const fn max_total_orders_per_anchor(self) -> usize {
         self.max_total_orders_per_anchor.get()
     }
-
     /// Maximum rows returned by one page.
     #[must_use]
     pub const fn max_page_rows(self) -> usize {
         self.max_page_rows.get()
     }
-
     fn decode_limits(self) -> Result<DecodeLimits, ProviderIngestFinalizedArchiveErrorV1> {
         let max = usize::try_from(self.max_record_bytes).map_err(|_| {
             ProviderIngestFinalizedArchiveErrorV1::InvalidBounds {
@@ -272,81 +257,7 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
         ))
     }
 }
-
-/// Exact finalized identity of one archived committed view.
-#[rustfmt::skip]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
-pub struct ProviderIngestFinalizedArchiveKeyV1 {
-    /// Exact genesis-derived network containing the committed state.
-    pub network_id: NetworkId,
-    /// One-based finalized block height.
-    pub height: u64,
-    /// Exact finalized block hash.
-    pub block_hash: [u8; 32],
-    /// Exact result-bearing block creation time.
-    pub finalized_at_unix_ms: u64,
-}
-
-impl ProviderIngestFinalizedArchiveKeyV1 {
-    /// Construct one validated exact key.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unmarked network identity, zero height/hash/time, or the
-    /// reserved maximum timestamp.
-    pub fn try_new(
-        network_id: NetworkId,
-        height: u64,
-        block_hash: [u8; 32],
-        finalized_at_unix_ms: u64,
-    ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
-        let key = Self {
-            network_id,
-            height,
-            block_hash,
-            finalized_at_unix_ms,
-        };
-        key.validate()?;
-        Ok(key)
-    }
-
-    /// Validate this exact finalized identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable key-validation failure.
-    pub fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        if self.network_id.as_bytes()[31] & 1 != 1 {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "network id must be an exact genesis-derived identity",
-            });
-        }
-        if self.height == 0 {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized height must be one-based",
-            });
-        }
-        if self.block_hash == [0; 32] {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized block hash must be non-zero",
-            });
-        }
-        if self.finalized_at_unix_ms == 0 || self.finalized_at_unix_ms == u64::MAX {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized block time must be a canonical non-zero timestamp",
-            });
-        }
-        Ok(())
-    }
-
-    fn finalized_anchor(&self) -> ProviderIngestFinalizedAnchorV1 {
-        ProviderIngestFinalizedAnchorV1 {
-            height: self.height,
-            block_hash: self.block_hash,
-        }
-    }
-}
-
+include!("provider_ingest_finalized/archive_key.rs");
 /// One exact provider-scoped replication order at a finalized anchor.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchivedOrderV1 {
@@ -357,13 +268,11 @@ pub struct ProviderIngestFinalizedArchivedOrderV1 {
     /// Consensus-authenticated Musubi archive binding, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
 }
-
 impl ProviderIngestFinalizedArchivedOrderV1 {
     fn order_id(&self) -> ReplicationOrderId {
         self.replication_order.order_id
     }
 }
-
 /// Complete provider-scoped state at one exact finalized anchor.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedProviderProjectionV1 {
@@ -376,7 +285,6 @@ pub struct ProviderIngestFinalizedProviderProjectionV1 {
     /// Assigned orders in strict replication-order identity order.
     pub orders: Vec<ProviderIngestFinalizedArchivedOrderV1>,
 }
-
 /// Complete provider-indexed projection at one exact finalized anchor.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedProjectionV1 {
@@ -386,7 +294,6 @@ pub struct ProviderIngestFinalizedProjectionV1 {
     /// providers that currently have no assigned orders.
     pub providers: Vec<ProviderIngestFinalizedProviderProjectionV1>,
 }
-
 impl ProviderIngestFinalizedProjectionV1 {
     /// Validate provider isolation, order bindings, authority bindings, and
     /// configured resource ceilings.
@@ -524,7 +431,6 @@ impl ProviderIngestFinalizedProjectionV1 {
         Ok(())
     }
 }
-
 /// One page row carrying every completion execution compare-and-set binding.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
@@ -549,7 +455,6 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     /// Current authoritative completion epoch, when completion is admissible.
     pub completion_epoch: Option<u64>,
 }
-
 /// Context-bound exclusive cursor for provider-indexed archive pages.
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
@@ -563,7 +468,6 @@ pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Last returned order identity, excluded from the next page.
     pub after_order_id: ReplicationOrderId,
 }
-
 /// Bounded stable page from one exact provider-indexed committed projection.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchivePageV1 {
@@ -578,7 +482,6 @@ pub struct ProviderIngestFinalizedArchivePageV1 {
     /// Context-bound exclusive continuation, when another row exists.
     pub next_cursor: Option<ProviderIngestFinalizedArchiveCursorV1>,
 }
-
 /// Outcome of publishing one immutable exact-anchor record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
@@ -587,7 +490,6 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
     /// The exact typed projection was already durable at the same key.
     ExactReplay,
 }
-
 /// Exact finalized boundary authorized for provider-archive retention.
 ///
 /// The finality-artifact hash is supplied by the commit-owned caller and is
@@ -598,7 +500,6 @@ pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     kura_finality_artifact_hash: [u8; 32],
     expected_archive_generation: u64,
 }
-
 impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
     /// Construct one exact non-zero retention fence at the caller-observed
     /// archive generation.
@@ -626,26 +527,22 @@ impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
             expected_archive_generation,
         })
     }
-
     /// Return the exact greatest height the caller permits pruning through.
     #[must_use]
     pub const fn key(&self) -> &ProviderIngestFinalizedArchiveKeyV1 {
         &self.key
     }
-
     /// Return the Kura artifact identity authenticating the retention floor.
     #[must_use]
     pub const fn kura_finality_artifact_hash(&self) -> [u8; 32] {
         self.kura_finality_artifact_hash
     }
-
     /// Return the exact archive generation observed by the retention decider.
     #[must_use]
     pub const fn expected_archive_generation(&self) -> u64 {
         self.expected_archive_generation
     }
 }
-
 /// Public qualification of a deployment-owned sealed retention authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
@@ -653,7 +550,6 @@ pub struct ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
     /// Construct one exact public adapter and policy qualification.
     #[must_use]
@@ -664,19 +560,16 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the exact adapter/public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the exact public-policy digest.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn validate(self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         if self.version != ARCHIVE_VERSION_V1 || self.revision == 0 || self.policy_digest == [0; 32]
         {
@@ -685,14 +578,12 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
         Ok(())
     }
 }
-
 /// Credential-free expected identity of a sealed retention authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
     handle: String,
     qualification: ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1,
 }
-
 impl ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
     /// Construct one exact deployment-owned authority binding.
     ///
@@ -718,13 +609,11 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
             qualification,
         })
     }
-
     /// Return the exact credential-free runtime-provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the exact public adapter and policy qualification.
     #[must_use]
     pub const fn qualification(
@@ -733,7 +622,6 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
         self.qualification
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchiveCompactionProposalMaterialV1 {
     version: u16,
@@ -741,14 +629,12 @@ struct ProviderIngestFinalizedArchiveCompactionProposalMaterialV1 {
     checkpoint_digest: [u8; 32],
     checkpoint_canonical_digest: [u8; 32],
 }
-
 /// Exact canonical checkpoint and fence submitted for external approval.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveCompactionProposalV1 {
     material: ProviderIngestFinalizedArchiveCompactionProposalMaterialV1,
     proposal_digest: [u8; 32],
 }
-
 impl ProviderIngestFinalizedArchiveCompactionProposalV1 {
     fn try_new(
         fence: ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -770,7 +656,6 @@ impl ProviderIngestFinalizedArchiveCompactionProposalV1 {
         proposal.validate()?;
         Ok(proposal)
     }
-
     fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         self.material.fence.key.validate()?;
         if self.material.version != ARCHIVE_VERSION_V1
@@ -788,32 +673,27 @@ impl ProviderIngestFinalizedArchiveCompactionProposalV1 {
         }
         Ok(())
     }
-
     /// Return the exact Kura-authenticated fence.
     #[must_use]
     pub const fn fence(&self) -> &ProviderIngestFinalizedArchiveRetentionFenceV1 {
         &self.material.fence
     }
-
     /// Return the content-addressed archive checkpoint digest.
     #[must_use]
     pub const fn checkpoint_digest(&self) -> [u8; 32] {
         self.material.checkpoint_digest
     }
-
     /// Return the digest of the complete canonical checkpoint bytes.
     #[must_use]
     pub const fn checkpoint_canonical_digest(&self) -> [u8; 32] {
         self.material.checkpoint_canonical_digest
     }
-
     /// Return the digest naming this exact proposal.
     #[must_use]
     pub const fn proposal_digest(&self) -> [u8; 32] {
         self.proposal_digest
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1 {
     namespace: [u8; 32],
@@ -824,14 +704,12 @@ struct ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1 {
     predecessor_revision: Option<[u8; 32]>,
     predecessor_checkpoint_digest: Option<[u8; 32]>,
 }
-
 /// Canonical monotonic CAS record approving one exact compaction proposal.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
     material: ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1,
     revision: [u8; 32],
 }
-
 impl ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
     fn try_new(
         sequence: u64,
@@ -854,7 +732,6 @@ impl ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
         record.validate()?;
         Ok(record)
     }
-
     fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         self.material.authority_qualification.validate()?;
         self.material.proposal.validate()?;
@@ -885,7 +762,6 @@ impl ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
         }
         Ok(())
     }
-
     /// Decode one strictly bounded canonical Norito approval record.
     ///
     /// # Errors
@@ -920,7 +796,6 @@ impl ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
         }
         Ok(record)
     }
-
     /// Encode this approval as strictly bounded canonical Norito.
     ///
     /// # Errors
@@ -939,13 +814,11 @@ impl ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
         }
         Ok(bytes)
     }
-
     /// Return the monotonic authority sequence.
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.material.sequence
     }
-
     /// Return the exact public authority qualification.
     #[must_use]
     pub const fn authority_qualification(
@@ -953,32 +826,27 @@ impl ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
     ) -> ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
         self.material.authority_qualification
     }
-
     /// Return the exact approved proposal.
     #[must_use]
     pub const fn proposal(&self) -> &ProviderIngestFinalizedArchiveCompactionProposalV1 {
         &self.material.proposal
     }
-
     /// Return the exact predecessor approval revision.
     #[must_use]
     pub const fn predecessor_revision(&self) -> Option<[u8; 32]> {
         self.material.predecessor_revision
     }
-
     /// Return the exact predecessor archive-checkpoint digest.
     #[must_use]
     pub const fn predecessor_checkpoint_digest(&self) -> Option<[u8; 32]> {
         self.material.predecessor_checkpoint_digest
     }
-
     /// Return this deterministic CAS revision.
     #[must_use]
     pub const fn revision(&self) -> [u8; 32] {
         self.revision
     }
 }
-
 /// Fixed payload-free failures returned by an external retention authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1 {
@@ -989,7 +857,6 @@ pub enum ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1 {
     /// A compare-and-swap may have committed and requires exact readback.
     Ambiguous,
 }
-
 /// Deployment-owned sealed monotonic CAS authority for archive retention.
 ///
 /// Implementations own all credentials and durable state. Each `network_id`
@@ -998,7 +865,6 @@ pub enum ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1 {
 pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Debug {
     /// Return the stable credential-free production handle.
     fn handle(&self) -> &str;
-
     /// Return the current public adapter and policy qualification.
     ///
     /// # Errors
@@ -1010,7 +876,6 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
         ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1,
         ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
-
     /// Load the exact latest authoritative record for `network_id`.
     ///
     /// # Errors
@@ -1023,7 +888,6 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
         Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
         ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
-
     /// Install `next` only when the authoritative revision is exactly
     /// `expected_revision`.
     ///
@@ -1040,7 +904,6 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
         next: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
     ) -> Result<(), ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1>;
 }
-
 /// Result of installing one authenticated virtual-base checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -1051,39 +914,33 @@ pub struct ProviderIngestFinalizedArchiveCompactionOutcomeV1 {
     pruned_bytes: u64,
     generation: u64,
 }
-
 impl ProviderIngestFinalizedArchiveCompactionOutcomeV1 {
     /// Return the exact oldest queryable key after compaction.
     #[must_use]
     pub const fn retention_floor(&self) -> &ProviderIngestFinalizedArchiveKeyV1 {
         &self.retention_floor
     }
-
     /// Return the content digest naming the immutable virtual base.
     #[must_use]
     pub const fn checkpoint_digest(&self) -> [u8; 32] {
         self.checkpoint_digest
     }
-
     /// Return the cumulative number of original anchor records pruned.
     #[must_use]
     pub const fn pruned_entries(&self) -> u64 {
         self.pruned_entries
     }
-
     /// Return the cumulative canonical record bytes pruned.
     #[must_use]
     pub const fn pruned_bytes(&self) -> u64 {
         self.pruned_bytes
     }
-
     /// Return the archive generation preserved across compaction.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Exact archive coverage qualified against one authenticated Kura boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -1094,39 +951,33 @@ pub struct ProviderIngestFinalizedArchiveQualificationV1 {
     lag_blocks: u64,
     generation: u64,
 }
-
 impl ProviderIngestFinalizedArchiveQualificationV1 {
     /// Return the first exact finalized height represented by the archive.
     #[must_use]
     pub const fn activation_floor(&self) -> &ProviderIngestFinalizedArchiveKeyV1 {
         &self.activation_floor
     }
-
     /// Return the highest exact finalized height represented by the archive.
     #[must_use]
     pub const fn archive_tip(&self) -> &ProviderIngestFinalizedArchiveKeyV1 {
         &self.archive_tip
     }
-
     /// Return the authenticated Kura tip used for qualification.
     #[must_use]
     pub const fn kura_tip_height(&self) -> u64 {
         self.kura_tip_height
     }
-
     /// Return the explicit Kura suffix not yet captured.
     #[must_use]
     pub const fn lag_blocks(&self) -> u64 {
         self.lag_blocks
     }
-
     /// Return the immutable archive generation used for qualification.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Outcome of exact startup or recovery reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -1135,39 +986,33 @@ pub struct ProviderIngestFinalizedArchiveReconcileOutcomeV1 {
     qualification: ProviderIngestFinalizedArchiveQualificationV1,
     activation_floor_created: bool,
 }
-
 impl ProviderIngestFinalizedArchiveReconcileOutcomeV1 {
     /// Return whether reconciliation inserted or exactly replayed the tip.
     #[must_use]
     pub const fn insertion(&self) -> ProviderIngestFinalizedArchiveInsertOutcomeV1 {
         self.insertion
     }
-
     /// Return the exact Kura-bound qualification.
     #[must_use]
     pub const fn qualification(&self) -> &ProviderIngestFinalizedArchiveQualificationV1 {
         &self.qualification
     }
-
     /// Return whether reconciliation established a new explicit floor.
     #[must_use]
     pub const fn activation_floor_created(&self) -> bool {
         self.activation_floor_created
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderProjectionDeltaV1 {
     provider_id: ProviderId,
     next: Option<ProviderIngestFinalizedProviderProjectionV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchivePredecessorV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchiveRecordMaterialV1 {
     version: u16,
@@ -1176,13 +1021,11 @@ struct ProviderIngestFinalizedArchiveRecordMaterialV1 {
     deltas: Vec<ProviderProjectionDeltaV1>,
     provider_state_root: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchiveRecordV1 {
     material: ProviderIngestFinalizedArchiveRecordMaterialV1,
     record_digest: [u8; 32],
 }
-
 impl ProviderIngestFinalizedArchiveRecordV1 {
     fn try_new(
         material: ProviderIngestFinalizedArchiveRecordMaterialV1,
@@ -1195,7 +1038,6 @@ impl ProviderIngestFinalizedArchiveRecordV1 {
         record.validate()?;
         Ok(record)
     }
-
     fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         if self.material.version != ARCHIVE_VERSION_V1 {
             return Err(
@@ -1254,7 +1096,6 @@ impl ProviderIngestFinalizedArchiveRecordV1 {
         Ok(())
     }
 }
-
 impl ProviderIngestFinalizedArchiveCheckpointV1 {
     fn try_new(
         material: ProviderIngestFinalizedArchiveCheckpointMaterialV1,
@@ -1268,7 +1109,6 @@ impl ProviderIngestFinalizedArchiveCheckpointV1 {
         checkpoint.validate(bounds)?;
         Ok(checkpoint)
     }
-
     fn validate(
         &self,
         bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -1341,13 +1181,11 @@ impl ProviderIngestFinalizedArchiveCheckpointV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyDigestHistoryCheckpointV1 {
     policy_id: [u8; 32],
     policy_digests: Vec<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyHistoryCheckpointV1 {
     provider_id: ProviderId,
@@ -1355,14 +1193,12 @@ struct ProviderPolicyHistoryCheckpointV1 {
     active: bool,
     seen_policy_digests: Vec<ProviderPolicyDigestHistoryCheckpointV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedPrefixLinkV1 {
     previous_cumulative_digest: Option<[u8; 32]>,
     key: ProviderIngestFinalizedArchiveKeyV1,
     record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     version: u16,
@@ -1381,20 +1217,17 @@ struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     seen_order_ids: Vec<ReplicationOrderId>,
     kura_finality_artifact_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchiveCheckpointV1 {
     material: ProviderIngestFinalizedArchiveCheckpointMaterialV1,
     checkpoint_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone)]
 struct ArchiveVirtualBaseV1 {
     checkpoint: ProviderIngestFinalizedArchiveCheckpointV1,
     path: PathBuf,
     canonical_bytes: u64,
 }
-
 #[derive(Debug)]
 struct PreparedArchiveCompactionV1 {
     checkpoint: ProviderIngestFinalizedArchiveCheckpointV1,
@@ -1402,7 +1235,6 @@ struct PreparedArchiveCompactionV1 {
     obsolete: Vec<((NetworkId, u64), ArchiveRecordEntryV1)>,
     previous_base: Option<ArchiveVirtualBaseV1>,
 }
-
 #[derive(Debug)]
 struct ArchiveCompactionHistoryV1 {
     policy_history: BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
@@ -1410,14 +1242,12 @@ struct ArchiveCompactionHistoryV1 {
     seen_order_ids: BTreeSet<ReplicationOrderId>,
     cumulative_prefix_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone)]
 struct ArchiveRecordEntryV1 {
     record: ProviderIngestFinalizedArchiveRecordV1,
     path: PathBuf,
     canonical_bytes: u64,
 }
-
 #[derive(Debug, Default)]
 struct ArchiveIndexV1 {
     by_height: BTreeMap<(NetworkId, u64), ArchiveRecordEntryV1>,
@@ -1425,7 +1255,6 @@ struct ArchiveIndexV1 {
     total_bytes: u64,
     generation: u64,
 }
-
 /// Durable, immutable, provider-indexed finalized replication-order archive.
 #[derive(Debug)]
 pub struct ProviderIngestFinalizedArchiveV1 {
@@ -1440,7 +1269,6 @@ pub struct ProviderIngestFinalizedArchiveV1 {
     writer_lock: fs::File,
     index: RwLock<ArchiveIndexV1>,
 }
-
 impl ProviderIngestFinalizedArchiveV1 {
     /// Open or create one direct single-writer archive and validate every
     /// immutable record before making it queryable.
@@ -1466,7 +1294,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         archive.verify_storage_boundaries()?;
         Ok(archive)
     }
-
     /// Open an archive whose retention state is sealed by `authority`.
     ///
     /// Startup installs or finishes only the exact checkpoint durably named by
@@ -1506,7 +1333,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         archive.verify_storage_boundaries()?;
         Ok(archive)
     }
-
     fn open_unreconciled(
         root: impl Into<PathBuf>,
         bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -1578,7 +1404,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         archive.verify_storage_boundaries()?;
         Ok((archive, checkpoint_candidates))
     }
-
     fn recover_approved_retention(
         &self,
         network_id: &NetworkId,
@@ -1609,13 +1434,11 @@ impl ProviderIngestFinalizedArchiveV1 {
             network_id,
         )?;
         authenticate_retention_fence(approval.proposal().fence(), kura)?;
-
         let approved_candidate = checkpoint_candidates.iter().find(|candidate| {
             candidate.checkpoint.checkpoint_digest == approval.proposal().checkpoint_digest()
         });
         let mut index = self.write_index()?;
         self.verify_storage_boundaries()?;
-
         if let Some(candidate) = approved_candidate {
             validate_approval_checkpoint(&approval, &candidate.checkpoint, self.bounds)?;
             install_virtual_bases(&mut index, &checkpoint_candidates, self.bounds)?;
@@ -1640,7 +1463,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             validate_index_coverage(&index, self.bounds)?;
             return Ok(());
         }
-
         if checkpoint_candidates.is_empty() {
             if approval.predecessor_checkpoint_digest().is_some() {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRollback);
@@ -1669,7 +1491,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             refresh_archive_accounting(&mut index, self.bounds)?;
             validate_index_coverage(&index, self.bounds)?;
         }
-
         authenticate_retention_prefix(&index, approval.proposal().fence(), kura, self.bounds)?;
         let prepared =
             prepare_archive_compaction(&index, approval.proposal().fence(), self.bounds)?;
@@ -1689,7 +1510,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})?;
         Ok(())
     }
-
     /// Return the explicit first archived key for `network_id`.
     ///
     /// # Errors
@@ -1717,7 +1537,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
         Ok(floor.map(|entry| entry.record.material.key.clone()))
     }
-
     /// Return the installed compaction floor for `network_id`, when one exists.
     ///
     /// Unlike [`Self::activation_floor`], this returns `None` for an
@@ -1744,7 +1563,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         verify_checkpoint_entry(base, self.bounds)?;
         Ok(Some(base.checkpoint.material.retention_floor.clone()))
     }
-
     /// Resolve a height/hash cursor to its complete exact archive key.
     ///
     /// This is the adapter seam for consumers whose finalized cursor carries
@@ -1803,7 +1621,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
         Ok(entry.record.material.key.clone())
     }
-
     /// Return the monotonic in-process generation of the validated immutable
     /// record index.
     ///
@@ -1816,7 +1633,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         self.verify_storage_boundaries()?;
         Ok(index.generation)
     }
-
     /// Return whether the complete bound archive namespace has no records.
     ///
     /// This is the only state accepted when a fresh height-zero node enables
@@ -1841,7 +1657,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             && durable.virtual_bases.is_empty()
             && durable.total_bytes == 0)
     }
-
     /// Qualify contiguous immutable coverage against Kura's exact durable tip.
     ///
     /// Every represented anchor is reauthenticated against its result-bearing
@@ -1974,7 +1789,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             generation,
         })
     }
-
     /// Reconcile one replayed startup state tip using Kura's recovered
     /// non-forgeable receipt, then require that exact State key to be the
     /// zero-lag archive and Kura tip.
@@ -2036,7 +1850,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             activation_floor_created: activation_floor_before.is_none(),
         })
     }
-
     /// Capture one immutable committed view authenticated by its exact durable
     /// Kura v2 finality receipt.
     ///
@@ -2056,7 +1869,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         let projection = capture_projection(state_ro, key, self.bounds)?;
         self.insert(projection)
     }
-
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
     /// Preparation is read-only. Every physical prefix anchor and the fence's
@@ -2085,7 +1897,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         validate_prepared_compaction_capacity(&index, &prepared, self.bounds)?;
         compaction_proposal(&prepared, fence)
     }
-
     /// Durably approve and install one previously prepared compaction.
     ///
     /// This is the only production compaction entry point. It repeats all
@@ -2121,7 +1932,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         if compaction_proposal(&prepared, fence)? != *proposal {
             return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionProposalMismatch);
         }
-
         let network_id = &fence.key.network_id;
         let current = load_retention_approval(binding, authority, network_id)?;
         let expected_checkpoint = prepared
@@ -2176,7 +1986,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
         self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})
     }
-
     #[cfg(test)]
     fn compact_prefix_locked<AfterPublish, AfterUnlink>(
         &self,
@@ -2204,7 +2013,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         validate_prepared_compaction_capacity(index, &prepared, self.bounds)?;
         self.publish_prepared_compaction(index, prepared, after_publish, &mut after_unlink)
     }
-
     fn publish_prepared_compaction<AfterPublish, AfterUnlink>(
         &self,
         index: &mut ArchiveIndexV1,
@@ -2235,7 +2043,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::CheckpointDigestMismatch);
         }
         after_publish();
-
         let virtual_base = ArchiveVirtualBaseV1 {
             checkpoint: checkpoint.clone(),
             path: checkpoint_path,
@@ -2267,7 +2074,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             generation: index.generation,
         })
     }
-
     /// Durably publish one exact typed projection.
     ///
     /// This lower-level entry point is useful to authenticated replay and
@@ -2331,7 +2137,6 @@ impl ProviderIngestFinalizedArchiveV1 {
                 },
             );
         }
-
         let previous_entry = index
             .by_height
             .range((
@@ -2438,7 +2243,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         self.verify_storage_boundaries()?;
         Ok(ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted)
     }
-
     /// Read one bounded provider-indexed page at an exact finalized anchor.
     ///
     /// `cursor` is exclusive and must belong to the same network, block,
@@ -2580,7 +2384,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             next_cursor,
         })
     }
-
     /// Return the deterministic immutable path for one exact key.
     ///
     /// # Errors
@@ -2593,7 +2396,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         key.validate()?;
         Ok(self.records.join(record_file_name(key)?))
     }
-
     fn read_index(
         &self,
     ) -> Result<RwLockReadGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1> {
@@ -2601,7 +2403,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             .read()
             .map_err(|_| ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)
     }
-
     fn write_index(
         &self,
     ) -> Result<RwLockWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1> {
@@ -2609,7 +2410,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             .write()
             .map_err(|_| ProviderIngestFinalizedArchiveErrorV1::ArchiveLockPoisoned)
     }
-
     fn verify_storage_boundaries(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         verify_absolute_directory_ancestry(&self.root)?;
         verify_archive_directory_identity(&self.root, self.root_identity).map_err(|source| {
@@ -2658,14 +2458,12 @@ impl ProviderIngestFinalizedArchiveV1 {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct ProviderProjectionBuilderV1 {
     expected_owner: Option<AccountId>,
     expected_signer_policy: Option<ProviderIngestCompletionSignerPolicyV1>,
     orders: BTreeMap<ReplicationOrderId, ProviderIngestFinalizedArchivedOrderV1>,
 }
-
 fn capture_projection(
     state_ro: &impl StateReadOnly,
     key: ProviderIngestFinalizedArchiveKeyV1,
@@ -2710,7 +2508,6 @@ fn capture_projection(
         }
         provider.expected_signer_policy = Some(authority.signer_policy);
     }
-
     let mut total_orders = 0_usize;
     for (order_id, order_record) in world.replication_orders().iter() {
         let decoded = validated_replication_order_from_record(order_id, order_record)?;
@@ -2861,7 +2658,6 @@ fn capture_projection(
     projection.validate(bounds)?;
     Ok(projection)
 }
-
 fn validated_replication_order_from_record(
     order_id: &ReplicationOrderId,
     order_record: &ReplicationOrderRecord,
@@ -2902,7 +2698,6 @@ fn validated_replication_order_from_record(
     }
     Ok(order)
 }
-
 fn validate_archived_order(
     key: &ProviderIngestFinalizedArchiveKeyV1,
     provider_id: ProviderId,
@@ -3024,7 +2819,6 @@ fn validate_archived_order(
     }
     Ok(())
 }
-
 fn validate_projection_transition(
     previous: &ProviderIngestFinalizedProjectionV1,
     current: &ProviderIngestFinalizedProjectionV1,
@@ -3074,27 +2868,23 @@ fn validate_projection_transition(
     }
     Ok(())
 }
-
 #[derive(Debug)]
 struct ProviderPolicyHistoryV1 {
     last: ProviderIngestCompletionSignerPolicyV1,
     active: bool,
     seen_policy_digests: BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>,
 }
-
 struct ProviderPolicyHistorySeedV1 {
     providers: BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
     history: BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
     seeded: bool,
 }
-
 struct ProviderOrderHistorySeedV1 {
     providers: BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
     active: BTreeSet<ReplicationOrderId>,
     seen: BTreeSet<ReplicationOrderId>,
     seeded: bool,
 }
-
 fn validate_historical_policy_transition(
     index: &ArchiveIndexV1,
     projection: &ProviderIngestFinalizedProjectionV1,
@@ -3130,7 +2920,6 @@ fn validate_historical_policy_transition(
         Ok(())
     }
 }
-
 fn validate_historical_order_transition(
     index: &ArchiveIndexV1,
     projection: &ProviderIngestFinalizedProjectionV1,
@@ -3164,7 +2953,6 @@ fn validate_historical_order_transition(
         Ok(())
     }
 }
-
 fn provider_order_ids<I>(providers: I) -> BTreeSet<ReplicationOrderId>
 where
     I: IntoIterator,
@@ -3177,7 +2965,6 @@ where
             order_ids
         })
 }
-
 fn observe_order_history(
     current: BTreeSet<ReplicationOrderId>,
     active: &mut BTreeSet<ReplicationOrderId>,
@@ -3194,7 +2981,6 @@ fn observe_order_history(
     *active = current;
     Ok(())
 }
-
 fn seed_policy_history(
     providers: &BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
     history: &mut BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
@@ -3214,7 +3000,6 @@ fn seed_policy_history(
         })
     }));
 }
-
 fn observe_policy_history(
     providers: &BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
     history: &mut BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
@@ -3296,7 +3081,6 @@ fn observe_policy_history(
     }
     Ok(())
 }
-
 fn validate_projection_completion_anchors_before_insert(
     index: &ArchiveIndexV1,
     projection: &ProviderIngestFinalizedProjectionV1,
@@ -3349,7 +3133,6 @@ fn validate_projection_completion_anchors_before_insert(
     }
     Ok(())
 }
-
 fn validate_provider_authority_transition(
     previous: &ProviderIngestFinalizedProviderProjectionV1,
     current: &ProviderIngestFinalizedProviderProjectionV1,
@@ -3397,7 +3180,6 @@ fn validate_provider_authority_transition(
         ),
     }
 }
-
 fn canonical_order_map(
     projection: &ProviderIngestFinalizedProjectionV1,
 ) -> Result<
@@ -3422,7 +3204,6 @@ fn canonical_order_map(
     }
     Ok(orders)
 }
-
 fn validate_order_transition(
     previous: &ProviderIngestFinalizedArchivedOrderV1,
     current: &ProviderIngestFinalizedArchivedOrderV1,
@@ -3511,7 +3292,6 @@ fn validate_order_transition(
     }
     Ok(())
 }
-
 fn pin_manifest_immutable_fields_match(
     previous: &PinManifestRecord,
     current: &PinManifestRecord,
@@ -3529,7 +3309,6 @@ fn pin_manifest_immutable_fields_match(
         && previous.successor_of == current.successor_of
         && previous.metadata == current.metadata
 }
-
 fn validate_pin_manifest_lifecycle(
     manifest: &PinManifestRecord,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
@@ -3555,14 +3334,12 @@ fn validate_pin_manifest_lifecycle(
     }
     Ok(())
 }
-
 fn validate_pin_manifest_transition(
     previous: &PinManifestRecord,
     current: &PinManifestRecord,
     order_id: ReplicationOrderId,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     use iroha_data_model::sorafs::pin_registry::PinStatus;
-
     let status_is_monotonic = match (previous.status, current.status) {
         (
             PinStatus::Pending,
@@ -3599,7 +3376,6 @@ fn validate_pin_manifest_transition(
     }
     Ok(())
 }
-
 fn build_provider_deltas(
     previous: Option<&ProviderIngestFinalizedProjectionV1>,
     current: &ProviderIngestFinalizedProjectionV1,
@@ -3635,7 +3411,6 @@ fn build_provider_deltas(
         })
         .collect()
 }
-
 fn apply_provider_deltas(
     providers: &mut BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
     deltas: &[ProviderProjectionDeltaV1],
@@ -3648,7 +3423,6 @@ fn apply_provider_deltas(
         }
     }
 }
-
 fn first_record_for_network<'index>(
     index: &'index ArchiveIndexV1,
     network_id: &NetworkId,
@@ -3662,7 +3436,6 @@ fn first_record_for_network<'index>(
         .next()
         .map(|(_, entry)| entry)
 }
-
 fn below_floor_error(
     index: &ArchiveIndexV1,
     network_id: &NetworkId,
@@ -3681,18 +3454,15 @@ fn below_floor_error(
         }
     }
 }
-
 fn retained_archive_entries(index: &ArchiveIndexV1) -> usize {
     index
         .by_height
         .len()
         .saturating_add(index.virtual_bases.len())
 }
-
 fn strictly_ordered<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|window| window[0] < window[1])
 }
-
 fn policy_history_to_checkpoint(
     history: &BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
 ) -> Vec<ProviderPolicyHistoryCheckpointV1> {
@@ -3717,7 +3487,6 @@ fn policy_history_to_checkpoint(
         )
         .collect()
 }
-
 fn policy_history_from_checkpoint(
     checkpoint: &[ProviderPolicyHistoryCheckpointV1],
 ) -> Result<BTreeMap<ProviderId, ProviderPolicyHistoryV1>, ProviderIngestFinalizedArchiveErrorV1> {
@@ -3770,7 +3539,6 @@ fn policy_history_from_checkpoint(
     }
     Ok(history)
 }
-
 fn validate_policy_history_checkpoint(
     projection: &ProviderIngestFinalizedProjectionV1,
     checkpoint: &[ProviderPolicyHistoryCheckpointV1],
@@ -3807,7 +3575,6 @@ fn validate_policy_history_checkpoint(
     }
     Ok(())
 }
-
 fn policy_history_seed_from_virtual_base(
     index: &ArchiveIndexV1,
     network_id: &NetworkId,
@@ -3832,7 +3599,6 @@ fn policy_history_seed_from_virtual_base(
         seeded: true,
     })
 }
-
 fn order_history_seed_from_virtual_base(
     index: &ArchiveIndexV1,
     network_id: &NetworkId,
@@ -3871,7 +3637,6 @@ fn order_history_seed_from_virtual_base(
         seeded: true,
     }
 }
-
 fn compaction_proposal(
     prepared: &PreparedArchiveCompactionV1,
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -3886,14 +3651,12 @@ fn compaction_proposal(
         ),
     )
 }
-
 fn canonical_bytes_domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn validate_approval_checkpoint(
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
     checkpoint: &ProviderIngestFinalizedArchiveCheckpointV1,
@@ -3915,7 +3678,6 @@ fn validate_approval_checkpoint(
     }
     Ok(())
 }
-
 fn validate_retention_checkpoint_candidate_inventory(
     candidates: &[ArchiveVirtualBaseV1],
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
@@ -3926,7 +3688,6 @@ fn validate_retention_checkpoint_candidate_inventory(
     if predecessor == Some(approved) {
         return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
     }
-
     let mut observed = BTreeSet::new();
     for candidate in candidates {
         if &candidate.checkpoint.material.retention_floor.network_id != network_id
@@ -3935,7 +3696,6 @@ fn validate_retention_checkpoint_candidate_inventory(
             return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
         }
     }
-
     let approved_is_present = observed.contains(&approved);
     let exact = match (approved_is_present, predecessor) {
         (true, None) => observed.len() == 1,
@@ -3956,7 +3716,6 @@ fn validate_retention_checkpoint_candidate_inventory(
     }
     Ok(())
 }
-
 fn validate_approval_for_prepared(
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
@@ -3978,7 +3737,6 @@ fn validate_approval_for_prepared(
     }
     Ok(())
 }
-
 fn validate_retention_approval_record(
     approval: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
@@ -4002,7 +3760,6 @@ fn validate_retention_approval_record(
     }
     Ok(())
 }
-
 fn validate_retention_authority_predecessor(
     current: Option<&ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
     expected_checkpoint: Option<[u8; 32]>,
@@ -4016,7 +3773,6 @@ fn validate_retention_authority_predecessor(
     }
     Ok(())
 }
-
 fn retention_authority_external_error(
     error: ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
 ) -> ProviderIngestFinalizedArchiveErrorV1 {
@@ -4032,7 +3788,6 @@ fn retention_authority_external_error(
         }
     }
 }
-
 fn assert_retention_authority_identity(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
@@ -4057,7 +3812,6 @@ fn assert_retention_authority_identity(
     }
     Ok(())
 }
-
 fn load_retention_approval(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
@@ -4076,7 +3830,6 @@ fn load_retention_approval(
     }
     Ok(record)
 }
-
 fn require_exact_retention_readback(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
@@ -4089,7 +3842,6 @@ fn require_exact_retention_readback(
         Err(_) => Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasAmbiguous),
     }
 }
-
 fn compare_and_read_back_retention_approval(
     binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
@@ -4132,7 +3884,6 @@ fn compare_and_read_back_retention_approval(
     }
     Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation)
 }
-
 fn authenticate_retention_fence(
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
     kura: &Kura,
@@ -4174,7 +3925,6 @@ fn authenticate_retention_fence(
     }
     Ok(())
 }
-
 fn authenticate_retention_artifact_hash(
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
     kura: &Kura,
@@ -4201,7 +3951,6 @@ fn authenticate_retention_artifact_hash(
     }
     Ok(())
 }
-
 fn authenticate_retention_prefix(
     index: &ArchiveIndexV1,
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -4267,7 +4016,6 @@ fn authenticate_retention_prefix(
     }
     Ok(())
 }
-
 fn prepare_archive_compaction(
     index: &ArchiveIndexV1,
     fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -4360,7 +4108,6 @@ fn prepare_archive_compaction(
         previous_base,
     })
 }
-
 fn cumulative_pruned_accounting(
     previous_base: Option<&ArchiveVirtualBaseV1>,
     obsolete: &[((NetworkId, u64), ArchiveRecordEntryV1)],
@@ -4391,7 +4138,6 @@ fn cumulative_pruned_accounting(
     )?;
     Ok((pruned_entries, pruned_bytes))
 }
-
 fn validate_prepared_compaction_capacity(
     index: &ArchiveIndexV1,
     prepared: &PreparedArchiveCompactionV1,
@@ -4444,7 +4190,6 @@ fn validate_prepared_compaction_capacity(
     }
     Ok(())
 }
-
 fn checkpoint_history_through(
     index: &ArchiveIndexV1,
     network_id: &NetworkId,
@@ -4538,7 +4283,6 @@ fn checkpoint_history_through(
         cumulative_prefix_digest: cumulative,
     })
 }
-
 fn reconstruct_provider_projection(
     index: &ArchiveIndexV1,
     key: &ProviderIngestFinalizedArchiveKeyV1,
@@ -4611,7 +4355,6 @@ fn reconstruct_provider_projection(
     }
     Ok(provider)
 }
-
 fn reconstruct_projection(
     index: &ArchiveIndexV1,
     key: &ProviderIngestFinalizedArchiveKeyV1,
@@ -4674,7 +4417,6 @@ fn reconstruct_projection(
     projection.validate(bounds)?;
     Ok(projection)
 }
-
 fn verify_record_entry(
     entry: &ArchiveRecordEntryV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -4701,7 +4443,6 @@ fn verify_record_entry(
     }
     Ok(())
 }
-
 fn validate_index_coverage(
     index: &ArchiveIndexV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -4850,7 +4591,6 @@ fn validate_index_coverage(
     }
     Ok(())
 }
-
 fn validate_delta_minimality(
     providers: &BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
     deltas: &[ProviderProjectionDeltaV1],
@@ -4872,7 +4612,6 @@ fn validate_delta_minimality(
     }
     Ok(())
 }
-
 fn validate_completion_anchors(
     index: &ArchiveIndexV1,
     projection: &ProviderIngestFinalizedProjectionV1,
@@ -4921,7 +4660,6 @@ fn validate_completion_anchors(
     }
     Ok(())
 }
-
 fn activation_floor_from_index(
     index: &ArchiveIndexV1,
     network_id: &NetworkId,
@@ -4936,13 +4674,11 @@ fn activation_floor_from_index(
     }
     Ok(first_record_for_network(index, network_id).map(|entry| entry.record.material.key.clone()))
 }
-
 fn provider_state_root(
     providers: &[ProviderIngestFinalizedProviderProjectionV1],
 ) -> Result<[u8; 32], ProviderIngestFinalizedArchiveErrorV1> {
     canonical_domain_digest(STATE_ROOT_DOMAIN_V1, &providers.to_vec())
 }
-
 fn canonical_domain_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -4953,7 +4689,6 @@ fn canonical_domain_digest<T: norito::core::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn authenticate_archive_anchor_against_kura(
     key: &ProviderIngestFinalizedArchiveKeyV1,
     kura: &Kura,
@@ -5038,7 +4773,6 @@ fn authenticate_archive_anchor_against_kura(
     }
     Ok(())
 }
-
 fn authenticate_capture_view(
     state_ro: &impl StateReadOnly,
     kura: &Kura,
@@ -5143,7 +4877,6 @@ fn authenticate_capture_view(
         finalized_at_unix_ms,
     )
 }
-
 fn same_kura_receipt(left: &KuraV2CommitReceipt, right: &KuraV2CommitReceipt) -> bool {
     left.height() == right.height()
         && left.block_hash() == right.block_hash()
@@ -5152,7 +4885,6 @@ fn same_kura_receipt(left: &KuraV2CommitReceipt, right: &KuraV2CommitReceipt) ->
         && left.certificate() == right.certificate()
         && left.artifact_hash() == right.artifact_hash()
 }
-
 fn encode_bounded_record(
     record: &ProviderIngestFinalizedArchiveRecordV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5167,7 +4899,6 @@ fn encode_bounded_record(
     }
     Ok(bytes)
 }
-
 fn encode_bounded_checkpoint(
     checkpoint: &ProviderIngestFinalizedArchiveCheckpointV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5183,7 +4914,6 @@ fn encode_bounded_checkpoint(
     }
     Ok(bytes)
 }
-
 fn load_archive_index(
     records: &Path,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5286,7 +5016,6 @@ fn load_archive_index(
     })?;
     Ok(index)
 }
-
 fn load_record_at(
     path: &Path,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5327,7 +5056,6 @@ fn load_record_at(
     }
     Ok(record)
 }
-
 fn load_checkpoint_at(
     path: &Path,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5368,7 +5096,6 @@ fn load_checkpoint_at(
     }
     Ok(checkpoint)
 }
-
 fn load_archive_checkpoints(
     checkpoints: &Path,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5432,7 +5159,6 @@ fn load_archive_checkpoints(
     }
     Ok(loaded)
 }
-
 fn install_virtual_bases(
     index: &mut ArchiveIndexV1,
     candidates: &[ArchiveVirtualBaseV1],
@@ -5516,7 +5242,6 @@ fn install_virtual_bases(
     }
     Ok(())
 }
-
 fn finish_compaction_cleanup(
     records: &Path,
     records_identity: ArchiveFileIdentity,
@@ -5542,7 +5267,6 @@ fn finish_compaction_cleanup(
     for (subject, _) in obsolete_records {
         index.by_height.remove(&subject);
     }
-
     let active_paths = index
         .virtual_bases
         .values()
@@ -5558,7 +5282,6 @@ fn finish_compaction_cleanup(
     }
     Ok(())
 }
-
 fn refresh_archive_accounting(
     index: &mut ArchiveIndexV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5609,7 +5332,6 @@ fn refresh_archive_accounting(
     }
     Ok(())
 }
-
 fn verify_checkpoint_entry(
     entry: &ArchiveVirtualBaseV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5635,7 +5357,6 @@ fn verify_checkpoint_entry(
     }
     Ok(())
 }
-
 fn unlink_verified_archive_file(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -5649,7 +5370,6 @@ fn unlink_verified_archive_file(
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         let name = path.file_name().ok_or_else(|| {
             ProviderIngestFinalizedArchiveErrorV1::PathBindingMismatch {
                 path: path.to_path_buf(),
@@ -5719,7 +5439,6 @@ fn unlink_verified_archive_file(
         })
     }
 }
-
 fn ensure_insert_capacity(
     index: &ArchiveIndexV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -5751,11 +5470,9 @@ fn ensure_insert_capacity(
     }
     Ok(())
 }
-
 fn bounded_bytes_len(bytes: &[u8]) -> u64 {
     u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
-
 fn record_file_name(
     key: &ProviderIngestFinalizedArchiveKeyV1,
 ) -> Result<String, ProviderIngestFinalizedArchiveErrorV1> {
@@ -5768,11 +5485,9 @@ fn record_file_name(
         hex::encode(hasher.finalize().as_bytes())
     ))
 }
-
 fn checkpoint_file_name(checkpoint_digest: [u8; 32]) -> String {
     format!("{}{CHECKPOINT_FILE_SUFFIX}", hex::encode(checkpoint_digest))
 }
-
 fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
     let Some(stem) = name.strip_suffix(suffix) else {
         return false;
@@ -5782,7 +5497,6 @@ fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn validate_archive_root_path(path: &Path) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     if !path.is_absolute()
         || path.parent().is_none()
@@ -5797,7 +5511,6 @@ fn validate_archive_root_path(path: &Path) -> Result<(), ProviderIngestFinalized
     }
     Ok(())
 }
-
 fn verify_existing_directory_ancestry(
     path: &Path,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
@@ -5823,7 +5536,6 @@ fn verify_existing_directory_ancestry(
     }
     Ok(())
 }
-
 fn verify_absolute_directory_ancestry(
     path: &Path,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
@@ -5848,13 +5560,11 @@ fn verify_absolute_directory_ancestry(
     open_unix_directory_ancestry(path).map(drop)?;
     Ok(())
 }
-
 #[cfg(unix)]
 fn open_unix_directory_ancestry(
     path: &Path,
 ) -> Result<fs::File, ProviderIngestFinalizedArchiveErrorV1> {
     use std::os::unix::fs::MetadataExt as _;
-
     let mut current = fs::File::from(
         rustix::fs::open(
             "/",
@@ -5930,7 +5640,6 @@ fn open_unix_directory_ancestry(
     }
     Ok(current)
 }
-
 fn validate_root_namespace(root: &Path) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     for entry in
         fs::read_dir(root).map_err(|source| ProviderIngestFinalizedArchiveErrorV1::Read {
@@ -5952,7 +5661,6 @@ fn validate_root_namespace(root: &Path) -> Result<(), ProviderIngestFinalizedArc
     }
     Ok(())
 }
-
 fn recover_staged_directory(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -5962,7 +5670,6 @@ fn recover_staged_directory(
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-
         let directory_file = open_unix_directory_ancestry(directory)?;
         verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)?;
         let entries = rustix::fs::Dir::read_from(&directory_file)
@@ -6049,7 +5756,6 @@ fn recover_staged_directory(
             directory,
         );
     }
-
     #[cfg(not(unix))]
     {
         let _ = (
@@ -6081,7 +5787,6 @@ fn recover_staged_directory(
         Ok(())
     }
 }
-
 #[cfg(unix)]
 fn unix_staged_file_has_canonical_target(
     directory: &fs::File,
@@ -6090,7 +5795,6 @@ fn unix_staged_file_has_canonical_target(
     canonical_suffix: &str,
 ) -> Result<bool, rustix::io::Errno> {
     use std::os::unix::ffi::OsStrExt as _;
-
     let entries = rustix::fs::Dir::read_from(directory)?;
     let mut matches = 0_u8;
     for entry in entries {
@@ -6119,7 +5823,6 @@ fn unix_staged_file_has_canonical_target(
     }
     Ok(matches == 1)
 }
-
 fn publish_immutable_bytes(
     directory: &Path,
     expected_directory_identity: ArchiveFileIdentity,
@@ -6157,7 +5860,6 @@ fn publish_immutable_bytes(
         })
     }
 }
-
 #[cfg(unix)]
 fn publish_immutable_bytes_unix_with_hooks<BeforeCreate, BeforeLink>(
     directory: &Path,
@@ -6317,14 +6019,12 @@ where
     }
     verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)
 }
-
 #[cfg(unix)]
 struct UnixStagedArtifact<'directory> {
     directory: &'directory fs::File,
     name: OsString,
     armed: bool,
 }
-
 #[cfg(unix)]
 impl UnixStagedArtifact<'_> {
     fn unlink(&mut self) -> Result<(), rustix::io::Errno> {
@@ -6335,18 +6035,15 @@ impl UnixStagedArtifact<'_> {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 impl Drop for UnixStagedArtifact<'_> {
     fn drop(&mut self) {
         let _ = self.unlink();
     }
 }
-
 #[cfg(unix)]
 fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsString)> {
     use std::os::unix::fs::MetadataExt as _;
-
     for _ in 0..128 {
         let name = OsString::from(format!(
             "{STAGED_FILE_PREFIX}{:08x}-{:016x}",
@@ -6387,7 +6084,6 @@ fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsStri
         "could not allocate a unique staged archive artifact",
     ))
 }
-
 #[cfg(unix)]
 fn verify_unix_directory_handle(
     directory: &fs::File,
@@ -6409,7 +6105,6 @@ fn verify_unix_directory_handle(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn verify_unix_named_file(
     directory: &fs::File,
@@ -6431,7 +6126,6 @@ fn verify_unix_named_file(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn unix_stat_matches_metadata(
     entry: &rustix::fs::Stat,
@@ -6439,7 +6133,6 @@ fn unix_stat_matches_metadata(
     expected_links: u64,
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
         && entry.st_dev as u64 == metadata.dev()
         && entry.st_ino as u64 == metadata.ino()
@@ -6447,7 +6140,6 @@ fn unix_stat_matches_metadata(
         && metadata.nlink() == expected_links
         && u64::try_from(entry.st_size).ok() == Some(metadata.len())
 }
-
 #[cfg(unix)]
 fn read_bounded_archive_file_at_unix(
     directory: &fs::File,
@@ -6509,7 +6201,6 @@ fn read_bounded_archive_file_at_unix(
     }
     Ok(bytes)
 }
-
 fn create_direct_directory(path: &Path) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     validate_archive_root_path(path)?;
     verify_existing_directory_ancestry(path)?;
@@ -6558,7 +6249,6 @@ fn create_direct_directory(path: &Path) -> Result<(), ProviderIngestFinalizedArc
         },
     )
 }
-
 fn open_writer_lock_file(path: &Path) -> Result<fs::File, ProviderIngestFinalizedArchiveErrorV1> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true);
@@ -6607,7 +6297,6 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ProviderIngestFinalize
     }
     Ok(file)
 }
-
 fn acquire_writer_ownership(
     file: &fs::File,
     path: &Path,
@@ -6625,44 +6314,36 @@ fn acquire_writer_ownership(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 type ArchiveFileIdentity = (u64, u64);
 #[cfg(windows)]
 type ArchiveFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type ArchiveFileIdentity = ();
-
 #[cfg(unix)]
 fn archive_file_identity(metadata: &fs::Metadata) -> ArchiveFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn archive_file_identity(metadata: &fs::Metadata) -> ArchiveFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn archive_file_identity(_metadata: &fs::Metadata) -> ArchiveFileIdentity {}
-
 #[cfg(unix)]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     false
 }
-
 fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -6680,7 +6361,6 @@ fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdentity> {
     let metadata = fs::symlink_metadata(path)?;
     let identity = archive_file_identity(&metadata);
@@ -6695,7 +6375,6 @@ fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdent
     }
     Ok(identity)
 }
-
 fn verify_archive_directory_identity(path: &Path, expected: ArchiveFileIdentity) -> io::Result<()> {
     if direct_archive_directory_identity(path)? != expected {
         return Err(io::Error::new(
@@ -6705,7 +6384,6 @@ fn verify_archive_directory_identity(path: &Path, expected: ArchiveFileIdentity)
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -6718,7 +6396,6 @@ fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -6730,12 +6407,10 @@ fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn archive_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink()
@@ -6750,7 +6425,6 @@ fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<fs::M
     }
     Ok(metadata)
 }
-
 fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
     let path_before = direct_archive_file_metadata(path, max_bytes)?;
     let mut options = fs::OpenOptions::new();
@@ -6801,7 +6475,6 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     }
     Ok(bytes)
 }
-
 fn sync_archive_directory(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -6816,7 +6489,6 @@ fn sync_archive_directory(path: &Path) -> io::Result<()> {
         fs::File::open(path)?.sync_all()
     }
 }
-
 /// Fail-closed errors returned by the finalized provider-ingest archive.
 #[derive(Debug, Error)]
 pub enum ProviderIngestFinalizedArchiveErrorV1 {
@@ -7252,17 +6924,8 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     #[error("finalized provider-ingest archive lock is poisoned")]
     ArchiveLockPoisoned,
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        panic::AssertUnwindSafe,
-        sync::{Arc, Mutex},
-    };
-
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt as _;
-
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -7277,17 +6940,21 @@ mod tests {
         CapacityMetadataEntry, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
         ReplicationOrderSlaV1,
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+    use std::{
+        panic::AssertUnwindSafe,
+        sync::{Arc, Mutex},
+    };
     const PROVIDER_A: ProviderId = ProviderId::new([0x11; 32]);
     const PROVIDER_B: ProviderId = ProviderId::new([0x22; 32]);
     const PROVIDER_EMPTY: ProviderId = ProviderId::new([0x33; 32]);
-
     fn physical_tempdir() -> std::io::Result<tempfile::TempDir> {
         let temp_root = std::env::temp_dir().canonicalize()?;
         tempfile::Builder::new()
             .prefix("provider-ingest-finalized-")
             .tempdir_in(temp_root)
     }
-
     fn bounds() -> ProviderIngestFinalizedArchiveBoundsV1 {
         ProviderIngestFinalizedArchiveBoundsV1::try_new(
             2 * 1024 * 1024,
@@ -7300,13 +6967,11 @@ mod tests {
         )
         .expect("valid archive bounds")
     }
-
     fn account(seed: u8) -> AccountId {
         let key =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("deterministic key");
         AccountId::new(key.public_key().clone())
     }
-
     fn policy(identity: u8, revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
         let digest = u8::try_from(revision).unwrap_or(0xFE);
         ProviderIngestCompletionSignerPolicyV1 {
@@ -7316,13 +6981,11 @@ mod tests {
             policy_digest: [digest; 32],
         }
     }
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],
         )))
     }
-
     fn key(height: u64) -> ProviderIngestFinalizedArchiveKeyV1 {
         ProviderIngestFinalizedArchiveKeyV1::try_new(
             test_network_id(0x31),
@@ -7332,7 +6995,6 @@ mod tests {
         )
         .expect("valid finalized key")
     }
-
     fn archived_order(
         order_seed: u8,
         assigned: &[ProviderId],
@@ -7406,7 +7068,6 @@ mod tests {
             musubi_archive: None,
         }
     }
-
     fn projection(height: u64) -> ProviderIngestFinalizedProjectionV1 {
         let key = key(height);
         let shared = archived_order(0xA1, &[PROVIDER_A, PROVIDER_B]);
@@ -7435,9 +7096,7 @@ mod tests {
             ],
         }
     }
-
     include!("provider_ingest_finalized/musubi_archive_binding_tests.rs");
-
     #[test]
     fn complete_namespace_empty_check_rejects_any_record() {
         let directory = physical_tempdir().expect("create archive directory");
@@ -7448,7 +7107,6 @@ mod tests {
         archive.insert(projection(1)).expect("insert projection");
         assert!(!archive.is_empty().expect("inspect populated archive"));
     }
-
     #[test]
     fn pre_release_archive_state_root_is_not_accepted_by_first_release_layout() {
         let projection = projection(7);
@@ -7460,7 +7118,6 @@ mod tests {
         let first_release_root =
             provider_state_root(&projection.providers).expect("first-release root");
         assert_ne!(pre_release_root, first_release_root);
-
         let directory = physical_tempdir().expect("archive record directory");
         let path = directory.path().join("pre-release-root-record.norito");
         let record = ProviderIngestFinalizedArchiveRecordV1::try_new(
@@ -7489,7 +7146,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch)
         ));
     }
-
     fn advance_projection(
         previous: &ProviderIngestFinalizedProjectionV1,
         height: u64,
@@ -7498,11 +7154,9 @@ mod tests {
         next.key = key(height);
         next
     }
-
     fn archive_root(directory: &tempfile::TempDir) -> PathBuf {
         directory.path().join("provider-ingest-finalized")
     }
-
     fn retention_fence(
         key: ProviderIngestFinalizedArchiveKeyV1,
         expected_archive_generation: u64,
@@ -7514,7 +7168,6 @@ mod tests {
         )
         .expect("valid test retention fence")
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TestRetentionCasBehavior {
         Apply,
@@ -7522,7 +7175,6 @@ mod tests {
         LeaveUnchanged,
         Equivocate,
     }
-
     #[derive(Debug)]
     struct TestRetentionAuthority {
         handle: String,
@@ -7531,7 +7183,6 @@ mod tests {
         behavior: Mutex<TestRetentionCasBehavior>,
         competing: Mutex<Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>>,
     }
-
     impl TestRetentionAuthority {
         fn new() -> Self {
             Self {
@@ -7544,7 +7195,6 @@ mod tests {
                 competing: Mutex::new(None),
             }
         }
-
         fn binding(&self) -> ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
             ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1::try_new(
                 self.handle.clone(),
@@ -7553,21 +7203,17 @@ mod tests {
             )
             .expect("valid test retention authority binding")
         }
-
         fn set_behavior(&self, behavior: TestRetentionCasBehavior) {
             *self.behavior.lock().expect("lock CAS behavior") = behavior;
         }
-
         fn set_competing(&self, record: ProviderIngestFinalizedArchiveRetentionApprovalRecordV1) {
             *self.competing.lock().expect("lock competing approval") = Some(record);
         }
     }
-
     impl ProviderIngestFinalizedArchiveRetentionAuthorityV1 for TestRetentionAuthority {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7576,7 +7222,6 @@ mod tests {
         > {
             Ok(self.qualification)
         }
-
         fn load_latest(
             &self,
             _network_id: &NetworkId,
@@ -7586,7 +7231,6 @@ mod tests {
         > {
             Ok(self.latest.lock().expect("lock latest approval").clone())
         }
-
         fn compare_and_swap_latest(
             &self,
             _network_id: &NetworkId,
@@ -7624,7 +7268,6 @@ mod tests {
             }
         }
     }
-
     fn prepared_compaction_for_test(
         archive: &ProviderIngestFinalizedArchiveV1,
         target: ProviderIngestFinalizedArchiveKeyV1,
@@ -7640,7 +7283,6 @@ mod tests {
         let proposal = compaction_proposal(&prepared, &fence).expect("digest proposal");
         (fence, prepared, proposal)
     }
-
     #[cfg(unix)]
     fn compact_for_test(
         archive: &ProviderIngestFinalizedArchiveV1,
@@ -7652,7 +7294,6 @@ mod tests {
             .compact_prefix_locked(&mut index, &fence, || {}, |_| {})
             .expect("compact authenticated test prefix")
     }
-
     #[cfg(unix)]
     fn candidate_for_prepared_compaction(
         archive: &ProviderIngestFinalizedArchiveV1,
@@ -7666,7 +7307,6 @@ mod tests {
             canonical_bytes: bounded_bytes_len(&prepared.canonical_bytes),
         }
     }
-
     #[cfg(unix)]
     fn publish_prepared_checkpoint_for_test(
         archive: &ProviderIngestFinalizedArchiveV1,
@@ -7682,7 +7322,6 @@ mod tests {
         .expect("publish test checkpoint");
         candidate.path
     }
-
     #[cfg(unix)]
     fn archive_namespace_snapshot(directory: &Path) -> BTreeMap<String, Vec<u8>> {
         fs::read_dir(directory)
@@ -7699,10 +7338,8 @@ mod tests {
             })
             .collect()
     }
-
     #[cfg(unix)]
     include!("provider_ingest_finalized/retention_inventory_tests.rs");
-
     #[cfg(unix)]
     #[test]
     fn retention_restart_rejects_extra_crash_candidate_without_cleanup() {
@@ -7717,7 +7354,6 @@ mod tests {
         archive.insert(first).expect("insert first");
         archive.insert(second.clone()).expect("insert second");
         archive.insert(third.clone()).expect("insert third");
-
         let (_prior_fence, _prior_prepared, prior_proposal) =
             prepared_compaction_for_test(&archive, second.key.clone());
         let authority = TestRetentionAuthority::new();
@@ -7732,7 +7368,6 @@ mod tests {
         .expect("construct predecessor approval");
         let prior_outcome = compact_for_test(&archive, second.key);
         archive.insert(fourth.clone()).expect("insert fourth");
-
         let (_approved_fence, approved_prepared, approved_proposal) =
             prepared_compaction_for_test(&archive, third.key.clone());
         let (_extra_fence, extra_prepared, _extra_proposal) =
@@ -7746,7 +7381,6 @@ mod tests {
         )
         .expect("construct successor approval");
         *authority.latest.lock().expect("lock latest approval") = Some(approval);
-
         publish_prepared_checkpoint_for_test(&archive, &approved_prepared);
         publish_prepared_checkpoint_for_test(&archive, &extra_prepared);
         let records_before = archive_namespace_snapshot(&archive.records);
@@ -7758,7 +7392,6 @@ mod tests {
         );
         let network_id = third.key.network_id;
         drop(archive);
-
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
             ProviderIngestFinalizedArchiveV1::try_open_with_retention_authority(
@@ -7782,7 +7415,6 @@ mod tests {
             "rejected restart must preserve every checkpoint for operator recovery"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn retention_prepare_ambiguous_cas_and_exact_readback_gate_publication() {
@@ -7805,7 +7437,6 @@ mod tests {
             0,
             "preparation must not publish a checkpoint"
         );
-
         let authority = TestRetentionAuthority::new();
         authority.set_behavior(TestRetentionCasBehavior::ApplyAmbiguous);
         let binding = authority.binding();
@@ -7832,7 +7463,6 @@ mod tests {
             0,
             "authority approval alone must not mutate local archive storage"
         );
-
         require_exact_retention_readback(&binding, &authority, &second.key.network_id, &approval)
             .expect("approval remains authoritative");
         let mut index = archive.write_index().expect("lock approved compaction");
@@ -7848,7 +7478,6 @@ mod tests {
             Some(second.key)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn unchanged_equivocating_and_rollback_authorities_never_publish() {
@@ -7872,7 +7501,6 @@ mod tests {
             None,
         )
         .expect("construct approval");
-
         authority.set_behavior(TestRetentionCasBehavior::LeaveUnchanged);
         assert!(matches!(
             compare_and_read_back_retention_approval(
@@ -7884,7 +7512,6 @@ mod tests {
             ),
             Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasUnchanged)
         ));
-
         let competing_proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
             fence.clone(),
             [0xE1; 32],
@@ -7923,7 +7550,6 @@ mod tests {
             "failed authority decisions must not publish local checkpoint bytes"
         );
     }
-
     #[test]
     fn retention_approval_canonical_decode_is_strict_and_bounded() {
         let proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
@@ -7962,7 +7588,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn retention_approval_rejects_same_label_foreign_genesis_network() {
         let authority = TestRetentionAuthority::new();
@@ -7981,7 +7606,6 @@ mod tests {
             None,
         )
         .expect("construct exact-network approval");
-
         // Both deployments may carry the same human-facing ChainName. Only the
         // genesis-derived NetworkId enters this durable approval namespace.
         assert!(
@@ -7989,7 +7613,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn retention_authority_binding_rejects_test_marked_substituted_and_stale_providers() {
         assert!(matches!(
@@ -8000,7 +7623,6 @@ mod tests {
             ),
             Err(ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionAuthorityBinding)
         ));
-
         let expected = TestRetentionAuthority::new();
         let binding = expected.binding();
         let mut substituted = TestRetentionAuthority::new();
@@ -8010,7 +7632,6 @@ mod tests {
             assert_retention_authority_identity(&binding, &substituted),
             Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthoritySubstitution)
         ));
-
         let mut stale = TestRetentionAuthority::new();
         stale.qualification = ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1::new(
             binding.qualification().revision() - 1,
@@ -8021,7 +7642,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthoritySubstitution)
         ));
     }
-
     #[test]
     fn bounds_reject_zero_and_inconsistent_page_limits() {
         assert!(matches!(
@@ -8033,7 +7653,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::InvalidBounds { .. })
         ));
     }
-
     #[test]
     fn exact_replay_pagination_and_provider_index_isolation_are_deterministic() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8120,7 +7739,6 @@ mod tests {
             .expect("empty provider page");
         assert!(empty.rows.is_empty());
         assert!(empty.next_cursor.is_none());
-
         let second_directory = physical_tempdir().expect("second archive tempdir");
         let second_root = archive_root(&second_directory);
         let second_archive = ProviderIngestFinalizedArchiveV1::try_open(&second_root, bounds())
@@ -8134,7 +7752,6 @@ mod tests {
             .expect("read second bytes");
         assert_eq!(bytes_a, bytes_b);
     }
-
     #[test]
     fn unchanged_successor_uses_empty_delta_but_serves_its_exact_anchor() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8167,7 +7784,6 @@ mod tests {
         );
         assert_eq!(page.rows[0].completion_epoch, Some(second.key.height));
     }
-
     #[cfg(unix)]
     #[test]
     fn virtual_base_preserves_floor_pages_cursors_and_successor_bytes() {
@@ -8195,7 +7811,6 @@ mod tests {
         let successor_path = archive.record_path(&third.key).expect("successor path");
         let successor_before = fs::read(&successor_path).expect("read successor");
         let outcome = compact_for_test(&archive, second.key.clone());
-
         assert_eq!(outcome.pruned_entries(), 2);
         assert_eq!(outcome.generation(), 3);
         assert!(
@@ -8254,13 +7869,11 @@ mod tests {
             })
         ));
         drop(archive);
-
         assert!(matches!(
             ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()),
             Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRequired)
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn compaction_reclaims_entry_capacity_without_crossing_the_fence() {
@@ -8319,7 +7932,6 @@ mod tests {
                 .expect("first path")
                 .exists()
         );
-
         let outcome = compact_for_test(&archive, second.key.clone());
         assert_eq!(outcome.pruned_entries(), 2);
         assert!(outcome.pruned_bytes() > 0);
@@ -8337,7 +7949,6 @@ mod tests {
             third.key
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn repeated_compaction_preserves_generation_and_checkpoint_lineage() {
@@ -8387,7 +7998,6 @@ mod tests {
             })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn manual_reopen_never_installs_or_finishes_checkpoint_crash_cleanup() {
@@ -8434,7 +8044,6 @@ mod tests {
             }));
             assert!(crashed.is_err());
             drop(archive);
-
             let remaining_before = fs::read_dir(root.join(RECORDS_DIRECTORY))
                 .expect("read interrupted records")
                 .count();
@@ -8451,7 +8060,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn tampered_virtual_predecessor_digest_is_rejected_on_reopen() {
@@ -8478,7 +8086,6 @@ mod tests {
         let mut checkpoint =
             load_checkpoint_at(&checkpoint_path, bounds()).expect("load checkpoint");
         drop(archive);
-
         checkpoint.material.original_terminal_record_digest = [0xE1; 32];
         checkpoint.checkpoint_digest =
             canonical_domain_digest(CHECKPOINT_DIGEST_DOMAIN_V1, &checkpoint.material)
@@ -8500,7 +8107,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRequired)
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn compacted_policy_and_order_history_remain_monotonic() {
@@ -8528,7 +8134,6 @@ mod tests {
                 }
             )
         ));
-
         let order_directory = physical_tempdir().expect("order archive tempdir");
         let order_archive =
             ProviderIngestFinalizedArchiveV1::try_open(archive_root(&order_directory), bounds())
@@ -8579,7 +8184,6 @@ mod tests {
             }) if order_id == target
         ));
     }
-
     #[test]
     fn outer_record_decoder_accepts_domain_valid_large_canonical_order_fields() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8625,7 +8229,6 @@ mod tests {
             first.key
         );
     }
-
     #[test]
     fn provider_reassignment_preserves_old_exact_index_and_removes_new_index() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8634,7 +8237,6 @@ mod tests {
                 .expect("open archive");
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
-
         let shared_id = ReplicationOrderId::new([0xA1; 32]);
         let mut reassigned = advance_projection(&first, 8);
         reassigned
@@ -8669,7 +8271,6 @@ mod tests {
         archive
             .insert(reassigned.clone())
             .expect("insert provider reassignment");
-
         assert_eq!(
             archive
                 .read_provider_page(&first.key, PROVIDER_B, None, 1)
@@ -8695,7 +8296,6 @@ mod tests {
             shared_id
         );
     }
-
     #[test]
     fn below_floor_fork_gap_cursor_substitution_and_replay_conflict_fail_closed() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8773,7 +8373,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::ConflictingProjection { .. })
         ));
     }
-
     #[test]
     fn authority_assignment_and_owner_substitution_transitions_are_rejected() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8782,7 +8381,6 @@ mod tests {
                 .expect("open archive");
         let first = projection(7);
         archive.insert(first.clone()).expect("insert first");
-
         let mut rollback = advance_projection(&first, 8);
         rollback.providers[0].expected_signer_policy =
             Some(ProviderIngestCompletionSignerPolicyV1 {
@@ -8797,7 +8395,6 @@ mod tests {
                 provider_id: PROVIDER_A
             })
         ));
-
         let mut owner_substitution = advance_projection(&first, 8);
         owner_substitution.providers[0].expected_owner = Some(account(0x66));
         assert!(matches!(
@@ -8808,7 +8405,6 @@ mod tests {
                 }
             )
         ));
-
         let mut assignment_rollback = advance_projection(&first, 8);
         for provider in &mut assignment_rollback.providers {
             for order in &mut provider.orders {
@@ -8821,14 +8417,12 @@ mod tests {
                 | Err(ProviderIngestFinalizedArchiveErrorV1::AssignmentRollback { .. })
                 | Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
         ));
-
         let mut valid_rotation = advance_projection(&first, 8);
         valid_rotation.providers[0].expected_signer_policy = Some(policy(0xA1, 2));
         archive
             .insert(valid_rotation)
             .expect("exact predecessor-bound signer rotation");
     }
-
     #[test]
     fn activation_floor_accepts_current_policy_revision_without_claiming_prior_history() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8840,14 +8434,12 @@ mod tests {
         archive
             .insert(floor.clone())
             .expect("insert explicit mid-history activation floor");
-
         let mut successor = advance_projection(&floor, 8);
         successor.providers[0].expected_signer_policy = Some(policy(0xA1, 6));
         archive
             .insert(successor)
             .expect("insert exact successor to floor policy");
     }
-
     #[test]
     fn assignment_revision_cannot_substitute_non_assignment_order_fields() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8877,7 +8469,6 @@ mod tests {
         archive
             .insert(revised.clone())
             .expect("assignment-only revision");
-
         let mut substituted = advance_projection(&revised, 9);
         for provider in &mut substituted.providers {
             for archived in &mut provider.orders {
@@ -8903,7 +8494,6 @@ mod tests {
             }) if order_id == target
         ));
     }
-
     #[test]
     fn terminal_order_identity_cannot_reappear_after_removal() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8920,7 +8510,6 @@ mod tests {
             }
         }
         archive.insert(first.clone()).expect("insert first");
-
         let mut terminal = advance_projection(&first, 8);
         for provider in &mut terminal.providers {
             for archived in &mut provider.orders {
@@ -8930,7 +8519,6 @@ mod tests {
             }
         }
         archive.insert(terminal.clone()).expect("terminalize order");
-
         let mut removed = advance_projection(&terminal, 9);
         let removed_order = removed.providers[0]
             .orders
@@ -8944,7 +8532,6 @@ mod tests {
         archive
             .insert(removed.clone())
             .expect("remove terminal order");
-
         let mut reappeared = advance_projection(&removed, 10);
         reappeared.providers[0].orders.push(removed_order);
         assert!(matches!(
@@ -8954,7 +8541,6 @@ mod tests {
             }) if order_id == target
         ));
     }
-
     #[test]
     fn expired_order_cannot_append_provider_completion() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -8971,7 +8557,6 @@ mod tests {
             }
         }
         archive.insert(first.clone()).expect("insert first");
-
         let mut expired = advance_projection(&first, 8);
         for provider in &mut expired.providers {
             for archived in &mut provider.orders {
@@ -8983,7 +8568,6 @@ mod tests {
         archive
             .insert(expired.clone())
             .expect("insert valid expiration");
-
         let retained_completion = ReplicationOrderCompletionRecord {
             provider_id: PROVIDER_A,
             completed_by: account(0x11),
@@ -9013,7 +8597,6 @@ mod tests {
             }) if order_id == target
         ));
     }
-
     #[test]
     fn invalid_expiration_epoch_is_rejected_at_activation_floor() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9031,7 +8614,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::InvalidProjection { .. })
         ));
     }
-
     #[test]
     fn pin_lifecycle_cannot_rollback_after_retirement() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9068,7 +8650,6 @@ mod tests {
             Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
         ));
     }
-
     #[test]
     fn revoked_policy_identity_cannot_be_reused_at_an_old_revision() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9082,7 +8663,6 @@ mod tests {
         archive
             .insert(revoked.clone())
             .expect("record signer revocation");
-
         let mut reused = advance_projection(&revoked, 9);
         reused.providers[0].expected_signer_policy = Some(policy(0xA1, 1));
         assert!(matches!(
@@ -9091,14 +8671,12 @@ mod tests {
                 provider_id: PROVIDER_A
             })
         ));
-
         let mut successor = advance_projection(&revoked, 9);
         successor.providers[0].expected_signer_policy = Some(policy(0xA1, 2));
         archive
             .insert(successor)
             .expect("strict successor may reactivate a revoked policy identity");
     }
-
     #[test]
     fn replaced_policy_identity_cannot_cycle_back_to_an_old_identity() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9112,7 +8690,6 @@ mod tests {
         archive
             .insert(replacement.clone())
             .expect("insert replacement policy identity");
-
         let mut cycled = advance_projection(&replacement, 9);
         cycled.providers[0].expected_signer_policy = Some(policy(0xA1, 1));
         assert!(matches!(
@@ -9124,7 +8701,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn bounded_decode_rejects_allocation_bomb_without_panicking() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9144,7 +8720,6 @@ mod tests {
         assert!(outcome.is_ok(), "bounded decoder must not panic");
         assert!(outcome.expect("no panic").is_err());
     }
-
     #[test]
     fn corruption_is_rejected_before_archive_qualification() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9167,7 +8742,6 @@ mod tests {
         drop(archive);
         assert!(ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn crash_stage_recovery_accepts_only_one_canonical_link_peer() {
@@ -9208,7 +8782,6 @@ mod tests {
             1
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn hostile_staged_hardlink_is_rejected() {
@@ -9226,7 +8799,6 @@ mod tests {
         fs::hard_link(&external_file, &staged).expect("create hostile staged hardlink");
         assert!(ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).is_err());
     }
-
     #[test]
     fn archive_is_single_writer() {
         let directory = physical_tempdir().expect("archive tempdir");
@@ -9241,7 +8813,6 @@ mod tests {
         drop(first);
         ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).expect("writer lock released");
     }
-
     #[cfg(unix)]
     #[test]
     fn writer_lock_path_substitution_fails_closed() {
@@ -9254,7 +8825,6 @@ mod tests {
         fs::rename(&lock_path, displaced.path().join("writer.lock"))
             .expect("displace owned writer lock");
         fs::write(&lock_path, b"").expect("substitute writer lock");
-
         assert!(matches!(
             archive.health_generation(),
             Err(ProviderIngestFinalizedArchiveErrorV1::InvalidStorage { .. })

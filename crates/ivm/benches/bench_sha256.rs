@@ -2,7 +2,6 @@
 //! Compares the auto-accelerated path (Metal/CUDA/ARMv8 SHA2 → scalar)
 //! vs a pure scalar reference implementation embedded in the bench.
 use criterion::Criterion;
-
 fn iv_init_state() -> [u32; 8] {
     [
         0x6a09e667u32,
@@ -15,7 +14,6 @@ fn iv_init_state() -> [u32; 8] {
         0x5be0cd19,
     ]
 }
-
 fn padded_abc_block() -> [u8; 64] {
     let mut b = [0u8; 64];
     b[0] = b'a';
@@ -25,7 +23,6 @@ fn padded_abc_block() -> [u8; 64] {
     b[63] = 24; // 3 bytes * 8 bits
     b
 }
-
 fn scalar_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -84,7 +81,6 @@ fn scalar_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     state[7] = state[7].wrapping_add(h);
     state
 }
-
 fn bench_sha256_auto(c: &mut Criterion) {
     c.bench_function("sha256_compress_auto", |b| {
         b.iter(|| {
@@ -95,7 +91,6 @@ fn bench_sha256_auto(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_sha256_scalar(c: &mut Criterion) {
     c.bench_function("sha256_compress_scalar", |b| {
         b.iter(|| {
@@ -106,7 +101,6 @@ fn bench_sha256_scalar(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_sha256_scalar(&mut c);

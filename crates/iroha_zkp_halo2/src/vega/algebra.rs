@@ -1,9 +1,6 @@
 //! Deterministic polynomial algebra used by Vega's sum-check protocols.
-
-use thiserror::Error;
-
 use super::VegaT256ScalarV1 as Scalar;
-
+use thiserror::Error;
 /// Failure while evaluating a bounded Vega polynomial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum AlgebraError {
@@ -12,9 +9,7 @@ pub(super) enum AlgebraError {
     #[error("Vega polynomial evaluation table is too large")]
     EvaluationTableTooLarge,
 }
-
 const MAX_EVALUATION_TABLE_ITEMS: usize = 1 << 20;
-
 pub(super) fn evaluation_table_size(variable_count: usize) -> Result<usize, AlgebraError> {
     let size = 1_usize
         .checked_shl(
@@ -26,14 +21,12 @@ pub(super) fn evaluation_table_size(variable_count: usize) -> Result<usize, Alge
     }
     Ok(size)
 }
-
 pub(super) fn log2_exact(value: usize) -> Result<usize, AlgebraError> {
     if value == 0 || !value.is_power_of_two() {
         return Err(AlgebraError::InvalidDimension);
     }
     Ok(value.trailing_zeros() as usize)
 }
-
 pub(super) fn eq_evals(point: &[Scalar]) -> Result<Vec<Scalar>, AlgebraError> {
     let size = evaluation_table_size(point.len())?;
     let mut evaluations = vec![Scalar::zero(); size];
@@ -49,7 +42,6 @@ pub(super) fn eq_evals(point: &[Scalar]) -> Result<Vec<Scalar>, AlgebraError> {
     }
     Ok(evaluations)
 }
-
 pub(super) fn eq_evaluate(left: &[Scalar], right: &[Scalar]) -> Result<Scalar, AlgebraError> {
     if left.len() != right.len() {
         return Err(AlgebraError::InvalidDimension);
@@ -60,7 +52,6 @@ pub(super) fn eq_evaluate(left: &[Scalar], right: &[Scalar]) -> Result<Scalar, A
     }
     Ok(result)
 }
-
 pub(super) fn decompress_univariate(
     coefficients_except_linear: &[Scalar],
     sum_at_boolean_points: Scalar,
@@ -78,7 +69,6 @@ pub(super) fn decompress_univariate(
     coefficients.extend_from_slice(higher);
     Ok(coefficients)
 }
-
 pub(super) fn evaluate_univariate(
     coefficients: &[Scalar],
     point: Scalar,
@@ -94,7 +84,6 @@ pub(super) fn evaluate_univariate(
     }
     Ok(result)
 }
-
 pub(super) fn inner_product(left: &[Scalar], right: &[Scalar]) -> Result<Scalar, AlgebraError> {
     if left.len() != right.len() {
         return Err(AlgebraError::InvalidDimension);
@@ -105,15 +94,12 @@ pub(super) fn inner_product(left: &[Scalar], right: &[Scalar]) -> Result<Scalar,
         .zip(right.iter().copied())
         .fold(Scalar::zero(), |sum, (left, right)| sum + left * right))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     #[test]
     fn eq_table_and_direct_evaluation_agree_at_boolean_points() {
         let point = [s(3), s(5), s(7)];
@@ -137,7 +123,6 @@ mod tests {
             Scalar::one()
         );
     }
-
     #[test]
     fn compressed_univariate_recovers_boolean_sum_invariant() {
         let compressed = [s(11), s(13), s(17)];
@@ -151,7 +136,6 @@ mod tests {
         assert_eq!(polynomial[0], compressed[0]);
         assert_eq!(polynomial[2..], compressed[1..]);
     }
-
     #[test]
     fn evaluation_tables_reject_oversized_dimensions() {
         assert_eq!(

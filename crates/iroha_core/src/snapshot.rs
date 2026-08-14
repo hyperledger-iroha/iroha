@@ -1,13 +1,17 @@
 //! This module contains [`State`] snapshot actor service.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::{Read, Seek, Write},
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, Instant},
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
+use crate::{
+    kura::{BlockCount, CommitManifestBindingState, Error as KuraError, Kura},
+    query::store::LiveQueryStoreHandle,
+    state::{
+        LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
+        SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State, StateBlock,
+        WorldReadOnly, ZkConfigInstallError, deserialize::KuraSeed, lane_incarnation_lineage_root,
+        public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
+        public_lane_validator_record_matches_key,
+    },
 };
-
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
 use iroha_config::{
@@ -35,21 +39,14 @@ use mv::storage::{Storage, StorageReadOnly};
 use norito::codec::Encode as NoritoEncode;
 use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
-
-#[cfg(feature = "telemetry")]
-use crate::telemetry::StateTelemetry;
-use crate::{
-    kura::{BlockCount, CommitManifestBindingState, Error as KuraError, Kura},
-    query::store::LiveQueryStoreHandle,
-    state::{
-        LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
-        SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State, StateBlock,
-        WorldReadOnly, ZkConfigInstallError, deserialize::KuraSeed, lane_incarnation_lineage_root,
-        public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
-        public_lane_validator_record_matches_key,
-    },
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{Read, Seek, Write},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
 };
-
 fn serialize_state_snapshot(
     state: &State,
     out: &mut String,
@@ -124,7 +121,6 @@ fn serialize_state_snapshot(
     } else {
         Vec::new()
     };
-
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -147,60 +143,49 @@ fn serialize_state_snapshot(
     out.push(':');
     state.world.json_serialize(out);
     out.push(',');
-
     json::write_json_string("nexus_runtime", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&nexus_runtime, out);
     out.push(',');
-
     json::write_json_string("block_hashes", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&block_hashes, out);
     out.push(',');
-
     json::write_json_string("transactions", out);
     out.push(':');
     state.transactions.json_serialize(out);
     out.push(',');
-
     json::write_json_string("public_lane_validators", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_validators, out);
     out.push(',');
-
     json::write_json_string("public_lane_stake_shares", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
     out.push(',');
-
     json::write_json_string("public_lane_rewards", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_rewards, out);
     out.push(',');
-
     json::write_json_string("public_lane_reward_claims", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
-
     if include_space_directory_manifests {
         out.push(',');
         json::write_json_string("space_directory_manifests", out);
         out.push(':');
         json::JsonSerialize::json_serialize(&space_directory_manifests, out);
     }
-
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&commit_topology, out);
     out.push(',');
-
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&prev_commit_topology, out);
     out.push('}');
 }
-
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
     let block_hashes: Vec<HashOf<BlockHeader>> = state.block_hashes().iter().copied().collect();
@@ -263,7 +248,6 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
             encoded_hex: hex::encode(NoritoEncode::encode(value)),
         })
         .collect();
-
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -277,65 +261,53 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(':');
     world.json_serialize(out);
     out.push(',');
-
     json::write_json_string("nexus_runtime", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&nexus_runtime, out);
     out.push(',');
-
     json::write_json_string("block_hashes", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&block_hashes, out);
     out.push(',');
-
     json::write_json_string("transactions", out);
     out.push(':');
     state.json_serialize_transactions_after_commit(out);
     out.push(',');
-
     json::write_json_string("public_lane_validators", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_validators, out);
     out.push(',');
-
     json::write_json_string("public_lane_stake_shares", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
     out.push(',');
-
     json::write_json_string("public_lane_rewards", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_rewards, out);
     out.push(',');
-
     json::write_json_string("public_lane_reward_claims", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
     out.push(',');
-
     json::write_json_string("space_directory_manifests", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&space_directory_manifests, out);
     out.push(',');
-
     json::write_json_string("commit_topology", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&commit_topology, out);
     out.push(',');
-
     json::write_json_string("prev_commit_topology", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&prev_commit_topology, out);
     out.push('}');
 }
-
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
 impl JsonSerializeTrait for State {
     fn json_serialize(&self, out: &mut String) {
         serialize_state_snapshot(self, out, true);
     }
 }
-
 /// Name of the [`State`] snapshot file.
 const SNAPSHOT_FILE_NAME: &str = "snapshot.data";
 /// Name of the digest accompanying the snapshot file.
@@ -363,7 +335,6 @@ std::thread_local! {
 }
 /// Default chunk size used to derive snapshot Merkle metadata.
 const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
-
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum SnapshotMerkleError {
     /// Snapshot Merkle metadata missing
@@ -421,7 +392,6 @@ enum SnapshotMerkleError {
         reason: String,
     },
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct SnapshotMerkleMetadata {
     /// Chunk size in bytes used to compute leaf digests.
@@ -433,12 +403,10 @@ struct SnapshotMerkleMetadata {
     /// Hex-encoded SHA-256 digests for each chunk.
     leaf_hashes_hex: Vec<String>,
 }
-
 impl SnapshotMerkleMetadata {
     fn parse_error(message: impl Into<String>) -> SnapshotMerkleError {
         SnapshotMerkleError::Parse(norito::json::Error::Message(message.into()))
     }
-
     fn expect_field<'a>(
         map: &'a norito::json::Map,
         field: &'static str,
@@ -446,7 +414,6 @@ impl SnapshotMerkleMetadata {
         map.get(field)
             .ok_or_else(|| SnapshotMerkleError::Parse(norito::json::Error::missing_field(field)))
     }
-
     fn parse_u64_field(
         map: &norito::json::Map,
         field: &'static str,
@@ -457,7 +424,6 @@ impl SnapshotMerkleMetadata {
         }
         Err(Self::parse_error(format!("`{field}` must be a u64")))
     }
-
     fn parse_string_field(
         map: &norito::json::Map,
         field: &'static str,
@@ -468,7 +434,6 @@ impl SnapshotMerkleMetadata {
             .map(|raw| raw.to_owned())
             .ok_or_else(|| Self::parse_error(format!("`{field}` must be a string")))
     }
-
     fn parse_string_vec_field(
         map: &norito::json::Map,
         field: &'static str,
@@ -491,12 +456,10 @@ impl SnapshotMerkleMetadata {
             "`{field}` must be an array of hex strings"
         )))
     }
-
     fn from_json_value(value: norito::json::Value) -> Result<Self, SnapshotMerkleError> {
         let map = value
             .as_object()
             .ok_or_else(|| Self::parse_error("snapshot Merkle metadata must be a JSON object"))?;
-
         Ok(Self {
             chunk_size_bytes: Self::parse_u64_field(map, "chunk_size_bytes")?,
             total_len_bytes: Self::parse_u64_field(map, "total_len_bytes")?,
@@ -504,7 +467,6 @@ impl SnapshotMerkleMetadata {
             leaf_hashes_hex: Self::parse_string_vec_field(map, "leaf_hashes_hex")?,
         })
     }
-
     fn from_bytes(bytes: &[u8], chunk_size: NonZeroUsize) -> Self {
         let leaf_hashes = chunk_hashes(bytes, chunk_size);
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaf_hashes.clone());
@@ -522,12 +484,10 @@ impl SnapshotMerkleMetadata {
             leaf_hashes_hex: leaf_hashes.into_iter().map(hex::encode).collect(),
         }
     }
-
     fn chunk_size(&self) -> Result<NonZeroUsize, SnapshotMerkleError> {
         NonZeroUsize::new(usize::try_from(self.chunk_size_bytes).unwrap_or(0))
             .ok_or(SnapshotMerkleError::ChunkSizeInvalid(self.chunk_size_bytes))
     }
-
     fn parse_root(&self) -> Result<HashOf<MerkleTree<[u8; 32]>>, SnapshotMerkleError> {
         let bytes =
             hex::decode(&self.root_hex).map_err(|_| SnapshotMerkleError::RootHexMalformed)?;
@@ -538,7 +498,6 @@ impl SnapshotMerkleMetadata {
         arr.copy_from_slice(&bytes);
         Ok(HashOf::from_untyped_unchecked(Hash::prehashed(arr)))
     }
-
     fn parse_leaves(&self) -> Result<Vec<[u8; 32]>, SnapshotMerkleError> {
         self.leaf_hashes_hex
             .iter()
@@ -553,7 +512,6 @@ impl SnapshotMerkleMetadata {
             })
             .collect()
     }
-
     fn expected_leaf_count(&self, chunk_size: NonZeroUsize) -> Result<u64, SnapshotMerkleError> {
         let chunk = u64::try_from(chunk_size.get())
             .map_err(|_| SnapshotMerkleError::ChunkSizeInvalid(self.chunk_size_bytes))?;
@@ -562,12 +520,10 @@ impl SnapshotMerkleMetadata {
         }
         Ok((self.total_len_bytes - 1) / chunk + 1)
     }
-
     fn tree(&self) -> Result<MerkleTree<[u8; 32]>, SnapshotMerkleError> {
         let leaves = self.parse_leaves()?;
         Ok(MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves))
     }
-
     fn verify_self(&self) -> Result<(), SnapshotMerkleError> {
         let chunk_size = self.chunk_size()?;
         let expected_leaves = self.expected_leaf_count(chunk_size)?;
@@ -591,7 +547,6 @@ impl SnapshotMerkleMetadata {
         }
         Ok(())
     }
-
     fn verify_against_bytes(
         &self,
         bytes: &[u8],
@@ -614,7 +569,6 @@ impl SnapshotMerkleMetadata {
                 actual: bytes_len,
             });
         }
-
         let computed = SnapshotMerkleMetadata::from_bytes(bytes, metadata_chunk_size);
         if computed.root_hex != self.root_hex {
             return Err(SnapshotMerkleError::RootMismatch {
@@ -630,7 +584,6 @@ impl SnapshotMerkleMetadata {
         }
         Ok(())
     }
-
     fn proof_for_chunk(
         &self,
         chunk_index: usize,
@@ -648,7 +601,6 @@ impl SnapshotMerkleMetadata {
             }
         })
     }
-
     fn verify_chunk(
         &self,
         chunk_index: usize,
@@ -677,7 +629,6 @@ impl SnapshotMerkleMetadata {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn from_path(path: &Path, max_bytes: u64) -> Result<Self, SnapshotMerkleError> {
         let bytes = match read_bounded_stable_regular_file(path, max_bytes) {
@@ -697,7 +648,6 @@ impl SnapshotMerkleMetadata {
         Ok(metadata)
     }
 }
-
 fn chunk_hashes(bytes: &[u8], chunk_size: NonZeroUsize) -> Vec<[u8; 32]> {
     let chunk = chunk_size.get();
     if chunk == 0 {
@@ -719,10 +669,8 @@ fn chunk_hashes(bytes: &[u8], chunk_size: NonZeroUsize) -> Vec<[u8; 32]> {
         })
         .collect()
 }
-
 // /// Errors produced by [`SnapshotMaker`] actor.
 // pub type Result<T, E = Error> = core::result::Result<T, E>;
-
 /// Actor responsible for [`State`] snapshot reading and writing.
 pub struct SnapshotMaker {
     state: Arc<State>,
@@ -741,7 +689,6 @@ pub struct SnapshotMaker {
     /// Typed decode and transient resource limits used for restart parity.
     resource_policy: SnapshotResourcePolicy,
 }
-
 impl SnapshotMaker {
     /// Start the actor.
     pub fn start(self, shutdown_signal: ShutdownSignal) -> Child {
@@ -750,12 +697,10 @@ impl SnapshotMaker {
             OnShutdown::Wait(Duration::from_secs(30)),
         )
     }
-
     async fn run(mut self, shutdown_signal: ShutdownSignal) {
         let mut snapshot_create_every = tokio::time::interval(self.create_every);
         // Don't try to create snapshot more frequently if previous take longer time
         snapshot_create_every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
         loop {
             tokio::select! {
                 _ = snapshot_create_every.tick() => {
@@ -771,13 +716,11 @@ impl SnapshotMaker {
             tokio::task::yield_now().await;
         }
     }
-
     /// Invoke snapshot creation task
     fn create_snapshot(&mut self) {
         let store_dir = self.store_dir.clone();
         let latest_block_hash = self.state.latest_block_hash_fast();
         let at_height = self.state.committed_height();
-
         if latest_block_hash != self.latest_block_hash {
             let state = self.state.clone();
             let store_dir = store_dir.clone();
@@ -795,7 +738,6 @@ impl SnapshotMaker {
                     resource_policy,
                 )
             });
-
             match result {
                 Ok(()) => {
                     iroha_logger::info!(at_height, "Successfully created a snapshot of state");
@@ -810,7 +752,6 @@ impl SnapshotMaker {
             }
         }
     }
-
     /// Create from [`Config`].
     ///
     /// Might return [`None`] if the configuration is not suitable for _making_ snapshots.
@@ -832,44 +773,36 @@ impl SnapshotMaker {
         }
     }
 }
-
 #[cfg(unix)]
 type StableSnapshotFileIdentity = (u64, u64);
 #[cfg(windows)]
 type StableSnapshotFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type StableSnapshotFileIdentity = ();
-
 #[cfg(unix)]
 fn stable_file_identity(metadata: &std::fs::Metadata) -> StableSnapshotFileIdentity {
     use std::os::unix::fs::MetadataExt;
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn stable_file_identity(metadata: &std::fs::Metadata) -> StableSnapshotFileIdentity {
     use std::os::windows::fs::MetadataExt;
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn stable_file_identity(_metadata: &std::fs::Metadata) -> StableSnapshotFileIdentity {}
-
 #[cfg(unix)]
 fn stable_file_identity_available(_identity: StableSnapshotFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 fn stable_file_identity_available(identity: StableSnapshotFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn stable_file_identity_available(_identity: StableSnapshotFileIdentity) -> bool {
     false
 }
-
 fn regular_file_has_single_link(metadata: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -887,17 +820,14 @@ fn regular_file_has_single_link(metadata: &std::fs::Metadata) -> bool {
         false
     }
 }
-
 #[cfg(unix)]
 fn snapshot_unix_owner_and_mode_are_trusted(uid: u32, mode: u32, effective_uid: u32) -> bool {
     uid == effective_uid && mode & 0o022 == 0
 }
-
 fn snapshot_metadata_has_trusted_owner_and_mode(metadata: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-
         snapshot_unix_owner_and_mode_are_trusted(
             metadata.uid(),
             metadata.mode(),
@@ -910,7 +840,6 @@ fn snapshot_metadata_has_trusted_owner_and_mode(metadata: &std::fs::Metadata) ->
         true
     }
 }
-
 fn bounded_snapshot_read_capacity(opened_len: u64, max_bytes: u64) -> std::io::Result<usize> {
     if opened_len > max_bytes {
         return Err(std::io::Error::new(
@@ -925,7 +854,6 @@ fn bounded_snapshot_read_capacity(opened_len: u64, max_bytes: u64) -> std::io::R
         )
     })
 }
-
 fn stream_snapshot_file_digest(
     file: &std::fs::File,
     expected_len: u64,
@@ -972,7 +900,6 @@ fn stream_snapshot_file_digest(
     reader.seek(std::io::SeekFrom::Start(0))?;
     Ok(digest.finalize().into())
 }
-
 fn bind_snapshot_file_handle(
     path: &Path,
     max_bytes: u64,
@@ -1002,7 +929,6 @@ fn bind_snapshot_file_handle(
             ),
         ));
     }
-
     let file = std::fs::File::open(path)?;
     let opened_before = file.metadata()?;
     if !opened_before.is_file()
@@ -1043,7 +969,6 @@ fn bind_snapshot_file_handle(
         max_bytes,
     }))
 }
-
 fn read_bound_snapshot_payload(binding: &BoundSnapshotFile) -> Result<Vec<u8>, TryReadError> {
     let capacity = bounded_snapshot_read_capacity(binding.len, binding.max_bytes)
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
@@ -1084,7 +1009,6 @@ fn read_bound_snapshot_payload(binding: &BoundSnapshotFile) -> Result<Vec<u8>, T
     }
     Ok(bytes)
 }
-
 #[derive(Clone, Debug)]
 struct BoundSnapshotFile {
     path: PathBuf,
@@ -1094,7 +1018,6 @@ struct BoundSnapshotFile {
     bytes_sha256: [u8; 32],
     max_bytes: u64,
 }
-
 #[derive(Clone, Debug)]
 enum BoundSnapshotDestination {
     Absent,
@@ -1103,7 +1026,6 @@ enum BoundSnapshotDestination {
         bytes: Vec<u8>,
     },
 }
-
 fn bind_snapshot_file(
     path: &Path,
     max_bytes: u64,
@@ -1141,7 +1063,6 @@ fn bind_snapshot_file(
     }
     Ok(Some((binding, bytes)))
 }
-
 #[cfg(test)]
 fn read_bounded_stable_regular_file(
     path: &Path,
@@ -1154,7 +1075,6 @@ fn read_bounded_stable_regular_file(
             error => std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
         })
 }
-
 fn bind_snapshot_destination(
     path: &Path,
     max_bytes: u64,
@@ -1164,7 +1084,6 @@ fn bind_snapshot_destination(
         None => BoundSnapshotDestination::Absent,
     })
 }
-
 fn verify_bound_snapshot_file_at(
     path: &Path,
     binding: &BoundSnapshotFile,
@@ -1192,11 +1111,9 @@ fn verify_bound_snapshot_file_at(
     }
     Ok(())
 }
-
 fn verify_bound_snapshot_file(binding: &BoundSnapshotFile) -> Result<(), TryReadError> {
     verify_bound_snapshot_file_at(&binding.path, binding)
 }
-
 fn verify_bound_snapshot_destination(
     path: &Path,
     binding: &BoundSnapshotDestination,
@@ -1211,7 +1128,6 @@ fn verify_bound_snapshot_destination(
         }
     }
 }
-
 fn snapshot_merkle_max_bytes(payload_len: u64, merkle_chunk_size: NonZeroUsize) -> u64 {
     let chunk_size = u64::try_from(merkle_chunk_size.get()).unwrap_or(u64::MAX);
     let leaf_count = if payload_len == 0 {
@@ -1222,7 +1138,6 @@ fn snapshot_merkle_max_bytes(payload_len: u64, merkle_chunk_size: NonZeroUsize) 
     SNAPSHOT_MERKLE_FIXED_OVERHEAD_BYTES
         .saturating_add(leaf_count.saturating_mul(SNAPSHOT_MERKLE_BYTES_PER_LEAF))
 }
-
 fn verify_signature_hex(
     signature_hex: &str,
     digest: &[u8],
@@ -1248,7 +1163,6 @@ fn verify_signature_hex(
         .verify(verification_key, digest)
         .map_err(|err| TryReadError::SignatureInvalid(err.to_string()))
 }
-
 fn sync_snapshot_directory(
     path: &Path,
     expected_identity: StableSnapshotFileIdentity,
@@ -1277,11 +1191,9 @@ fn sync_snapshot_directory(
     }
     Ok(())
 }
-
 struct SnapshotReadOutcome {
     state: State,
 }
-
 fn direct_snapshot_directory_identity(
     path: &Path,
 ) -> Result<StableSnapshotFileIdentity, TryReadError> {
@@ -1303,13 +1215,11 @@ fn direct_snapshot_directory_identity(
     }
     Ok(identity)
 }
-
 struct SnapshotGenerationBytes {
     digest: Vec<u8>,
     signature: Vec<u8>,
     merkle: Vec<u8>,
 }
-
 struct BoundSnapshotGeneration {
     store_dir: PathBuf,
     store_dir_identity: StableSnapshotFileIdentity,
@@ -1322,7 +1232,6 @@ struct BoundSnapshotGeneration {
     artifacts: Vec<BoundSnapshotFile>,
     bytes: SnapshotGenerationBytes,
 }
-
 fn bind_required_snapshot_file(
     path: &Path,
     max_bytes: u64,
@@ -1332,7 +1241,6 @@ fn bind_required_snapshot_file(
         reason: "required generation artifact is missing".to_owned(),
     })
 }
-
 fn parse_snapshot_current_pointer(bytes: &[u8], path: &Path) -> Result<String, TryReadError> {
     let text = std::str::from_utf8(bytes).map_err(|_| TryReadError::SnapshotGenerationInvalid {
         path: path.to_path_buf(),
@@ -1356,7 +1264,6 @@ fn parse_snapshot_current_pointer(bytes: &[u8], path: &Path) -> Result<String, T
     }
     Ok(digest_hex.to_owned())
 }
-
 fn bind_current_snapshot_generation(
     store_dir: &Path,
     payload_limit: u64,
@@ -1423,13 +1330,11 @@ fn bind_current_snapshot_generation(
         },
     })
 }
-
 impl BoundSnapshotGeneration {
     fn verify_selection_unchanged(&self) -> Result<(), TryReadError> {
         verify_bound_snapshot_file(&self.pointer)?;
         self.verify_generation_unchanged()
     }
-
     fn verify_generation_unchanged(&self) -> Result<(), TryReadError> {
         if direct_snapshot_directory_identity(&self.store_dir)? != self.store_dir_identity
             || direct_snapshot_directory_identity(&self.generations_dir)?
@@ -1449,43 +1354,36 @@ impl BoundSnapshotGeneration {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SnapshotPayloadAuthority {
     NormallySigned,
     ExactAuditedDigestBypass,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SnapshotBootstrapLineageAuthorityKind {
     ExactAuditedBoundary,
     NormallySignedCarriedLineage,
 }
-
 /// Non-forgeable proof that the snapshot reader authenticated the outer payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SnapshotBootstrapLineageAuthority {
     kind: SnapshotBootstrapLineageAuthorityKind,
 }
-
 impl SnapshotBootstrapLineageAuthority {
     fn exact_audited_boundary() -> Self {
         Self {
             kind: SnapshotBootstrapLineageAuthorityKind::ExactAuditedBoundary,
         }
     }
-
     fn normally_signed_carried_lineage() -> Self {
         Self {
             kind: SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage,
         }
     }
-
     pub(crate) fn permits_carried_lineage(self) -> bool {
         self.kind == SnapshotBootstrapLineageAuthorityKind::NormallySignedCarriedLineage
     }
 }
-
 /// Authenticated snapshot bootstrap record and the exact signed block-hash vector.
 ///
 /// Fields and construction stay private to this module so raw decoded snapshot
@@ -1496,7 +1394,6 @@ pub(crate) struct AuthenticatedSnapshotBootstrapPayload {
     block_hashes: Vec<HashOf<BlockHeader>>,
     authority: SnapshotBootstrapLineageAuthority,
 }
-
 impl AuthenticatedSnapshotBootstrapPayload {
     fn new(
         record: SnapshotV2BootstrapRecord,
@@ -1509,19 +1406,15 @@ impl AuthenticatedSnapshotBootstrapPayload {
             authority,
         }
     }
-
     pub(crate) fn record(&self) -> &SnapshotV2BootstrapRecord {
         &self.record
     }
-
     pub(crate) fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
         &self.block_hashes
     }
-
     pub(crate) fn is_exact_audited_boundary(&self) -> bool {
         self.authority.kind == SnapshotBootstrapLineageAuthorityKind::ExactAuditedBoundary
     }
-
     #[cfg(test)]
     pub(crate) fn for_testing(
         record: SnapshotV2BootstrapRecord,
@@ -1534,7 +1427,6 @@ impl AuthenticatedSnapshotBootstrapPayload {
         )
     }
 }
-
 fn snapshot_payload_preview(bytes: &[u8]) -> String {
     let mut preview = String::new();
     let limit = bytes.len().min(96);
@@ -1549,13 +1441,11 @@ fn snapshot_payload_preview(bytes: &[u8]) -> String {
     }
     preview
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 struct SnapshotJsonSummary {
     has_space_directory_manifests: bool,
     block_hash_count: Option<usize>,
 }
-
 struct SnapshotJsonBudgetScanner<'a> {
     input: &'a str,
     cursor: usize,
@@ -1565,14 +1455,12 @@ struct SnapshotJsonBudgetScanner<'a> {
     largest_typed_field_bytes: usize,
     summary: SnapshotJsonSummary,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SnapshotJsonContext {
     Root,
     World,
     Other,
 }
-
 impl<'a> SnapshotJsonBudgetScanner<'a> {
     fn new(input: &'a str, policy: SnapshotResourcePolicy) -> Self {
         Self {
@@ -1585,7 +1473,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             summary: SnapshotJsonSummary::default(),
         }
     }
-
     fn scan(mut self) -> Result<SnapshotJsonSummary, TryReadError> {
         self.charge_transient(0)?;
         self.parse_value(1, false, SnapshotJsonContext::Root)?;
@@ -1594,7 +1481,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         }
         Ok(self.summary)
     }
-
     fn parse_value(
         &mut self,
         depth: usize,
@@ -1618,7 +1504,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             _ => Err(TryReadError::NonCanonicalSnapshotPayload),
         }
     }
-
     fn parse_object(
         &mut self,
         depth: usize,
@@ -1667,7 +1552,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             }
         }
     }
-
     fn parse_array(&mut self, depth: usize) -> Result<(), TryReadError> {
         self.consume_byte(b'[')?;
         if self.peek() == Some(b']') {
@@ -1697,7 +1581,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             }
         }
     }
-
     fn parse_string(&mut self, encoded_blob: bool) -> Result<SnapshotString<'a>, TryReadError> {
         self.consume_byte(b'"')?;
         let content_start = self.cursor;
@@ -1813,7 +1696,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             }
         }
     }
-
     fn parse_number(&mut self) -> Result<(), TryReadError> {
         let start = self.cursor;
         let mut parser = json::Parser::new_at(self.input, start);
@@ -1827,7 +1709,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         }
         Ok(())
     }
-
     fn charge_item(&mut self) -> Result<(), TryReadError> {
         self.items = self.items.checked_add(1).ok_or_else(|| {
             TryReadError::SnapshotResourceLimit("snapshot item count overflowed".to_owned())
@@ -1842,7 +1723,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         // Encoded strings/blobs are charged separately at their decoded size.
         self.charge_transient(16 * std::mem::size_of::<usize>())
     }
-
     fn charge_transient(&mut self, bytes: usize) -> Result<(), TryReadError> {
         self.transient_bytes = self.transient_bytes.checked_add(bytes).ok_or_else(|| {
             TryReadError::SnapshotResourceLimit("snapshot transient budget overflowed".to_owned())
@@ -1855,7 +1735,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         }
         Ok(())
     }
-
     fn record_typed_field_bytes(&mut self, bytes: usize) -> Result<(), TryReadError> {
         if bytes <= self.largest_typed_field_bytes {
             return Ok(());
@@ -1865,7 +1744,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         self.largest_typed_field_bytes = bytes;
         Ok(())
     }
-
     fn consume_exact(&mut self, expected: &[u8]) -> Result<(), TryReadError> {
         let end = self.cursor.saturating_add(expected.len());
         if self.input.as_bytes().get(self.cursor..end) != Some(expected) {
@@ -1874,7 +1752,6 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         self.cursor = end;
         Ok(())
     }
-
     fn consume_byte(&mut self, expected: u8) -> Result<(), TryReadError> {
         if self.peek() != Some(expected) {
             return Err(TryReadError::NonCanonicalSnapshotPayload);
@@ -1882,16 +1759,13 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         self.cursor += 1;
         Ok(())
     }
-
     fn peek(&self) -> Option<u8> {
         self.input.as_bytes().get(self.cursor).copied()
     }
 }
-
 struct SnapshotString<'a> {
     raw: &'a str,
 }
-
 fn count_borrowed_json_array_items(input: &str) -> Result<usize, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'[').map_err(TryReadError::Serialization)?;
@@ -1921,7 +1795,6 @@ fn count_borrowed_json_array_items(input: &str) -> Result<usize, TryReadError> {
     }
     Ok(count)
 }
-
 fn validate_snapshot_json_resources(
     bytes: &[u8],
     policy: SnapshotResourcePolicy,
@@ -1930,7 +1803,6 @@ fn validate_snapshot_json_resources(
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     SnapshotJsonBudgetScanner::new(input, policy).scan()
 }
-
 fn snapshot_object_field_raw<'a>(
     object: &'a str,
     wanted: &str,
@@ -1960,7 +1832,6 @@ fn snapshot_object_field_raw<'a>(
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CanonicalWsvPath {
     Root,
@@ -1969,18 +1840,15 @@ enum CanonicalWsvPath {
     Sumeragi,
     Other,
 }
-
 #[derive(Clone, Copy, Default)]
 struct CanonicalWsvOverrides<'a> {
     committed_external_event_buf: Option<&'a str>,
 }
-
 struct BorrowedJsonMember<'a> {
     key: String,
     encoded_key: &'a str,
     value: &'a str,
 }
-
 fn borrowed_json_object_members(input: &str) -> Result<Vec<BorrowedJsonMember<'_>>, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'{').map_err(TryReadError::Serialization)?;
@@ -2017,7 +1885,6 @@ fn borrowed_json_object_members(input: &str) -> Result<Vec<BorrowedJsonMember<'_
     }
     Ok(members)
 }
-
 fn borrowed_json_array_items(input: &str) -> Result<Vec<&str>, TryReadError> {
     let mut parser = json::Parser::new(input);
     parser.expect(b'[').map_err(TryReadError::Serialization)?;
@@ -2044,7 +1911,6 @@ fn borrowed_json_array_items(input: &str) -> Result<Vec<&str>, TryReadError> {
     }
     Ok(items)
 }
-
 fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
     match path {
         CanonicalWsvPath::Root => matches!(
@@ -2059,7 +1925,6 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
         }
     }
 }
-
 fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPath {
     match (path, key) {
         (CanonicalWsvPath::Root, "world") => CanonicalWsvPath::World,
@@ -2068,7 +1933,6 @@ fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPa
         _ => CanonicalWsvPath::Other,
     }
 }
-
 fn canonical_wsv_cell_value<'a>(
     path: CanonicalWsvPath,
     key: &str,
@@ -2101,7 +1965,6 @@ fn canonical_wsv_cell_value<'a>(
         .find(|member| member.key == "blocks")
         .map_or(input, |member| member.value))
 }
-
 fn update_snapshot_wsv_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
@@ -2118,7 +1981,6 @@ fn update_snapshot_wsv_hash(
         None => Err(TryReadError::NonCanonicalSnapshotPayload),
     }
 }
-
 fn update_snapshot_wsv_object_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
@@ -2130,7 +1992,6 @@ fn update_snapshot_wsv_object_hash(
     if members.windows(2).any(|pair| pair[0].key == pair[1].key) {
         return Err(TryReadError::NonCanonicalSnapshotPayload);
     }
-
     Digest::update(hasher, b"{");
     let mut first = true;
     for member in members {
@@ -2171,7 +2032,6 @@ fn update_snapshot_wsv_object_hash(
     Digest::update(hasher, b"}");
     Ok(())
 }
-
 fn update_snapshot_wsv_array_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
@@ -2188,7 +2048,6 @@ fn update_snapshot_wsv_array_hash(
     Digest::update(hasher, b"]");
     Ok(())
 }
-
 fn update_sorted_string_set_hash(
     hasher: &mut Blake2b<U32>,
     input: &str,
@@ -2209,11 +2068,9 @@ fn update_sorted_string_set_hash(
     Digest::update(hasher, b"]");
     Ok(())
 }
-
 fn canonical_snapshot_wsv_hash(bytes: &[u8]) -> Result<Hash, TryReadError> {
     canonical_snapshot_wsv_hash_with_overrides(bytes, CanonicalWsvOverrides::default())
 }
-
 fn canonical_snapshot_wsv_hash_with_overrides(
     bytes: &[u8],
     overrides: CanonicalWsvOverrides<'_>,
@@ -2224,7 +2081,6 @@ fn canonical_snapshot_wsv_hash_with_overrides(
     update_snapshot_wsv_hash(&mut hasher, input, CanonicalWsvPath::Root, overrides)?;
     Ok(Hash::prehashed(hasher.finalize().into()))
 }
-
 fn validate_snapshot_sccp_registry_raw(input: &str) -> Result<(), TryReadError> {
     let Some(world) = snapshot_object_field_raw(input, "world")? else {
         return Ok(());
@@ -2235,7 +2091,6 @@ fn validate_snapshot_sccp_registry_raw(input: &str) -> Result<(), TryReadError> 
     crate::state::validate_sccp_registry_cell_json_str(registry)
         .map_err(TryReadError::InvalidSccpRegistry)
 }
-
 #[cfg(test)]
 fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
     matches!(
@@ -2243,7 +2098,6 @@ fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
         json::Value::Object(map) if map.contains_key("space_directory_manifests")
     )
 }
-
 #[cfg(test)]
 fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
     matches!(
@@ -2252,7 +2106,6 @@ fn snapshot_world_has_field(value: &json::Value, field: &str) -> bool {
             if matches!(map.get("world"), Some(json::Value::Object(world)) if world.contains_key(field))
     )
 }
-
 fn reconcile_snapshot_hash_height_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     block_count: usize,
@@ -2290,7 +2143,6 @@ fn reconcile_snapshot_hash_height_with_kura(
         );
         return Ok(());
     }
-
     if snapshot_height > block_count {
         return Err(TryReadError::MismatchedHeight {
             snapshot_height,
@@ -2299,14 +2151,12 @@ fn reconcile_snapshot_hash_height_with_kura(
     }
     Ok(())
 }
-
 fn reconcile_snapshot_hashes_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     kura: &Kura,
 ) -> Result<(), TryReadError> {
     #[cfg(test)]
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(passes.get() + 1));
-
     let kura_height = kura.blocks_count();
     for (idx, snapshot_block_hash) in snapshot_hashes.iter().copied().enumerate() {
         let height = idx + 1;
@@ -2319,17 +2169,14 @@ fn reconcile_snapshot_hashes_with_kura(
         if kura_block_hash == snapshot_block_hash {
             continue;
         }
-
         return Err(TryReadError::MismatchedHash {
             height,
             snapshot_block_hash,
             kura_block_hash,
         });
     }
-
     Ok(())
 }
-
 fn validate_snapshot_wsv_checkpoint(
     snapshot_wsv_hash: Hash,
     snapshot_hashes: &[HashOf<BlockHeader>],
@@ -2369,7 +2216,6 @@ fn validate_snapshot_wsv_checkpoint(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle<F>(
@@ -2435,7 +2281,6 @@ where
     merkle
         .verify_against_bytes(bytes, merkle_chunk_size)
         .map_err(|error| merkle_err_to_try_read(error, generation.generation_dir.clone()))?;
-
     let summary = match validate_snapshot_json_resources(bytes, resource_policy) {
         Ok(summary) => summary,
         Err(err) => {
@@ -2573,7 +2418,6 @@ where
     generation.verify_generation_unchanged()?;
     Ok(SnapshotReadOutcome { state })
 }
-
 /// Deserialize [`State`] and install the actual runtime ZK configuration
 /// before snapshot reconciliation is allowed to mutate Kura.
 ///
@@ -2613,7 +2457,6 @@ pub fn try_read_snapshot(
         telemetry,
     )
 }
-
 /// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
 ///
 /// The policy is fail-closed: a bootstrap envelope or signature bypass is accepted only when the
@@ -2655,7 +2498,6 @@ pub fn try_read_snapshot_with_bootstrap_policy(
         telemetry,
     )
 }
-
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
@@ -2708,11 +2550,9 @@ where
     generation.verify_generation_unchanged()?;
     Ok(outcome.state)
 }
-
 fn snapshot_publication_error(context: &str, error: impl std::fmt::Display) -> TryWriteError {
     TryWriteError::PublicationIntegrity(format!("{context}: {error}"))
 }
-
 fn create_synced_snapshot_temp(
     store_dir: &Path,
     directory_identity: StableSnapshotFileIdentity,
@@ -2767,7 +2607,6 @@ fn create_synced_snapshot_temp(
     }
     Ok((temp, binding))
 }
-
 struct PublishedSnapshotGeneration {
     generations_dir: PathBuf,
     generations_dir_identity: StableSnapshotFileIdentity,
@@ -2776,7 +2615,6 @@ struct PublishedSnapshotGeneration {
     artifacts: Vec<BoundSnapshotFile>,
     name: String,
 }
-
 impl PublishedSnapshotGeneration {
     fn verify_unchanged(&self) -> Result<(), TryWriteError> {
         if direct_snapshot_directory_identity(&self.generations_dir)
@@ -2800,18 +2638,15 @@ impl PublishedSnapshotGeneration {
         Ok(())
     }
 }
-
 #[derive(Clone)]
 struct BoundSnapshotDeletionFile {
     path: PathBuf,
     identity: StableSnapshotFileIdentity,
     len: u64,
 }
-
 fn canonical_snapshot_digest_name(name: &str) -> bool {
     hex::decode(name).is_ok_and(|bytes| bytes.len() == Hash::LENGTH && hex::encode(bytes) == name)
 }
-
 fn snapshot_generation_has_exact_artifact_inventory(path: &Path) -> Result<bool, TryReadError> {
     let expected = BTreeSet::from([
         SNAPSHOT_FILE_NAME.to_owned(),
@@ -2836,7 +2671,6 @@ fn snapshot_generation_has_exact_artifact_inventory(path: &Path) -> Result<bool,
     }
     Ok(actual == expected)
 }
-
 fn snapshot_generation_is_canonical_for_gc(
     path: &Path,
     generation_name: &str,
@@ -2874,7 +2708,6 @@ fn snapshot_generation_is_canonical_for_gc(
         let merkle_limit = snapshot_merkle_max_bytes(payload.len, merkle_chunk_size);
         let (merkle_file, merkle_bytes) =
             bind_required_snapshot_file(&path.join(SNAPSHOT_MERKLE_FILE_NAME), merkle_limit)?;
-
         let payload_digest = payload.bytes_sha256.to_vec();
         if hex::encode(&payload_digest) != generation_name
             || digest_bytes != format!("{generation_name}\n").as_bytes()
@@ -2918,7 +2751,6 @@ fn snapshot_generation_is_canonical_for_gc(
     };
     validate().is_ok()
 }
-
 fn bind_snapshot_generation_gc_removal(
     generations_dir: &Path,
     generations_dir_identity: StableSnapshotFileIdentity,
@@ -2985,7 +2817,6 @@ fn bind_snapshot_generation_gc_removal(
     verify_snapshot_generation_gc_removal(generations_dir, generations_dir_identity, &removal, 0)?;
     Ok(Some(removal))
 }
-
 fn verify_snapshot_generation_gc_removal(
     generations_dir: &Path,
     generations_dir_identity: StableSnapshotFileIdentity,
@@ -3054,7 +2885,6 @@ fn verify_snapshot_generation_gc_removal(
     }
     Ok(())
 }
-
 fn remove_bound_snapshot_generation_directory(
     generations_dir: &Path,
     generations_dir_identity: StableSnapshotFileIdentity,
@@ -3094,17 +2924,14 @@ fn remove_bound_snapshot_generation_directory(
         .map_err(|error| snapshot_publication_error("sync generations after GC", error))?;
     Ok(())
 }
-
 struct SnapshotGenerationGcRemoval {
     path: PathBuf,
     directory_identity: StableSnapshotFileIdentity,
     files: Vec<BoundSnapshotDeletionFile>,
 }
-
 struct SnapshotGenerationGcPlan {
     removals: Vec<SnapshotGenerationGcRemoval>,
 }
-
 fn plan_snapshot_generation_gc(
     generation: &PublishedSnapshotGeneration,
     previous_generation: Option<&str>,
@@ -3222,7 +3049,6 @@ fn plan_snapshot_generation_gc(
     generation.verify_unchanged()?;
     Ok(SnapshotGenerationGcPlan { removals })
 }
-
 fn execute_snapshot_generation_gc(
     generation: &PublishedSnapshotGeneration,
     plan: &SnapshotGenerationGcPlan,
@@ -3276,7 +3102,6 @@ fn execute_snapshot_generation_gc(
     }
     generation.verify_unchanged()
 }
-
 fn create_generation_artifact(
     generation_dir: &Path,
     generation_dir_identity: StableSnapshotFileIdentity,
@@ -3299,7 +3124,6 @@ fn create_generation_artifact(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-
         options.mode(0o600);
     }
     let mut file = options
@@ -3338,7 +3162,6 @@ fn create_generation_artifact(
     }
     Ok(binding)
 }
-
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -3366,7 +3189,6 @@ fn publish_generation_directory_noreplace(
     )
     .map_err(std::io::Error::from)
 }
-
 #[cfg(windows)]
 fn publish_generation_directory_noreplace(
     generations_dir: &Path,
@@ -3375,7 +3197,6 @@ fn publish_generation_directory_noreplace(
 ) -> std::io::Result<()> {
     std::fs::rename(staging_dir, generations_dir.join(generation_name))
 }
-
 #[cfg(not(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -3393,7 +3214,6 @@ fn publish_generation_directory_noreplace(
         "atomic no-replace directory publication is unsupported on this platform",
     ))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn bind_existing_snapshot_generation_for_write(
     generations_dir: &Path,
@@ -3500,7 +3320,6 @@ fn bind_existing_snapshot_generation_for_write(
     published.verify_unchanged()?;
     Ok(published)
 }
-
 fn publish_immutable_snapshot_generation(
     store_dir: &Path,
     store_dir_identity: StableSnapshotFileIdentity,
@@ -3520,7 +3339,6 @@ fn publish_immutable_snapshot_generation(
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
-
                 builder.mode(0o700);
             }
             match builder.create(&generations_dir) {
@@ -3637,7 +3455,6 @@ fn publish_immutable_snapshot_generation(
         verification_key,
     )
 }
-
 fn publish_snapshot_current_pointer(
     store_dir: &Path,
     store_dir_identity: StableSnapshotFileIdentity,
@@ -3782,7 +3599,6 @@ fn publish_snapshot_current_pointer(
     }
     Ok(())
 }
-
 /// Reconstruct generated bytes through the semantic restart boundary before publication.
 ///
 /// # Errors
@@ -3798,7 +3614,6 @@ fn validate_generated_snapshot_for_restart(
         SnapshotResourcePolicy::default(),
     )
 }
-
 #[cfg(test)]
 fn validate_generated_snapshot_for_restart_with_policy(
     state: &State,
@@ -3843,7 +3658,6 @@ fn validate_generated_snapshot_for_restart_with_policy(
         .map_err(TryReadError::InvalidSccpRevert)?;
     Ok(())
 }
-
 /// Serialize, validate, and durably publish one canonical state snapshot.
 #[cfg(test)]
 fn try_write_snapshot_with_limit(
@@ -3862,7 +3676,6 @@ fn try_write_snapshot_with_limit(
         SnapshotResourcePolicy::default(),
     )
 }
-
 fn try_write_snapshot_with_limit_and_policy(
     state: &State,
     store_dir: impl AsRef<Path>,
@@ -3886,7 +3699,6 @@ fn try_write_snapshot_with_limit_and_policy(
         snapshot_json.into_bytes(),
     )
 }
-
 #[cfg(test)]
 fn try_write_snapshot_payload_with_limit(
     state: &State,
@@ -3912,7 +3724,6 @@ fn try_write_snapshot_payload_with_limit(
         snapshot_bytes,
     )
 }
-
 fn try_write_snapshot_payload_with_limit_locked(
     state: &State,
     store_dir: impl AsRef<Path>,
@@ -3945,7 +3756,6 @@ fn try_write_snapshot_payload_with_limit_locked(
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-
         store_builder.mode(0o700);
     }
     store_builder
@@ -4021,7 +3831,6 @@ fn try_write_snapshot_payload_with_limit_locked(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn try_write_snapshot(
     state: &State,
@@ -4037,7 +3846,6 @@ fn try_write_snapshot(
         iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
     )
 }
-
 struct DurableSnapshotGeometryCheckpoint {
     lane_config: iroha_config::parameters::actual::LaneConfig,
     incarnations: BTreeMap<LaneId, Hash>,
@@ -4049,7 +3857,6 @@ struct DurableSnapshotGeometryCheckpoint {
     snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
     smart_contract_state: BTreeMap<StatePath, Vec<u8>>,
 }
-
 fn ensure_snapshot_commit_evidence(
     state: &State,
     checkpoint: &DurableSnapshotGeometryCheckpoint,
@@ -4124,7 +3931,6 @@ fn ensure_snapshot_commit_evidence(
         }
         return Ok(());
     }
-
     let wsv_checkpoint = kura
         .wsv_checkpoint(checkpoint.height)
         .map_err(|error| TryWriteError::CommitEvidence {
@@ -4145,7 +3951,6 @@ fn ensure_snapshot_commit_evidence(
             ),
         });
     }
-
     let manifest = kura
         .commit_manifest(checkpoint.height)
         .map_err(|error| TryWriteError::CommitEvidence {
@@ -4177,7 +3982,6 @@ fn ensure_snapshot_commit_evidence(
             });
         }
     }
-
     let (artifact, _receipt) = kura
         .v2_finality_artifact_with_receipt(checkpoint.height)
         .map_err(|error| TryWriteError::CommitEvidence {
@@ -4204,7 +4008,6 @@ fn ensure_snapshot_commit_evidence(
     }
     Ok(())
 }
-
 fn geometry_checkpoint_from_snapshot(
     bytes: &[u8],
 ) -> Result<DurableSnapshotGeometryCheckpoint, TryWriteError> {
@@ -4235,7 +4038,6 @@ fn geometry_checkpoint_from_snapshot(
         .map(json::from_str)
         .transpose()
         .map_err(TryWriteError::Serialization)?;
-
     let lane_count = NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
         TryWriteError::Serialization(json::Error::Message(
             "snapshot Nexus lane count is zero".to_owned(),
@@ -4281,7 +4083,6 @@ fn geometry_checkpoint_from_snapshot(
         incarnations.insert(lane.id, entry.incarnation);
         activation_heights.insert(lane.id, entry.activation_height);
     }
-
     let world = required_snapshot_object_field(input, "world")?;
     let smart_contract_storage: Storage<StatePath, Vec<u8>> = json::from_str(
         required_snapshot_object_field(world, "smart_contract_state")?,
@@ -4306,7 +4107,6 @@ fn geometry_checkpoint_from_snapshot(
         smart_contract_state,
     })
 }
-
 fn required_snapshot_object_field<'a>(
     object: &'a str,
     field: &str,
@@ -4315,7 +4115,6 @@ fn required_snapshot_object_field<'a>(
         .map_err(TryWriteError::RestartValidation)?
         .ok_or_else(|| TryWriteError::Serialization(json::Error::missing_field(field)))
 }
-
 fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
     let state_height = state.committed_height();
     let kura_height = state
@@ -4327,7 +4126,6 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
             kura_height,
         });
     }
-
     let Some(height) = NonZeroUsize::new(state_height) else {
         return Ok(());
     };
@@ -4340,16 +4138,13 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
             kura_hash,
         });
     }
-
     Ok(())
 }
-
 /// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes_with_options(state, true)
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn canonical_state_snapshot_bytes_with_options(
     state: &State,
@@ -4362,7 +4157,6 @@ fn canonical_state_snapshot_bytes_with_options(
     .expect("state snapshot serialization must succeed")
     .into_bytes()
 }
-
 /// Canonical hash for the committed ledger WSV surface.
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash {
     let mut snapshot_json = String::new();
@@ -4370,7 +4164,6 @@ pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash
     canonical_snapshot_wsv_hash(snapshot_json.as_bytes())
         .expect("typed State serialization must form a canonical WSV snapshot")
 }
-
 /// Canonical bytes of the exact WSV surface that `state_block.commit()` would publish.
 ///
 /// The block remains an uncommitted MVCC overlay, so callers can reject a mismatched
@@ -4381,7 +4174,6 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
     serialize_staged_state_snapshot(state_block, &mut json);
     let mut value: json::Value =
         json::from_str(&json).expect("staged state snapshot serialization must produce valid JSON");
-
     let mut event_buffer_json = String::new();
     state_block.json_serialize_committed_external_event_buffer(&mut event_buffer_json);
     let event_buffer = json::from_str(&event_buffer_json)
@@ -4391,7 +4183,6 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
         .and_then(json::Value::as_object_mut)
         .expect("staged state snapshot world must be an object")
         .insert("external_event_buf".to_owned(), event_buffer);
-
     normalize_mv_cell_fields_in_state_value(&mut value);
     normalize_set_like_parameter_fields_in_state_value(&mut value);
     redact_consensus_sidecars_from_state_value(&mut value);
@@ -4399,7 +4190,6 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
         .expect("staged state snapshot canonical serialization must succeed")
         .into_bytes()
 }
-
 /// Canonical hash of the exact WSV surface that `state_block.commit()` would publish.
 ///
 /// The block remains an uncommitted MVCC overlay, so callers can reject a mismatched
@@ -4419,12 +4209,10 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")
 }
-
 #[cfg(test)]
 fn canonical_state_snapshot_value(state: &State) -> json::Value {
     canonical_state_snapshot_value_with_options(state, true)
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn canonical_state_snapshot_value_with_options(
     state: &State,
@@ -4439,20 +4227,16 @@ fn canonical_state_snapshot_value_with_options(
     redact_consensus_sidecars_from_state_value(&mut value);
     value
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
     let Some(state) = value.as_object_mut() else {
         return;
     };
-
     normalize_serialized_cell_field(state, "commit_topology");
     normalize_serialized_cell_field(state, "prev_commit_topology");
-
     let Some(world) = state.get_mut("world").and_then(json::Value::as_object_mut) else {
         return;
     };
-
     for key in [
         "parameters",
         "peers",
@@ -4468,7 +4252,6 @@ fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
         normalize_serialized_cell_field(world, key);
     }
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
     let Some(value) = map.get_mut(key) else {
@@ -4483,7 +4266,6 @@ fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
         *value = current_value;
     }
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
     let Some(sumeragi) = value
@@ -4494,28 +4276,23 @@ fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {
     else {
         return;
     };
-
     sort_dedup_json_array_field(sumeragi, "key_allowed_algorithms");
     sort_dedup_json_array_field(sumeragi, "key_allowed_hsm_providers");
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn sort_dedup_json_array_field(map: &mut json::Map, key: &str) {
     let Some(values) = map.get_mut(key).and_then(json::Value::as_array_mut) else {
         return;
     };
-
     values.sort_by_cached_key(canonical_json_sort_key);
     values.dedup();
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn canonical_json_sort_key(value: &json::Value) -> String {
     let mut out = String::new();
     json::JsonSerialize::json_serialize(value, &mut out);
     out
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     let Some(state) = value.as_object_mut() else {
@@ -4529,13 +4306,11 @@ fn redact_consensus_sidecars_from_state_value(value: &mut json::Value) {
     // execution, so they must not perturb committed ledger checkpoints.
     state.remove("commit_topology");
     state.remove("prev_commit_topology");
-
     let Some(world) = value.get_mut("world") else {
         return;
     };
     redact_consensus_sidecars_from_world_value(world);
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     let Some(world) = world.as_object_mut() else {
@@ -4550,7 +4325,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // block application. Kura replay verifies block-applied WSV data only.
     world.remove("vrf_epochs");
 }
-
 /// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
 /// were included in durable snapshots.
 #[cfg(test)]
@@ -4559,14 +4333,12 @@ pub(crate) fn legacy_state_snapshot_hash_without_space_directory_manifests(
 ) -> iroha_crypto::Hash {
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes_with_options(state, false))
 }
-
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 #[allow(dead_code)]
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }
-
 /// Error variants for snapshot reading
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 #[ignore_extra_doc_attributes]
@@ -4692,7 +4464,6 @@ pub enum TryReadError {
     /// Failed to reconcile snapshot block hashes with Kura
     Kura(#[source] KuraError),
 }
-
 fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadError {
     match err {
         #[cfg(test)]
@@ -4736,7 +4507,6 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadEr
         },
     }
 }
-
 /// Error variants for snapshot writing
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 enum TryWriteError {
@@ -4792,7 +4562,6 @@ enum TryWriteError {
         reason: String,
     },
 }
-
 #[cfg(test)]
 mod tests {
     include!("snapshot/support_policy_tests.rs");

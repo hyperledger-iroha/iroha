@@ -1,5 +1,4 @@
 // App-API query adapter filter regressions.
-
 #[cfg(all(test, feature = "app_api"))]
 mod adapter_filter_tests {
     use super::*;
@@ -8,19 +7,15 @@ mod adapter_filter_tests {
     use crate::{json_array, json_object, json_value};
     #[cfg(feature = "app_api")]
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)
     }
-
     fn arr(values: Vec<Value>) -> Value {
         json_array(values)
     }
-
     fn val<T: json::JsonSerialize + ?Sized>(value: &T) -> Value {
         json_value(value)
     }
-
     #[test]
     fn accounts_filter_adapter_accepts_id_eq_and_rejects_lt() {
         let ok = obj(vec![
@@ -37,7 +32,6 @@ mod adapter_filter_tests {
         crate::filter::validate_filter(&expr).unwrap();
         #[cfg(feature = "app_api")]
         validate_accounts_filter_adapter(&expr).unwrap();
-
         let bad = obj(vec![
             ("op", val("lt")),
             ("args", arr(vec![val("id"), val(&5u64)])),
@@ -47,7 +41,6 @@ mod adapter_filter_tests {
         #[cfg(feature = "app_api")]
         assert!(validate_accounts_filter_adapter(&expr2).is_err());
     }
-
     #[test]
     fn defs_filter_adapter_accepts_in_and_rejects_numeric() {
         let ok = obj(vec![
@@ -71,7 +64,6 @@ mod adapter_filter_tests {
         crate::filter::validate_filter(&expr).unwrap();
         #[cfg(feature = "app_api")]
         validate_defs_filter_adapter(&expr).unwrap();
-
         let bad = obj(vec![
             ("op", val("gte")),
             ("args", arr(vec![val("id"), val(&1u64)])),
@@ -81,41 +73,33 @@ mod adapter_filter_tests {
         #[cfg(feature = "app_api")]
         assert!(validate_defs_filter_adapter(&expr2).is_err());
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn defs_filter_adapter_accepts_name_alias_and_metadata_nullability() {
         let name_eq = FilterExpr::Eq(FieldPath("name".into()), Value::from("CBDC"));
         validate_defs_filter_adapter(&name_eq).unwrap();
-
         let alias_null = FilterExpr::IsNull(FieldPath("alias".into()));
         validate_defs_filter_adapter(&alias_null).unwrap();
-
         let alias_binding_status = FilterExpr::Eq(
             FieldPath("alias_binding.status".into()),
             Value::from("leased_grace"),
         );
         validate_defs_filter_adapter(&alias_binding_status).unwrap();
-
         let alias_binding_bound_at = FilterExpr::Gt(
             FieldPath("alias_binding.bound_at_ms".into()),
             Value::from(10_u64),
         );
         validate_defs_filter_adapter(&alias_binding_bound_at).unwrap();
-
         let metadata_lt = FilterExpr::Lt(FieldPath("metadata.rank".into()), Value::from(2_u64));
         validate_defs_filter_adapter(&metadata_lt).unwrap();
-
         let bad = FilterExpr::IsNull(FieldPath("name".into()));
         assert!(validate_defs_filter_adapter(&bad).is_err());
-
         let bad_alias_binding = FilterExpr::Eq(
             FieldPath("alias_binding.bound_at_ms".into()),
             Value::from("10"),
         );
         assert!(validate_defs_filter_adapter(&bad_alias_binding).is_err());
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn defs_filter_projection_matches_name_alias_and_metadata_passthrough() {
@@ -151,7 +135,6 @@ mod adapter_filter_tests {
                 bound_at_ms: 50,
             }),
         };
-
         assert!(asset_definition_filter_projection(
             &FilterExpr::Eq(FieldPath("name".into()), Value::from("CBDC")),
             &item,
@@ -191,7 +174,6 @@ mod adapter_filter_tests {
             &item,
         ));
     }
-
     #[test]
     fn nfts_filter_adapter_accepts_exists_and_rejects_is_null() {
         let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
@@ -199,14 +181,12 @@ mod adapter_filter_tests {
         crate::filter::validate_filter(&expr).unwrap();
         #[cfg(feature = "app_api")]
         validate_nfts_filter_adapter(&expr).unwrap();
-
         let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
         let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
         crate::filter::validate_filter(&expr2).unwrap();
         #[cfg(feature = "app_api")]
         assert!(validate_nfts_filter_adapter(&expr2).is_err());
     }
-
     #[test]
     fn rwas_filter_adapter_accepts_exists_and_rejects_is_null() {
         let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
@@ -214,19 +194,16 @@ mod adapter_filter_tests {
         crate::filter::validate_filter(&expr).unwrap();
         #[cfg(feature = "app_api")]
         validate_rwas_filter_adapter(&expr).unwrap();
-
         let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
         let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
         crate::filter::validate_filter(&expr2).unwrap();
         #[cfg(feature = "app_api")]
         assert!(validate_rwas_filter_adapter(&expr2).is_err());
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn asset_holder_filter_adapter_accepts_asset_and_scope_eq() {
         use iroha_test_samples::ALICE_ID;
-
         let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
@@ -238,16 +215,13 @@ mod adapter_filter_tests {
         validate_holders_filter_adapter(&expr).unwrap();
         let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
         validate_holders_filter_adapter(&scope_expr).unwrap();
-
         let bad = FilterExpr::Eq(FieldPath("asset".into()), Value::from("not-an-asset"));
         assert!(validate_holders_filter_adapter(&bad).is_err());
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn asset_holder_filter_matches_asset_and_scope() {
         use iroha_test_samples::ALICE_ID;
-
         let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
@@ -268,7 +242,6 @@ mod adapter_filter_tests {
         assert!(filter_asset_holder_item(&expr, &item));
         let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
         assert!(filter_asset_holder_item(&scope_expr, &item));
-
         let other_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("issuer", "universal").expect("domain"),
             "usd".parse().expect("name"),
@@ -279,7 +252,6 @@ mod adapter_filter_tests {
         );
         assert!(!filter_asset_holder_item(&expr2, &item));
     }
-
     #[test]
     fn sort_spec_parser_parses_keys_and_orders() {
         let spec = "metadata.display_name:desc,id:asc,unknown";

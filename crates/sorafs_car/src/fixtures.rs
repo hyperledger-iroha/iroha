@@ -5,17 +5,13 @@
 //! payload, the derived [`CarBuildPlan`], provider metadata, and telemetry
 //! snapshots so integration tests can exercise end-to-end fetch flows without
 //! standing up real storage nodes.
-
-use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
-
 use crate::{
     CarBuildPlan, CarPlanError,
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget, TransportHint},
     scoreboard::{ProviderTelemetry, TelemetrySnapshot},
 };
-
+use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
 const MAX_FIXTURE_PROVIDERS: usize = 1_024;
-
 /// Errors returned while constructing deterministic multi-peer fixtures.
 #[derive(Debug, thiserror::Error)]
 pub enum MultiPeerFixtureError {
@@ -35,10 +31,8 @@ pub enum MultiPeerFixtureError {
         requested: usize,
     },
 }
-
 /// Unix timestamp (seconds) used across fixture artefacts.
 const FIXTURE_NOW_UNIX_SECS: u64 = 1_725_000_000;
-
 /// Deterministic multi-peer fixture derived from the canonical chunk-store vectors.
 #[derive(Debug, Clone)]
 pub struct MultiPeerFixture {
@@ -49,7 +43,6 @@ pub struct MultiPeerFixture {
     telemetry: TelemetrySnapshot,
     max_chunk_length: u32,
 }
-
 impl MultiPeerFixture {
     /// Builds a fixture populated with `provider_count` mock providers.
     ///
@@ -67,7 +60,6 @@ impl MultiPeerFixture {
                 maximum: MAX_FIXTURE_PROVIDERS,
             });
         }
-
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
         let payload = vectors.input.clone();
         let plan = CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)?;
@@ -77,7 +69,6 @@ impl MultiPeerFixture {
             .map(|chunk| chunk.length)
             .max()
             .unwrap_or(0);
-
         let mut provider_payloads = Vec::new();
         try_reserve_fixture(
             &mut provider_payloads,
@@ -90,10 +81,8 @@ impl MultiPeerFixture {
             replica.extend_from_slice(&payload);
             provider_payloads.push(replica);
         }
-
         let providers = build_provider_metadata(provider_count, max_chunk_length)?;
         let telemetry = build_telemetry(&providers)?;
-
         Ok(Self {
             plan,
             payload,
@@ -103,50 +92,42 @@ impl MultiPeerFixture {
             max_chunk_length,
         })
     }
-
     /// Returns the canonical payload bytes.
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     /// Returns the chunk fetch plan derived from the payload.
     #[must_use]
     pub fn plan(&self) -> &CarBuildPlan {
         &self.plan
     }
-
     /// Returns the metadata records describing each mock provider.
     #[must_use]
     pub fn providers(&self) -> &[ProviderMetadata] {
         &self.providers
     }
-
     /// Returns the telemetry snapshot aligned with the provider metadata.
     #[must_use]
     pub fn telemetry(&self) -> &TelemetrySnapshot {
         &self.telemetry
     }
-
     /// Returns per-provider payload replicas.
     #[must_use]
     pub fn provider_payloads(&self) -> &[Vec<u8>] {
         &self.provider_payloads
     }
-
     /// Returns the longest chunk length present in the plan.
     #[must_use]
     pub fn max_chunk_length(&self) -> u32 {
         self.max_chunk_length
     }
-
     /// Returns the canonical timestamp used when evaluating advert freshness.
     #[must_use]
     pub fn now_unix_secs(&self) -> u64 {
         FIXTURE_NOW_UNIX_SECS
     }
 }
-
 fn try_reserve_fixture<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -159,7 +140,6 @@ fn try_reserve_fixture<T>(
             requested: additional,
         })
 }
-
 fn build_provider_metadata(
     count: usize,
     max_chunk_length: u32,
@@ -202,7 +182,6 @@ fn build_provider_metadata(
     }
     Ok(providers)
 }
-
 fn build_telemetry(
     providers: &[ProviderMetadata],
 ) -> Result<TelemetrySnapshot, MultiPeerFixtureError> {
@@ -223,11 +202,9 @@ fn build_telemetry(
     }
     Ok(TelemetrySnapshot::from_records(records))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn fixture_provider_count_is_bounded_without_panicking() {
         assert!(matches!(
@@ -239,7 +216,6 @@ mod tests {
             Err(MultiPeerFixtureError::TooManyProviders { .. })
         ));
     }
-
     #[test]
     fn fixture_builds_valid_bounded_provider_inventory() {
         let fixture = MultiPeerFixture::with_providers(2).expect("build fixture");

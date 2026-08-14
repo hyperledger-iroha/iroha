@@ -1,14 +1,10 @@
 #![allow(clippy::redundant_pub_crate)]
-
 //! Shared BN254 Poseidon width-3 parameter staging for GPU hosts.
-
 use std::sync::OnceLock;
-
 /// Number of 64-bit limbs in a canonical BN254 field element.
 pub(crate) const BN254_LIMBS: usize = 4;
 /// Poseidon width used for transcript digest hashing.
 pub(crate) const BN254_POSEIDON_WIDTH: usize = 3;
-
 /// BN254 Poseidon width-3 constants flattened as canonical little-endian limbs.
 pub(crate) struct Bn254PoseidonWidth3Params {
     /// Round constants, flattened as `[round][word][limb]`.
@@ -19,7 +15,6 @@ pub(crate) struct Bn254PoseidonWidth3Params {
     #[cfg(target_os = "macos")]
     pub(crate) round_count: u32,
 }
-
 /// Return the shared BN254 Poseidon width-3 parameters in canonical limb form.
 pub(crate) fn bn254_poseidon_width3_params() -> &'static Bn254PoseidonWidth3Params {
     static PARAMS: OnceLock<Bn254PoseidonWidth3Params> = OnceLock::new();
@@ -52,7 +47,6 @@ pub(crate) fn bn254_poseidon_width3_params() -> &'static Bn254PoseidonWidth3Para
         }
     })
 }
-
 /// Convert canonical BN254 bytes into little-endian 64-bit limbs.
 pub(crate) fn bn254_bytes_to_limbs(bytes: &[u8; 32]) -> [u64; BN254_LIMBS] {
     let mut limbs = [0u64; BN254_LIMBS];
@@ -63,7 +57,6 @@ pub(crate) fn bn254_bytes_to_limbs(bytes: &[u8; 32]) -> [u64; BN254_LIMBS] {
     }
     limbs
 }
-
 /// Convert little-endian BN254 limbs into canonical bytes.
 pub(crate) fn bn254_limbs_to_bytes(limbs: &[u64]) -> [u8; 32] {
     debug_assert_eq!(limbs.len(), BN254_LIMBS);

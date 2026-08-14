@@ -1,7 +1,6 @@
 //! Benchmarks for AES round helpers (scalar vs accelerated).
 use criterion::Criterion;
 use ivm::{aesdec, aesdec_impl, aesenc, aesenc_impl};
-
 fn bench_aesenc(c: &mut Criterion) {
     let state = [
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
@@ -26,7 +25,6 @@ fn bench_aesenc(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aesdec(c: &mut Criterion) {
     // Use the output of one round as the input for dec-round
     let enc_in = [
@@ -50,7 +48,6 @@ fn bench_aesdec(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_aesenc(&mut c);

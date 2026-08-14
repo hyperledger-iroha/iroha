@@ -303,7 +303,15 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 1_353
+    assert len(grouped_record_lines) == 1_386
+    diagnostics_records = _run_resolver(
+        ROOT,
+        "--suite",
+        "sumeragi-v2-sdk-diagnostics",
+        "--print-records",
+    )
+    assert diagnostics_records.returncode == 0, diagnostics_records.stderr
+    assert len(diagnostics_records.stdout.splitlines()) == 1_386
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -642,6 +650,7 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
     }
     required_omissions_closed = {
         "python/iroha_torii_client/client_status_models.py",
+        "python/iroha_torii_client/kaigi_relay_client.py",
         "python/iroha_torii_client/connect_session.py",
         "python/iroha_torii_client/orderbook_submission.py",
         "javascript/iroha_js/src/browser.js",

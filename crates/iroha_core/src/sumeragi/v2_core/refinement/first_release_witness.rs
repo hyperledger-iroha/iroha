@@ -95,6 +95,13 @@ impl<P> CheckedProductionTransition<P> {
 
     /// Borrow the versioned witness attached by the production checker.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "first-release witness is consumed by release validation"
+        )
+    )]
     pub(crate) const fn first_release_witness(
         &self,
     ) -> Option<&ProductionInFlightFirstReleaseTransitionWitnessV1> {

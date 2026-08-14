@@ -1,5 +1,4 @@
 //! Integration tests for the JSON query envelope DSL.
-
 #[cfg(feature = "json")]
 mod json_envelope {
     use iroha_data_model::query::{
@@ -7,7 +6,6 @@ mod json_envelope {
         json::QueryEnvelopeJson,
         parameters::{FetchSize, SortOrder},
     };
-
     const AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     #[test]
     fn iterable_envelope_parses_params() {
@@ -29,25 +27,20 @@ mod json_envelope {
             }
         }"#
         .replace("__AUTHORITY__", AUTHORITY);
-
         let envelope: QueryEnvelopeJson = norito::json::from_str(&json).expect("parse envelope");
         let request = envelope.into_request().expect("build query request");
-
         let QueryRequest::Start(query_with_params) = &request else {
             panic!("expected iterable envelope");
         };
         let params = query_with_params.params();
-
         let pagination = params.pagination();
         assert_eq!(pagination.offset_value(), 1);
         assert_eq!(
             pagination.limit_value().map(std::num::NonZeroU64::get),
             Some(5)
         );
-
         let fetch: &FetchSize = params.fetch_size();
         assert_eq!(fetch.value().map(std::num::NonZeroU64::get), Some(10));
-
         let sorting = params.sorting();
         assert_eq!(
             sorting
@@ -58,7 +51,6 @@ mod json_envelope {
         );
         assert!(matches!(sorting.order(), Some(SortOrder::Desc)));
     }
-
     #[test]
     fn iterable_order_without_key_errors() {
         let json = r#"{"iterable": {"type": "FindDomains", "params": {"order": "Asc"}}}"#;
@@ -69,7 +61,6 @@ mod json_envelope {
         };
         assert!(err.to_string().contains("sort order"));
     }
-
     #[test]
     fn unknown_iterable_field_is_rejected() {
         let json = r#"{
@@ -79,7 +70,6 @@ mod json_envelope {
                 "bogus": true
             }
         }"#;
-
         let err = norito::json::from_str::<QueryEnvelopeJson>(json).unwrap_err();
         assert!(
             err.to_string()
@@ -87,7 +77,6 @@ mod json_envelope {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn unknown_params_field_is_rejected() {
         let json = r#"{
@@ -96,7 +85,6 @@ mod json_envelope {
                 "params": {"limit": 1, "extra": 5}
             }
         }"#;
-
         let err = norito::json::from_str::<QueryEnvelopeJson>(json).unwrap_err();
         assert!(
             err.to_string()
@@ -104,7 +92,6 @@ mod json_envelope {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn singular_contract_manifest_roundtrip() {
         let json = r#"{

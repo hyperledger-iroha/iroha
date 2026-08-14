@@ -1,3 +1,9 @@
+use norito::{
+    derive::JsonSerialize,
+    json as serde_json,
+    json::{build_struct_index, build_struct_index_scalar_bench},
+};
+use serde::Serialize;
 use std::{
     error::Error,
     fmt::Write as _,
@@ -5,15 +11,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
-use norito::{
-    derive::JsonSerialize,
-    json as serde_json,
-    json::{build_struct_index, build_struct_index_scalar_bench},
-};
-use serde::Serialize;
 use time::OffsetDateTime;
-
 #[derive(Clone, Debug)]
 pub struct Stage1BenchOptions {
     pub sizes: Vec<usize>,
@@ -22,7 +20,6 @@ pub struct Stage1BenchOptions {
     pub markdown_out: Option<PathBuf>,
     pub allow_overwrite: bool,
 }
-
 #[derive(Clone, Debug, Serialize, JsonSerialize)]
 pub struct Stage1BenchSample {
     pub size_bytes: usize,
@@ -31,7 +28,6 @@ pub struct Stage1BenchSample {
     pub scalar_ms_per_iter: f64,
     pub speedup_vs_scalar: f64,
 }
-
 #[derive(Clone, Debug, Serialize, JsonSerialize)]
 pub struct Stage1BenchReport {
     pub timestamp: String,
@@ -39,7 +35,6 @@ pub struct Stage1BenchReport {
     pub samples: Vec<Stage1BenchSample>,
     pub recommended_threshold_bytes: usize,
 }
-
 #[derive(Clone, Debug, Serialize, JsonSerialize)]
 pub struct BenchEnvironment {
     pub target: String,
@@ -47,7 +42,6 @@ pub struct BenchEnvironment {
     pub os: String,
     pub cpu: Option<String>,
 }
-
 pub fn run_stage1_bench(options: Stage1BenchOptions) -> Result<Stage1BenchReport, Box<dyn Error>> {
     if options.sizes.is_empty() {
         return Err("stage1-bench requires at least one --size value".into());
@@ -55,7 +49,6 @@ pub fn run_stage1_bench(options: Stage1BenchOptions) -> Result<Stage1BenchReport
     if options.iterations == 0 {
         return Err("iterations must be greater than zero".into());
     }
-
     let timestamp =
         OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?;
     let env = BenchEnvironment {
@@ -67,7 +60,6 @@ pub fn run_stage1_bench(options: Stage1BenchOptions) -> Result<Stage1BenchReport
             .unwrap_or_else(|_| std::env::consts::OS.to_string()),
         cpu: std::env::var("NORITO_CPU_INFO").ok(),
     };
-
     let mut samples = Vec::with_capacity(options.sizes.len());
     for &size in &options.sizes {
         let payload = make_payload(size);
@@ -91,28 +83,23 @@ pub fn run_stage1_bench(options: Stage1BenchOptions) -> Result<Stage1BenchReport
         sample.speedup_vs_scalar = sample.scalar_ms_per_iter / sample.default_ms_per_iter;
         samples.push(sample);
     }
-
     let recommended_threshold_bytes = samples
         .iter()
         .find(|s| s.speedup_vs_scalar >= 1.05)
         .map(|s| s.size_bytes)
         .unwrap_or_else(|| samples.last().map(|s| s.size_bytes).unwrap_or(0));
-
     let report = Stage1BenchReport {
         timestamp,
         environment: env,
         samples,
         recommended_threshold_bytes,
     };
-
     write_json(&report, &options.json_out, options.allow_overwrite)?;
     if let Some(md) = options.markdown_out {
         write_markdown(&report, &md, options.allow_overwrite)?;
     }
-
     Ok(report)
 }
-
 fn write_json(
     report: &Stage1BenchReport,
     path: &Path,
@@ -128,7 +115,6 @@ fn write_json(
     fs::write(path, data)?;
     Ok(())
 }
-
 fn write_markdown(
     report: &Stage1BenchReport,
     path: &Path,
@@ -168,7 +154,6 @@ fn write_markdown(
     fs::write(path, out)?;
     Ok(())
 }
-
 fn time_backend<F: FnMut()>(iterations: u32, mut f: F) -> Duration {
     let start = Instant::now();
     for _ in 0..iterations {
@@ -176,7 +161,6 @@ fn time_backend<F: FnMut()>(iterations: u32, mut f: F) -> Duration {
     }
     start.elapsed()
 }
-
 fn make_payload(target_bytes: usize) -> String {
     // Deterministic large JSON: array of small objects with tricky strings.
     // This mirrors the criterion benchmarks and leans on escaped characters to exercise stage-1 scanning costs.
@@ -201,11 +185,9 @@ fn make_payload(target_bytes: usize) -> String {
     }
     s
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn payload_meets_requested_size() {
         let p = make_payload(8 * 1024);
@@ -216,7 +198,6 @@ mod tests {
         );
         assert!(p.starts_with('[') && p.ends_with(']'));
     }
-
     #[test]
     fn bench_runs_with_small_sizes() {
         let tmp = tempfile::NamedTempFile::new().unwrap();

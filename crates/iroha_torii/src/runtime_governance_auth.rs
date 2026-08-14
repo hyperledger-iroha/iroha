@@ -1,5 +1,4 @@
 // Principal binding shared by account-authenticated runtime/governance drafts.
-
 #[cfg(feature = "app_api")]
 fn require_runtime_governance_account(
     requested: &iroha_data_model::account::AccountId,
@@ -15,7 +14,6 @@ fn require_runtime_governance_account(
         )),
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn require_runtime_governance_canonical_account_literal(
     requested: &str,
@@ -34,22 +32,18 @@ fn require_runtime_governance_canonical_account_literal(
     }
     require_runtime_governance_account(parsed.account_id(), authenticated, context)
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod runtime_governance_auth_tests {
     use iroha_data_model::ValidationFail;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
     use super::{
         Error, require_runtime_governance_account,
         require_runtime_governance_canonical_account_literal,
     };
-
     #[test]
     fn exact_runtime_governance_authority_is_required() {
         require_runtime_governance_account(&ALICE_ID, &ALICE_ID, "citizen draft")
             .expect("the authenticated authority must be accepted");
-
         let error = require_runtime_governance_account(&BOB_ID, &ALICE_ID, "citizen draft")
             .expect_err("another body authority must be rejected");
         assert!(matches!(
@@ -58,7 +52,6 @@ mod runtime_governance_auth_tests {
                 if message.contains("citizen draft authority")
         ));
     }
-
     #[test]
     fn canonical_literal_binding_rejects_mismatch_and_noncanonical_input() {
         let alice = ALICE_ID.to_string();
@@ -68,7 +61,6 @@ mod runtime_governance_auth_tests {
             "ministry agenda draft",
         )
         .expect("the exact canonical authenticated authority must be accepted");
-
         let error = require_runtime_governance_canonical_account_literal(
             &BOB_ID.to_string(),
             &ALICE_ID,
@@ -80,7 +72,6 @@ mod runtime_governance_auth_tests {
             Error::Query(ValidationFail::NotPermitted(message))
                 if message.contains("ministry agenda draft authority")
         ));
-
         require_runtime_governance_canonical_account_literal(
             &format!(" {alice}"),
             &ALICE_ID,

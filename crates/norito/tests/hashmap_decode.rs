@@ -1,11 +1,8 @@
 //! Regression tests for HashMap decode performance path.
 //! Ensures functional equivalence after optimizing allocations.
-
-use std::collections::{BTreeMap, HashMap, HashSet};
-
 use norito::{decode_from_bytes, to_bytes};
 use rand::{Rng, SeedableRng, rngs::StdRng};
-
+use std::collections::{BTreeMap, HashMap, HashSet};
 fn gen_map(n: usize) -> HashMap<String, u32> {
     let mut rng = StdRng::seed_from_u64(12345);
     let mut hm = HashMap::with_capacity(n);
@@ -16,7 +13,6 @@ fn gen_map(n: usize) -> HashMap<String, u32> {
     }
     hm
 }
-
 #[test]
 fn hashmap_roundtrip_small() {
     let hm = gen_map(32);
@@ -24,7 +20,6 @@ fn hashmap_roundtrip_small() {
     let out: HashMap<String, u32> = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(hm, out);
 }
-
 #[test]
 fn hashmap_roundtrip_larger() {
     let hm = gen_map(2_000);
@@ -32,7 +27,6 @@ fn hashmap_roundtrip_larger() {
     let out: HashMap<String, u32> = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(hm, out);
 }
-
 #[test]
 fn hashmap_roundtrip_empty() {
     let hm: HashMap<String, u32> = HashMap::new();
@@ -40,7 +34,6 @@ fn hashmap_roundtrip_empty() {
     let out: HashMap<String, u32> = decode_from_bytes(&bytes).expect("decode");
     assert!(out.is_empty());
 }
-
 #[test]
 fn btreemap_roundtrip() {
     let mut bm: BTreeMap<u64, String> = BTreeMap::new();
@@ -51,7 +44,6 @@ fn btreemap_roundtrip() {
     let out: BTreeMap<u64, String> = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(bm, out);
 }
-
 #[test]
 fn hashset_roundtrip() {
     let mut hs: HashSet<String> = HashSet::new();

@@ -5,7 +5,6 @@ use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::IVMHost; // bring trait into scope for `.syscall()`
 use ivm::{IVM, Memory, ProgramMetadata, syscalls};
-
 fn build_tlv<T: norito::NoritoSerialize>(type_id: u16, val: &T) -> Vec<u8> {
     use iroha_crypto::Hash;
     let payload = norito::to_bytes(val).expect("encode payload");
@@ -18,26 +17,22 @@ fn build_tlv<T: norito::NoritoSerialize>(type_id: u16, val: &T) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 #[test]
 fn register_and_unregister_domain_queue_instructions() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
-
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let tlv = build_tlv(0x0008, &domain_id);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let ptr = Memory::INPUT_START;
     vm.set_register(10, ptr);
-
     // Register
     let res = host.syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &mut vm);
     assert!(res.is_ok());
     let queued = host.drain_instructions();
     assert_eq!(queued.len(), 1);
-
     // Unregister (reset host)
     let mut host2 = CoreHost::new(ALICE_ID.clone());
     vm.set_register(10, ptr);
@@ -46,14 +41,12 @@ fn register_and_unregister_domain_queue_instructions() {
     let queued2 = host2.drain_instructions();
     assert_eq!(queued2.len(), 1);
 }
-
 #[test]
 fn transfer_domain_queues_instruction() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
-
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let tlv_dom = build_tlv(0x0008, &domain_id);
     vm.memory.preload_input(0, &tlv_dom).expect("preload input");
@@ -65,20 +58,17 @@ fn transfer_domain_queues_instruction() {
     let p_to = Memory::INPUT_START + 256;
     vm.set_register(10, p_dom);
     vm.set_register(11, p_to);
-
     let res = host.syscall(syscalls::SYSCALL_TRANSFER_DOMAIN, &mut vm);
     assert!(res.is_ok());
     let queued = host.drain_instructions();
     assert_eq!(queued.len(), 1);
 }
-
 #[test]
 fn register_domain_rejects_wrong_type() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
-
     // Use AccountId TLV where DomainId expected (type mismatch)
     let bad = build_tlv(0x0001, &ALICE_ID.clone());
     vm.memory.preload_input(0, &bad).expect("preload input");
@@ -86,7 +76,6 @@ fn register_domain_rejects_wrong_type() {
     let res = host.syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &mut vm);
     assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
 }
-
 #[test]
 fn register_domain_rejects_corrupted_hash() {
     use iroha_crypto::Hash;
@@ -94,7 +83,6 @@ fn register_domain_rejects_corrupted_hash() {
     let mut vm = IVM::new(0);
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
-
     let did: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let payload = norito::to_bytes(&did).expect("encode domain id");
     let mut blob = Vec::new();

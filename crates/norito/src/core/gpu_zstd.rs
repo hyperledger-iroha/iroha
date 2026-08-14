@@ -4,7 +4,6 @@
 //! fall back to the CPU implementation if no supported accelerator is present.
 //! Helper libraries must pass an encode/decode self-test before Norito registers
 //! them as accelerated backends.
-
 #[cfg(unix)]
 use std::ffi::{c_char, c_int};
 #[cfg(unix)]
@@ -26,7 +25,6 @@ unsafe extern "C" {
     fn objc_autoreleasePoolPush() -> *mut c_void;
     fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
-
 #[cfg(unix)]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -48,11 +46,9 @@ unsafe extern "system" {
 const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
 #[cfg(windows)]
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
-
 #[cfg(unix)]
 const RTLD_LAZY: c_int = 1;
 const RC_GPU_UNAVAILABLE: i32 = 3;
-
 type CompressFn = unsafe extern "C" fn(
     src: *const u8,
     src_len: usize,
@@ -62,7 +58,6 @@ type CompressFn = unsafe extern "C" fn(
 ) -> i32;
 type DecompressFn =
     unsafe extern "C" fn(src: *const u8, src_len: usize, dst: *mut u8, dst_len: *mut usize) -> i32;
-
 #[derive(Debug)]
 enum SelfTestFailure {
     GpuCompress { rc: i32, len: usize, cap: usize },
@@ -77,7 +72,6 @@ enum SelfTestFailure {
     GpuRoundtripDecompress { rc: i32, len: usize, cap: usize },
     GpuRoundtripMismatch,
 }
-
 impl SelfTestFailure {
     fn rc_label(rc: i32) -> &'static str {
         match rc {
@@ -90,7 +84,6 @@ impl SelfTestFailure {
         }
     }
 }
-
 impl fmt::Display for SelfTestFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -142,7 +135,6 @@ impl fmt::Display for SelfTestFailure {
         }
     }
 }
-
 enum Backend {
     Cpu,
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -156,7 +148,6 @@ enum Backend {
         decompress: DecompressFn,
     },
 }
-
 static BACKEND: OnceLock<Backend> = OnceLock::new();
 static BACKEND_DISABLED: AtomicBool = AtomicBool::new(false);
 static VALIDATE_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -164,7 +155,6 @@ const VALIDATE_INITIAL_CALLS: usize = 4;
 const VALIDATE_INTERVAL: usize = 257;
 #[cfg(windows)]
 static DLL_DIRECTORY_SETUP: OnceLock<Result<(), String>> = OnceLock::new();
-
 #[cfg(windows)]
 fn report_gpu_load_failure(message: impl AsRef<str>) {
     eprintln!(
@@ -172,7 +162,6 @@ fn report_gpu_load_failure(message: impl AsRef<str>) {
         message.as_ref()
     );
 }
-
 #[cfg(windows)]
 fn ensure_secure_dll_search_path() -> Result<(), String> {
     DLL_DIRECTORY_SETUP
@@ -189,7 +178,6 @@ fn ensure_secure_dll_search_path() -> Result<(), String> {
         })
         .clone()
 }
-
 #[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 fn unix_gpu_helper_library_names() -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
@@ -201,12 +189,10 @@ fn unix_gpu_helper_library_names() -> &'static [&'static str] {
         &["libgpuzstd_cuda.so"]
     }
 }
-
 #[cfg(windows)]
 fn windows_gpu_helper_library_names() -> &'static [&'static str] {
     &["gpuzstd_cuda.dll"]
 }
-
 fn gpu_self_test_sample(
     compress: CompressFn,
     decompress: DecompressFn,
@@ -311,11 +297,9 @@ fn gpu_self_test_sample(
     }
     Ok(())
 }
-
 fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), SelfTestFailure> {
     const SAMPLE: &[u8] = b"norito gpu roundtrip parity check v1";
     gpu_self_test_sample(compress, decompress, SAMPLE)?;
-
     for &len in &[
         super::heuristics::Heuristics::canonical().min_compress_bytes_gpu,
         super::heuristics::Heuristics::canonical()
@@ -327,7 +311,6 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
     }
     Ok(())
 }
-
 fn deterministic_payload(len: usize, mut seed: u64) -> Vec<u8> {
     let mut out = vec![0u8; len];
     for (idx, byte) in out.iter_mut().enumerate() {
@@ -338,7 +321,6 @@ fn deterministic_payload(len: usize, mut seed: u64) -> Vec<u8> {
     }
     out
 }
-
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe fn init_backend() -> Option<Backend> {
     #[link(name = "Metal", kind = "framework")]
@@ -371,7 +353,6 @@ unsafe fn init_backend() -> Option<Backend> {
         decompress: decompress_fn,
     })
 }
-
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 unsafe fn init_backend() -> Option<Backend> {
     #[cfg(unix)]
@@ -440,11 +421,9 @@ unsafe fn init_backend() -> Option<Backend> {
     #[allow(unreachable_code)]
     None
 }
-
 #[cfg(unix)]
 unsafe fn load_gpu_symbols(lib_names: &[&str]) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
     use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = env::current_exe()
         && let Some(dir) = exe.parent()
@@ -453,7 +432,6 @@ unsafe fn load_gpu_symbols(lib_names: &[&str]) -> Option<(*mut c_void, CompressF
             candidates.extend(helper_candidates_from_exe_dir(dir, lib_name));
         }
     }
-
     for path in candidates {
         let bytes = path.as_os_str().as_bytes();
         if bytes.contains(&0) {
@@ -466,7 +444,6 @@ unsafe fn load_gpu_symbols(lib_names: &[&str]) -> Option<(*mut c_void, CompressF
             }
         }
     }
-
     for lib_name in lib_names {
         if let Ok(path) = CString::new(*lib_name) {
             let library = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
@@ -477,10 +454,8 @@ unsafe fn load_gpu_symbols(lib_names: &[&str]) -> Option<(*mut c_void, CompressF
             }
         }
     }
-
     None
 }
-
 #[cfg(unix)]
 unsafe fn resolve_gpu_symbols(
     library: *mut c_void,
@@ -491,12 +466,10 @@ unsafe fn resolve_gpu_symbols(
         let _ = unsafe { dlclose(library) };
         return None;
     }
-
     let compress_fn: CompressFn = unsafe { std::mem::transmute(compress) };
     let decompress_fn: DecompressFn = unsafe { std::mem::transmute(decompress) };
     Some((library, compress_fn, decompress_fn))
 }
-
 #[cfg(unix)]
 #[cfg_attr(all(target_os = "macos", target_arch = "aarch64"), allow(dead_code))]
 fn helper_candidates_from_exe_dir(exe_dir: &Path, lib_name: &str) -> Vec<PathBuf> {
@@ -507,19 +480,15 @@ fn helper_candidates_from_exe_dir(exe_dir: &Path, lib_name: &str) -> Vec<PathBuf
         exe_dir.join("../../lib").join(lib_name),
     ]
 }
-
 fn backend() -> &'static Backend {
     BACKEND.get_or_init(|| unsafe { init_backend().unwrap_or(Backend::Cpu) })
 }
-
 fn disable_backend() {
     BACKEND_DISABLED.store(true, Ordering::SeqCst);
 }
-
 fn backend_disabled() -> bool {
     BACKEND_DISABLED.load(Ordering::SeqCst)
 }
-
 fn try_gpu_encode(compress: CompressFn, payload: &[u8], level: i32) -> Option<Vec<u8>> {
     let mut cap = payload.len().saturating_mul(2) + 128;
     for _ in 0..5 {
@@ -548,7 +517,6 @@ fn try_gpu_encode(compress: CompressFn, payload: &[u8], level: i32) -> Option<Ve
     }
     None
 }
-
 fn try_gpu_decode(
     decompress: DecompressFn,
     compressed: &[u8],
@@ -570,7 +538,6 @@ fn try_gpu_decode(
     out.truncate(out_len);
     Some(out)
 }
-
 /// Returns `true` if a supported GPU backend (CUDA or Metal) is available.
 pub fn available() -> bool {
     if !super::hw::gpu_policy_allowed() || backend_disabled() {
@@ -578,7 +545,6 @@ pub fn available() -> bool {
     }
     !matches!(backend(), Backend::Cpu)
 }
-
 pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
     let min_gpu_bytes = super::heuristics::get().min_compress_bytes_gpu;
     if payload.len() < min_gpu_bytes || !super::hw::gpu_policy_allowed() || backend_disabled() {
@@ -603,18 +569,15 @@ pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
         }
         Backend::Cpu => {}
     }
-
     // CPU fallback
     zstd::encode_all(std::io::Cursor::new(payload), level)
 }
-
 fn should_validate_encoded_sample() -> bool {
     let call = VALIDATE_CALLS
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
     call <= VALIDATE_INITIAL_CALLS || call.is_multiple_of(VALIDATE_INTERVAL)
 }
-
 fn validate_single_zstd_frame(encoded: &[u8]) -> bool {
     if encoded.is_empty() {
         return false;
@@ -624,7 +587,6 @@ fn validate_single_zstd_frame(encoded: &[u8]) -> bool {
         Ok(frame_len) if frame_len == encoded.len()
     )
 }
-
 fn validate_encoded_sample(payload: &[u8], encoded: &[u8]) -> bool {
     if !should_validate_encoded_sample() {
         return true;
@@ -637,11 +599,9 @@ fn validate_encoded_sample(payload: &[u8], encoded: &[u8]) -> bool {
         Err(_) => false,
     }
 }
-
 fn validate_or_disable_encoded_sample(payload: &[u8], encoded: &[u8]) -> bool {
     validate_or_disable_encoded_sample_with(payload, encoded, disable_backend)
 }
-
 fn validate_or_disable_encoded_sample_with(
     payload: &[u8],
     encoded: &[u8],
@@ -654,7 +614,6 @@ fn validate_or_disable_encoded_sample_with(
         false
     }
 }
-
 pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, super::Error> {
     let target_len = super::payload_len_to_usize(uncompressed_size)?;
     if !validate_single_zstd_frame(compressed) {
@@ -681,7 +640,6 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
         }
         Backend::Cpu => {}
     }
-
     // CPU fallback
     let decoder = zstd::Decoder::new(compressed)?;
     let mut out = Vec::with_capacity(target_len);
@@ -692,19 +650,14 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
     }
     Ok(out)
 }
-
 #[cfg(all(test, feature = "gpu-compression"))]
 mod tests {
-    use rand::{Rng, SeedableRng, rngs::StdRng};
-    use std::{io::Cursor, sync::Mutex};
-
     use super::*;
     use crate::core::hw;
-
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use std::{io::Cursor, sync::Mutex};
     static GPU_POLICY_TEST_LOCK: Mutex<()> = Mutex::new(());
-
     struct GpuPolicyGuard(bool);
-
     impl GpuPolicyGuard {
         fn set(allowed: bool) -> Self {
             let previous = hw::gpu_policy_allowed();
@@ -712,17 +665,14 @@ mod tests {
             Self(previous)
         }
     }
-
     impl Drop for GpuPolicyGuard {
         fn drop(&mut self) {
             hw::set_gpu_compression_allowed(self.0);
         }
     }
-
     fn cuda_required() -> bool {
         std::env::var_os("GPUZSTD_CUDA_REQUIRE").is_some()
     }
-
     #[test]
     fn raw_roundtrip() {
         let data = b"hello world".to_vec();
@@ -730,7 +680,6 @@ mod tests {
         let decoded = decode_all(&encoded, data.len() as u64).expect("decode");
         assert_eq!(decoded, data);
     }
-
     #[test]
     fn decode_all_rejects_length_mismatch() {
         let data = b"length mismatch".to_vec();
@@ -738,24 +687,20 @@ mod tests {
         let result = decode_all(&encoded, (data.len() as u64).saturating_sub(1));
         assert!(matches!(result, Err(crate::core::Error::LengthMismatch)));
     }
-
     #[test]
     fn decode_all_rejects_trailing_zstd_frame() {
         let data = b"trailing frame".to_vec();
         let mut encoded = zstd::encode_all(Cursor::new(&data), 1).expect("encode");
         let empty_frame = zstd::encode_all(Cursor::new(Vec::<u8>::new()), 1).expect("empty frame");
         encoded.extend_from_slice(&empty_frame);
-
         let result = decode_all(&encoded, data.len() as u64);
         assert!(matches!(result, Err(crate::core::Error::LengthMismatch)));
     }
-
     #[test]
     fn availability_probe_runs() {
         // Should simply return a boolean without panicking
         let _ = available();
     }
-
     #[test]
     fn required_cuda_backend_is_registered_when_requested() {
         if !cuda_required() {
@@ -765,7 +710,6 @@ mod tests {
             available(),
             "GPUZSTD_CUDA_REQUIRE requires Norito to register the CUDA zstd backend"
         );
-
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         {
             let data = vec![0x5au8; 1024 * 1024];
@@ -785,7 +729,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn encode_all_small_payload_uses_cpu_path() {
         let min_gpu = crate::core::heuristics::get().min_compress_bytes_gpu;
@@ -798,7 +741,6 @@ mod tests {
         let gpu = encode_all(data, 1).expect("gpu encode");
         assert_eq!(gpu, cpu);
     }
-
     #[test]
     fn gpu_roundtrip_if_available() {
         if !available() {
@@ -810,14 +752,12 @@ mod tests {
         let decoded = decode_all(&encoded, data.len() as u64).expect("decode");
         assert_eq!(decoded, data);
     }
-
     fn sample_payload(len: usize) -> Vec<u8> {
         let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
         let mut payload = vec![0u8; len];
         rng.fill(payload.as_mut_slice());
         payload
     }
-
     #[test]
     fn gpu_encode_decodes_to_payload_when_available() {
         let _lock = GPU_POLICY_TEST_LOCK
@@ -844,7 +784,6 @@ mod tests {
             "CPU roundtrip must match original payload"
         );
     }
-
     #[test]
     fn gpu_decode_matches_cpu_when_available() {
         let _lock = GPU_POLICY_TEST_LOCK
@@ -867,21 +806,16 @@ mod tests {
         );
     }
 }
-
 #[cfg(test)]
 mod self_test {
+    use super::*;
     use std::cell::Cell;
     use std::sync::Mutex;
     use std::{io, io::Write, path::Path, path::PathBuf, ptr, slice};
-
-    use super::*;
-
     static VALIDATION_TEST_LOCK: Mutex<()> = Mutex::new(());
-
     fn reset_validation_test_state() {
         VALIDATE_CALLS.store(0, Ordering::Relaxed);
     }
-
     unsafe extern "C" fn compress_stub(
         src: *const u8,
         src_len: usize,
@@ -901,7 +835,6 @@ mod self_test {
         }
         0
     }
-
     unsafe extern "C" fn compress_with_trailing_empty_frame(
         src: *const u8,
         src_len: usize,
@@ -924,7 +857,6 @@ mod self_test {
         }
         0
     }
-
     unsafe extern "C" fn decompress_stub(
         src: *const u8,
         src_len: usize,
@@ -944,7 +876,6 @@ mod self_test {
         }
         0
     }
-
     unsafe extern "C" fn compress_unavailable_stub(
         _src: *const u8,
         _src_len: usize,
@@ -954,7 +885,6 @@ mod self_test {
     ) -> i32 {
         RC_GPU_UNAVAILABLE
     }
-
     unsafe extern "C" fn compress_invalid_len_success(
         _src: *const u8,
         _src_len: usize,
@@ -966,7 +896,6 @@ mod self_test {
         unsafe { *dst_len = capacity.saturating_add(1) };
         0
     }
-
     unsafe extern "C" fn compress_unavailable_immediate(
         _src: *const u8,
         _src_len: usize,
@@ -976,7 +905,6 @@ mod self_test {
     ) -> i32 {
         RC_GPU_UNAVAILABLE
     }
-
     unsafe extern "C" fn decompress_invalid_len_success(
         _src: *const u8,
         _src_len: usize,
@@ -987,12 +915,10 @@ mod self_test {
         unsafe { *dst_len = capacity.saturating_add(1) };
         0
     }
-
     #[test]
     fn gpu_self_test_passes_for_cpu_stubs() {
         assert!(gpu_self_test(compress_stub, decompress_stub).is_ok());
     }
-
     #[test]
     fn gpu_self_test_rejects_unavailable_compress_even_when_decode_works() {
         let err = gpu_self_test(compress_unavailable_stub, decompress_stub)
@@ -1005,33 +931,28 @@ mod self_test {
             }
         ));
     }
-
     #[test]
     fn gpu_self_test_rejects_trailing_frame_output() {
         let err = gpu_self_test(compress_with_trailing_empty_frame, decompress_stub)
             .expect_err("GPU helper output must be a single zstd frame");
         assert!(matches!(err, SelfTestFailure::GpuOutputNotSingleFrame));
     }
-
     #[test]
     fn try_gpu_encode_rejects_invalid_success_length() {
         let payload = b"encode helper length check";
         assert!(try_gpu_encode(compress_invalid_len_success, payload, 1).is_none());
     }
-
     #[test]
     fn try_gpu_encode_stops_on_gpu_unavailable() {
         let payload = b"gpu unavailable";
         assert!(try_gpu_encode(compress_unavailable_immediate, payload, 1).is_none());
     }
-
     #[test]
     fn try_gpu_decode_rejects_invalid_success_length() {
         let payload = b"decode helper length check";
         let encoded = zstd::encode_all(io::Cursor::new(payload), 1).expect("cpu encode");
         assert!(try_gpu_decode(decompress_invalid_len_success, &encoded, payload.len()).is_none());
     }
-
     #[test]
     fn sampled_validation_rejects_wrong_decoded_payload() {
         let _guard = VALIDATION_TEST_LOCK
@@ -1043,7 +964,6 @@ mod self_test {
             zstd::encode_all(io::Cursor::new(b"different payload"), 1).expect("cpu encode");
         assert!(!validate_encoded_sample(payload, &encoded_wrong));
     }
-
     #[test]
     fn sampled_validation_rejects_trailing_empty_frame() {
         let _guard = VALIDATION_TEST_LOCK
@@ -1055,11 +975,9 @@ mod self_test {
         let empty_frame =
             zstd::encode_all(io::Cursor::new(Vec::<u8>::new()), 1).expect("empty frame");
         encoded.extend_from_slice(&empty_frame);
-
         assert!(!validate_single_zstd_frame(&encoded));
         assert!(!validate_encoded_sample(payload, &encoded));
     }
-
     #[test]
     fn sampled_validation_accepts_byte_distinct_single_frame_same_payload() {
         let _guard = VALIDATION_TEST_LOCK
@@ -1072,12 +990,10 @@ mod self_test {
         encoder.include_checksum(true).expect("enable checksum");
         encoder.write_all(payload).expect("write payload");
         let checksummed = encoder.finish().expect("finish encoder");
-
         assert_ne!(checksummed, encoded);
         assert!(validate_single_zstd_frame(&checksummed));
         assert!(validate_encoded_sample(payload, &checksummed));
     }
-
     #[test]
     fn sampled_validation_skips_until_interval_then_checks_again() {
         let _guard = VALIDATION_TEST_LOCK
@@ -1087,14 +1003,11 @@ mod self_test {
         let payload = b"expected payload";
         let encoded_wrong =
             zstd::encode_all(io::Cursor::new(b"different payload"), 1).expect("cpu encode");
-
         VALIDATE_CALLS.store(VALIDATE_INITIAL_CALLS, Ordering::Relaxed);
         assert!(validate_encoded_sample(payload, &encoded_wrong));
-
         VALIDATE_CALLS.store(VALIDATE_INTERVAL - 1, Ordering::Relaxed);
         assert!(!validate_encoded_sample(payload, &encoded_wrong));
     }
-
     #[test]
     fn sampled_validation_mismatch_disables_backend() {
         let _guard = VALIDATION_TEST_LOCK
@@ -1105,7 +1018,6 @@ mod self_test {
         let encoded_wrong =
             zstd::encode_all(io::Cursor::new(b"different payload"), 1).expect("cpu encode");
         let disabled = Cell::new(false);
-
         assert!(!validate_or_disable_encoded_sample_with(
             payload,
             &encoded_wrong,
@@ -1113,7 +1025,6 @@ mod self_test {
         ));
         assert!(disabled.get());
     }
-
     #[cfg(unix)]
     #[test]
     fn helper_candidates_include_parent_sibling_library() {
@@ -1132,7 +1043,6 @@ mod self_test {
             "candidate list should include parent sibling dylib used by cargo-run examples"
         );
     }
-
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn unix_gpu_helper_names_use_cuda_helper_only() {
@@ -1148,7 +1058,6 @@ mod self_test {
         );
         assert!(!names.contains(&"libgpuzstd_metal.so"));
     }
-
     unsafe extern "C" fn compress_corrupt(
         _src: *const u8,
         _src_len: usize,
@@ -1167,14 +1076,12 @@ mod self_test {
         }
         0
     }
-
     #[test]
     fn gpu_self_test_detects_corruption() {
         let err = gpu_self_test(compress_corrupt, decompress_stub)
             .expect_err("corrupted payload should fail self-test");
         assert!(matches!(err, SelfTestFailure::GpuOutputNotSingleFrame));
     }
-
     #[test]
     fn self_test_error_reports_rc() {
         let err = SelfTestFailure::GpuCompress {

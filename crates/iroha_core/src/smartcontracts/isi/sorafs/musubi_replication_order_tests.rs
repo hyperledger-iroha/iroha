@@ -1,12 +1,10 @@
 // Same-scope Musubi replication-order regressions extracted to keep the parent source bounded.
-
 #[test]
 fn issue_replication_order_atomically_installs_musubi_archive_binding() {
     let state = make_state();
     let mut block = state.block(block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
-
     let pin = registry_grade_musubi_pin();
     let archive = musubi_archive_for_pin(&pin, 0x61);
     let archive_id = archive.archive_id;
@@ -14,7 +12,6 @@ fn issue_replication_order_atomically_installs_musubi_archive_binding() {
     stx.world
         .musubi_archives
         .insert(archive_id, archive.clone());
-
     let order_id = ReplicationOrderId::new([0x62; 32]);
     let providers = vec![
         ProviderId::new([0x63; 32]),
@@ -27,7 +24,6 @@ fn issue_replication_order_atomically_installs_musubi_archive_binding() {
         .for_musubi_archive(archive_id)
         .execute(&alice(), &mut stx)
         .expect("issue archive-bound replication order");
-
     assert!(stx.world.replication_orders.get(&order_id).is_some());
     let reference = stx
         .world

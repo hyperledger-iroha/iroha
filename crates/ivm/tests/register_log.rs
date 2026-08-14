@@ -1,7 +1,6 @@
 use ivm::{IVM, encoding, instruction};
 mod common;
 use common::assemble_zk;
-
 #[test]
 fn test_register_events_logged() {
     // Program: store 0x11 at heap, load it back

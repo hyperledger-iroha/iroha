@@ -1,7 +1,4 @@
 //! Example wire model for one custom instruction.
-
-use std::{borrow::ToOwned, format, string::String, vec::Vec};
-
 use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{CustomInstruction, InstructionBox},
@@ -12,56 +9,46 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-
+use std::{borrow::ToOwned, format, string::String, vec::Vec};
 #[derive(Debug, IntoSchema)]
 pub enum CustomInstructionBox {
     MintAssetForAllAccounts(MintAssetForAllAccounts),
     // Other custom instructions
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize, IntoSchema)]
 pub struct MintAssetForAllAccounts {
     pub asset_definition: AssetDefinitionId,
     pub quantity: Quantity,
 }
-
 impl From<MintAssetForAllAccounts> for CustomInstructionBox {
     fn from(isi: MintAssetForAllAccounts) -> Self {
         Self::MintAssetForAllAccounts(isi)
     }
 }
-
 // Do not implement the sealed Instruction trait for custom types; wrap into CustomInstruction instead.
-
 impl From<CustomInstructionBox> for CustomInstruction {
     fn from(isi: CustomInstructionBox) -> Self {
         let payload =
             json::to_value(&isi).expect("INTERNAL BUG: Couldn't serialize custom instruction");
-
         Self::new(payload)
     }
 }
-
 impl From<MintAssetForAllAccounts> for InstructionBox {
     fn from(isi: MintAssetForAllAccounts) -> Self {
         InstructionBox::from(CustomInstruction::from(CustomInstructionBox::from(isi)))
     }
 }
-
 impl From<CustomInstructionBox> for InstructionBox {
     fn from(isi: CustomInstructionBox) -> Self {
         InstructionBox::from(CustomInstruction::from(isi))
     }
 }
-
 impl TryFrom<&Json> for CustomInstructionBox {
     type Error = json::Error;
-
     fn try_from(payload: &Json) -> Result<Self, json::Error> {
         json::from_str::<Self>(payload.as_ref())
     }
 }
-
 impl json::JsonSerialize for CustomInstructionBox {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -75,12 +62,10 @@ impl json::JsonSerialize for CustomInstructionBox {
         out.push('}');
     }
 }
-
 impl json::JsonDeserialize for CustomInstructionBox {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
         let mut variant: Option<Self> = None;
-
         while let Some(key) = visitor.next_key()? {
             let key_str = key.as_str();
             match key_str {
@@ -97,9 +82,7 @@ impl json::JsonDeserialize for CustomInstructionBox {
                 }
             }
         }
-
         visitor.finish()?;
-
         variant.ok_or_else(|| json::Error::missing_field("CustomInstructionBox"))
     }
 }

@@ -1,9 +1,7 @@
 // Production-kernel gate and refinement proof tail.
 //
 // Included lexically by `verus_proofs` so public item paths remain unchanged.
-
 verus! {
-
 /// Exact executable volatile-cardinality checker used by production.
 pub fn verified_volatile_summary_gate(
     summary: ProductionVolatileSummaryProjection,
@@ -14,7 +12,6 @@ pub fn verified_volatile_summary_gate(
 {
     volatile_summary_well_formed_body!(summary, validator_count)
 }
-
 /// Exact executable signed-completion classifier used by production.
 pub fn verified_signed_message_class_gate(
     facts: ProductionTransitionFactsProjection,
@@ -28,7 +25,6 @@ pub fn verified_signed_message_class_gate(
     }
     accepted
 }
-
 /// Exact executable stutter-action checker used by production.
 pub fn verified_stutter_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -42,7 +38,6 @@ pub fn verified_stutter_action_gate(
     }
     accepted
 }
-
 /// Exact executable begin-WAL action checker used by production.
 pub fn verified_begin_wal_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -56,7 +51,6 @@ pub fn verified_begin_wal_action_gate(
     }
     accepted
 }
-
 /// Exact executable acknowledge-WAL action checker used by production.
 pub fn verified_acknowledge_wal_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -70,7 +64,6 @@ pub fn verified_acknowledge_wal_action_gate(
     }
     accepted
 }
-
 /// Exact executable successful-validation effect checker used by production.
 pub fn verified_validation_completed_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -84,7 +77,6 @@ pub fn verified_validation_completed_action_gate(
     }
     accepted
 }
-
 /// Exact executable body-progress action checker used by production.
 pub fn verified_body_progress_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -98,7 +90,6 @@ pub fn verified_body_progress_action_gate(
     }
     accepted
 }
-
 /// Exact executable volatile-protocol action checker used by production.
 #[verifier::spinoff_prover]
 pub fn verified_volatile_protocol_action_gate(
@@ -113,7 +104,6 @@ pub fn verified_volatile_protocol_action_gate(
     }
     accepted
 }
-
 /// Exact executable application-completion action checker used by production.
 pub fn verified_complete_application_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -127,7 +117,6 @@ pub fn verified_complete_application_action_gate(
     }
     accepted
 }
-
 /// Exact executable replay-resumption checker used by production.
 pub fn verified_resume_after_replay_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -141,7 +130,6 @@ pub fn verified_resume_after_replay_action_gate(
     }
     accepted
 }
-
 /// Exact executable action-discriminant checker used by production.
 pub fn verified_action_kind_gate(
     facts: ProductionTransitionFactsProjection,
@@ -164,7 +152,6 @@ pub fn verified_action_kind_gate(
     }
     accepted
 }
-
 /// Exact executable action/WAL/signature-class checker used by production.
 pub fn verified_named_action_gate(
     facts: ProductionTransitionFactsProjection,
@@ -182,7 +169,6 @@ pub fn verified_named_action_gate(
     }
     accepted
 }
-
 /// Exact executable per-slot authorization checker used by production.
 pub fn verified_effect_slots_gate(
     trace: ProductionEffectTraceProjection,
@@ -192,7 +178,6 @@ pub fn verified_effect_slots_gate(
 {
     effect_slots_authorized_body!(trace)
 }
-
 /// Exact executable effect-discriminant counter used by production.
 pub fn verified_effect_count_gate(
     trace: ProductionEffectTraceProjection,
@@ -203,7 +188,6 @@ pub fn verified_effect_count_gate(
 {
     effect_count_body!(trace, kind)
 }
-
 /// Exact executable order constraints used by production.
 pub fn verified_effect_order_constraints_gate(
     trace: ProductionEffectTraceProjection,
@@ -241,7 +225,6 @@ pub fn verified_effect_order_constraints_gate(
         enter_count,
     )
 }
-
 /// Exact executable vector-order checker used by production.
 pub fn verified_effect_order_gate(
     trace: ProductionEffectTraceProjection,
@@ -257,7 +240,6 @@ pub fn verified_effect_order_gate(
         verified_effect_order_constraints_gate,
     )
 }
-
 /// Exact executable combined effect checker used by the production gate.
 pub fn verified_effect_trace_gate(
     trace: ProductionEffectTraceProjection,
@@ -273,7 +255,6 @@ pub fn verified_effect_trace_gate(
         verified_effect_order_gate,
     )
 }
-
 /// Exact executable branch constraints used by the production gate.
 pub fn verified_transition_branch_constraints_gate(
     facts: ProductionTransitionFactsProjection,
@@ -302,7 +283,6 @@ pub fn verified_transition_branch_constraints_gate(
         enter_count,
     )
 }
-
 /// Exact executable branch checker used by the production gate.
 pub fn verified_transition_branch_gate(
     facts: ProductionTransitionFactsProjection,
@@ -316,7 +296,6 @@ pub fn verified_transition_branch_gate(
         verified_transition_branch_constraints_gate,
     )
 }
-
 /// Exact executable decision procedure used by `refinement::accepts` in a
 /// normal build.  The body is one shared macro expansion, not a transcription.
 pub fn verified_production_transition_gate(
@@ -337,14 +316,12 @@ pub fn verified_production_transition_gate(
     }
     accepted
 }
-
 /// Safety relation of the exact primitive production kernel.
 pub closed spec fn production_kernel_relation(
     projection: ProductionTransitionProjection,
 ) -> bool {
     production_transition_action_relation(production_facts_from_projection(projection))
 }
-
 /// An accepted active persisted-TC transition selects the maximum of the
 /// pre-transition lock and the TC's highest `PrepareQC`, carries that exact
 /// durable lock in `EnterView`, and emits one immediately following recovery
@@ -385,7 +362,6 @@ pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
     reveal(production_enter_view_selected_lock);
     reveal(production_enter_view_has_exact_following_fetch);
 }
-
 /// An accepted active persisted-TC transition exposes the complete exact
 /// `EnterView` fact consumed by the effective-lock production refinement.
 pub proof fn accepted_core_enter_view_has_exact_fact(
@@ -402,7 +378,6 @@ pub proof fn accepted_core_enter_view_has_exact_fact(
     reveal(production_facts_from_projection);
     reveal(production_enter_view_exact_fact);
 }
-
 /// Exact executable kernel called conceptually by `refinement::accepts`:
 /// derive facts from concrete primitives first, then evaluate the established
 /// transition gate.  No authorization or action-exactness boolean is an input.
@@ -419,7 +394,6 @@ pub fn verified_production_kernel(
     }
     accepted
 }
-
 /// A nonzero invariant-violation counter cannot be hidden by the fact
 /// derivation and therefore cannot pass the production kernel.
 pub proof fn production_kernel_rejects_invalid_before_state(
@@ -441,7 +415,6 @@ pub proof fn production_kernel_rejects_invalid_before_state(
     reveal(production_kernel_relation);
     reveal(production_transition_action_relation);
 }
-
 /// A counterfeit grant whose primitive key differs from the requested key in
 /// any active slot cannot authorize the effect vector.
 pub proof fn production_effect_slot_rejects_counterfeit_grant(
@@ -456,7 +429,6 @@ pub proof fn production_effect_slot_rejects_counterfeit_grant(
         !production_effect_slot_authorized(slot),
 {
 }
-
 /// Acceptance refines to the production action relation and exposes the
 /// durable invariants and complete per-slot effect authorization on which the
 /// reducer's commit depends.
@@ -514,5 +486,4 @@ pub proof fn accepted_production_transition_refines_action(
 {
     reveal(production_transition_action_relation);
 }
-
 } // verus!

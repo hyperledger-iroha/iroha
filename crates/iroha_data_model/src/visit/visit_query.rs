@@ -1,19 +1,15 @@
 //! Visitor helper functions for queries.
-
+use super::Visit;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
-
-use super::Visit;
 // Alias the `query` module for ergonomic type references within this module.
 use crate::query as query_mod;
 use crate::{
     prelude::*,
     query::{AnyQueryBox, QueryWithParams, SingularQueryBox},
 };
-
 #[cfg(test)]
 static SINGULAR_QUERY_FALLBACK_HIT: AtomicBool = AtomicBool::new(false);
-
 fn payload_is_exact_query<Q>(payload: &[u8]) -> bool
 where
     Q: norito::codec::Decode + norito::codec::Encode,
@@ -24,7 +20,6 @@ where
     };
     input.is_empty() && norito::codec::Encode::encode(&query) == payload
 }
-
 fn decode_exact<T>(payload: &[u8]) -> Option<T>
 where
     T: norito::codec::Decode + norito::codec::Encode,
@@ -33,7 +28,6 @@ where
     let value = <T as norito::codec::Decode>::decode(&mut input).ok()?;
     (input.is_empty() && norito::codec::Encode::encode(&value) == payload).then_some(value)
 }
-
 macro_rules! try_visit_singular_queries {
     ($visitor:expr, $query:expr; $($method:ident($variant:ident)),+ $(,)?) => {
         match $query {
@@ -47,7 +41,6 @@ macro_rules! try_visit_singular_queries {
         }
     };
 }
-
 fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
     visitor: &mut V,
     query: &SingularQueryBox,
@@ -97,7 +90,6 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
     }
 }
-
 fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
     visitor: &mut V,
     query: &SingularQueryBox,
@@ -157,7 +149,6 @@ fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_sorafs_moderation_events(FindSorafsModerationEvents),
     }
 }
-
 #[cfg(test)]
 fn handle_unvisited_singular_query(visited: bool) {
     if !visited {
@@ -165,17 +156,14 @@ fn handle_unvisited_singular_query(visited: bool) {
         panic!("singular query fallback matched a variant; add a visit_singular_query arm");
     }
 }
-
 #[cfg(not(test))]
 fn handle_unvisited_singular_query(_: bool) {}
-
 /// Dispatch a singular query to the matching visitor method.
 pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &SingularQueryBox) {
     let visited = try_visit_non_sorafs_singular_query(visitor, query)
         || try_visit_sorafs_singular_query(visitor, query);
     handle_unvisited_singular_query(visited);
 }
-
 /// Reconstruct and dispatch an iterable query from its canonical components.
 #[allow(
     clippy::too_many_lines,
@@ -183,7 +171,6 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
 )]
 pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &QueryWithParams) {
     let (item, predicate_bytes, selector_bytes, query_payload) = query_with_params.parts();
-
     macro_rules! visit_erased {
         ($item:ty, $method:ident) => {{
             let Some(predicate) =
@@ -204,7 +191,6 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
             visitor.$method(&query);
         }};
     }
-
     match item {
         query_mod::QueryItemKind::Domain => {
             visit_erased!(crate::domain::Domain, visit_find_domains)
@@ -298,7 +284,6 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
         | query_mod::QueryItemKind::AssetEscrowsByStatus => {}
     }
 }
-
 /// Dispatch a query wrapper to either singular or iterable handlers.
 pub fn visit_query<V: Visit + ?Sized>(visitor: &mut V, query: &AnyQueryBox) {
     match query {
@@ -306,7 +291,6 @@ pub fn visit_query<V: Visit + ?Sized>(visitor: &mut V, query: &AnyQueryBox) {
         AnyQueryBox::Iterable(query) => visitor.visit_iter_query(query),
     }
 }
-
 /// Macro generating visitor method signatures for every query variant.
 #[macro_export]
 macro_rules! query_visitors {
@@ -567,7 +551,6 @@ macro_rules! query_visitors {
             visit_find_fee_sponsor_program_by_id(
                 &$crate::query::nexus::prelude::FindFeeSponsorProgramById
             ),
-
             // Iterable Query visitors
             visit_find_domains(&$crate::query::ErasedIterQuery<$crate::domain::Domain>),
             visit_find_accounts(&$crate::query::ErasedIterQuery<$crate::account::Account>),
@@ -596,41 +579,33 @@ macro_rules! query_visitors {
         }
     };
 }
-
 macro_rules! define_query_visitors {
     ( $( $visitor:ident($operation:ty) ),+ $(,)? ) => { $(
         #[doc = concat!("Visit ", stringify!($operation), ".")]
         pub fn $visitor<V: Visit + ?Sized>(_visitor: &mut V, _operation: $operation) {}
     )+ };
 }
-
 query_visitors!(define_query_visitors);
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{asset::AssetId, prelude::*, query as query_mod, query::parameters::QueryParams};
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{Mutex, OnceLock},
     };
-
-    use super::*;
-    use crate::{asset::AssetId, prelude::*, query as query_mod, query::parameters::QueryParams};
-
     fn reset_singular_query_fallback_guard() {
         SINGULAR_QUERY_FALLBACK_HIT.store(false, Ordering::Relaxed);
     }
-
     fn singular_query_fallback_triggered() -> bool {
         SINGULAR_QUERY_FALLBACK_HIT.load(Ordering::Relaxed)
     }
-
     fn singular_query_tests_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-
     fn assert_singular_query_variant(query: &SingularQueryBox) {
         match query {
             SingularQueryBox::FindExecutorDataModel(_) => {}
@@ -733,30 +708,25 @@ mod tests {
             SingularQueryBox::__TestFallback => {}
         }
     }
-
     struct CountingVisitor {
         params: usize,
         domains: usize,
         roles_by_account: usize,
         accounts_with_asset: usize,
     }
-
     impl Visit for CountingVisitor {
         fn visit_find_parameters(&mut self, _: &FindParameters) {
             self.params += 1;
         }
-
         fn visit_find_domains(&mut self, _: &query_mod::ErasedIterQuery<crate::domain::Domain>) {
             self.domains += 1;
         }
-
         fn visit_find_roles_by_account_id(
             &mut self,
             _: &query_mod::ErasedIterQuery<crate::role::RoleId>,
         ) {
             self.roles_by_account += 1;
         }
-
         fn visit_find_accounts_with_asset(
             &mut self,
             _: &query_mod::ErasedIterQuery<crate::account::Account>,
@@ -764,16 +734,12 @@ mod tests {
             self.accounts_with_asset += 1;
         }
     }
-
     struct NoopVisitor;
-
     impl Visit for NoopVisitor {}
-
     #[derive(Default)]
     struct MusubiVisitor {
         seen: [bool; 11],
     }
-
     impl Visit for MusubiVisitor {
         fn visit_find_musubi_exact_package_v1(
             &mut self,
@@ -781,64 +747,54 @@ mod tests {
         ) {
             self.seen[0] = true;
         }
-
         fn visit_find_musubi_exact_release_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiExactReleaseV1,
         ) {
             self.seen[1] = true;
         }
-
         fn visit_find_musubi_provider_bundle_attestation_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiProviderBundleAttestationV1,
         ) {
             self.seen[10] = true;
         }
-
         fn visit_find_musubi_resolver_index_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiResolverIndexV1,
         ) {
             self.seen[2] = true;
         }
-
         fn visit_find_musubi_versions_v1(&mut self, _: &query_mod::musubi::FindMusubiVersionsV1) {
             self.seen[3] = true;
         }
-
         fn visit_find_musubi_maintainers_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiMaintainersV1,
         ) {
             self.seen[4] = true;
         }
-
         fn visit_find_musubi_archive_locations_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiArchiveLocationsV1,
         ) {
             self.seen[5] = true;
         }
-
         fn visit_find_musubi_archive_retention_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiArchiveRetentionV1,
         ) {
             self.seen[6] = true;
         }
-
         fn visit_find_musubi_alias_v1(&mut self, _: &query_mod::musubi::FindMusubiAliasV1) {
             self.seen[7] = true;
         }
-
         fn visit_find_musubi_alias_history_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiAliasHistoryV1,
         ) {
             self.seen[8] = true;
         }
-
         fn visit_find_musubi_ordered_prefix_v1(
             &mut self,
             _: &query_mod::musubi::FindMusubiOrderedPrefixV1,
@@ -846,7 +802,6 @@ mod tests {
             self.seen[9] = true;
         }
     }
-
     fn musubi_v1_singular_queries() -> Vec<SingularQueryBox> {
         use crate::musubi::{
             ArchiveId, MusubiAliasNameV1, MusubiAliasQueryV1, MusubiArchiveLocationQueryV1,
@@ -856,7 +811,6 @@ mod tests {
             MusubiPageRequestV1, MusubiProviderBundleAttestationKeyV1, MusubiReleaseIdV1,
             MusubiResolverIndexQueryV1, MusubiVersionV1,
         };
-
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
@@ -871,7 +825,6 @@ mod tests {
             limit: 50,
             cursor: None,
         };
-
         vec![
             query_mod::musubi::FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
                 package: package.clone(),
@@ -932,15 +885,12 @@ mod tests {
             .into(),
         ]
     }
-
     const ALICE_ACCOUNT_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
-
     fn query_with_default_params(
         query: QueryBox<query_mod::QueryOutputBatchBox>,
     ) -> QueryWithParams {
         QueryWithParams::new(&query, QueryParams::default())
     }
-
     #[test]
     fn visit_find_parameters_dispatches() {
         let mut visitor = CountingVisitor {
@@ -953,21 +903,17 @@ mod tests {
         visit_query(&mut visitor, &query);
         assert_eq!(visitor.params, 1);
     }
-
     #[test]
     fn musubi_v1_singular_query_inventory_dispatches_every_typed_hook() {
         let queries = musubi_v1_singular_queries();
         assert_eq!(queries.len(), 11);
-
         let mut visitor = MusubiVisitor::default();
         for query in &queries {
             assert_singular_query_variant(query);
             visit_singular_query(&mut visitor, query);
         }
-
         assert_eq!(visitor.seen, [true; 11]);
     }
-
     #[test]
     fn visit_find_domains_dispatches() {
         let mut visitor = CountingVisitor {
@@ -986,7 +932,6 @@ mod tests {
         visit_query(&mut visitor, &query);
         assert_eq!(visitor.domains, 1);
     }
-
     #[test]
     fn visit_parameterized_iterable_queries_dispatches_distinct_policy_hooks() {
         let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR)
@@ -1023,14 +968,11 @@ mod tests {
             roles_by_account: 0,
             accounts_with_asset: 0,
         };
-
         visit_query(&mut visitor, &roles);
         visit_query(&mut visitor, &accounts);
-
         assert_eq!(visitor.roles_by_account, 1);
         assert_eq!(visitor.accounts_with_asset, 1);
     }
-
     #[test]
     fn iterable_visitor_rejects_noncanonical_components() {
         let query = AnyQueryBox::Iterable(QueryWithParams {
@@ -1049,18 +991,14 @@ mod tests {
             roles_by_account: 0,
             accounts_with_asset: 0,
         };
-
         visit_query(&mut visitor, &query);
-
         assert_eq!(visitor.domains, 0);
     }
-
     #[test]
     fn singular_query_fallback_never_triggers_for_known_variants() {
         let _guard = singular_query_tests_guard();
         reset_singular_query_fallback_guard();
         let mut visitor = NoopVisitor;
-
         let proof_id = crate::proof::ProofId {
             backend: "test.backend".into(),
             proof_hash: [0x11; 32],
@@ -1148,7 +1086,6 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             )),
         ];
-
         for query in &queries {
             assert_singular_query_variant(query);
             visit_singular_query(&mut visitor, query);
@@ -1158,24 +1095,20 @@ mod tests {
             "singular query fallback matched a variant; add a visitor arm",
         );
     }
-
     #[test]
     fn singular_query_fallback_panics_for_missing_visitor() {
         let _guard = singular_query_tests_guard();
         reset_singular_query_fallback_guard();
         let mut visitor = NoopVisitor;
-
         let panic_payload = catch_unwind(AssertUnwindSafe(|| {
             visit_singular_query(&mut visitor, &SingularQueryBox::__TestFallback);
         }))
         .expect_err("singular query fallback should panic when visitor is missing");
-
         let panic_message = panic_payload
             .downcast_ref::<String>()
             .map(String::as_str)
             .or_else(|| panic_payload.downcast_ref::<&'static str>().copied())
             .unwrap_or_default();
-
         assert!(
             panic_message.contains(
                 "singular query fallback matched a variant; add a visit_singular_query arm"

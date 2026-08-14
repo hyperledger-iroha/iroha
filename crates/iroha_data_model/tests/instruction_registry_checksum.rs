@@ -4,12 +4,10 @@ use iroha_data_model::{
     prelude::{Encode, Level, Log},
 };
 use norito::decode_from_bytes;
-
 #[test]
 fn frame_helper_produces_valid_header() {
     let instruction = Log::new(Level::INFO, "bench".to_owned());
     let type_name = Instruction::id(&instruction);
-
     // Encode without a Norito header, then frame with the helper used by the registry.
     let payload = instruction.encode();
     let framed = norito::core::frame_bare_with_header_flags::<Log>(
@@ -17,7 +15,6 @@ fn frame_helper_produces_valid_header() {
         norito::core::default_encode_flags(),
     )
     .expect("frame payload");
-
     // Header checksum should match the payload bytes.
     let header_size = norito::core::Header::SIZE;
     assert!(
@@ -48,7 +45,6 @@ fn frame_helper_produces_valid_header() {
         norito::crc64_fallback(payload_bytes),
         "header checksum must match payload"
     );
-
     // And the registry should accept the framed bytes.
     let registry = InstructionRegistry::new().register::<Log>();
     let decoded = registry
@@ -56,7 +52,6 @@ fn frame_helper_produces_valid_header() {
         .expect("registered")
         .expect("decode framed payload");
     assert_eq!(Instruction::id(&*decoded), type_name);
-
     // Direct Norito decode should also succeed.
     let _ = decode_from_bytes::<Log>(&framed).expect("decode framed payload directly");
 }

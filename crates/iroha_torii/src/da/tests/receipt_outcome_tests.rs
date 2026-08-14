@@ -1,5 +1,4 @@
 // DA receipt-outcome and fixture-helper regressions.
-
 #[test]
 fn da_spool_rejection_response_allows_committed_receipt_outcomes() {
     for receipt_outcome in [
@@ -15,14 +14,12 @@ fn da_spool_rejection_response_allows_committed_receipt_outcomes() {
             Ok(DaSpoolActionOutput::ReceiptOutcome(receipt_outcome))
         }));
         let report = batch.execute_sync();
-
         assert!(
             da_spool_rejection_response(&report, ResponseFormat::Json).is_none(),
             "accepted receipt outcomes must not be converted into errors"
         );
     }
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_stale_receipt_outcome() {
     let mut batch = DaSpoolBatch::new();
@@ -34,10 +31,8 @@ fn da_spool_rejection_response_rejects_stale_receipt_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("stale receipt must produce a conflict response");
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_sequence_gap_outcome() {
     let mut batch = DaSpoolBatch::new();
@@ -52,10 +47,8 @@ fn da_spool_rejection_response_rejects_sequence_gap_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("sequence gap receipt must produce a conflict response");
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_receipt_conflict_outcome() {
     let mut batch = DaSpoolBatch::new();
@@ -69,10 +62,8 @@ fn da_spool_rejection_response_rejects_receipt_conflict_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("receipt conflict must produce a conflict response");
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_duplicate_fingerprint_conflict_outcome() {
     let mut batch = DaSpoolBatch::new();
@@ -88,10 +79,8 @@ fn da_spool_rejection_response_rejects_duplicate_fingerprint_conflict_outcome() 
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("duplicate fingerprint conflict must produce a conflict response");
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_manifest_conflict_outcome() {
     let mut batch = DaSpoolBatch::new();
@@ -106,10 +95,8 @@ fn da_spool_rejection_response_rejects_manifest_conflict_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("manifest conflict must produce a conflict response");
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_missing_receipt_log_outcome() {
     let mut batch = DaSpoolBatch::new();
@@ -119,10 +106,8 @@ fn da_spool_rejection_response_rejects_missing_receipt_log_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("missing receipt log outcome must fail closed");
-
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
-
 #[test]
 fn da_spool_rejection_response_rejects_spool_action_errors() {
     let mut batch = DaSpoolBatch::new();
@@ -132,10 +117,8 @@ fn da_spool_rejection_response_rejects_spool_action_errors() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("spool action errors must fail closed");
-
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
-
 fn telemetry_handle_for_tests_with_profile(
     profile: TelemetryProfile,
 ) -> (Arc<Metrics>, MaybeTelemetry) {
@@ -144,16 +127,13 @@ fn telemetry_handle_for_tests_with_profile(
     let handle = MaybeTelemetry::from_profile(Some(telemetry), profile);
     (metrics, handle)
 }
-
 fn telemetry_handle_for_tests() -> (Arc<Metrics>, MaybeTelemetry) {
     telemetry_handle_for_tests_with_profile(TelemetryProfile::Operator)
 }
-
 fn test_metrics() -> Arc<Metrics> {
     enable_duplicate_metric_panic();
     Arc::new(Metrics::default())
 }
-
 fn enable_duplicate_metric_panic() {
     static INIT: LazyLock<()> = LazyLock::new(|| {
         #[allow(unsafe_code)]
@@ -163,13 +143,11 @@ fn enable_duplicate_metric_panic() {
     });
     LazyLock::force(&INIT);
 }
-
 fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
     dump.lines()
         .find(|line| line.starts_with(prefix))
         .unwrap_or_else(|| panic!("metric `{prefix}` not found\n{dump}"))
 }
-
 fn da_rent_metric_lines(dump: &str) -> Vec<String> {
     let mut lines: Vec<String> = dump
         .lines()
@@ -190,7 +168,6 @@ fn da_rent_metric_lines(dump: &str) -> Vec<String> {
     lines.sort();
     lines
 }
-
 fn parse_metric_value(line: &str) -> f64 {
     line.split_whitespace()
         .last()
@@ -198,14 +175,12 @@ fn parse_metric_value(line: &str) -> f64 {
         .parse::<f64>()
         .expect("metric value")
 }
-
 struct ChunkRecordFixture {
     file_name: String,
     offset: u64,
     length: u32,
     digest_hex: String,
 }
-
 fn load_chunk_record_fixture(name: &str) -> Vec<ChunkRecordFixture> {
     let path = fixtures_dir().join(name);
     let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
@@ -241,7 +216,6 @@ fn load_chunk_record_fixture(name: &str) -> Vec<ChunkRecordFixture> {
         })
         .collect()
 }
-
 fn load_manifest_fixture(name: &str) -> Vec<u8> {
     let path = fixtures_dir().join(name);
     let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
@@ -249,7 +223,6 @@ fn load_manifest_fixture(name: &str) -> Vec<u8> {
     });
     hex::decode(contents.trim()).expect("fixture must be valid hex")
 }
-
 fn load_manifest_json_fixture(name: &str) -> Value {
     let path = fixtures_dir().join(name);
     let contents = fs::read_to_string(&path).unwrap_or_else(|err| {
@@ -260,7 +233,6 @@ fn load_manifest_json_fixture(name: &str) -> Value {
     });
     json::from_str(&contents).expect("fixture must be valid Norito JSON")
 }
-
 fn write_manifest_fixture_bundle(
     case: &ManifestFixtureCase,
     context: &ManifestFixtureContext,
@@ -276,7 +248,6 @@ fn write_manifest_fixture_bundle(
     fs::write(manifest_dir.join("manifest.json"), format!("{json_text}\n"))?;
     Ok(())
 }
-
 fn write_chunk_record_fixture(
     path: &Path,
     records: &[PersistedChunkRecord],
@@ -300,7 +271,6 @@ fn write_chunk_record_fixture(
     writeln!(file, "# total_bytes {total_bytes}")?;
     Ok(())
 }
-
 fn format_base_id(
     lane_id: LaneId,
     epoch: u64,
@@ -315,7 +285,6 @@ fn format_base_id(
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
     format!("{lane_hex}-{epoch_hex}-{sequence_hex}-{ticket_hex}-{fingerprint_hex}")
 }
-
 fn fixtures_dir() -> PathBuf {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/da/ingest");
     base.canonicalize()

@@ -96,7 +96,6 @@ pub(crate) enum V2ApplyError {
     #[error("injected crash after reputation archive capture and before WSV commit")]
     InjectedCrashAfterReputationArchiveCapture,
 }
-
 impl V2ApplyError {
     fn committed_recovery_required(stage: &'static str, error: &impl std::fmt::Display) -> Self {
         Self::CommittedRecoveryRequired {
@@ -104,7 +103,6 @@ impl V2ApplyError {
             detail: error.to_string(),
         }
     }
-
     /// Return whether the live consensus process must stop producing output until restart.
     #[must_use]
     pub(crate) const fn requires_restart_recovery(&self) -> bool {
@@ -120,7 +118,6 @@ impl V2ApplyError {
         }
     }
 }
-
 impl BodyValidationError for V2ApplyError {
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match self {

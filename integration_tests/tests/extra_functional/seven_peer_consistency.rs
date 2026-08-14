@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that all peers in a seven-peer network maintain consistent asset balances with DA enabled.
-
-use std::time::{Duration, Instant};
-
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_or_storage};
 use iroha::{
@@ -24,7 +21,7 @@ use iroha::{
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
-
+use std::time::{Duration, Instant};
 #[test]
 #[allow(clippy::too_many_lines)]
 fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
@@ -62,10 +59,8 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     else {
         return Ok(());
     };
-
     let peers = network.peers();
     let submitter = &peers[0];
-
     // Ensure the network is ready before submitting transactions.
     let sync_timeout = network.sync_timeout().saturating_mul(2);
     rt.block_on(async { network.ensure_blocks_with(|height| height.total >= 1).await })
@@ -77,7 +72,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         sync_timeout,
     )
     .wrap_err("seven_peer_consistency peers did not connect")?;
-
     // Create a fresh domain, account, and asset definition
     let domain_name: Name = "seven".parse()?;
     let domain_id = DomainId::try_new(&domain_name, "universal")?;
@@ -96,7 +90,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             None,
         )
     });
-
     let mut submitter_client = submitter.client();
     let tx_timeout = sync_timeout;
     submitter_client.transaction_status_timeout = tx_timeout;
@@ -123,7 +116,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         )
         .wrap_err("seven_peer_consistency submit setup failed")?;
     }
-
     let status_before_mint = get_status_with_retry_or_storage(
         &network,
         &submitter_client,
@@ -141,7 +133,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     ) {
         eprintln!("seven_peer_consistency mint did not confirm; continuing. err={err:?}");
     }
-
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let submitter_deadline = Instant::now() + sync_timeout;
     loop {
@@ -162,11 +153,9 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             ))) => Some("asset not found".to_owned()),
             Err(err) => Some(format!("query error: {err:?}")),
         };
-
         if err_detail.is_none() {
             break;
         }
-
         if Instant::now() >= submitter_deadline {
             return Err(eyre!(
                 "minted asset did not appear on submitter {} before timeout; last_err={last_err:?}",
@@ -174,15 +163,12 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
                 last_err = err_detail
             ));
         }
-
         std::thread::sleep(Duration::from_millis(250));
     }
-
     let expected_min_height = status_before_mint.blocks.saturating_add(1);
     let required_height = expected_min_height.max(3);
     wait_for_blocks_at_least(&rt, peers, required_height, sync_timeout)
         .wrap_err("seven_peer_consistency peers did not all commit the post-mint height")?;
-
     // Then: verify each peer reports the same state (cross-peer consistency).
     let deadline = Instant::now() + network.sync_timeout();
     loop {
@@ -210,24 +196,19 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
                 }
             }
         }
-
         if pending.is_empty() {
             break;
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "minted asset did not converge across peers before timeout: {}",
                 pending.join("; ")
             ));
         }
-
         std::thread::sleep(Duration::from_millis(250));
     }
-
     Ok(())
 }
-
 fn wait_for_peer_connectivity(
     rt: &tokio::runtime::Runtime,
     peers: &[NetworkPeer],
@@ -253,23 +234,19 @@ fn wait_for_peer_connectivity(
                     }
                 }
             }
-
             if pending.is_empty() {
                 return Ok(());
             }
-
             if Instant::now() >= deadline {
                 return Err(eyre!(
                     "timed out waiting for peer connectivity: {}",
                     pending.join("; ")
                 ));
             }
-
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     })
 }
-
 fn wait_for_blocks_at_least(
     rt: &tokio::runtime::Runtime,
     peers: &[NetworkPeer],
@@ -287,7 +264,6 @@ fn wait_for_blocks_at_least(
         Ok(())
     })
 }
-
 fn wait_for_setup_state(
     client: &Client,
     domain_id: &DomainId,
@@ -301,7 +277,6 @@ fn wait_for_setup_state(
         let domains = client.query(FindDomains).execute_all();
         let accounts = client.query(FindAccounts).execute_all();
         let asset_defs = client.query(FindAssetsDefinitions).execute_all();
-
         match (domains, accounts, asset_defs) {
             (Ok(domains), Ok(accounts), Ok(asset_defs)) => {
                 let domain_ok = domains.iter().any(|domain| domain.id() == domain_id);
@@ -322,14 +297,12 @@ fn wait_for_setup_state(
                 ));
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "timed out waiting for setup state; last_err={:?}",
                 last_err
             ));
         }
-
         std::thread::sleep(Duration::from_millis(200));
     }
 }

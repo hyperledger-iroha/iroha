@@ -6,20 +6,17 @@
 //! an empty active-validator set, respectively. Pass `--consensus-sections`
 //! before a template config to parse only its `nexus` and `pipeline` tables;
 //! this is useful for deployment templates whose runtime secrets are redacted.
-
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    str::FromStr as _,
-};
-
 use iroha_config::{
     base::toml::TomlSource,
     parameters::actual::{Nexus, Pipeline, Root, sumeragi_v2_nexus_amx_context_hash},
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
 use iroha_data_model::block::consensus_v2::GenesisActiveNexusLaneRecord;
-
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    str::FromStr as _,
+};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let first = args.next();
@@ -33,7 +30,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("usage: sumeragi_v2_context_hash [--consensus-sections] [config.toml] [active-records.norito]".into());
     }
-
     let (nexus, pipeline) = if let Some(path) = config_path {
         let root = if consensus_sections {
             load_consensus_sections(&path)?
@@ -52,13 +48,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Vec::new()
     };
-
     let hash = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active_records, &[]);
     println!("{}", hex::encode(hash.as_ref()));
     println!("{}", norito::json::to_json(&<[u8; 32]>::from(hash))?);
     Ok(())
 }
-
 fn load_consensus_sections(path: &Path) -> Result<Root, Box<dyn std::error::Error>> {
     let source = fs::read_to_string(path)?;
     let header = || {

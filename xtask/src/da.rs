@@ -1,12 +1,4 @@
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::Write as _,
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
-
+use crate::{JsonTarget, write_json_output};
 use blake3::hash;
 use hex::encode as hex_encode;
 use integration_tests::da::pdp_potr::{DEFAULT_SEED, SimulationConfig, run_simulation};
@@ -42,17 +34,21 @@ use norito::{
 use sorafs_car::ChunkStore;
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::ReplicationOrderV1;
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use walkdir::WalkDir;
-
-use crate::{JsonTarget, write_json_output};
-
 /// Options accepted by `cargo xtask da-threat-model-report`.
 pub(crate) struct ThreatModelReportOptions {
     pub output: JsonTarget,
     pub seed: u64,
     pub config_path: Option<PathBuf>,
 }
-
 #[derive(Debug, Default, JsonDeserialize)]
 struct SimulationConfigOverrides {
     nodes: Option<usize>,
@@ -70,7 +66,6 @@ struct SimulationConfigOverrides {
     detection_bias_no_partition: Option<f64>,
     repair_capacity_per_epoch: Option<usize>,
 }
-
 impl SimulationConfigOverrides {
     fn apply(self, config: &mut SimulationConfig) {
         macro_rules! apply_field {
@@ -93,13 +88,11 @@ impl SimulationConfigOverrides {
         apply_field!(potr_late_threshold);
         apply_field!(detection_bias_no_partition);
         apply_field!(repair_capacity_per_epoch);
-
         if let Some(ms) = self.challenge_interval_ms {
             config.challenge_interval = Duration::from_millis(ms);
         }
     }
 }
-
 pub(crate) fn generate_threat_model_report(
     options: ThreatModelReportOptions,
 ) -> Result<(), Box<dyn Error>> {
@@ -114,10 +107,8 @@ pub(crate) fn generate_threat_model_report(
     let summary = stats.json_summary();
     write_json_output(&summary, options.output)
 }
-
 /// Default target when no `--seed` is provided.
 pub(crate) const DEFAULT_REPORT_SEED: u64 = DEFAULT_SEED;
-
 pub(crate) fn parse_seed(value: &str) -> Result<u64, Box<dyn Error>> {
     if let Some(hex) = value.strip_prefix("0x") {
         u64::from_str_radix(hex, 16).map_err(|err| err.into())
@@ -125,7 +116,6 @@ pub(crate) fn parse_seed(value: &str) -> Result<u64, Box<dyn Error>> {
         value.parse::<u64>().map_err(|err| err.into())
     }
 }
-
 /// Options accepted by `cargo xtask da-replication-audit`.
 pub(crate) struct ReplicationAuditOptions {
     pub config: PathBuf,
@@ -135,7 +125,6 @@ pub(crate) struct ReplicationAuditOptions {
     pub plan_output: Option<JsonTarget>,
     pub allow_mismatch: bool,
 }
-
 /// Runs the replication audit command.
 pub(crate) fn run_replication_audit(
     options: ReplicationAuditOptions,
@@ -146,7 +135,6 @@ pub(crate) fn run_replication_audit(
     let policy = load_replication_policy(&options.config)?;
     let manifests = load_manifests(&options.manifests)?;
     let orders = load_replication_orders(&options.replication_orders)?;
-
     let mut manifests_out = Vec::with_capacity(manifests.len());
     let mut order_index: HashMap<[u8; 32], Vec<LoadedOrder>> = HashMap::new();
     for order in orders {
@@ -155,19 +143,16 @@ pub(crate) fn run_replication_audit(
             .or_default()
             .push(order);
     }
-
     for manifest in manifests {
         let matching_orders = order_index.remove(&manifest.digest).unwrap_or_default();
         manifests_out.push(audit_manifest(&policy, manifest, matching_orders));
     }
-
     let summary = build_summary(&manifests_out);
     let report = ReplicationAuditReport {
         summary: summary.clone(),
         manifests: manifests_out,
     };
     let remediation_plan = build_remediation_plan(&report.manifests);
-
     if let Some(target) = options.json_output.clone() {
         let value = json::to_value(&report)?;
         write_json_output(&value, target)?;
@@ -176,23 +161,18 @@ pub(crate) fn run_replication_audit(
         let value = json::to_value(&remediation_plan)?;
         write_json_output(&value, target)?;
     }
-
     print_report(&report);
-
     let has_failures = summary.policy_mismatches > 0 || summary.replica_shortfalls > 0;
     if has_failures && !options.allow_mismatch {
         return Err("replication audit detected policy mismatches or replica shortfalls".into());
     }
-
     Ok(())
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ReplicationAuditReport {
     summary: AuditSummary,
     manifests: Vec<ManifestAudit>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct AuditSummary {
     total: usize,
@@ -201,7 +181,6 @@ struct AuditSummary {
     replica_shortfalls: usize,
     status: ManifestAuditStatus,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ManifestAudit {
     manifest_path: String,
@@ -215,7 +194,6 @@ struct ManifestAudit {
     expected_policy: PolicySnapshot,
     replication: Vec<ReplicationOrderSnapshot>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct PolicySnapshot {
     hot_retention_secs: u64,
@@ -224,7 +202,6 @@ struct PolicySnapshot {
     storage_class: String,
     governance_tag: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ReplicationOrderSnapshot {
     order_path: String,
@@ -234,12 +211,10 @@ struct ReplicationOrderSnapshot {
     target_matches_policy: bool,
     assignments_sufficient: bool,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ReplicationRemediationPlan {
     manifests: Vec<ManifestRemediation>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ManifestRemediation {
     manifest_path: String,
@@ -253,14 +228,12 @@ struct ManifestRemediation {
     governance_tag: String,
     notes: Vec<String>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManifestAuditStatus {
     Ok,
     ReplicaShortfall,
     PolicyMismatch,
 }
-
 impl ManifestAuditStatus {
     fn as_str(self) -> &'static str {
         match self {
@@ -269,7 +242,6 @@ impl ManifestAuditStatus {
             Self::PolicyMismatch => "policy_mismatch",
         }
     }
-
     fn severity(self) -> u8 {
         match self {
             Self::Ok => 0,
@@ -277,7 +249,6 @@ impl ManifestAuditStatus {
             Self::PolicyMismatch => 2,
         }
     }
-
     fn escalate(self, other: Self) -> Self {
         if other.severity() > self.severity() {
             other
@@ -285,7 +256,6 @@ impl ManifestAuditStatus {
             self
         }
     }
-
     fn from_flags(policy_match: bool, replica_shortfall: bool) -> Self {
         if !policy_match {
             Self::PolicyMismatch
@@ -296,26 +266,22 @@ impl ManifestAuditStatus {
         }
     }
 }
-
 impl norito::json::FastJsonWrite for ManifestAuditStatus {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
 }
-
 #[derive(Clone)]
 struct LoadedManifest {
     path: PathBuf,
     manifest: DaManifestV1,
     digest: [u8; 32],
 }
-
 #[derive(Clone)]
 struct LoadedOrder {
     path: PathBuf,
     order: ReplicationOrderV1,
 }
-
 fn load_manifests(paths: &[PathBuf]) -> Result<Vec<LoadedManifest>, Box<dyn Error>> {
     let mut entries = Vec::with_capacity(paths.len());
     for path in paths {
@@ -323,7 +289,6 @@ fn load_manifests(paths: &[PathBuf]) -> Result<Vec<LoadedManifest>, Box<dyn Erro
     }
     Ok(entries)
 }
-
 fn load_manifest(path: &Path) -> Result<LoadedManifest, Box<dyn Error>> {
     let manifest = read_manifest(path)?;
     let bytes = to_bytes(&manifest)?;
@@ -334,7 +299,6 @@ fn load_manifest(path: &Path) -> Result<LoadedManifest, Box<dyn Error>> {
         digest,
     })
 }
-
 fn read_manifest(path: &Path) -> Result<DaManifestV1, Box<dyn Error>> {
     match path
         .extension()
@@ -353,7 +317,6 @@ fn read_manifest(path: &Path) -> Result<DaManifestV1, Box<dyn Error>> {
         }
     }
 }
-
 fn load_replication_orders(paths: &[PathBuf]) -> Result<Vec<LoadedOrder>, Box<dyn Error>> {
     let mut orders = Vec::with_capacity(paths.len());
     for path in paths {
@@ -361,7 +324,6 @@ fn load_replication_orders(paths: &[PathBuf]) -> Result<Vec<LoadedOrder>, Box<dy
     }
     Ok(orders)
 }
-
 fn load_replication_order(path: &Path) -> Result<LoadedOrder, Box<dyn Error>> {
     let order = match path
         .extension()
@@ -382,7 +344,6 @@ fn load_replication_order(path: &Path) -> Result<LoadedOrder, Box<dyn Error>> {
         order,
     })
 }
-
 fn audit_manifest(
     policy: &DaReplicationPolicy,
     manifest: LoadedManifest,
@@ -390,10 +351,8 @@ fn audit_manifest(
 ) -> ManifestAudit {
     let expected = policy.retention_for(manifest.manifest.blob_class, None);
     let policy_match = manifest.manifest.retention_policy == *expected;
-
     let mut replica_shortfall = expected.required_replicas > 0 && matching_orders.is_empty();
     let mut replication = Vec::with_capacity(matching_orders.len());
-
     for order in matching_orders {
         let assignments = order.order.assignments.len();
         let target_matches_policy = order.order.target_replicas == expected.required_replicas;
@@ -410,7 +369,6 @@ fn audit_manifest(
             assignments_sufficient,
         });
     }
-
     ManifestAudit {
         manifest_path: manifest.path.display().to_string(),
         blob_class: blob_class_label(manifest.manifest.blob_class).to_string(),
@@ -424,7 +382,6 @@ fn audit_manifest(
         replication,
     }
 }
-
 fn load_replication_policy(path: &Path) -> Result<DaReplicationPolicy, Box<dyn Error>> {
     let reader = ConfigReader::new()
         .read_toml_with_extends(path)
@@ -435,7 +392,6 @@ fn load_replication_policy(path: &Path) -> Result<DaReplicationPolicy, Box<dyn E
         .map_err(|err| format!("failed to parse config {path:?}: {err}"))?;
     Ok(config.torii.da_ingest.replication_policy)
 }
-
 fn policy_snapshot(policy: &RetentionPolicy) -> PolicySnapshot {
     PolicySnapshot {
         hot_retention_secs: policy.hot_retention_secs,
@@ -445,7 +401,6 @@ fn policy_snapshot(policy: &RetentionPolicy) -> PolicySnapshot {
         governance_tag: policy.governance_tag.0.clone(),
     }
 }
-
 fn storage_class_label(class: StorageClass) -> &'static str {
     match class {
         StorageClass::Hot => "hot",
@@ -453,7 +408,6 @@ fn storage_class_label(class: StorageClass) -> &'static str {
         StorageClass::Cold => "cold",
     }
 }
-
 fn blob_class_label(class: BlobClass) -> &'static str {
     match class {
         BlobClass::TaikaiSegment => "taikai_segment",
@@ -462,7 +416,6 @@ fn blob_class_label(class: BlobClass) -> &'static str {
         BlobClass::Custom(_) => "custom",
     }
 }
-
 fn build_remediation_plan(manifests: &[ManifestAudit]) -> ReplicationRemediationPlan {
     let mut entries = Vec::new();
     for audit in manifests {
@@ -477,7 +430,6 @@ fn build_remediation_plan(manifests: &[ManifestAudit]) -> ReplicationRemediation
             .max()
             .unwrap_or(0);
         let missing = required.saturating_sub(assigned);
-
         let mut notes = Vec::new();
         if !audit.policy_match {
             notes.push(String::from(
@@ -490,7 +442,6 @@ fn build_remediation_plan(manifests: &[ManifestAudit]) -> ReplicationRemediation
                 missing.max(1)
             ));
         }
-
         entries.push(ManifestRemediation {
             manifest_path: audit.manifest_path.clone(),
             manifest_digest_hex: audit.manifest_digest_hex.clone(),
@@ -504,10 +455,8 @@ fn build_remediation_plan(manifests: &[ManifestAudit]) -> ReplicationRemediation
             notes,
         });
     }
-
     ReplicationRemediationPlan { manifests: entries }
 }
-
 fn build_summary(results: &[ManifestAudit]) -> AuditSummary {
     let mut summary = AuditSummary {
         total: results.len(),
@@ -526,7 +475,6 @@ fn build_summary(results: &[ManifestAudit]) -> AuditSummary {
     }
     summary
 }
-
 fn print_report(report: &ReplicationAuditReport) {
     for manifest in &report.manifests {
         println!(
@@ -577,7 +525,6 @@ fn print_report(report: &ReplicationAuditReport) {
         }
         println!();
     }
-
     println!(
         "Summary: {}/{} ok · {} policy mismatch · {} replica shortfall",
         report.summary.ok,
@@ -587,7 +534,6 @@ fn print_report(report: &ReplicationAuditReport) {
     );
     println!("Overall status: {}", report.summary.status.as_str());
 }
-
 /// Options for the DA commitment reconciliation command.
 pub(crate) struct CommitmentReconcileOptions {
     pub receipts: Vec<PathBuf>,
@@ -595,14 +541,12 @@ pub(crate) struct CommitmentReconcileOptions {
     pub json_output: Option<JsonTarget>,
     pub allow_unexpected_commitments: bool,
 }
-
 /// Options for the DA privilege audit command.
 pub(crate) struct PrivilegeAuditOptions {
     pub config: PathBuf,
     pub extra_paths: Vec<PathBuf>,
     pub json_output: Option<JsonTarget>,
 }
-
 /// Options for benchmarking DA proof verification.
 pub(crate) struct ProofBenchOptions {
     pub manifest: PathBuf,
@@ -615,17 +559,14 @@ pub(crate) struct ProofBenchOptions {
     pub markdown_output: Option<PathBuf>,
     pub iterations: usize,
 }
-
 struct ReceiptArtifact {
     receipt: DaIngestReceipt,
     source: String,
 }
-
 struct CommitmentArtifact {
     record: DaCommitmentRecord,
     source: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ReconciliationReport {
     summary: ReconciliationSummary,
@@ -635,7 +576,6 @@ struct ReconciliationReport {
     duplicate_receipts: Vec<DuplicateTicket>,
     duplicate_commitments: Vec<DuplicateTicket>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ReconciliationSummary {
     total_receipts: usize,
@@ -648,7 +588,6 @@ struct ReconciliationSummary {
     duplicate_commitments: usize,
     status: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct MissingCommitment {
     ticket_hex: String,
@@ -659,7 +598,6 @@ struct MissingCommitment {
     chunk_root_hex: String,
     source: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct CommitmentMismatch {
     ticket_hex: String,
@@ -667,7 +605,6 @@ struct CommitmentMismatch {
     commitment_source: String,
     differences: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct UnexpectedCommitment {
     ticket_hex: String,
@@ -679,20 +616,17 @@ struct UnexpectedCommitment {
     chunk_root_hex: String,
     source: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct DuplicateTicket {
     ticket_hex: String,
     sources: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct PrivilegeAuditReport {
     summary: PrivilegeAuditSummary,
     entries: Vec<PrivilegeEntry>,
     config_hash_hex: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct PrivilegeAuditSummary {
     checked_paths: usize,
@@ -702,7 +636,6 @@ struct PrivilegeAuditSummary {
     metadata_errors: usize,
     status: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct PrivilegeEntry {
     path: String,
@@ -712,7 +645,6 @@ struct PrivilegeEntry {
     world_writable: Option<bool>,
     issue: Option<String>,
 }
-
 /// Compare DA ingest receipts against on-chain DA commitment records.
 pub(crate) fn run_commitment_reconciliation(
     options: CommitmentReconcileOptions,
@@ -720,14 +652,11 @@ pub(crate) fn run_commitment_reconciliation(
     let receipts = load_receipt_artifacts(&options.receipts)?;
     let commitments = load_commitment_artifacts(&options.blocks)?;
     let report = reconcile_receipts_and_commitments(&receipts, &commitments);
-
     if let Some(target) = options.json_output.clone() {
         let value = json::to_value(&report)?;
         write_json_output(&value, target)?;
     }
-
     print_reconciliation_summary(&report, options.allow_unexpected_commitments);
-
     let mut alert = report.summary.missing_from_blocks > 0
         || report.summary.mismatches > 0
         || report.summary.duplicate_receipts > 0;
@@ -735,16 +664,13 @@ pub(crate) fn run_commitment_reconciliation(
         alert |=
             report.summary.unexpected_commitments > 0 || report.summary.duplicate_commitments > 0;
     }
-
     if alert {
         return Err(
             "DA commitment reconciliation detected missing or mismatched commitments".into(),
         );
     }
-
     Ok(())
 }
-
 /// Audit DA privilege-sensitive directories for missing paths or insecure permissions.
 pub(crate) fn run_privilege_audit(options: PrivilegeAuditOptions) -> Result<(), Box<dyn Error>> {
     let config_bytes = fs::read(&options.config).map_err(|err| -> Box<dyn Error> {
@@ -752,7 +678,6 @@ pub(crate) fn run_privilege_audit(options: PrivilegeAuditOptions) -> Result<(), 
     })?;
     let config_hash_hex = hex_encode(hash(&config_bytes).as_bytes());
     let da_ingest = load_da_ingest_config(&options.config)?;
-
     let mut paths = vec![
         da_ingest.replay_cache_store_dir,
         da_ingest.manifest_store_dir,
@@ -761,13 +686,11 @@ pub(crate) fn run_privilege_audit(options: PrivilegeAuditOptions) -> Result<(), 
     paths.retain(|path| !path.as_os_str().is_empty());
     paths.sort();
     paths.dedup();
-
     if paths.is_empty() {
         return Err(
             "da-privilege-audit requires at least one path (from config or --extra-path)".into(),
         );
     }
-
     let mut entries = Vec::with_capacity(paths.len());
     let mut missing = 0usize;
     let mut non_directory = 0usize;
@@ -789,12 +712,10 @@ pub(crate) fn run_privilege_audit(options: PrivilegeAuditOptions) -> Result<(), 
         }
         entries.push(entry);
     }
-
     let mut status = "ok";
     if missing > 0 || non_directory > 0 || world_writable > 0 || metadata_errors > 0 {
         status = "alert";
     }
-
     let report = PrivilegeAuditReport {
         summary: PrivilegeAuditSummary {
             checked_paths: entries.len(),
@@ -807,12 +728,10 @@ pub(crate) fn run_privilege_audit(options: PrivilegeAuditOptions) -> Result<(), 
         entries,
         config_hash_hex,
     };
-
     if let Some(target) = options.json_output.clone() {
         let value = json::to_value(&report)?;
         write_json_output(&value, target)?;
     }
-
     println!(
         "DA privilege audit: checked {} path(s) · missing={} · non-directory={} · world-writable={} · metadata-errors={} · status={}",
         report.summary.checked_paths,
@@ -822,14 +741,11 @@ pub(crate) fn run_privilege_audit(options: PrivilegeAuditOptions) -> Result<(), 
         report.summary.metadata_errors,
         report.summary.status
     );
-
     if report.summary.status == "alert" {
         return Err("DA privilege audit found issues".into());
     }
-
     Ok(())
 }
-
 fn reconcile_receipts_and_commitments(
     receipts: &[ReceiptArtifact],
     commitments: &[CommitmentArtifact],
@@ -841,7 +757,6 @@ fn reconcile_receipts_and_commitments(
             .or_default()
             .push(receipt);
     }
-
     let mut commitment_map: HashMap<_, Vec<&CommitmentArtifact>> = HashMap::new();
     for commitment in commitments {
         commitment_map
@@ -849,15 +764,12 @@ fn reconcile_receipts_and_commitments(
             .or_default()
             .push(commitment);
     }
-
     let duplicate_receipts = collect_receipt_duplicates(&receipt_map);
     let duplicate_commitments = collect_commitment_duplicates(&commitment_map);
-
     let mut missing_commitments = Vec::new();
     let mut mismatches = Vec::new();
     let mut unmatched_commitments = Vec::new();
     let mut matched = 0usize;
-
     for (ticket, receipt_entries) in receipt_map {
         let receipt = receipt_entries[0];
         match commitment_map.remove(&ticket) {
@@ -907,12 +819,10 @@ fn reconcile_receipts_and_commitments(
             }
         }
     }
-
     // Anything left in the commitment map was not paired with a receipt.
     for orphan in commitment_map.into_values().flatten() {
         unmatched_commitments.push(orphan);
     }
-
     let unexpected_commitments = unmatched_commitments
         .into_iter()
         .map(|commitment| UnexpectedCommitment {
@@ -926,7 +836,6 @@ fn reconcile_receipts_and_commitments(
             source: commitment.source.clone(),
         })
         .collect::<Vec<_>>();
-
     let mut status = "ok";
     if !missing_commitments.is_empty()
         || !mismatches.is_empty()
@@ -936,7 +845,6 @@ fn reconcile_receipts_and_commitments(
     {
         status = "alert";
     }
-
     ReconciliationReport {
         summary: ReconciliationSummary {
             total_receipts: receipts.len(),
@@ -956,7 +864,6 @@ fn reconcile_receipts_and_commitments(
         duplicate_commitments,
     }
 }
-
 fn collect_receipt_duplicates(
     grouped: &HashMap<StorageTicketId, Vec<&ReceiptArtifact>>,
 ) -> Vec<DuplicateTicket> {
@@ -974,7 +881,6 @@ fn collect_receipt_duplicates(
         })
         .collect()
 }
-
 fn collect_commitment_duplicates(
     grouped: &HashMap<StorageTicketId, Vec<&CommitmentArtifact>>,
 ) -> Vec<DuplicateTicket> {
@@ -992,7 +898,6 @@ fn collect_commitment_duplicates(
         })
         .collect()
 }
-
 enum MatchOutcome {
     Match,
     Mismatch {
@@ -1000,7 +905,6 @@ enum MatchOutcome {
         source: String,
     },
 }
-
 fn pick_best_match(
     receipt: &ReceiptArtifact,
     candidates: &[&CommitmentArtifact],
@@ -1028,7 +932,6 @@ fn pick_best_match(
     }
     best.map(|(_, outcome, idx)| (outcome, idx))
 }
-
 fn diff_receipt_and_commitment(
     receipt: &DaIngestReceipt,
     commitment: &DaCommitmentRecord,
@@ -1085,7 +988,6 @@ fn diff_receipt_and_commitment(
     }
     differences
 }
-
 fn load_receipt_artifacts(paths: &[PathBuf]) -> Result<Vec<ReceiptArtifact>, Box<dyn Error>> {
     let files = collect_input_files(paths)?;
     let mut out = Vec::with_capacity(files.len());
@@ -1098,7 +1000,6 @@ fn load_receipt_artifacts(paths: &[PathBuf]) -> Result<Vec<ReceiptArtifact>, Box
     }
     Ok(out)
 }
-
 fn load_commitment_artifacts(paths: &[PathBuf]) -> Result<Vec<CommitmentArtifact>, Box<dyn Error>> {
     let files = collect_input_files(paths)?;
     let mut out = Vec::new();
@@ -1108,7 +1009,6 @@ fn load_commitment_artifacts(paths: &[PathBuf]) -> Result<Vec<CommitmentArtifact
     }
     Ok(out)
 }
-
 fn decode_receipt(path: &Path) -> Result<DaIngestReceipt, Box<dyn Error>> {
     let bytes = fs::read(path)?;
     decode_from_bytes::<DaIngestReceipt>(&bytes)
@@ -1122,10 +1022,8 @@ fn decode_receipt(path: &Path) -> Result<DaIngestReceipt, Box<dyn Error>> {
         })
         .map_err(Into::into)
 }
-
 fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Error>> {
     let bytes = fs::read(path)?;
-
     if let Ok(block) = decode_framed_signed_block(&bytes)
         && let Some(bundle) = block.da_commitments()
     {
@@ -1139,7 +1037,6 @@ fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Er
             })
             .collect());
     }
-
     if let Ok(bundle) = decode_from_bytes::<DaCommitmentBundle>(&bytes) {
         return Ok(bundle
             .commitments
@@ -1150,14 +1047,12 @@ fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Er
             })
             .collect());
     }
-
     if let Ok(record) = decode_from_bytes::<DaCommitmentRecord>(&bytes) {
         return Ok(vec![CommitmentArtifact {
             record,
             source: path.display().to_string(),
         }]);
     }
-
     if let Ok(bundle) = json::from_slice::<DaCommitmentBundle>(&bytes) {
         return Ok(bundle
             .commitments
@@ -1168,19 +1063,16 @@ fn decode_commitments(path: &Path) -> Result<Vec<CommitmentArtifact>, Box<dyn Er
             })
             .collect());
     }
-
     if let Ok(record) = json::from_slice::<DaCommitmentRecord>(&bytes) {
         return Ok(vec![CommitmentArtifact {
             record,
             source: path.display().to_string(),
         }]);
     }
-
     Err::<Vec<CommitmentArtifact>, Box<dyn Error>>(
         format!("failed to decode commitments from {:?}", path).into(),
     )
 }
-
 fn collect_input_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut files = Vec::new();
     for path in paths {
@@ -1202,7 +1094,6 @@ fn collect_input_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn Error>
     }
     Ok(files)
 }
-
 fn print_reconciliation_summary(report: &ReconciliationReport, allow_unexpected: bool) {
     println!(
         "DA commitment reconciliation: matched {} of {} receipts",
@@ -1247,11 +1138,9 @@ fn print_reconciliation_summary(report: &ReconciliationReport, allow_unexpected:
     }
     println!("Overall status: {}", report.summary.status);
 }
-
 fn ticket_hex(ticket: &StorageTicketId) -> String {
     hex_encode(ticket.as_ref())
 }
-
 fn load_da_ingest_config(path: &Path) -> Result<DaIngest, Box<dyn Error>> {
     let reader =
         ConfigReader::new()
@@ -1269,7 +1158,6 @@ fn load_da_ingest_config(path: &Path) -> Result<DaIngest, Box<dyn Error>> {
             format!("failed to parse config {path:?}: {err}").into()
         })
 }
-
 fn inspect_path(path: &Path) -> Result<PrivilegeEntry, Box<dyn Error>> {
     let display = path.display().to_string();
     match fs::metadata(path) {
@@ -1302,7 +1190,6 @@ fn inspect_path(path: &Path) -> Result<PrivilegeEntry, Box<dyn Error>> {
         }),
     }
 }
-
 #[cfg(unix)]
 fn permission_snapshot(metadata: &fs::Metadata) -> (Option<String>, Option<bool>) {
     use std::os::unix::fs::PermissionsExt;
@@ -1310,12 +1197,10 @@ fn permission_snapshot(metadata: &fs::Metadata) -> (Option<String>, Option<bool>
     let world_writable = mode & 0o002 != 0;
     (Some(format!("{mode:04o}")), Some(world_writable))
 }
-
 #[cfg(not(unix))]
 fn permission_snapshot(_metadata: &fs::Metadata) -> (Option<String>, Option<bool>) {
     (None, None)
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct ProofBenchReport {
     pub manifest_path: String,
@@ -1327,7 +1212,6 @@ pub struct ProofBenchReport {
     pub stats: ProofBenchStats,
     pub runs: Vec<DaProofBenchmark>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct ProofBenchStats {
     pub proof_count: usize,
@@ -1339,7 +1223,6 @@ pub struct ProofBenchStats {
     pub budget_pass_rate: f64,
     pub recommended_budget_ms: u64,
 }
-
 /// Benchmark DA proof verification time against the configured budget.
 pub(crate) fn run_proof_bench(
     options: ProofBenchOptions,
@@ -1352,7 +1235,6 @@ pub(crate) fn run_proof_bench(
     })?;
     let mut manifest: DaManifestV1 = json::from_slice(&manifest_bytes)?;
     ensure_taikai_metadata(&mut manifest).map_err(|err| -> Box<dyn Error> { err.into() })?;
-
     let mut config = DaProofConfig::default();
     if let Some(count) = options.sample_count {
         config.sample_count = count;
@@ -1363,7 +1245,6 @@ pub(crate) fn run_proof_bench(
     let budget_ms = options
         .budget_ms
         .unwrap_or(iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS);
-
     let iterations = options.iterations.max(1);
     let chunk_size_hint = {
         let base = if manifest.chunk_size == 0 {
@@ -1389,7 +1270,6 @@ pub(crate) fn run_proof_bench(
         })?;
         (data, options.payload.display().to_string())
     };
-
     let (runs, manifest_label) = if options.payload_bytes.is_some() {
         let synthetic = synthesize_manifest_from_payload(&payload, chunk_size_hint)?;
         let runs = run_benchmark_iterations(&synthetic, &payload, &config, budget_ms, iterations)?;
@@ -1406,7 +1286,6 @@ pub(crate) fn run_proof_bench(
         (runs, label)
     };
     let stats = summarize_proof_bench(&runs, budget_ms);
-
     let report = ProofBenchReport {
         manifest_path: manifest_label,
         payload_path: payload_label,
@@ -1417,12 +1296,10 @@ pub(crate) fn run_proof_bench(
         stats,
         runs,
     };
-
     if let Some(target) = options.json_output.clone() {
         let value = json::to_value(&report)?;
         write_json_output(&value, target)?;
     }
-
     if let Some(path) = options.markdown_output.as_deref() {
         let markdown = render_proof_bench_markdown(&report);
         if path == Path::new("-") {
@@ -1436,7 +1313,6 @@ pub(crate) fn run_proof_bench(
             fs::write(path, markdown)?;
         }
     }
-
     println!(
         "DA proof verification benchmark: total={}ms budget={}ms status={}",
         report.stats.max_total_ms,
@@ -1447,14 +1323,11 @@ pub(crate) fn run_proof_bench(
             "over_budget"
         }
     );
-
     if report.stats.budget_pass_rate < 100.0 {
         eprintln!("warning: proof verification exceeds budget for at least one iteration");
     }
-
     Ok(report)
 }
-
 fn run_benchmark_iterations(
     manifest: &DaManifestV1,
     payload: &[u8],
@@ -1471,7 +1344,6 @@ fn run_benchmark_iterations(
     }
     Ok(runs)
 }
-
 fn synthesize_manifest_from_payload(
     payload: &[u8],
     chunk_size: u32,
@@ -1489,7 +1361,6 @@ fn synthesize_manifest_from_payload(
     };
     let mut store = ChunkStore::with_profile(profile);
     store.ingest_bytes(payload)?;
-
     let chunk_commitments = store
         .chunks()
         .iter()
@@ -1506,7 +1377,6 @@ fn synthesize_manifest_from_payload(
             ))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-
     let blob_hash = BlobDigest::from_hash(hash(payload));
     let chunk_root = BlobDigest::new(*store.por_tree().root());
     let chunk_size = chunk_commitments
@@ -1526,7 +1396,6 @@ fn synthesize_manifest_from_payload(
             .div_ceil(usize::from(erasure_profile.data_shards.max(1))),
     )?;
     let shards_per_stripe = u32::from(erasure_profile.data_shards + erasure_profile.parity_shards);
-
     Ok(DaManifestV1 {
         version: DaManifestV1::VERSION,
         client_blob_id: blob_hash,
@@ -1550,7 +1419,6 @@ fn synthesize_manifest_from_payload(
         issued_at_unix: 0,
     })
 }
-
 fn summarize_proof_bench(runs: &[DaProofBenchmark], _budget_ms: u64) -> ProofBenchStats {
     let proof_count = runs.first().map(|run| run.proof_count).unwrap_or(0);
     let leaf_count = runs.first().map(|run| run.leaf_count).unwrap_or(0);
@@ -1585,7 +1453,6 @@ fn summarize_proof_bench(runs: &[DaProofBenchmark], _budget_ms: u64) -> ProofBen
     };
     let recommended_budget_ms =
         (((max_total_ms.max(max_single_ms) as f64) * 1.1_f64).ceil() as u64).max(1);
-
     ProofBenchStats {
         proof_count,
         leaf_count,
@@ -1597,12 +1464,10 @@ fn summarize_proof_bench(runs: &[DaProofBenchmark], _budget_ms: u64) -> ProofBen
         recommended_budget_ms,
     }
 }
-
 const META_TAIKAI_EVENT_ID: &str = "taikai.event_id";
 const META_TAIKAI_STREAM_ID: &str = "taikai.stream_id";
 const META_TAIKAI_RENDITION_ID: &str = "taikai.rendition_id";
 const META_TAIKAI_SEGMENT_SEQUENCE: &str = "taikai.segment.sequence";
-
 fn ensure_taikai_metadata(manifest: &mut DaManifestV1) -> Result<(), String> {
     if manifest.blob_class != BlobClass::TaikaiSegment {
         return Ok(());
@@ -1612,7 +1477,6 @@ fn ensure_taikai_metadata(manifest: &mut DaManifestV1) -> Result<(), String> {
     ensure_metadata_entry(entries, META_TAIKAI_STREAM_ID, b"bench_stream");
     ensure_metadata_entry(entries, META_TAIKAI_RENDITION_ID, b"bench_rendition");
     ensure_metadata_entry(entries, META_TAIKAI_SEGMENT_SEQUENCE, b"0");
-
     let missing = [
         META_TAIKAI_EVENT_ID,
         META_TAIKAI_STREAM_ID,
@@ -1632,7 +1496,6 @@ fn ensure_taikai_metadata(manifest: &mut DaManifestV1) -> Result<(), String> {
         ))
     }
 }
-
 fn ensure_metadata_entry(entries: &mut Vec<MetadataEntry>, key: &str, value: &[u8]) {
     if entries.iter().any(|entry| entry.key == key) {
         return;
@@ -1643,7 +1506,6 @@ fn ensure_metadata_entry(entries: &mut Vec<MetadataEntry>, key: &str, value: &[u
         MetadataVisibility::Public,
     ));
 }
-
 fn deterministic_payload(len: usize) -> Vec<u8> {
     let mut payload = Vec::with_capacity(len);
     let mut state: u8 = 0x5A;
@@ -1655,7 +1517,6 @@ fn deterministic_payload(len: usize) -> Vec<u8> {
     }
     payload
 }
-
 fn render_proof_bench_markdown(report: &ProofBenchReport) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "# DA Proof Verification Benchmark");
@@ -1715,11 +1576,15 @@ fn render_proof_bench_markdown(report: &ProofBenchReport) -> String {
     }
     output
 }
-
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
+    use super::{
+        CommitmentArtifact, ManifestAudit, ManifestAuditStatus, PolicySnapshot, ProofBenchOptions,
+        ReceiptArtifact, ReplicationOrderSnapshot, blob_class_label, build_remediation_plan,
+        diff_receipt_and_commitment, reconcile_receipts_and_commitments, run_proof_bench,
+        storage_class_label,
+    };
+    use crate::JsonTarget;
     use iroha_crypto::{Hash as CryptoHash, Signature};
     use iroha_data_model::{
         da::{
@@ -1730,15 +1595,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
-
-    use super::{
-        CommitmentArtifact, ManifestAudit, ManifestAuditStatus, PolicySnapshot, ProofBenchOptions,
-        ReceiptArtifact, ReplicationOrderSnapshot, blob_class_label, build_remediation_plan,
-        diff_receipt_and_commitment, reconcile_receipts_and_commitments, run_proof_bench,
-        storage_class_label,
-    };
-    use crate::JsonTarget;
-
+    use std::path::PathBuf;
     fn sample_receipt(
         ticket: [u8; 32],
         manifest: [u8; 32],
@@ -1767,7 +1624,6 @@ mod tests {
             source: String::from("receipt.norito"),
         }
     }
-
     fn sample_commitment(
         ticket: [u8; 32],
         manifest: [u8; 32],
@@ -1791,7 +1647,6 @@ mod tests {
             source: String::from("block.block"),
         }
     }
-
     #[test]
     fn blob_class_labels_are_stable() {
         assert_eq!(blob_class_label(BlobClass::TaikaiSegment), "taikai_segment");
@@ -1805,14 +1660,12 @@ mod tests {
         );
         assert_eq!(blob_class_label(BlobClass::Custom(7)), "custom");
     }
-
     #[test]
     fn storage_class_labels_are_stable() {
         assert_eq!(storage_class_label(StorageClass::Hot), "hot");
         assert_eq!(storage_class_label(StorageClass::Warm), "warm");
         assert_eq!(storage_class_label(StorageClass::Cold), "cold");
     }
-
     #[test]
     fn status_from_flags_covers_all_cases() {
         assert_eq!(
@@ -1832,7 +1685,6 @@ mod tests {
             ManifestAuditStatus::PolicyMismatch
         );
     }
-
     #[test]
     fn reconciliation_detects_missing() {
         let receipt = sample_receipt([1; 32], [2; 32], [3; 32]);
@@ -1841,7 +1693,6 @@ mod tests {
         assert_eq!(report.summary.mismatches, 0);
         assert_eq!(report.summary.matched, 0);
     }
-
     #[test]
     fn reconciliation_detects_mismatch_and_match() {
         let receipt = sample_receipt([9; 32], [4; 32], [5; 32]);
@@ -1852,7 +1703,6 @@ mod tests {
         assert_eq!(report.summary.mismatches, 1);
         assert_eq!(report.summary.matched, 1);
     }
-
     #[test]
     fn diff_includes_all_fields() {
         let receipt = sample_receipt([1; 32], [2; 32], [3; 32]);
@@ -1863,7 +1713,6 @@ mod tests {
         assert!(diffs.iter().any(|d| d.contains("chunk_root")));
         assert!(diffs.iter().any(|d| d.contains("pdp/proof")));
     }
-
     #[test]
     fn remediation_plan_reports_policy_and_replica_gap() {
         let audit = ManifestAudit {
@@ -1897,7 +1746,6 @@ mod tests {
                 assignments_sufficient: false,
             }],
         };
-
         let plan = build_remediation_plan(&[audit]);
         assert_eq!(plan.manifests.len(), 1);
         let entry = &plan.manifests[0];
@@ -1910,7 +1758,6 @@ mod tests {
         );
         assert!(entry.notes.iter().any(|note| note.contains("retention")));
     }
-
     #[test]
     fn proof_bench_runner_accepts_fixture() {
         let root = crate::workspace_root();

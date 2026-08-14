@@ -1,13 +1,11 @@
-/// Generates Norito-encoded fixtures for Kotlin SDK parity tests.
-///
-/// Each subcommand outputs the wire payload hex on the first line,
-/// followed by input parameters the Kotlin encoder needs.
-///
-/// When the Rust data model changes, this binary produces different
-/// bytes, causing the Kotlin parity tests to fail until the
-/// corresponding encoder is updated.
-use std::env;
-
+//! Generates Norito-encoded fixtures for Kotlin SDK parity tests.
+//!
+//! Each subcommand outputs the wire payload hex on the first line,
+//! followed by input parameters the Kotlin encoder needs.
+//!
+//! When the Rust data model changes, this binary produces different
+//! bytes, causing the Kotlin parity tests to fail until the
+//! corresponding encoder is updated.
 use iroha_crypto::{Hash, PublicKey, default_bfv_programmed_hidden_program, sha256};
 use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
 use iroha_data_model::account::{
@@ -35,17 +33,15 @@ use iroha_data_model::ram_lfe::{
     RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
     RamLfeProgramId, RamLfeReceiptAttestation,
 };
-
+use std::env;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-
 fn parity_account_id() -> AccountId {
     let pk: PublicKey = PARITY_PUBLIC_KEY.parse().expect("parse public key");
     AccountId::new(pk)
 }
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -68,7 +64,6 @@ fn main() {
         }
     }
 }
-
 fn emit_offline_device_attestation() {
     // Synthetic unit-test bytes only. This fixture proves canonical wire parity and is not
     // physical-device attestation or release evidence.
@@ -143,20 +138,17 @@ fn emit_offline_device_attestation() {
     let instruction_archive =
         norito::to_bytes(&RegisterOfflineDeviceAttestation::new(registration))
             .expect("encode registration instruction");
-
     println!("{}", hex::encode(registration_archive));
     println!("{}", hex::encode(instruction_archive));
     println!("{}", hex::encode(challenge_hash.as_ref()));
     println!("{account_id}");
     println!("{}", hex::encode(registration_id.as_ref()));
 }
-
 fn emit_hidden_ram_fhe_program() {
     let program = default_bfv_programmed_hidden_program();
     let encoded = norito::to_bytes(&program).expect("encode HiddenRamFheProgram");
     println!("{}", hex::encode(encoded));
 }
-
 fn emit_register_account() {
     let account_id = parity_account_id();
     let new_account = NewAccount::new(account_id);
@@ -164,7 +156,6 @@ fn emit_register_account() {
     let encoded = norito::to_bytes(&register_box).expect("encode RegisterBox");
     println!("{}", hex::encode(encoded));
 }
-
 fn emit_transfer_asset() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
     let account_id = parity_account_id();
@@ -174,11 +165,9 @@ fn emit_transfer_asset() {
     let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
     let amount = Quantity::from(100_u64);
     let destination = account_id.clone();
-
     let transfer = Transfer::asset_quantity(asset_id, amount, destination);
     let transfer_box: TransferBox = transfer.into();
     let encoded = norito::to_bytes(&transfer_box).expect("encode TransferBox");
-
     // Line 1: wire payload hex
     println!("{}", hex::encode(encoded));
     // Line 2: asset ID string (<base58-def>#<i105-account>)
@@ -188,7 +177,6 @@ fn emit_transfer_asset() {
     // Line 4: destination account I105
     println!("{}", account_id);
 }
-
 fn emit_transfer_asset_scoped() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
     let account_id = parity_account_id();
@@ -202,17 +190,14 @@ fn emit_transfer_asset_scoped() {
     );
     let amount = Quantity::from(100_u64);
     let destination = account_id.clone();
-
     let transfer = Transfer::asset_quantity(asset_id, amount, destination);
     let transfer_box: TransferBox = transfer.into();
     let encoded = norito::to_bytes(&transfer_box).expect("encode scoped TransferBox");
-
     println!("{}", hex::encode(encoded));
     println!("{}#{}#dataspace:42", asset_def_id, account_id);
     println!("100");
     println!("{}", account_id);
 }
-
 fn emit_claim_identifier() {
     let account_id = parity_account_id();
     let policy_id = IdentifierPolicyId::new("phone".parse().unwrap(), "e164".parse().unwrap());
@@ -236,7 +221,6 @@ fn emit_claim_identifier() {
     let uaid = UniversalAccountId::from_hash(dummy_hash);
     // Deterministic signature bytes (64 bytes of 0xCD).
     let signature_bytes = [0xCD_u8; 64];
-
     let receipt_payload = IdentifierResolutionReceiptPayload {
         policy_id,
         execution,
@@ -261,18 +245,15 @@ fn emit_claim_identifier() {
     };
     let signature = iroha_crypto::Signature::try_from_bytes(&signature_bytes)
         .expect("Kotlin fixture receipt signature is non-empty and nonzero");
-
     let receipt = IdentifierResolutionReceipt {
         payload: receipt_payload,
         attestation: RamLfeReceiptAttestation::Signed(signature),
     };
-
     let claim = ClaimIdentifier {
         account: account_id.clone(),
         receipt,
     };
     let encoded = norito::to_bytes(&claim).expect("encode ClaimIdentifier");
-
     // Line 1: full wire payload hex
     println!("{}", hex::encode(encoded));
     // Line 2: account I105

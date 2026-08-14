@@ -3,21 +3,16 @@
 //! These benchmarks exercise the canonical planner across CPU and GPU
 //! execution paths so operators can capture comparative performance data
 //! on reference hardware.
-
-use std::{convert::TryFrom, hint::black_box, sync::OnceLock};
-
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet};
 use fastpq_prover::{ExecutionMode, Planner};
-
+use std::{convert::TryFrom, hint::black_box, sync::OnceLock};
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const COLUMN_COUNT: usize = 16;
-
 fn trace_logs(max_log: u32) -> Vec<u32> {
     let start = max_log.saturating_sub(1);
     (start..=max_log).collect()
 }
-
 fn generate_columns(len: usize, column_count: usize, seed: u64) -> Vec<Vec<u64>> {
     let mut columns = Vec::with_capacity(column_count);
     for column in 0..column_count {
@@ -34,21 +29,17 @@ fn generate_columns(len: usize, column_count: usize, seed: u64) -> Vec<Vec<u64>>
     }
     columns
 }
-
 fn resolved_gpu_mode() -> ExecutionMode {
     static MODE: OnceLock<ExecutionMode> = OnceLock::new();
     *MODE.get_or_init(|| ExecutionMode::Auto.resolve())
 }
-
 fn bench_fft_for_params(c: &mut Criterion, params: StarkParameterSet) {
     let planner = Planner::new(&params);
     let group_name = format!("planner_fft::{}", params.name);
     let mut group = c.benchmark_group(&group_name);
-
     for trace_log in trace_logs(params.trace_log_size) {
         let len = 1usize << trace_log;
         let id = format!("trace=2^{trace_log};cols={COLUMN_COUNT}");
-
         group.bench_with_input(BenchmarkId::new("cpu", &id), &len, |b, _| {
             b.iter_batched(
                 || generate_columns(len, COLUMN_COUNT, 0x51a2_d3f4),
@@ -59,7 +50,6 @@ fn bench_fft_for_params(c: &mut Criterion, params: StarkParameterSet) {
                 BatchSize::LargeInput,
             );
         });
-
         let gpu_label = match resolved_gpu_mode() {
             ExecutionMode::Gpu => "gpu",
             _ => "gpu_fallback",
@@ -75,19 +65,15 @@ fn bench_fft_for_params(c: &mut Criterion, params: StarkParameterSet) {
             );
         });
     }
-
     group.finish();
 }
-
 fn bench_ifft_for_params(c: &mut Criterion, params: StarkParameterSet) {
     let planner = Planner::new(&params);
     let group_name = format!("planner_ifft::{}", params.name);
     let mut group = c.benchmark_group(&group_name);
-
     for trace_log in trace_logs(params.trace_log_size) {
         let len = 1usize << trace_log;
         let id = format!("trace=2^{trace_log};cols={COLUMN_COUNT}");
-
         group.bench_with_input(BenchmarkId::new("cpu", &id), &len, |b, _| {
             b.iter_batched(
                 || {
@@ -102,7 +88,6 @@ fn bench_ifft_for_params(c: &mut Criterion, params: StarkParameterSet) {
                 BatchSize::LargeInput,
             );
         });
-
         let gpu_label = match resolved_gpu_mode() {
             ExecutionMode::Gpu => "gpu",
             _ => "gpu_fallback",
@@ -122,16 +107,13 @@ fn bench_ifft_for_params(c: &mut Criterion, params: StarkParameterSet) {
             );
         });
     }
-
     group.finish();
 }
-
 fn bench_lde_for_params(c: &mut Criterion, params: StarkParameterSet) {
     let planner = Planner::new(&params);
     let group_name = format!("planner_lde::{}", params.name);
     let mut group = c.benchmark_group(&group_name);
     let blowup_log = planner.blowup_log();
-
     for trace_log in trace_logs(params.trace_log_size) {
         if trace_log + blowup_log > params.lde_log_size {
             continue;
@@ -139,7 +121,6 @@ fn bench_lde_for_params(c: &mut Criterion, params: StarkParameterSet) {
         let len = 1usize << trace_log;
         let eval_log = trace_log + blowup_log;
         let id = format!("trace=2^{trace_log}->lde=2^{eval_log};cols={COLUMN_COUNT}");
-
         group.bench_with_input(BenchmarkId::new("cpu", &id), &len, |b, _| {
             b.iter_batched(
                 || generate_columns(len, COLUMN_COUNT, 0x6b72_940c),
@@ -150,7 +131,6 @@ fn bench_lde_for_params(c: &mut Criterion, params: StarkParameterSet) {
                 BatchSize::LargeInput,
             );
         });
-
         let gpu_label = match resolved_gpu_mode() {
             ExecutionMode::Gpu => "gpu",
             _ => "gpu_fallback",
@@ -166,10 +146,8 @@ fn bench_lde_for_params(c: &mut Criterion, params: StarkParameterSet) {
             );
         });
     }
-
     group.finish();
 }
-
 fn register_planner_benchmarks(c: &mut Criterion) {
     for params in CANONICAL_PARAMETER_SETS {
         bench_fft_for_params(c, params);
@@ -177,7 +155,6 @@ fn register_planner_benchmarks(c: &mut Criterion) {
         bench_lde_for_params(c, params);
     }
 }
-
 fn main() {
     let mut criterion = Criterion::default().configure_from_args();
     register_planner_benchmarks(&mut criterion);

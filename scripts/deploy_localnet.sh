@@ -991,30 +991,7 @@ curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" 
 curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
   "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" || true
 
-echo "Waiting for the frozen consensus mode..."
-CONSENSUS_MODE=""
-MODE_READY=false
-# The v2 frozen height context is informational and may be behind operator auth.
-# Don't block localnet startup for the full readiness timeout.
-MODE_CONTEXT_TIMEOUT_SECS=10
-for ((i = 1; i <= MODE_CONTEXT_TIMEOUT_SECS; i++)); do
-  CONSENSUS_MODE="$(
-    { curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
-        "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/sumeragi/status" 2>/dev/null || true; } \
-      | python3 -c 'import json, sys; payload = json.load(sys.stdin); print((payload.get("height_context") or {}).get("mode", {}).get("mode", ""))' \
-        2>/dev/null || true
-  )"
-  if [[ -n "$CONSENSUS_MODE" ]]; then
-    MODE_READY=true
-    break
-  fi
-  sleep 1
-done
-if [[ "$MODE_READY" == true ]]; then
-  echo "Frozen consensus mode: $CONSENSUS_MODE"
-else
-  echo "Warning: the authoritative v2 height context is not available yet." >&2
-fi
+echo "Consensus readiness was established through bounded public /status; inspect the frozen mode with an operator-signed Sumeragi status request when needed."
 
 CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_CHECK" != true ]]; then

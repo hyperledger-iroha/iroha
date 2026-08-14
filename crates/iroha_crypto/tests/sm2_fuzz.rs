@@ -1,11 +1,7 @@
 //! Deterministic regression tests for SM2 key generation and signatures.
 #![cfg(feature = "sm")]
-
 #[path = "sm2_negative_vector_fixture.rs"]
 mod negative_fixture;
-
-use std::sync::{Arc, OnceLock};
-
 use hex::decode as hex_decode;
 use iroha_crypto::{
     Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
@@ -14,7 +10,7 @@ use negative_fixture::{NegativeVector, apply_mutation, load_negative_vectors};
 use norito::json::Value;
 use sm2::dsa::{Signature as Sm2RawSignature, signature::hazmat::PrehashVerifier};
 use sm3::{Digest, Sm3};
-
+use std::sync::{Arc, OnceLock};
 #[derive(Clone, Debug)]
 struct WycheproofCase {
     distid: String,
@@ -23,11 +19,9 @@ struct WycheproofCase {
     signature_der: Vec<u8>,
     expect_valid: bool,
 }
-
 static WYCHEPROOF_CASES: OnceLock<Arc<Vec<WycheproofCase>>> = OnceLock::new();
 static WYCHEPROOF_VALID_CASES: OnceLock<Arc<Vec<WycheproofCase>>> = OnceLock::new();
 static NEGATIVE_VECTORS: OnceLock<Arc<Vec<NegativeVector>>> = OnceLock::new();
-
 fn decode_hex(value: &str) -> Vec<u8> {
     if value.is_empty() {
         Vec::new()
@@ -35,7 +29,6 @@ fn decode_hex(value: &str) -> Vec<u8> {
         hex_decode(value).unwrap_or_else(|err| panic!("invalid hex '{value}': {err}"))
     }
 }
-
 fn load_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
     WYCHEPROOF_CASES
         .get_or_init(|| {
@@ -45,7 +38,6 @@ fn load_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
             let groups = value["testGroups"]
                 .as_array()
                 .expect("Wycheproof SM2 testGroups array");
-
             let mut cases = Vec::new();
             for group in groups {
                 let distid = group["distid"]
@@ -56,7 +48,6 @@ fn load_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
                     .as_str()
                     .expect("Wycheproof SM2 key missing");
                 let public_sec1 = decode_hex(public_hex);
-
                 let tests = group["tests"]
                     .as_array()
                     .expect("Wycheproof SM2 tests array missing");
@@ -71,7 +62,6 @@ fn load_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
                         test["result"].as_str().map(str::to_ascii_lowercase),
                         Some(ref result) if result == "valid"
                     );
-
                     cases.push(WycheproofCase {
                         distid: distid.clone(),
                         public_sec1: public_sec1.clone(),
@@ -81,12 +71,10 @@ fn load_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
                     });
                 }
             }
-
             Arc::new(cases)
         })
         .clone()
 }
-
 fn load_valid_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
     WYCHEPROOF_VALID_CASES
         .get_or_init(|| {
@@ -100,13 +88,11 @@ fn load_valid_wycheproof_cases() -> Arc<Vec<WycheproofCase>> {
         })
         .clone()
 }
-
 fn load_negative_vectors_arc() -> Arc<Vec<NegativeVector>> {
     NEGATIVE_VECTORS
         .get_or_init(|| Arc::new(load_negative_vectors()))
         .clone()
 }
-
 fn byte_array_32(seed: u8) -> [u8; 32] {
     let mut out = [0u8; 32];
     for (idx, byte) in out.iter_mut().enumerate() {
@@ -115,7 +101,6 @@ fn byte_array_32(seed: u8) -> [u8; 32] {
     }
     out
 }
-
 fn byte_array_16(seed: u8) -> [u8; 16] {
     let mut out = [0u8; 16];
     for (idx, byte) in out.iter_mut().enumerate() {
@@ -124,7 +109,6 @@ fn byte_array_16(seed: u8) -> [u8; 16] {
     }
     out
 }
-
 fn sample_message(seed: u8) -> Vec<u8> {
     let len = (seed as usize % 63) + 1;
     (0..len)
@@ -134,7 +118,6 @@ fn sample_message(seed: u8) -> Vec<u8> {
         })
         .collect()
 }
-
 #[test]
 fn sm2_invalid_rs_are_rejected() {
     let private =
@@ -148,14 +131,12 @@ fn sm2_invalid_rs_are_rejected() {
         [0xFF; Sm2Signature::LENGTH],
         byte_array_32(1).repeat(2).try_into().expect("64 bytes"),
     ];
-
     for bytes in invalid_signatures {
         let signature = Signature::from_bytes(&bytes);
         assert!(matches!(
             signature.verify(keypair_public, b"fuzz"),
             Err(Error::Parse(_) | Error::BadSignature)
         ));
-
         if let Ok(sm2_signature) = Sm2Signature::from_bytes(&bytes) {
             assert!(matches!(
                 public.verify(b"fuzz", &sm2_signature),
@@ -164,7 +145,6 @@ fn sm2_invalid_rs_are_rejected() {
         }
     }
 }
-
 #[test]
 fn sm2_wrong_distid_is_rejected() {
     let secret = [0xAA; 32];
@@ -172,7 +152,6 @@ fn sm2_wrong_distid_is_rejected() {
     let message = b"sm2 fuzz";
     let signature = private.sign(message);
     let pk_bytes = private.public_key().to_sec1_bytes(false);
-
     for distid in [byte_array_16(0), byte_array_16(3), byte_array_16(0x7F)] {
         let distid_suffix = u128::from_be_bytes(distid);
         let alt_distid = format!("ALT-{distid_suffix:032X}");
@@ -184,7 +163,6 @@ fn sm2_wrong_distid_is_rejected() {
         ));
     }
 }
-
 #[test]
 fn sm2_valid_signature_roundtrip() {
     for seed in [1_u8, 2, 7, 31, 127, 255] {
@@ -196,7 +174,6 @@ fn sm2_valid_signature_roundtrip() {
         assert!(pk.verify(&message, &signature).is_ok());
     }
 }
-
 #[test]
 fn sm2_compute_z_matches_signing_key() {
     for seed in [1_u8, 2, 7, 31, 127, 255] {
@@ -220,15 +197,12 @@ fn sm2_compute_z_matches_signing_key() {
         let za = public
             .compute_z(&distid)
             .expect("compute ZA for generated key");
-
         let message = sample_message(seed);
         let signature = private.sign(&message);
-
         let mut hasher = Sm3::new();
         hasher.update(za);
         hasher.update(&message);
         let digest = hasher.finalize();
-
         let raw = Sm2RawSignature::from_bytes(&signature.as_bytes())
             .expect("signature converts to raw SM2 form");
         public
@@ -237,12 +211,10 @@ fn sm2_compute_z_matches_signing_key() {
             .expect("prehash verification must succeed");
     }
 }
-
 #[test]
 fn sm2_upstream_negative_vectors_fail() {
     let private = Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, b"sm2-negative-vectors")
         .expect("deterministic key");
-
     for vector in load_negative_vectors_arc().iter() {
         let outcome = apply_mutation(vector, &private);
         if outcome.public_parse_failed {
@@ -260,7 +232,6 @@ fn sm2_upstream_negative_vectors_fail() {
             }
             continue;
         }
-
         let sig_bytes: [u8; Sm2Signature::LENGTH] = outcome
             .signature_bytes
             .clone()
@@ -278,7 +249,6 @@ fn sm2_upstream_negative_vectors_fail() {
         );
     }
 }
-
 #[test]
 fn sm2_wycheproof_cases_hold() {
     for case in load_wycheproof_cases().iter() {
@@ -301,7 +271,6 @@ fn sm2_wycheproof_cases_hold() {
         }
     }
 }
-
 #[test]
 fn sm2_wycheproof_detects_deterministic_tampering() {
     for case in load_valid_wycheproof_cases().iter() {
@@ -311,7 +280,6 @@ fn sm2_wycheproof_detects_deterministic_tampering() {
         };
         let signature =
             Sm2Signature::from_der(&case.signature_der).expect("valid Wycheproof signature");
-
         if !case.message.is_empty() {
             let mut tampered_message = case.message.clone();
             let idx = tampered_message.len() / 2;
@@ -319,7 +287,6 @@ fn sm2_wycheproof_detects_deterministic_tampering() {
             let verify = public.verify(&tampered_message, &signature);
             assert!(verify.is_err());
         }
-
         let mut tampered_signature = case.signature_der.clone();
         if !tampered_signature.is_empty() {
             let idx = tampered_signature.len() - 1;
@@ -335,7 +302,6 @@ fn sm2_wycheproof_detects_deterministic_tampering() {
         }
     }
 }
-
 #[test]
 fn sm2_truncated_signature_is_rejected() {
     for case in load_valid_wycheproof_cases().iter() {
@@ -354,7 +320,6 @@ fn sm2_truncated_signature_is_rejected() {
         }
     }
 }
-
 #[test]
 fn sm2_bitflip_signature_is_rejected() {
     for case in load_valid_wycheproof_cases().iter() {

@@ -1,7 +1,5 @@
 //! Grouped Torii Nexus, SoraFS, contract, and app surface integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../bridge_finality_endpoint.rs"]
 mod bridge_finality_endpoint;
 #[path = "../contracts_call_integration.rs"]

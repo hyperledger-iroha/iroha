@@ -1,6 +1,6 @@
 //! Exact post-dequeue consumption for one ordinary Sumeragi v2 ingress row.
 //!
-//! Selection remains owned by either the legacy fair-ingress loop or the
+//! Selection remains owned by either the outer fair-ingress loop or the
 //! lifecycle turn driver. Both paths move the already-dequeued carrier into
 //! [`PreparedDequeuedV2IngressV1`] and consume it through the single tail in
 //! this module, so control, lane, Serve, block-sync, payload, and NPoS routing

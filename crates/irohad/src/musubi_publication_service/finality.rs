@@ -4,9 +4,7 @@
 //! activation. It only derives one current archive record from daemon-owned finalized state and
 //! exact Kura history; the stock publication service remains unavailable without deployment
 //! injection.
-
 use std::{num::NonZeroUsize, sync::Arc};
-
 use iroha_core::{
     smartcontracts::isi::musubi::validate_musubi_registry_snapshot_history_v1,
     state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
@@ -21,7 +19,6 @@ use iroha_data_model::{
     transaction::{Executable, TransactionEntrypoint},
 };
 use mv::storage::StorageReadOnly as _;
-
 /// Exact immutable evidence needed to recover a finalized archive registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
@@ -38,7 +35,6 @@ pub struct MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
     /// Exact registry policy revision encoded by the native registration instruction.
     pub expected_policy_revision: u64,
 }
-
 impl MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
     fn validate(&self) -> Result<(), MusubiPublicationFinalizedArchiveRegistrationReadErrorV1> {
         self.snapshot.validate().map_err(|_| invalid())?;
@@ -55,7 +51,6 @@ impl MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
         Ok(())
     }
 }
-
 /// Closed, redacted failure from the daemon-owned finalized reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
@@ -64,7 +59,6 @@ pub enum MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     /// Evidence is malformed, substituted, absent from canonical history, or otherwise invalid.
     Invalid,
 }
-
 impl MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     /// Whether retrying after the local finalized view advances may succeed.
     #[must_use]
@@ -72,7 +66,6 @@ impl MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
         matches!(self, Self::LocallyAhead)
     }
 }
-
 impl core::fmt::Display for MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
@@ -83,20 +76,16 @@ impl core::fmt::Display for MusubiPublicationFinalizedArchiveRegistrationReadErr
         })
     }
 }
-
 impl std::error::Error for MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {}
-
 const fn invalid() -> MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid
 }
-
 /// Read-only daemon adapter for exact finalized archive registrations.
 #[derive(Clone)]
 pub struct MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
     network_id: NetworkId,
     state: Arc<State>,
 }
-
 impl core::fmt::Debug for MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -105,7 +94,6 @@ impl core::fmt::Debug for MusubiPublicationFinalizedArchiveRegistrationReaderV1 
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
     /// Bind a reader to one exact daemon network and finalized-state handle.
     ///
@@ -122,12 +110,10 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
         }
         Ok(Self { network_id, state })
     }
-
     pub(super) fn from_validated_context(network_id: NetworkId, state: Arc<State>) -> Self {
         debug_assert_eq!(state.network_id_ref(), &network_id);
         Self { network_id, state }
     }
-
     /// Read and independently authenticate one current archive record from finalized history.
     ///
     /// A single Core query view binds the world and canonical block-hash journal. The reader then
@@ -150,7 +136,6 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
         if query.network_id != self.network_id {
             return Err(invalid());
         }
-
         let view = self.state.query_view();
         let local_height = u64::try_from(view.block_hashes().len()).map_err(|_| invalid())?;
         let local_revision = view.world().musubi_resolver_index_revision();
@@ -161,7 +146,6 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
         }
         validate_musubi_registry_snapshot_history_v1(&query.snapshot, &view)
             .map_err(|_| invalid())?;
-
         let registered_height = usize::try_from(query.registration.registered_at_height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -187,7 +171,6 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
         {
             return Err(invalid());
         }
-
         let archive = view
             .world()
             .musubi_archives()
@@ -200,7 +183,6 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
         Ok(archive.clone())
     }
 }
-
 fn validate_finalized_block_wire(
     network_id: &NetworkId,
     registered_height: u64,
@@ -223,7 +205,6 @@ fn validate_finalized_block_wire(
                 == wire_hash
         })
 }
-
 fn validate_registration_transaction(
     query: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
     block: &SignedBlock,
@@ -231,7 +212,6 @@ fn validate_registration_transaction(
     if !block.has_results() || block.entrypoint_hashes().len() != block.results().len() {
         return false;
     }
-
     let mut found = false;
     for (_, entrypoint, result) in block.entrypoint_results() {
         let transaction = match entrypoint {
@@ -258,7 +238,6 @@ fn validate_registration_transaction(
             return false;
         }
         found = true;
-
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return false;
         };
@@ -280,11 +259,9 @@ fn validate_registration_transaction(
     }
     found
 }
-
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, num::NonZeroU64, sync::Arc, time::Duration};
-
     use super::*;
     use iroha_core::{
         block::BlockBuilder,
@@ -292,9 +269,7 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{
-        Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
-    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Registrable as _, ValidationFail,
         account::{Account, AccountId},
@@ -326,31 +301,26 @@ mod tests {
         },
     };
     use iroha_primitives::time::TimeSource;
-
     struct RegistrationMaterial {
         network_id: NetworkId,
         publisher_key: KeyPair,
         archive: MusubiArchiveRecordV1,
     }
-
     struct ReaderFixture {
         reader: MusubiPublicationFinalizedArchiveRegistrationReaderV1,
         state: Arc<State>,
         query: MusubiPublicationFinalizedArchiveRegistrationQueryV1,
         archive: MusubiArchiveRecordV1,
     }
-
     fn keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives an Ed25519 keypair")
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed | 1; 32]),
         ))
     }
-
     fn archive_commitment() -> MusubiArchiveCommitmentV1 {
         MusubiArchiveCommitmentV1 {
             root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
@@ -373,7 +343,6 @@ mod tests {
             chunk_count: 4,
         }
     }
-
     fn registration_material() -> RegistrationMaterial {
         let network_id = network_id(0x15);
         let publisher_key = keypair(0x31);
@@ -425,7 +394,6 @@ mod tests {
             archive,
         }
     }
-
     fn registration_instruction(archive: &MusubiArchiveRecordV1) -> RegisterMusubiArchiveV1 {
         RegisterMusubiArchiveV1::new(
             archive.commitment.clone(),
@@ -433,7 +401,6 @@ mod tests {
             1,
         )
     }
-
     fn signed_transaction(
         network_id: NetworkId,
         key: &KeyPair,
@@ -449,7 +416,6 @@ mod tests {
         .with_instructions(instructions)
         .sign(key.private_key())
     }
-
     fn successful_registration_transaction(material: &RegistrationMaterial) -> SignedTransaction {
         signed_transaction(
             material.network_id,
@@ -457,7 +423,6 @@ mod tests {
             vec![registration_instruction(&material.archive).into()],
         )
     }
-
     fn signed_block_with_results(
         transactions: Vec<SignedTransaction>,
         rejected_index: Option<usize>,
@@ -495,7 +460,6 @@ mod tests {
             .expect("fixture result hashes match entrypoints");
         block
     }
-
     fn finality_keypairs() -> Vec<KeyPair> {
         let mut keypairs = (0_u8..4)
             .map(|index| {
@@ -511,7 +475,6 @@ mod tests {
         });
         keypairs
     }
-
     fn finality_artifact(block: &SignedBlock, network_id: NetworkId) -> V2FinalityArtifact {
         let keypairs = finality_keypairs();
         let roster = keypairs
@@ -611,7 +574,6 @@ mod tests {
             .expect("finality fixture is cryptographically valid");
         artifact
     }
-
     fn seeded_world(material: &RegistrationMaterial) -> World {
         let publisher = material.archive.registered_by.clone();
         let account = Account::new(publisher.clone()).build(&publisher);
@@ -626,11 +588,9 @@ mod tests {
             .insert(binding.seed_provider, binding.ingress_broker.clone());
         world
     }
-
     fn reader_fixture() -> ReaderFixture {
         reader_fixture_with_finality(true)
     }
-
     fn reader_fixture_with_finality(store_finality: bool) -> ReaderFixture {
         let material = registration_material();
         let registration_transaction = successful_registration_transaction(&material);
@@ -672,7 +632,6 @@ mod tests {
         }
         let _ = state_block.apply_without_execution(&committed, Vec::new());
         state_block.commit().expect("commit fixture state block");
-
         let registered = state
             .query_view()
             .world()
@@ -686,7 +645,6 @@ mod tests {
         );
         assert_eq!(registered.location_revision, 1);
         replace_current_archive(&state, *canonical_block.hash().as_ref(), &material.archive);
-
         let query = MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
             version: 1,
             network_id: material.network_id,
@@ -711,7 +669,6 @@ mod tests {
             archive: material.archive,
         }
     }
-
     fn replace_current_archive(
         state: &State,
         canonical_hash: [u8; 32],
@@ -736,7 +693,6 @@ mod tests {
         transaction.apply();
         block.commit().expect("commit current archive substitution");
     }
-
     #[test]
     fn exact_finalized_registration_returns_current_mutable_record() {
         let fixture = reader_fixture();
@@ -748,7 +704,6 @@ mod tests {
         assert_eq!(archive.location_revision, 2);
         assert_eq!(archive.location_ids, fixture.archive.location_ids);
     }
-
     #[test]
     fn registration_without_verified_v2_finality_is_invalid() {
         let fixture = reader_fixture_with_finality(false);
@@ -760,7 +715,6 @@ mod tests {
             invalid()
         );
     }
-
     #[test]
     fn missing_duplicate_and_rejected_transactions_are_invalid() {
         let fixture = reader_fixture();
@@ -771,7 +725,6 @@ mod tests {
             .read_current_archive(&missing)
             .expect_err("missing transaction must fail closed");
         assert_eq!(error, invalid());
-
         let material = registration_material();
         let transaction = successful_registration_transaction(&material);
         let mut query = fixture.query.clone();
@@ -782,7 +735,6 @@ mod tests {
         let rejected = signed_block_with_results(vec![transaction], Some(0));
         assert!(!validate_registration_transaction(&query, &rejected));
     }
-
     #[test]
     fn multi_instruction_registration_is_invalid() {
         let fixture = reader_fixture();
@@ -798,7 +750,6 @@ mod tests {
         let block = signed_block_with_results(vec![transaction], None);
         assert!(!validate_registration_transaction(&query, &block));
     }
-
     #[test]
     fn wrong_authority_registration_is_invalid() {
         let fixture = reader_fixture();
@@ -813,7 +764,6 @@ mod tests {
         let block = signed_block_with_results(vec![transaction], None);
         assert!(!validate_registration_transaction(&query, &block));
     }
-
     #[test]
     fn wrong_network_registration_is_invalid() {
         let fixture = reader_fixture();
@@ -828,7 +778,6 @@ mod tests {
         let block = signed_block_with_results(vec![transaction], None);
         assert!(!validate_registration_transaction(&query, &block));
     }
-
     #[test]
     fn snapshot_and_finalized_wire_substitution_are_invalid() {
         let fixture = reader_fixture();
@@ -841,7 +790,6 @@ mod tests {
                 .expect_err("snapshot substitution must fail closed"),
             invalid()
         );
-
         let view = fixture.state.query_view();
         let block = view
             .kura()
@@ -860,7 +808,6 @@ mod tests {
             &block,
             &finality,
         ));
-
         let mut substituted = block.as_ref().clone();
         let entrypoint_hashes = substituted.entrypoint_hashes().collect::<Vec<_>>();
         substituted
@@ -883,7 +830,6 @@ mod tests {
             &finality,
         ));
     }
-
     #[test]
     fn current_registration_projection_substitution_is_invalid() {
         let fixture = reader_fixture();
@@ -905,7 +851,6 @@ mod tests {
             invalid()
         );
     }
-
     #[test]
     fn only_evidence_ahead_of_local_finality_is_retryable() {
         let fixture = reader_fixture();
@@ -916,7 +861,6 @@ mod tests {
         .expect_err("reader must reject a state handle from another exact network");
         assert_eq!(wrong_reader_error, invalid());
         assert!(!wrong_reader_error.is_retryable());
-
         let mut height_ahead = fixture.query.clone();
         height_ahead.snapshot.finalized_height = 2;
         height_ahead.snapshot.finalized_block_hash = [0x63; 32];
@@ -929,7 +873,6 @@ mod tests {
             MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
         );
         assert!(height_error.is_retryable());
-
         let mut revision_ahead = fixture.query.clone();
         revision_ahead.snapshot.index_revision = 2;
         let revision_error = fixture
@@ -941,7 +884,6 @@ mod tests {
             MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
         );
         assert!(revision_error.is_retryable());
-
         let mut substituted = fixture.query;
         substituted.snapshot.finalized_block_hash = [0x64; 32];
         let invalid_error = fixture

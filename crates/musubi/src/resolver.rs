@@ -5,14 +5,9 @@
 //! the first-release behavior: reuse a compatible selection already present in
 //! the graph, then a still-valid parent-local lock edge, then fresh releases in
 //! descending `SemVer` order.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    error::Error,
-    fmt,
-    sync::Arc,
+use crate::lockfile::{
+    LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
 };
-
 use iroha_data_model::{
     NetworkId,
     musubi::{
@@ -24,11 +19,12 @@ use iroha_data_model::{
     },
     name::Name,
 };
-
-use crate::lockfile::{
-    LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    error::Error,
+    fmt,
+    sync::Arc,
 };
-
 /// Maximum candidate rows retained across one bounded sparse-index collection.
 pub(crate) const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
 /// Maximum candidate dependency occurrences inspected across one collection.
@@ -40,7 +36,6 @@ pub(crate) const MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1: usize =
 /// rejected immediately for cycle, depth, node, or edge limits. A zero-candidate terminal task
 /// consumes no unit. The counter is global across failed branches and is never rolled back.
 pub(crate) const MAX_RESOLVER_SEARCH_ATTEMPTS_V1: usize = MAX_COLLECTED_RESOLVER_ROWS_V1;
-
 /// One registry requirement declared by a selected workspace root.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WorkspaceDependencyReqV1 {
@@ -53,7 +48,6 @@ pub struct WorkspaceDependencyReqV1 {
     /// Canonical published version range.
     pub requirement: MusubiVersionReqV1,
 }
-
 impl WorkspaceDependencyReqV1 {
     fn validate(&self) -> Result<(), ResolverError> {
         MusubiDependencyReqV1 {
@@ -65,7 +59,6 @@ impl WorkspaceDependencyReqV1 {
         .map_err(|error| ResolverError::invalid(error.reason()))
     }
 }
-
 /// Requirements of one selected or recursively reachable local package.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WorkspaceRootReqV1 {
@@ -74,7 +67,6 @@ pub struct WorkspaceRootReqV1 {
     /// Normal and root-local development requirements.
     pub dependencies: Vec<WorkspaceDependencyReqV1>,
 }
-
 /// A targeted Cargo-style update request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetedUpdateV1 {
@@ -85,7 +77,6 @@ pub struct TargetedUpdateV1 {
     /// Optional exact replacement requested by `--precise`.
     pub precise: Option<MusubiVersionV1>,
 }
-
 /// Lock mutation policy for one resolution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ResolveModeV1 {
@@ -95,7 +86,6 @@ pub enum ResolveModeV1 {
     /// Fail if the exact previous graph cannot be retained.
     Locked,
 }
-
 /// Complete deterministic resolver input.
 #[derive(Clone, Debug)]
 pub struct ResolveRequestV1 {
@@ -114,7 +104,6 @@ pub struct ResolveRequestV1 {
     /// Whether graph changes are allowed.
     pub mode: ResolveModeV1,
 }
-
 /// Successful exact resolution and whether its graph changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolveOutcomeV1 {
@@ -124,7 +113,6 @@ pub struct ResolveOutcomeV1 {
     /// Whether the caller must durably replace its lockfile.
     pub changed: bool,
 }
-
 /// Parent identity printed in a dependency conflict chain.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConflictParentV1 {
@@ -133,7 +121,6 @@ pub enum ConflictParentV1 {
     /// Exact registry release whose manifest declared the edge.
     Release(MusubiReleaseIdV1),
 }
-
 impl fmt::Display for ConflictParentV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -142,7 +129,6 @@ impl fmt::Display for ConflictParentV1 {
         }
     }
 }
-
 /// One parent-local edge in a minimal resolution conflict.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConflictStepV1 {
@@ -155,7 +141,6 @@ pub struct ConflictStepV1 {
     /// Canonical unsatisfied range.
     pub requirement: MusubiVersionReqV1,
 }
-
 impl fmt::Display for ConflictStepV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -165,7 +150,6 @@ impl fmt::Display for ConflictStepV1 {
         )
     }
 }
-
 /// Stable reason attached to a deterministic conflict chain.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConflictReasonV1 {
@@ -180,7 +164,6 @@ pub enum ConflictReasonV1 {
     /// The selected graph would exceed the 512-edge consumer-lock bound.
     EdgeLimit,
 }
-
 /// Minimal deterministic dependency conflict returned after backtracking.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResolutionConflictV1 {
@@ -189,7 +172,6 @@ pub struct ResolutionConflictV1 {
     /// Terminal failure reason.
     pub reason: ConflictReasonV1,
 }
-
 impl fmt::Display for ResolutionConflictV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.reason {
@@ -212,7 +194,6 @@ impl fmt::Display for ResolutionConflictV1 {
         Ok(())
     }
 }
-
 /// Deterministic resolver failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolverError {
@@ -228,13 +209,11 @@ pub enum ResolverError {
     /// A valid result exists but `--locked` forbids writing it.
     LockChangeRequired,
 }
-
 impl ResolverError {
     fn invalid(message: impl Into<String>) -> Self {
         Self::InvalidInput(message.into())
     }
 }
-
 impl fmt::Display for ResolverError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -252,28 +231,22 @@ impl fmt::Display for ResolverError {
         }
     }
 }
-
 impl Error for ResolverError {}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ParentKey {
     Root(Arc<MusubiPackageSelectorV1>),
     Release(Arc<MusubiReleaseIdV1>),
 }
-
 impl ParentKey {
     fn root(package: MusubiPackageSelectorV1) -> Self {
         Self::Root(Arc::new(package))
     }
-
     fn release(release: MusubiReleaseIdV1) -> Self {
         Self::Release(Arc::new(release))
     }
-
     fn shared_release(release: Arc<MusubiReleaseIdV1>) -> Self {
         Self::Release(release)
     }
-
     fn conflict_parent(&self) -> ConflictParentV1 {
         match self {
             Self::Root(name) => ConflictParentV1::Workspace(name.as_ref().clone()),
@@ -281,18 +254,15 @@ impl ParentKey {
         }
     }
 }
-
 #[derive(Clone)]
 struct ConflictChainV1 {
     tail: Arc<ConflictChainNodeV1>,
 }
-
 struct ConflictChainNodeV1 {
     previous: Option<Arc<Self>>,
     step: ConflictStepV1,
     len: usize,
 }
-
 impl ConflictChainV1 {
     fn first(step: ConflictStepV1) -> Self {
         Self {
@@ -303,7 +273,6 @@ impl ConflictChainV1 {
             }),
         }
     }
-
     fn push(&self, step: ConflictStepV1) -> Self {
         Self {
             tail: Arc::new(ConflictChainNodeV1 {
@@ -313,7 +282,6 @@ impl ConflictChainV1 {
             }),
         }
     }
-
     fn to_vec(&self) -> Vec<ConflictStepV1> {
         let mut steps = Vec::with_capacity(self.tail.len);
         let mut current = Some(self.tail.as_ref());
@@ -325,7 +293,6 @@ impl ConflictChainV1 {
         steps
     }
 }
-
 #[derive(Clone)]
 struct PendingEdge {
     parent: ParentKey,
@@ -338,7 +305,6 @@ struct PendingEdge {
     // The exact prior edge this task replaces, retained across parent-version backtracking.
     origin: Option<PreviousEdge>,
 }
-
 impl PendingEdge {
     fn step(
         parent: &ParentKey,
@@ -354,32 +320,27 @@ impl PendingEdge {
         }
     }
 }
-
 #[derive(Clone)]
 struct PreviousEdge {
     selected: Arc<MusubiReleaseIdV1>,
 }
-
 // Exact parent-local identity of one edge that selected the targeted locked node.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PreviousEdgeKey {
     parent: ParentKey,
     alias: Name,
 }
-
 #[derive(Clone, Default)]
 struct SearchState {
     selected: BTreeSet<Arc<MusubiReleaseIdV1>>,
     edges: BTreeMap<ParentKey, BTreeMap<Name, Arc<MusubiExactDependencyEdgeV1>>>,
     edge_count: usize,
 }
-
 #[derive(Default)]
 struct PreciseReplay {
     paths: BTreeMap<(ParentKey, ParentKey), Vec<ConflictStepV1>>,
     missing: BTreeMap<PreviousEdgeKey, Vec<ConflictStepV1>>,
 }
-
 #[derive(Clone, Copy)]
 struct Limits {
     nodes: usize,
@@ -387,7 +348,6 @@ struct Limits {
     edges: usize,
     attempts: usize,
 }
-
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -398,13 +358,11 @@ impl Default for Limits {
         }
     }
 }
-
 #[derive(Clone)]
 struct UpdatePlan {
     target: MusubiReleaseIdV1,
     precise: Option<MusubiVersionV1>,
 }
-
 struct Solver {
     network_id: NetworkId,
     snapshot: MusubiRegistrySnapshotV1,
@@ -422,13 +380,11 @@ struct Solver {
     selection_policy: SelectionPolicyV1,
     limits: Limits,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectionPolicyV1 {
     PreserveConsumerLock,
     FreshOnly,
 }
-
 /// Resolve the exact consumer graph using first-release deterministic policy.
 pub fn resolve(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, ResolverError> {
     resolve_with_policy(
@@ -437,7 +393,6 @@ pub fn resolve(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, ResolverEr
         SelectionPolicyV1::PreserveConsumerLock,
     )
 }
-
 /// Resolve a publication verification graph using only fresh-selectable rows.
 ///
 /// Still-valid fresh lock edges retain their normal preference, but yanked,
@@ -446,7 +401,6 @@ pub fn resolve(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, ResolverEr
 pub fn resolve_fresh(request: ResolveRequestV1) -> Result<ResolveOutcomeV1, ResolverError> {
     resolve_with_policy(request, Limits::default(), SelectionPolicyV1::FreshOnly)
 }
-
 #[cfg(test)]
 fn resolve_with_limits(
     request: ResolveRequestV1,
@@ -454,7 +408,6 @@ fn resolve_with_limits(
 ) -> Result<ResolveOutcomeV1, ResolverError> {
     resolve_with_policy(request, limits, SelectionPolicyV1::PreserveConsumerLock)
 }
-
 fn resolve_with_policy(
     request: ResolveRequestV1,
     limits: Limits,
@@ -463,7 +416,6 @@ fn resolve_with_policy(
     let solver = Solver::new(request, limits, selection_policy)?;
     solver.run()
 }
-
 impl Solver {
     #[expect(
         clippy::too_many_lines,
@@ -555,7 +507,6 @@ impl Solver {
                 "selected workspace root package selectors must be unique",
             ));
         }
-
         let mut rows = BTreeMap::new();
         for row in request.rows {
             row.validate()
@@ -583,7 +534,6 @@ impl Solver {
                 )));
             }
         }
-
         let mut preserved = BTreeMap::new();
         let mut locked_nodes = BTreeMap::new();
         if let Some(previous) = &request.previous {
@@ -624,7 +574,6 @@ impl Solver {
                 )));
             }
         }
-
         let update = prepare_update(request.update, request.previous.as_ref())?;
         let precise_occurrences =
             prepare_precise_occurrences(request.previous.as_ref(), update.as_ref())?;
@@ -654,7 +603,6 @@ impl Solver {
                     .then_with(|| left.cmp(right))
             });
         }
-
         Ok(Self {
             network_id: request.network_id,
             snapshot: request.snapshot,
@@ -672,7 +620,6 @@ impl Solver {
             limits,
         })
     }
-
     fn run(self) -> Result<ResolveOutcomeV1, ResolverError> {
         let pending = self.root_tasks();
         let mut attempts = 0_usize;
@@ -695,7 +642,6 @@ impl Solver {
             changed: true,
         })
     }
-
     fn root_tasks(&self) -> Vec<Arc<PendingEdge>> {
         self.roots
             .iter()
@@ -722,7 +668,6 @@ impl Solver {
             })
             .collect()
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the aggregate 512-edge cap bounds recursion while this state machine keeps candidate selection, conflict evidence, and deterministic backtracking adjacent"
@@ -754,7 +699,6 @@ impl Solver {
                 reason: ConflictReasonV1::NoCandidate,
             })));
         }
-
         let minimum_parallel_excess = parallel_version_excess(&state);
         let mut best_conflict = None;
         let mut best_solution = None;
@@ -841,7 +785,6 @@ impl Solver {
                     vacant.insert(Arc::new(edge));
                 }
             }
-
             let mut next_pending = Vec::new();
             if is_new {
                 let row = self
@@ -914,7 +857,6 @@ impl Solver {
             }),
         )))
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "candidate ordering keeps selected, parent-locked, globally locked, and fresh pointer-shared sources in one auditable precedence chain"
@@ -956,7 +898,6 @@ impl Solver {
                     .get(release)
                     .is_some_and(|row| self.locked_state_is_preservable(row))
         };
-
         let mut candidates = Vec::new();
         let mut seen = BTreeSet::new();
         let mut selected = state
@@ -1024,7 +965,6 @@ impl Solver {
         }
         candidates
     }
-
     fn precise_target_release(&self) -> Option<MusubiReleaseIdV1> {
         self.update.as_ref().and_then(|update| {
             update.precise.as_ref().map(|version| {
@@ -1032,7 +972,6 @@ impl Solver {
             })
         })
     }
-
     fn previous_edge(
         &self,
         parent: &ParentKey,
@@ -1047,12 +986,10 @@ impl Solver {
                 selected: Arc::new(edge.selected.clone()),
             })
     }
-
     fn precise_conflict(&self, state: &SearchState) -> Option<ResolutionConflictV1> {
         let expected = self.precise_target_release()?;
         let replay = self.precise_replay(state);
         let mut best = None;
-
         for occurrence in &self.precise_occurrences {
             let mapped = replay
                 .paths
@@ -1075,7 +1012,6 @@ impl Solver {
                 );
                 continue;
             }
-
             for (current, prefix) in mapped {
                 let selects_expected = state
                     .edges
@@ -1098,7 +1034,6 @@ impl Solver {
         }
         best
     }
-
     fn precise_terminal_step(
         parent: &ParentKey,
         occurrence: &PreviousEdgeKey,
@@ -1111,7 +1046,6 @@ impl Solver {
             requirement: MusubiVersionReqV1::Exact(expected.version.clone()),
         }
     }
-
     fn precise_replay(&self, state: &SearchState) -> PreciseReplay {
         let Some(previous) = self.previous.as_ref() else {
             return PreciseReplay::default();
@@ -1119,7 +1053,6 @@ impl Solver {
         let current_paths = self.current_release_paths(state);
         let mut replay = PreciseReplay::default();
         let mut pending = BTreeSet::new();
-
         for root in &previous.roots {
             if self
                 .roots
@@ -1145,7 +1078,6 @@ impl Solver {
                 }
             }
         }
-
         while let Some(key) = pending.pop_first() {
             let chain = replay
                 .paths
@@ -1185,7 +1117,6 @@ impl Solver {
                     }
                     continue;
                 };
-
                 let mut next_chain = chain.clone();
                 next_chain.push(PendingEdge::step(
                     current_parent,
@@ -1204,7 +1135,6 @@ impl Solver {
         }
         replay
     }
-
     fn current_release_paths(
         &self,
         state: &SearchState,
@@ -1250,7 +1180,6 @@ impl Solver {
         }
         paths
     }
-
     fn preserved_edge(&self, task: &PendingEdge) -> Option<&MusubiExactDependencyEdgeV1> {
         self.preserved
             .get(&task.parent)
@@ -1261,7 +1190,6 @@ impl Solver {
                     && task.requirement.matches(&edge.selected.version)
             })
     }
-
     fn preservable_locked_candidate(&self, task: &PendingEdge) -> Option<Arc<MusubiReleaseIdV1>> {
         let edge = self.preserved_edge(task)?;
         if self
@@ -1275,7 +1203,6 @@ impl Solver {
         self.locked_state_is_preservable(row)
             .then_some(Arc::clone(release))
     }
-
     fn locked_state_is_preservable(&self, row: &MusubiResolverReleaseRowV1) -> bool {
         let exact_locked_row = self
             .locked_nodes
@@ -1293,7 +1220,6 @@ impl Solver {
                 SelectionPolicyV1::FreshOnly => row.selection.fresh_selectable(),
             }
     }
-
     fn would_cycle(state: &SearchState, parent: &ParentKey, candidate: &MusubiReleaseIdV1) -> bool {
         let ParentKey::Release(parent) = parent else {
             return false;
@@ -1316,7 +1242,6 @@ impl Solver {
         }
         false
     }
-
     fn selected_subtree_depth_conflict(
         &self,
         state: &SearchState,
@@ -1327,7 +1252,6 @@ impl Solver {
         let root_chain = task.chain.to_vec();
         paths.insert((candidate.clone(), task.depth), root_chain.clone());
         let mut pending = BTreeSet::from([(task.depth, root_chain, candidate.clone())]);
-
         while let Some((depth, chain, release)) = pending.pop_first() {
             if paths.get(&(release.clone(), depth)) != Some(&chain) {
                 continue;
@@ -1356,7 +1280,6 @@ impl Solver {
         }
         None
     }
-
     fn build_lock(&self, state: &SearchState) -> Result<LockfileV1, ResolverError> {
         let roots = self
             .roots
@@ -1397,7 +1320,6 @@ impl Solver {
             .map_err(|error| ResolverError::invalid(error.to_string()))
     }
 }
-
 fn prepare_update(
     update: Option<TargetedUpdateV1>,
     previous: Option<&LockfileV1>,
@@ -1459,7 +1381,6 @@ fn prepare_update(
         precise: update.precise,
     }))
 }
-
 fn prepare_precise_occurrences(
     previous: Option<&LockfileV1>,
     update: Option<&UpdatePlan>,
@@ -1501,7 +1422,6 @@ fn prepare_precise_occurrences(
     }
     Ok(occurrences)
 }
-
 fn validate_precise_occurrence_roots(
     previous: Option<&LockfileV1>,
     roots: &[WorkspaceRootReqV1],
@@ -1532,7 +1452,6 @@ fn validate_precise_occurrence_roots(
                 .map(|edge| edge.selected.clone()),
         );
     }
-
     for occurrence in occurrences {
         let rooted = match &occurrence.parent {
             ParentKey::Root(root) => current_roots.contains(root.as_ref()),
@@ -1548,7 +1467,6 @@ fn validate_precise_occurrence_roots(
     }
     Ok(())
 }
-
 fn previous_edges<'lock>(
     previous: &'lock LockfileV1,
     parent: &ParentKey,
@@ -1568,7 +1486,6 @@ fn previous_edges<'lock>(
             .map_or(&[], |node| node.dependencies.as_slice()),
     }
 }
-
 fn precise_target_descendants(
     previous: &LockfileV1,
     occurrences: &BTreeSet<PreviousEdgeKey>,
@@ -1585,7 +1502,6 @@ fn precise_target_descendants(
                 .insert(node.release.clone());
         }
     }
-
     let target_parents = occurrences
         .iter()
         .filter_map(|occurrence| match &occurrence.parent {
@@ -1612,7 +1528,6 @@ fn precise_target_descendants(
     }
     descendants
 }
-
 fn insert_better_chain<Key: Ord>(
     paths: &mut BTreeMap<Key, Vec<ConflictStepV1>>,
     key: Key,
@@ -1627,7 +1542,6 @@ fn insert_better_chain<Key: Ord>(
     }
     replace
 }
-
 fn row_matches_locked_node(
     row: &MusubiResolverReleaseRowV1,
     node: &MusubiVerificationNodeV1,
@@ -1650,7 +1564,6 @@ fn row_matches_locked_node(
                     && requirement.requirement == edge.requirement
             })
 }
-
 fn push_unique(
     candidates: &mut Vec<Arc<MusubiReleaseIdV1>>,
     seen: &mut BTreeSet<Arc<MusubiReleaseIdV1>>,
@@ -1660,7 +1573,6 @@ fn push_unique(
         candidates.push(release);
     }
 }
-
 fn parallel_version_excess(state: &SearchState) -> usize {
     let mut counts = BTreeMap::<&MusubiPackageIdV1, usize>::new();
     for release in &state.selected {
@@ -1668,7 +1580,6 @@ fn parallel_version_excess(state: &SearchState) -> usize {
     }
     counts.values().map(|count| count.saturating_sub(1)).sum()
 }
-
 fn select_better_conflict(
     best: &mut Option<ResolutionConflictV1>,
     candidate: ResolutionConflictV1,
@@ -1681,9 +1592,9 @@ fn select_better_conflict(
         *best = Some(candidate);
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         account::AccountId,
         musubi::{
@@ -1696,21 +1607,16 @@ mod tests {
         nexus::DataSpaceId,
         prelude::{Algorithm, KeyPair},
     };
-
-    use super::*;
-
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("network id")
     }
-
     fn account() -> AccountId {
         let keypair =
             KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519).expect("fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn package(name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -1718,15 +1624,12 @@ mod tests {
             name.parse().expect("package name"),
         )
     }
-
     fn version(raw: &str) -> MusubiVersionV1 {
         raw.parse().expect("version")
     }
-
     fn requirement(raw: &str) -> MusubiVersionReqV1 {
         raw.parse().expect("requirement")
     }
-
     fn dependency(alias: &str, package: &MusubiPackageIdV1, req: &str) -> MusubiDependencyReqV1 {
         MusubiDependencyReqV1 {
             alias: alias.parse().expect("alias"),
@@ -1734,7 +1637,6 @@ mod tests {
             requirement: requirement(req),
         }
     }
-
     fn root_dependency(
         alias: &str,
         kind: MusubiDependencyKindV1,
@@ -1748,14 +1650,12 @@ mod tests {
             requirement: requirement(req),
         }
     }
-
     fn root(dependencies: Vec<WorkspaceDependencyReqV1>) -> WorkspaceRootReqV1 {
         WorkspaceRootReqV1 {
             package: "test/app".parse().expect("root selector"),
             dependencies,
         }
     }
-
     fn indexed_root(
         index: usize,
         dependencies: Vec<WorkspaceDependencyReqV1>,
@@ -1767,7 +1667,6 @@ mod tests {
             dependencies,
         }
     }
-
     fn snapshot(height: u64) -> MusubiRegistrySnapshotV1 {
         MusubiRegistrySnapshotV1 {
             finalized_height: height,
@@ -1775,7 +1674,6 @@ mod tests {
             index_revision: height,
         }
     }
-
     fn row(
         package: &MusubiPackageIdV1,
         raw_version: &str,
@@ -1826,7 +1724,6 @@ mod tests {
             index_revision: snapshot.index_revision,
         }
     }
-
     fn with_storage(
         mut row: MusubiResolverReleaseRowV1,
         availability: MusubiStorageAvailabilityV1,
@@ -1848,12 +1745,10 @@ mod tests {
         }
         row
     }
-
     fn yanked(mut row: MusubiResolverReleaseRowV1) -> MusubiResolverReleaseRowV1 {
         row.selection.yank.yanked = true;
         row
     }
-
     fn taken_down(mut row: MusubiResolverReleaseRowV1) -> MusubiResolverReleaseRowV1 {
         row.selection.governance =
             MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
@@ -1865,7 +1760,6 @@ mod tests {
             });
         row
     }
-
     fn request(
         roots: Vec<WorkspaceRootReqV1>,
         rows: Vec<MusubiResolverReleaseRowV1>,
@@ -1881,7 +1775,6 @@ mod tests {
             mode: ResolveModeV1::UpdateLock,
         }
     }
-
     fn binary_dead_end_request(
         prefix_count: usize,
         snapshot: MusubiRegistrySnapshotV1,
@@ -1927,7 +1820,6 @@ mod tests {
             snapshot,
         )
     }
-
     fn root_selection<'a>(lock: &'a LockfileV1, alias: &str) -> &'a MusubiReleaseIdV1 {
         &lock.roots[0]
             .dependencies
@@ -1936,7 +1828,6 @@ mod tests {
             .expect("locked root edge")
             .selected
     }
-
     #[test]
     fn input_order_is_irrelevant_and_selected_compatible_precedes_newest() {
         let snap = snapshot(3);
@@ -1949,7 +1840,6 @@ mod tests {
             row(&pkg, "2.0.0", vec![], snap),
             row(&pkg, "1.0.0", vec![], snap),
         ];
-
         let first = resolve(request(
             vec![root(dependencies.clone())],
             rows.clone(),
@@ -1966,7 +1856,6 @@ mod tests {
             snap,
         ))
         .expect("resolution");
-
         assert_eq!(first.lockfile, second.lockfile);
         assert_eq!(first.lockfile.nodes.len(), 1);
         assert_eq!(
@@ -1978,7 +1867,6 @@ mod tests {
             version("1.0.0")
         );
     }
-
     #[test]
     fn fresh_resolution_uses_descending_semver() {
         let snap = snapshot(3);
@@ -2002,7 +1890,6 @@ mod tests {
             version("2.0.0")
         );
     }
-
     #[test]
     fn parent_edge_lock_preserves_yanked_below_quorum_release_and_old_snapshot() {
         let old_snapshot = snapshot(3);
@@ -2031,13 +1918,11 @@ mod tests {
             new_snapshot,
         );
         next.previous = Some(previous.clone());
-
         let outcome = resolve(next).expect("preserved lock");
         assert!(!outcome.changed);
         assert_eq!(outcome.lockfile, previous);
         assert_eq!(outcome.lockfile.snapshot, old_snapshot);
     }
-
     #[test]
     fn publication_resolution_replaces_a_yanked_below_quorum_lock() {
         let old_snapshot = snapshot(5);
@@ -2066,21 +1951,18 @@ mod tests {
             new_snapshot,
         );
         next.previous = Some(previous);
-
         let outcome = resolve_fresh(next.clone()).expect("fresh publication graph");
         assert!(outcome.changed);
         assert_eq!(
             root_selection(&outcome.lockfile, "codec").version,
             version("2.0.0")
         );
-
         next.mode = ResolveModeV1::Locked;
         assert!(matches!(
             resolve_fresh(next),
             Err(ResolverError::LockChangeRequired)
         ));
     }
-
     #[test]
     fn changed_root_ranges_keep_every_still_valid_locked_version() {
         let old_snapshot = snapshot(15);
@@ -2100,7 +1982,6 @@ mod tests {
         .expect("parallel initial lock")
         .lockfile;
         assert_eq!(previous.nodes.len(), 2);
-
         let mut next = request(
             vec![root(vec![
                 root_dependency("a-broad", MusubiDependencyKindV1::Normal, &pkg, "^1.0.0"),
@@ -2119,7 +2000,6 @@ mod tests {
         );
         next.previous = Some(previous);
         let resolved = resolve(next).expect("still-valid selections remain locked");
-
         assert!(
             resolved.changed,
             "changed requirements rewrite edge metadata"
@@ -2134,7 +2014,6 @@ mod tests {
             version("1.9.0")
         );
     }
-
     #[test]
     fn compatible_selected_version_does_not_discard_yanked_locked_release() {
         let old_snapshot = snapshot(19);
@@ -2153,7 +2032,6 @@ mod tests {
         ))
         .expect("initial parallel lock")
         .lockfile;
-
         let locked_legacy = yanked(with_storage(
             row(&pkg, "1.0.0", vec![], new_snapshot),
             MusubiStorageAvailabilityV1::BelowQuorum,
@@ -2167,7 +2045,6 @@ mod tests {
             new_snapshot,
         );
         next.previous = Some(previous);
-
         let resolved = resolve(next).expect("yanked locked release remains fixed");
         assert_eq!(resolved.lockfile.nodes.len(), 2);
         assert_eq!(
@@ -2179,7 +2056,6 @@ mod tests {
             version("1.0.0")
         );
     }
-
     #[test]
     fn unavailable_locked_descendant_allows_parent_candidate_backtracking() {
         let old_snapshot = snapshot(21);
@@ -2207,7 +2083,6 @@ mod tests {
         ))
         .expect("initial lock")
         .lockfile;
-
         let mut next = request(
             roots,
             vec![
@@ -2232,7 +2107,6 @@ mod tests {
             new_snapshot,
         );
         next.previous = Some(previous);
-
         let resolved = resolve(next).expect("failed locked branch backtracks to another parent");
         assert!(resolved.changed);
         assert_eq!(
@@ -2246,7 +2120,6 @@ mod tests {
             node.release == MusubiReleaseIdV1::new(child.clone(), version("1.0.0"))
         }));
     }
-
     #[test]
     fn fresh_selection_excludes_every_unavailable_state() {
         let snap = snapshot(5);
@@ -2275,13 +2148,11 @@ mod tests {
             snap,
         ))
         .expect("only healthy release is selectable");
-
         assert_eq!(
             root_selection(&outcome.lockfile, "codec").version,
             version("1.0.0")
         );
     }
-
     #[test]
     fn cargo_prerelease_eligibility_comes_from_structured_requirement() {
         let snap = snapshot(6);
@@ -2303,7 +2174,6 @@ mod tests {
             snap,
         ))
         .expect("prerelease resolution");
-
         assert_eq!(
             root_selection(&outcome.lockfile, "explicit").version,
             version("1.1.0-alpha.1")
@@ -2313,7 +2183,6 @@ mod tests {
             version("1.0.0")
         );
     }
-
     #[test]
     fn comparator_prerelease_does_not_admit_a_different_core_prerelease() {
         let snap = snapshot(23);
@@ -2333,13 +2202,11 @@ mod tests {
             snap,
         ))
         .expect("same-core prerelease resolution");
-
         assert_eq!(
             root_selection(&outcome.lockfile, "codec").version,
             version("1.2.3-beta.2")
         );
     }
-
     #[test]
     fn incompatible_ranges_use_parallel_versions_and_dev_is_root_local() {
         let snap = snapshot(7);
@@ -2363,7 +2230,6 @@ mod tests {
             snap,
         ))
         .expect("parallel versions");
-
         assert_eq!(
             root_selection(&outcome.lockfile, "old").version,
             version("1.0.0")
@@ -2389,7 +2255,6 @@ mod tests {
                 .all(|edge| edge.kind == MusubiDependencyKindV1::Normal)
         );
     }
-
     #[test]
     fn transitive_failure_backtracks_to_an_older_parent_release() {
         let snap = snapshot(8);
@@ -2420,13 +2285,11 @@ mod tests {
             snap,
         ))
         .expect("parent backtracking");
-
         assert_eq!(
             root_selection(&outcome.lockfile, "parent").version,
             version("1.0.0")
         );
     }
-
     #[test]
     fn deterministic_search_attempts_bound_repeated_failed_subproblems() {
         let snap = snapshot(34);
@@ -2464,7 +2327,6 @@ mod tests {
             first,
             ResolverError::SearchLimitExceeded { limit: 1 }
         ));
-
         let resolved = resolve_with_limits(
             request(roots, rows, snap),
             Limits {
@@ -2478,7 +2340,6 @@ mod tests {
             version("1.0.0")
         );
     }
-
     #[test]
     fn production_search_attempt_corridor_is_inclusive_and_order_independent() {
         let snap = snapshot(35);
@@ -2489,7 +2350,6 @@ mod tests {
             ResolverError::Conflict(conflict)
                 if conflict.reason == ConflictReasonV1::NoCandidate
         ));
-
         let request = binary_dead_end_request(3, snap);
         let mut reversed = request.clone();
         reversed.rows.reverse();
@@ -2503,7 +2363,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn cycles_and_minimal_conflicts_are_deterministic() {
         let snap = snapshot(9);
@@ -2529,7 +2388,6 @@ mod tests {
         };
         assert!(matches!(cycle.reason, ConflictReasonV1::Cycle(_)));
         assert_eq!(cycle.chain.len(), 3);
-
         let parent = package("parent");
         let middle = package("middle");
         let missing = package("missing");
@@ -2570,7 +2428,6 @@ mod tests {
         assert_eq!(conflict.chain.len(), 2);
         assert_eq!(conflict.chain[1].alias.as_ref(), "short");
     }
-
     #[test]
     fn depth_and_node_limits_are_enforced_during_search() {
         let snap = snapshot(10);
@@ -2586,7 +2443,6 @@ mod tests {
             &a,
             "*",
         )])];
-
         let depth = resolve_with_limits(
             request(roots.clone(), rows.clone(), snap),
             Limits {
@@ -2601,7 +2457,6 @@ mod tests {
             panic!("expected depth conflict");
         };
         assert_eq!(depth.reason, ConflictReasonV1::DepthLimit);
-
         let nodes = resolve_with_limits(
             request(roots, rows, snap),
             Limits {
@@ -2617,7 +2472,6 @@ mod tests {
         };
         assert_eq!(nodes.reason, ConflictReasonV1::NodeLimit);
     }
-
     #[test]
     fn consumer_lock_root_bound_is_enforced_before_search() {
         let snap = snapshot(11);
@@ -2630,7 +2484,6 @@ mod tests {
             exact.lockfile.roots.len(),
             MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1
         );
-
         let mut too_many_roots = exact_roots;
         too_many_roots.push(indexed_root(MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1, Vec::new()));
         assert!(matches!(
@@ -2638,7 +2491,6 @@ mod tests {
             Err(ResolverError::InvalidInput(reason)) if reason.contains("workspace roots")
         ));
     }
-
     #[test]
     fn direct_candidate_rows_are_bounded_before_validation_or_indexing() {
         let snap = snapshot(30);
@@ -2650,7 +2502,6 @@ mod tests {
                 if reason.contains("resolver candidate input exceeds")
         ));
     }
-
     #[test]
     fn direct_candidate_dependency_work_is_bounded_before_row_indexing() {
         let snap = snapshot(33);
@@ -2667,7 +2518,6 @@ mod tests {
                 if reason.contains("dependency occurrences")
         ));
     }
-
     #[test]
     fn edge_limit_backtracks_and_rejects_only_oversized_branches() {
         let snap = snapshot(12);
@@ -2699,7 +2549,6 @@ mod tests {
             edges: 2,
             attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
         };
-
         let unavoidable = root(vec![
             root_dependency("parent-a", MusubiDependencyKindV1::Normal, &parent, "*"),
             root_dependency("parent-b", MusubiDependencyKindV1::Normal, &parent, "*"),
@@ -2709,7 +2558,6 @@ mod tests {
             resolve_with_limits(request(vec![unavoidable], Vec::new(), snap), limits),
             Err(ResolverError::InvalidInput(reason)) if reason.contains("root dependencies")
         ));
-
         let mut rows = vec![oversized.clone(), row(&parent, "1.0.0", Vec::new(), snap)];
         rows.extend(leaves.clone());
         let resolved = resolve_with_limits(request(roots.clone(), rows, snap), limits)
@@ -2718,7 +2566,6 @@ mod tests {
             root_selection(&resolved.lockfile, "parent").version,
             version("1.0.0")
         );
-
         let mut exact_rows = vec![oversized.clone()];
         exact_rows.extend(leaves.clone());
         let exact = resolve_with_limits(
@@ -2747,7 +2594,6 @@ mod tests {
                 .sum::<usize>(),
             3
         );
-
         let mut oversized_only = vec![oversized];
         oversized_only.extend(leaves);
         let error = resolve_with_limits(request(roots, oversized_only, snap), limits)
@@ -2757,7 +2603,6 @@ mod tests {
         };
         assert_eq!(conflict.reason, ConflictReasonV1::EdgeLimit);
     }
-
     #[test]
     fn production_edge_corridor_backtracks_at_the_exact_bound() {
         let snap = snapshot(31);
@@ -2776,7 +2621,6 @@ mod tests {
                 .map(|index| dependency(&format!("leaf{index:03}"), &shared_leaf, "*"))
                 .collect::<Vec<_>>()
         };
-
         let mut rows = vec![
             row(&hub, "1.0.0", hub_dependencies, snap),
             row(
@@ -2804,7 +2648,6 @@ mod tests {
             &hub,
             "*",
         )])];
-
         let resolved = resolve(request(roots.clone(), rows.clone(), snap))
             .expect("the lower-dependency candidate fits the exact production bound");
         assert_eq!(
@@ -2826,12 +2669,10 @@ mod tests {
         assert!(resolved.lockfile.nodes.iter().any(|node| {
             node.release.package == child_packages[0] && node.release.version == version("1.0.0")
         }));
-
         rows.reverse();
         let reversed = resolve(request(roots.clone(), rows.clone(), snap))
             .expect("row order does not change the bounded solution");
         assert_eq!(reversed.lockfile, resolved.lockfile);
-
         rows.retain(|row| {
             row.release.package != child_packages[0] || row.release.version != version("1.0.0")
         });
@@ -2842,7 +2683,6 @@ mod tests {
         };
         assert_eq!(conflict.reason, ConflictReasonV1::EdgeLimit);
     }
-
     #[test]
     fn recursive_search_clones_only_shared_branch_payloads() {
         let snap = snapshot(32);
@@ -2865,7 +2705,6 @@ mod tests {
         let pending = solver.root_tasks();
         let cloned_pending = pending.clone();
         assert!(Arc::ptr_eq(&pending[0], &cloned_pending[0]));
-
         let first_chain = pending[0].chain.clone();
         let extended_chain = first_chain.push(PendingEdge::step(
             &pending[0].parent,
@@ -2881,7 +2720,6 @@ mod tests {
                 .expect("extended chain prefix"),
             &first_chain.tail
         ));
-
         let release = Arc::new(MusubiReleaseIdV1::new(
             dependency_package.clone(),
             version("1.0.0"),
@@ -2922,7 +2760,6 @@ mod tests {
                 .expect("cloned selected edge")
         ));
     }
-
     #[test]
     fn reused_selected_subtree_still_enforces_the_deeper_path_limit() {
         let snap = snapshot(24);
@@ -2946,10 +2783,8 @@ mod tests {
             ],
             snap,
         );
-
         let mut with_fallback = request.clone();
         with_fallback.rows.push(row(&parent, "0.9.0", vec![], snap));
-
         let error = resolve_with_limits(
             request,
             Limits {
@@ -2968,7 +2803,6 @@ mod tests {
         assert_eq!(conflict.chain[0].alias.as_ref(), "z-parent");
         assert_eq!(conflict.chain[1].alias.as_ref(), "shared");
         assert_eq!(conflict.chain[2].alias.as_ref(), "leaf");
-
         let resolved = resolve_with_limits(
             with_fallback,
             Limits {
@@ -2984,7 +2818,6 @@ mod tests {
             version("0.9.0")
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -3039,7 +2872,6 @@ mod tests {
         ))
         .expect("initial parallel lock")
         .lockfile;
-
         let rows = vec![
             row(
                 &target,
@@ -3073,7 +2905,6 @@ mod tests {
         let mut forward = request(roots, rows, new_snapshot);
         forward.previous = Some(previous.clone());
         forward.update = Some(update.clone());
-
         let updated = resolve(forward.clone()).expect("version-qualified update");
         assert_eq!(
             root_selection(&updated.lockfile, "a-target-one").version,
@@ -3120,7 +2951,6 @@ mod tests {
                 .expect("preserved node in updated lock");
             assert_eq!(after, before);
         }
-
         forward.roots[0].dependencies.reverse();
         forward.rows.reverse();
         forward.previous = Some(previous);
@@ -3128,7 +2958,6 @@ mod tests {
         let reversed = resolve(forward).expect("reversed version-qualified update");
         assert_eq!(updated.lockfile, reversed.lockfile);
     }
-
     #[test]
     fn unqualified_update_rejects_a_parallel_locked_package() {
         let old_snapshot = snapshot(38);
@@ -3172,14 +3001,12 @@ mod tests {
             locked_version: None,
             precise: None,
         });
-
         let ResolverError::InvalidInput(message) = resolve(update).expect_err("ambiguous target")
         else {
             panic!("expected invalid targeted update");
         };
         assert!(message.contains("has multiple locked versions; specify PACKAGE@VERSION"));
     }
-
     #[test]
     fn targeted_precise_update_changes_only_target_and_forced_descendants() {
         let old_snapshot = snapshot(11);
@@ -3237,7 +3064,6 @@ mod tests {
         normal.previous = Some(previous.clone());
         let unchanged = resolve(normal.clone()).expect("normal preservation");
         assert!(!unchanged.changed);
-
         let mut unlocked = normal.clone();
         unlocked.update = Some(TargetedUpdateV1 {
             package: target.clone(),
@@ -3253,7 +3079,6 @@ mod tests {
             root_selection(&unlocked.lockfile, "independent").version,
             version("1.0.0")
         );
-
         normal.update = Some(TargetedUpdateV1 {
             package: target.clone(),
             locked_version: Some(version("1.0.0")),
@@ -3275,7 +3100,6 @@ mod tests {
             node.release == MusubiReleaseIdV1::new(child.clone(), version("1.0.0"))
         }));
     }
-
     #[test]
     fn precise_target_survives_parent_candidate_backtracking() {
         let old_snapshot = snapshot(24);
@@ -3336,7 +3160,6 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let updated = resolve(update).expect("precise update after parent backtracking");
         assert_eq!(
             root_selection(&updated.lockfile, "parent").version,
@@ -3349,7 +3172,6 @@ mod tests {
             node.release == MusubiReleaseIdV1::new(target.clone(), version("3.0.0"))
         }));
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -3442,7 +3264,6 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let updated = resolve(update).expect("occurrence-bound precise update");
         assert_eq!(
             root_selection(&updated.lockfile, "parent").version,
@@ -3489,7 +3310,6 @@ mod tests {
             node.release == MusubiReleaseIdV1::new(target.clone(), version("3.0.0"))
         }));
     }
-
     #[test]
     fn precise_replay_treats_a_still_selected_old_parent_as_itself() {
         let old_snapshot = snapshot(28);
@@ -3541,7 +3361,6 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let updated = resolve(update).expect("exact old parent is an implicit self mapping");
         let selected_parent = root_selection(&updated.lockfile, "new-parent");
         let parent_node = updated
@@ -3555,7 +3374,6 @@ mod tests {
             version("2.0.0")
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -3658,7 +3476,6 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let updated = resolve(update).expect("final graph replays through selected parent");
         assert_eq!(
             root_selection(&updated.lockfile, "b-targeted").version,
@@ -3668,7 +3485,6 @@ mod tests {
             node.release == MusubiReleaseIdV1::new(target.clone(), version("1.0.0"))
         }));
     }
-
     #[test]
     fn precise_terminal_conflict_uses_the_selected_current_parent() {
         let old_snapshot = snapshot(32);
@@ -3727,7 +3543,6 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let ResolverError::Conflict(conflict) = resolve(update).expect_err("renamed occurrence")
         else {
             panic!("expected precise dependency conflict");
@@ -3747,7 +3562,6 @@ mod tests {
             MusubiVersionReqV1::Exact(version("2.0.0"))
         );
     }
-
     #[test]
     fn precise_update_rejects_an_occurrence_under_an_omitted_lock_root() {
         let old_snapshot = snapshot(34);
@@ -3782,14 +3596,12 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let ResolverError::InvalidInput(message) = resolve(update).expect_err("omitted root")
         else {
             panic!("expected invalid targeted update");
         };
         assert!(message.contains("not reachable from the selected workspace roots"));
     }
-
     #[test]
     fn updated_parent_prefers_compatible_globally_locked_child() {
         let old_snapshot = snapshot(17);
@@ -3839,7 +3651,6 @@ mod tests {
             locked_version: Some(version("1.0.0")),
             precise: Some(version("2.0.0")),
         });
-
         let updated = resolve(update).expect("targeted parent update");
         let selected_parent = root_selection(&updated.lockfile, "parent");
         let parent_node = updated
@@ -3853,7 +3664,6 @@ mod tests {
             version("1.5.0")
         );
     }
-
     #[test]
     fn locked_mode_reports_change_required_without_returning_a_rewrite() {
         let old_snapshot = snapshot(13);
@@ -3879,7 +3689,6 @@ mod tests {
         );
         locked.previous = Some(previous);
         locked.mode = ResolveModeV1::Locked;
-
         assert!(matches!(
             resolve(locked),
             Err(ResolverError::LockChangeRequired)

@@ -8,7 +8,8 @@
 //! intended to be a fully optimized LRU; it keeps a simple VecDeque order and
 //! a HashMap for lookups. On capacity overflow, it evicts the least-recently
 //! used item. Accessing an existing entry marks it as most-recently used.
-
+use crate::{decoder, metadata::ProgramMetadata};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     hash::{Hash, Hasher},
@@ -18,11 +19,6 @@ use std::{
     },
     time::Instant,
 };
-
-use sha2::{Digest, Sha256};
-
-use crate::{decoder, metadata::ProgramMetadata};
-
 /// A decoded instruction with its byte offset and length.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodedOp {
@@ -33,14 +29,12 @@ pub struct DecodedOp {
     /// Instruction length in bytes (2 or 4).
     pub len: u32,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CacheKey {
     hash: [u8; 32],
     vmaj: u8,
     vmin: u8,
 }
-
 impl Hash for CacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(&self.hash);
@@ -48,7 +42,6 @@ impl Hash for CacheKey {
         state.write_u8(self.vmin);
     }
 }
-
 /// Snapshot of global cache metrics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheStats {
@@ -60,7 +53,6 @@ pub struct CacheStats {
     pub decode_failures: u64,
     pub decode_time_ns_total: u64,
 }
-
 /// Limits applied to the global IVM pre-decode cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheLimits {
@@ -71,10 +63,8 @@ pub struct CacheLimits {
     /// Maximum decoded ops per cached entry (0 = unlimited).
     pub max_decoded_ops: usize,
 }
-
 const DEFAULT_CACHE_MAX_DECODED_OPS: usize = 8_000_000;
 const DEFAULT_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
-
 /// Minimal LRU cache for pre-decoded instruction streams.
 pub struct IvmCache {
     cap: usize,
@@ -92,7 +82,6 @@ pub struct IvmCache {
     misses: u64,
     evictions: u64,
 }
-
 impl IvmCache {
     /// Create a new cache with the given capacity (number of entries).
     pub fn new(capacity: usize) -> Self {
@@ -108,7 +97,6 @@ impl IvmCache {
             evictions: 0,
         }
     }
-
     /// Compute the cache key for a code buffer and header version.
     fn key_for(code: &[u8], vmaj: u8, vmin: u8) -> CacheKey {
         let mut hasher = Sha256::new();
@@ -122,7 +110,6 @@ impl IvmCache {
             vmin,
         }
     }
-
     fn touch(&mut self, key: &CacheKey) {
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
@@ -130,11 +117,9 @@ impl IvmCache {
         self.order.push_back(*key);
         self.enforce_limits();
     }
-
     fn entry_size(decoded: &Arc<[DecodedOp]>) -> usize {
         core::mem::size_of::<DecodedOp>() * decoded.len()
     }
-
     fn enforce_limits(&mut self) {
         // Evict by count first
         while self.order.len() > self.cap {
@@ -167,7 +152,6 @@ impl IvmCache {
             }
         }
     }
-
     /// Decode the code buffer using the canonical decoder. Returns a shared
     /// slice of decoded ops.
     pub fn decode_stream(code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
@@ -214,7 +198,6 @@ impl IvmCache {
             }
         }
     }
-
     /// Get a pre-decoded stream from cache or decode and insert.
     pub fn get_or_predecode(
         &mut self,
@@ -225,7 +208,6 @@ impl IvmCache {
         let key = Self::key_for(code, vmaj, vmin);
         self.get_or_predecode_with_key(key, code)
     }
-
     /// Decode a full artifact that begins with a supported IVM 1.1 header followed by code
     /// bytes.
     pub fn decode_artifact(
@@ -241,7 +223,6 @@ impl IvmCache {
         let decoded = Self::decode_stream(code)?;
         Ok((parsed.metadata, decoded))
     }
-
     /// Get a pre-decoded stream from a supported IVM 1.1 artifact (header + code), using the
     /// header version in the cache key.
     pub fn get_or_predecode_artifact(
@@ -259,7 +240,6 @@ impl IvmCache {
         let decoded = self.get_or_predecode_with_key(key, code)?;
         Ok((parsed.metadata, decoded))
     }
-
     /// Get or predecode using explicit metadata (avoids reconstructing artifact bytes).
     pub fn get_or_predecode_with_meta(
         &mut self,
@@ -269,7 +249,6 @@ impl IvmCache {
         let key = Self::key_for(code, meta.version_major, meta.version_minor);
         self.get_or_predecode_with_key(key, code)
     }
-
     fn get_or_predecode_with_key(
         &mut self,
         key: CacheKey,
@@ -293,28 +272,23 @@ impl IvmCache {
         self.touch(&key);
         Ok(decoded)
     }
-
     /// Return current counters (hits, misses, evictions) for diagnostics.
     pub fn counters(&self) -> (u64, u64, u64) {
         (self.hits, self.misses, self.evictions)
     }
 }
-
 fn validate_supported_artifact_metadata(meta: &ProgramMetadata) -> Result<(), crate::VMError> {
     if meta.version_major == 1 && meta.version_minor == 1 {
         return Ok(());
     }
     Err(crate::VMError::InvalidMetadata)
 }
-
 // Global thread-safe cache and counters (Phase 2)
 pub struct ShardedCache {
     shards: RwLock<Vec<Arc<Mutex<IvmCache>>>>,
     total_capacity: AtomicUsize,
 }
-
 const SHARD_ACTIVATION_THRESHOLD: usize = 64;
-
 impl ShardedCache {
     fn new(total_capacity: usize) -> Self {
         let shard_vec = Self::build_shards(total_capacity, default_shard_count());
@@ -323,7 +297,6 @@ impl ShardedCache {
             total_capacity: AtomicUsize::new(total_capacity),
         }
     }
-
     fn build_shards(total_capacity: usize, suggested_shards: usize) -> Vec<Arc<Mutex<IvmCache>>> {
         let desired_shards = if total_capacity <= SHARD_ACTIVATION_THRESHOLD {
             1
@@ -355,7 +328,6 @@ impl ShardedCache {
         }
         shards
     }
-
     fn shard_for_key(&self, key: &CacheKey) -> Arc<Mutex<IvmCache>> {
         let shards = self.shards.read().unwrap();
         let count = shards.len();
@@ -368,7 +340,6 @@ impl ShardedCache {
         };
         Arc::clone(&shards[idx])
     }
-
     fn set_capacity(&self, total_capacity: usize) {
         self.total_capacity.store(total_capacity, Ordering::Relaxed);
         let shard_vec = Self::build_shards(total_capacity, default_shard_count());
@@ -376,7 +347,6 @@ impl ShardedCache {
             let mut guard = self.shards.write().unwrap();
             std::mem::replace(&mut *guard, shard_vec)
         };
-
         let evicted = old_shards
             .into_iter()
             .map(|shard| {
@@ -387,7 +357,6 @@ impl ShardedCache {
         atomic_saturating_add(&EVICTS, evicted);
     }
 }
-
 static CACHE_MAX_BYTES: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_MAX_BYTES);
 static CACHE_MAX_DECODED_OPS: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_MAX_DECODED_OPS);
 static GLOBAL_CACHE: OnceLock<ShardedCache> = OnceLock::new();
@@ -398,28 +367,23 @@ static DECODED_STREAMS: AtomicU64 = AtomicU64::new(0);
 static DECODED_OPS: AtomicU64 = AtomicU64::new(0);
 static DECODE_FAILURES: AtomicU64 = AtomicU64::new(0);
 static DECODE_TIME_NS: AtomicU64 = AtomicU64::new(0);
-
 fn global_capacity() -> usize {
     // Default capacity used when hosts do not configure the cache explicitly.
     128
 }
-
 fn configured_max_decoded_ops() -> usize {
     let raw = CACHE_MAX_DECODED_OPS.load(Ordering::Relaxed);
     if raw == 0 { usize::MAX } else { raw }
 }
-
 fn configured_max_bytes() -> usize {
     let raw = CACHE_MAX_BYTES.load(Ordering::Relaxed);
     if raw == 0 { usize::MAX } else { raw }
 }
-
 fn default_shard_count() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().clamp(1, 16))
         .unwrap_or(4)
 }
-
 fn atomic_saturating_add(cell: &AtomicU64, value: u64) {
     if value == 0 {
         return;
@@ -433,11 +397,9 @@ fn atomic_saturating_add(cell: &AtomicU64, value: u64) {
         }
     }
 }
-
 pub fn global_cache() -> &'static ShardedCache {
     GLOBAL_CACHE.get_or_init(|| ShardedCache::new(global_capacity()))
 }
-
 pub fn global_get_with_meta(
     code: &[u8],
     meta: &ProgramMetadata,
@@ -454,7 +416,6 @@ pub fn global_get_with_meta(
     EVICTS.fetch_add(after.2 - before.2, Ordering::Relaxed);
     out
 }
-
 pub fn global_stats() -> CacheStats {
     CacheStats {
         hits: HITS.load(Ordering::Relaxed),
@@ -466,25 +427,21 @@ pub fn global_stats() -> CacheStats {
         decode_time_ns_total: DECODE_TIME_NS.load(Ordering::Relaxed),
     }
 }
-
 pub fn global_counters() -> (u64, u64, u64) {
     let stats = global_stats();
     (stats.hits, stats.misses, stats.evictions)
 }
-
 /// Initialize the global cache with a specific capacity if it has not been created yet.
 /// If the cache already exists, this function is a no‑op.
 pub fn init_global_with_capacity(capacity: usize) {
     let _ = GLOBAL_CACHE.set(ShardedCache::new(capacity));
 }
-
 /// Update the capacity of the global cache at runtime. If the cache is not yet
 /// initialized, it will be created with the requested capacity.
 pub fn set_global_capacity(capacity: usize) {
     let cache = global_cache();
     cache.set_capacity(capacity);
 }
-
 fn normalize_limits(limits: CacheLimits) -> CacheLimits {
     CacheLimits {
         capacity: limits.capacity,
@@ -500,11 +457,9 @@ fn normalize_limits(limits: CacheLimits) -> CacheLimits {
         },
     }
 }
-
 fn denormalize(value: usize) -> usize {
     if value == usize::MAX { 0 } else { value }
 }
-
 fn apply_max_bytes_to_shards(max_bytes: usize) {
     if let Some(cache) = GLOBAL_CACHE.get() {
         let shards = cache.shards.read().unwrap();
@@ -515,13 +470,11 @@ fn apply_max_bytes_to_shards(max_bytes: usize) {
         }
     }
 }
-
 /// Configure cache limits (capacity, byte budget, decoded-op guard) from host config.
 pub fn configure_limits(limits: CacheLimits) {
     let normalized = normalize_limits(limits);
     CACHE_MAX_BYTES.store(normalized.max_bytes, Ordering::Relaxed);
     CACHE_MAX_DECODED_OPS.store(normalized.max_decoded_ops, Ordering::Relaxed);
-
     if let Some(cache) = GLOBAL_CACHE.get() {
         apply_max_bytes_to_shards(normalized.max_bytes);
         let current = cache.total_capacity.load(Ordering::Relaxed);
@@ -532,7 +485,6 @@ pub fn configure_limits(limits: CacheLimits) {
         let _ = GLOBAL_CACHE.set(ShardedCache::new(normalized.capacity));
     }
 }
-
 /// Snapshot of the current cache limits (0 denotes unlimited for max fields).
 pub fn cache_limits() -> CacheLimits {
     let capacity = GLOBAL_CACHE
@@ -545,12 +497,10 @@ pub fn cache_limits() -> CacheLimits {
         max_decoded_ops: denormalize(configured_max_decoded_ops()),
     }
 }
-
 /// RAII guard that restores previous cache limits when dropped.
 pub struct CacheLimitsGuard {
     previous: CacheLimits,
 }
-
 impl CacheLimitsGuard {
     /// Apply new cache limits for the lifetime of the guard.
     pub fn new(limits: CacheLimits) -> Self {
@@ -559,7 +509,6 @@ impl CacheLimitsGuard {
         Self { previous }
     }
 }
-
 impl Drop for CacheLimitsGuard {
     fn drop(&mut self) {
         configure_limits(self.previous);

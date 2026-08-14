@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../zk_mode.rs"]
 mod zk_mode;
 #[path = "../zk_open_batch_smoke.rs"]

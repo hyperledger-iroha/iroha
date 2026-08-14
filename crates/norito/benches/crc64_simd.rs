@@ -1,6 +1,5 @@
 //! Bench: hardware_crc64 vs crc64_fallback on various buffer sizes.
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-
 // Simple deterministic PRNG (xorshift64*) to avoid external deps
 fn fill_bytes(buf: &mut [u8]) {
     let mut x: u64 = 0xDEAD_BEEF_D15C_AFE5;
@@ -12,7 +11,6 @@ fn fill_bytes(buf: &mut [u8]) {
         *b = x as u8;
     }
 }
-
 fn bench_crc64(c: &mut Criterion) {
     let mut group = c.benchmark_group("crc64");
     let sizes = [256usize, 1024, 8 * 1024, 64 * 1024, 512 * 1024];
@@ -31,7 +29,6 @@ fn bench_crc64(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-
         group.bench_with_input(BenchmarkId::new("hardware", sz), &sz, |b, &sz| {
             b.iter_batched(
                 || {
@@ -49,6 +46,5 @@ fn bench_crc64(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_crc64);
 criterion_main!(benches);

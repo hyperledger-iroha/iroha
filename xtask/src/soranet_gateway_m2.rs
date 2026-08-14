@@ -2,24 +2,20 @@
 //! Extends the M1 alpha pack with DoQ/ODoH preview configs, trustless CAR
 //! verifier wiring, PQ readiness evidence, GAR compliance rollup, and
 //! hardening baselines ahead of GA.
-
-use std::{
-    fs,
-    path::{Path, PathBuf},
+use crate::{
+    gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
+    soranet_gateway_pq, soranet_pop,
 };
-
 use blake3::Hasher as Blake3;
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-
-use crate::{
-    gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
-    soranet_gateway_pq, soranet_pop,
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
-
 /// Command options for the M2 beta generator.
 #[derive(Debug)]
 pub struct GatewayM2Options {
@@ -28,7 +24,6 @@ pub struct GatewayM2Options {
     /// Output directory.
     pub output_dir: PathBuf,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct GatewayM2Config {
     pops: Vec<GatewayM2Pop>,
@@ -38,7 +33,6 @@ struct GatewayM2Config {
     #[norito(default)]
     hardening: Option<GatewayM2Hardening>,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct GatewayM2Pop {
     name: String,
@@ -68,7 +62,6 @@ struct GatewayM2Pop {
     #[norito(default)]
     odoh_relay: Option<String>,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct GatewayM2Billing {
     usage: PathBuf,
@@ -80,14 +73,12 @@ struct GatewayM2Billing {
     #[norito(default)]
     guardrails: Option<PathBuf>,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct GatewayM2Compliance {
     receipts_dir: PathBuf,
     #[norito(default)]
     acks_dir: Option<PathBuf>,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct GatewayM2Hardening {
     #[norito(default)]
@@ -103,7 +94,6 @@ struct GatewayM2Hardening {
     #[norito(default = "default_log_retention")]
     log_retention_days: u32,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct GatewayM2PopSummary {
     name: String,
@@ -118,14 +108,12 @@ struct GatewayM2PopSummary {
     #[norito(default)]
     hardening_summary: Option<String>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct GatewayM2BillingSummary {
     invoice: String,
     ledger_projection: String,
     totals_micros: u64,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct GatewayM2Summary {
     pops: Vec<GatewayM2PopSummary>,
@@ -133,14 +121,12 @@ struct GatewayM2Summary {
     #[norito(default)]
     compliance_summary: Option<String>,
 }
-
 /// Outcome for the M2 beta generator.
 #[derive(Debug)]
 pub struct GatewayM2Outcome {
     /// Path to the summary JSON file.
     pub summary_path: PathBuf,
 }
-
 /// Build the M2 beta bundle given a Norito JSON config.
 pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
     let config_bytes = fs::read(&options.config_path).wrap_err_with(|| {
@@ -164,13 +150,11 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             options.output_dir.display()
         )
     })?;
-
     let config_dir = options
         .config_path
         .parent()
         .unwrap_or_else(|| Path::new("."));
     let mut pop_summaries = Vec::new();
-
     let pops_root = options.output_dir.join("pops");
     for pop in &config.pops {
         let pop_label = sanitize_label(&pop.name);
@@ -179,13 +163,11 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
         let gateway_dir = pop_dir.join("gateway");
         let ops_dir = pop_dir.join("ops");
         let beta_dir = pop_dir.join("beta");
-
         let descriptor = resolve_path(config_dir, &pop.descriptor);
         let roa_bundle = pop
             .roa_bundle
             .as_ref()
             .map(|path| resolve_path(config_dir, path));
-
         let m0_outcome =
             soranet_gateway::write_gateway_m0_pack(soranet_gateway::GatewayM0Options {
                 output_dir: gateway_dir.clone(),
@@ -194,13 +176,11 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
                     .clone()
                     .unwrap_or_else(|| format!("{}-edge", pop_label)),
             })?;
-
         let trustless_config = pop
             .trustless_config
             .as_ref()
             .map(|path| resolve_path(config_dir, path))
             .unwrap_or(m0_outcome.trustless_verifier_path.clone());
-
         fs::create_dir_all(&beta_dir)
             .wrap_err_with(|| format!("failed to create beta dir `{}`", beta_dir.display()))?;
         let beta_edge_path = beta_dir.join("gateway_edge_beta.yaml");
@@ -216,7 +196,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             ),
         )
         .wrap_err_with(|| format!("failed to write {}", beta_edge_path.display()))?;
-
         let bundle_outcome = soranet_pop::build_pop_bundle(soranet_pop::PopBundleOptions {
             descriptor,
             roa_bundle,
@@ -230,13 +209,11 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
                 .clone()
                 .unwrap_or_else(|| "soranet-gateway-m2-beta".to_string()),
         })?;
-
         let ops_outcome =
             soranet_gateway_ops::write_gateway_ops_pack(soranet_gateway_ops::GatewayOpsOptions {
                 output_dir: ops_dir,
                 pop: pop.name.clone(),
             })?;
-
         let mut pq_summary = None;
         if let (Some(pq_bundle), Some(tls_dir)) = (&pop.pq_bundle, &pop.tls_bundle_dir) {
             let pq_outcome =
@@ -254,7 +231,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
                 &options.output_dir,
             ));
         }
-
         let mut hardening_summary = None;
         if let Some(harden_cfg) = &config.hardening {
             let outcome = soranet_gateway_hardening::run_gateway_hardening(
@@ -282,7 +258,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             )?;
             hardening_summary = Some(summarize_path(&outcome.summary_json, &options.output_dir));
         }
-
         pop_summaries.push(GatewayM2PopSummary {
             name: pop.name.clone(),
             image_tag: pop
@@ -298,7 +273,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             hardening_summary,
         });
     }
-
     let billing_dir = options.output_dir.join("billing");
     let default_catalog = PathBuf::from("../gateway_m0/meter_catalog.json");
     let catalog_path = resolve_path(
@@ -321,7 +295,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             asset_definition: config.billing.asset.clone(),
             allow_hard_cap: true,
         })?;
-
     let mut compliance_summary = None;
     if let Some(compliance) = &config.compliance {
         let out_path = options.output_dir.join("compliance_summary.json");
@@ -341,7 +314,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             .wrap_err_with(|| format!("write {}", out_path.display()))?;
         compliance_summary = Some(summarize_path(&out_path, &options.output_dir));
     }
-
     let summary = GatewayM2Summary {
         pops: pop_summaries,
         billing: GatewayM2BillingSummary {
@@ -351,16 +323,13 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
         },
         compliance_summary,
     };
-
     let summary_path = options.output_dir.join("gateway_m2_summary.json");
     let summary_file = fs::File::create(&summary_path)
         .wrap_err_with(|| format!("create {}", summary_path.display()))?;
     json::to_writer_pretty(summary_file, &summary)
         .wrap_err_with(|| format!("write {}", summary_path.display()))?;
-
     Ok(GatewayM2Outcome { summary_path })
 }
-
 fn resolve_path(base: &Path, candidate: &Path) -> PathBuf {
     if candidate.is_absolute() {
         candidate.to_path_buf()
@@ -368,7 +337,6 @@ fn resolve_path(base: &Path, candidate: &Path) -> PathBuf {
         base.join(candidate)
     }
 }
-
 fn render_edge_beta_config(
     edge_name: String,
     trustless_config: &Path,
@@ -431,7 +399,6 @@ gateway:\n\
     ));
     out
 }
-
 fn sanitize_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -443,22 +410,18 @@ fn sanitize_label(input: &str) -> String {
     }
     out.trim_matches('-').to_string()
 }
-
 fn summarize_path(path: &Path, root: &Path) -> String {
     match path.strip_prefix(root) {
         Ok(stripped) => stripped.display().to_string(),
         Err(_) => path.display().to_string(),
     }
 }
-
 fn default_data_retention() -> u32 {
     30
 }
-
 fn default_log_retention() -> u32 {
     30
 }
-
 /// Compute a BLAKE3 digest for the supplied file.
 #[allow(dead_code)]
 fn file_blake3_hex(path: &Path) -> Result<String> {

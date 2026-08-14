@@ -5,11 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  ToriiClient,
   ToriiHttpError,
   IsoMessageTimeoutError,
   LocalSigningContext,
   NetworkId,
+  ToriiClient as BaseToriiClient,
   bootstrapConnectPreviewSession,
   extractToriiFeatureConfig,
   buildRegisterDomainTransaction,
@@ -31,6 +31,10 @@ import {
   isNonEmptyString,
   isPlainObject,
 } from "./integrationToriiProverReportAssertions.js";
+import {
+  AuthenticatedIntegrationToriiClient as ToriiClient,
+  INTEGRATION_OPERATOR_SIGNING_CONTEXT,
+} from "./integrationToriiQueryAuth.js";
 import { normalizeIntegrationString, parseBooleanEnv } from "./integrationToriiEnv.js";
 import { buildIntegrationGovernancePlainBallotPayload } from "./toriiClientGovernanceTests.js";
 
@@ -75,22 +79,6 @@ const SORAFS_ENABLED = parseBooleanEnv(
 );
 const SORAFS_POR_WEEK =
   process.env.IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK ?? null;
-const SORAFS_FETCH_MANIFEST_RAW =
-  process.env.IROHA_TORII_INTEGRATION_SORAFS_FETCH_MANIFEST ?? "";
-const SORAFS_FETCH_MANIFEST =
-  SORAFS_FETCH_MANIFEST_RAW.trim().length === 0 ? null : SORAFS_FETCH_MANIFEST_RAW.trim();
-const SORAFS_FETCH_OFFSET = parseUnsignedIntegerEnv(
-  process.env.IROHA_TORII_INTEGRATION_SORAFS_FETCH_OFFSET,
-  { allowZero: true },
-);
-const SORAFS_FETCH_LENGTH = parseUnsignedIntegerEnv(
-  process.env.IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH,
-  { allowZero: false },
-);
-const SORAFS_FETCH_PROVIDER_RAW =
-  process.env.IROHA_TORII_INTEGRATION_SORAFS_FETCH_PROVIDER ?? "";
-const SORAFS_FETCH_PROVIDER =
-  SORAFS_FETCH_PROVIDER_RAW.trim().length === 0 ? null : SORAFS_FETCH_PROVIDER_RAW.trim();
 const DA_ENABLED = parseBooleanEnv(
   process.env.IROHA_TORII_INTEGRATION_DA_ENABLED ?? "0",
 );
@@ -156,6 +144,10 @@ if (!BASE_URL) {
   );
 }
 
+const OPERATOR_CLIENT = new BaseToriiClient(BASE_URL, {
+  operatorSigningContext: INTEGRATION_OPERATOR_SIGNING_CONTEXT,
+});
+
 const SUCCESS_STATUSES = new Set(["applied"]);
 const KAIGI_HEALTH_STATUSES = new Set(["healthy", "degraded", "unavailable"]);
 
@@ -174,6 +166,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
 
     const health = await client.getHealth();
@@ -183,12 +176,12 @@ test(
     assert.equal(typeof metricsText, "string");
     assert.notEqual(metricsText.length, 0);
 
-    const sumeragiStatus = await client.getSumeragiStatusTyped();
+    const sumeragiStatus = await OPERATOR_CLIENT.getSumeragiStatusTyped();
     assert.equal(sumeragiStatus.protocol_version, 4);
     assert.ok(sumeragiStatus.leader < sumeragiStatus.height_context.validator_count);
     assert.ok(Array.isArray(sumeragiStatus.committed_lane_blocks));
 
-    const connectStatus = await client.getConnectStatus();
+    const connectStatus = await OPERATOR_CLIENT.getConnectStatus();
     assert.ok(connectStatus === null || typeof connectStatus === "object");
 
     const timeNow = await client.getNetworkTimeNow();
@@ -202,7 +195,7 @@ test(
       "network time confidenceMs must be a non-negative integer",
     );
 
-    const timeStatus = await client.getNetworkTimeStatus();
+    const timeStatus = await OPERATOR_CLIENT.getNetworkTimeStatus();
     assertNonNegativeInteger(timeStatus.peers, "network time peers");
     assert.ok(Array.isArray(timeStatus.samples), "network time samples must be an array");
     timeStatus.samples.forEach((sample, index) => {
@@ -295,6 +288,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
     const snapshot = await client.getStatusSnapshot();
     assert.ok(snapshot, "status snapshot response must be present");
@@ -407,12 +401,7 @@ test(
     timeout: 60_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    const peers = await client.listPeersTyped();
+    const peers = await OPERATOR_CLIENT.listPeersTyped();
     assert.ok(Array.isArray(peers), "peer listing must return an array");
     if (peers.length === 0) {
       t.diagnostic("listPeersTyped returned an empty array; skipping shape assertions");
@@ -693,14 +682,10 @@ test(
     timeout: 60_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const count = await client.getSumeragiEvidenceCount();
+    const count = await OPERATOR_CLIENT.getSumeragiEvidenceCount();
     assertNonNegativeInteger(count.count, "sumeragi evidence count");
 
-    const page = await client.listSumeragiEvidence({ limit: 5 });
+    const page = await OPERATOR_CLIENT.listSumeragiEvidence({ limit: 5 });
     assertNonNegativeInteger(page.total, "sumeragi evidence total");
     assert.ok(Array.isArray(page.items), "sumeragi evidence items must be an array");
     assert.ok(
@@ -2193,10 +2178,7 @@ test(
     timeout: 60_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
+    const client = OPERATOR_CLIENT;
     let relayList;
     try {
       relayList = await client.listKaigiRelays();
@@ -2377,7 +2359,7 @@ test(
     const attemptedHeights = [];
     for (const height of candidateHeights) {
       attemptedHeights.push(height);
-      const recovery = await client.getPipelineRecoveryTyped(height);
+      const recovery = await OPERATOR_CLIENT.getPipelineRecoveryTyped(height);
       if (!recovery) {
         continue;
       }
@@ -2438,7 +2420,12 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
+    const canonicalAuth = {
+      accountId: AUTHORITY_ACCOUNT_ID,
+      privateKey: PRIVATE_KEY_HEX,
+    };
     const pinList = await client.listSorafsPinManifests({ limit: 5 });
     assert.ok(Array.isArray(pinList.manifests), "pin manifest list must include manifests array");
     assert.ok(
@@ -2465,14 +2452,14 @@ test(
       t.diagnostic("SoraFS pin registry returned no manifests");
     }
 
-    const aliasList = await client.listSorafsAliases({ limit: 5 });
+    const aliasList = await client.listSorafsAliases({ limit: 5, canonicalAuth });
     assert.ok(Array.isArray(aliasList.aliases), "alias list must include aliases array");
     if (aliasList.aliases.length > 0) {
       const aliasRecord = aliasList.aliases[0];
       assert.ok(aliasRecord.alias.length > 0, "alias entries must expose alias labels");
       assertHexString(aliasRecord.manifest_digest_hex, "alias manifest digest");
       const aliasIteratorHit = await iteratorIncludes(
-        client.iterateSorafsAliases({ pageSize: 1, maxItems: 10 }),
+        client.iterateSorafsAliases({ pageSize: 1, maxItems: 10, canonicalAuth }),
         (entry) =>
           entry?.alias === aliasRecord.alias &&
           entry?.manifest_digest_hex === aliasRecord.manifest_digest_hex,
@@ -2482,7 +2469,7 @@ test(
       t.diagnostic("SoraFS alias list is empty on target node");
     }
 
-    const replicationList = await client.listSorafsReplicationOrders({ limit: 5 });
+    const replicationList = await client.listSorafsReplicationOrders({ limit: 5, canonicalAuth });
     assert.ok(
       Array.isArray(replicationList.replication_orders),
       "replication order list must expose replication_orders",
@@ -2495,7 +2482,7 @@ test(
         "replication order entries must include receipts array",
       );
       const replicationIteratorHit = await iteratorIncludes(
-        client.iterateSorafsReplicationOrders({ pageSize: 1, maxItems: 10 }),
+        client.iterateSorafsReplicationOrders({ pageSize: 1, maxItems: 10, canonicalAuth }),
         (entry) => entry?.order_id_hex === order.order_id_hex,
       );
       assert.ok(
@@ -2506,74 +2493,20 @@ test(
       t.diagnostic("SoraFS replication order list is empty on target node");
     }
 
-    const storageState = await client.getSorafsStorageState();
-    assert.equal(
-      typeof storageState.bytes_capacity,
-      "number",
-      "storage state must expose bytes_capacity",
-    );
-    assert.equal(
-      typeof storageState.bytes_used,
-      "number",
-      "storage state must expose bytes_used",
+    t.diagnostic(
+      "SoraFS storage state is an operator-only local diagnostic and is not exercised by the public integration client",
     );
   },
 );
 
 test(
-  "SoraFS payload fetch returns requested range (optional)",
+  "SoraFS public integration client does not use the operator-only legacy payload fetch",
   {
     timeout: 90_000,
   },
   async (t) => {
-    if (!SORAFS_ENABLED) {
-      t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1 to exercise SoraFS payload fetch coverage",
-      );
-      return;
-    }
-    if (!SORAFS_FETCH_MANIFEST || SORAFS_FETCH_LENGTH === null) {
-      throw new Error(
-        "set IROHA_TORII_INTEGRATION_SORAFS_FETCH_MANIFEST=<digest> and IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH=<bytes> to enable payload fetch coverage",
-      );
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const offset = SORAFS_FETCH_OFFSET ?? 0;
-    const length = SORAFS_FETCH_LENGTH;
-    const requestInput = {
-      manifestIdHex: SORAFS_FETCH_MANIFEST,
-      offset,
-      length,
-    };
-    if (SORAFS_FETCH_PROVIDER) {
-      requestInput.providerIdHex = SORAFS_FETCH_PROVIDER;
-    }
-    const fetchResponse = await client.fetchSorafsPayloadRange(requestInput);
-    assertHexString(fetchResponse.manifest_id_hex, "sorafs fetch manifest_id_hex");
-    assert.equal(
-      fetchResponse.manifest_id_hex.toLowerCase(),
-      SORAFS_FETCH_MANIFEST.toLowerCase(),
-      "SoraFS payload fetch digest must match configured manifest",
-    );
-    assert.equal(fetchResponse.offset, offset, "SoraFS payload fetch offset must echo request");
-    assert.equal(fetchResponse.length, length, "SoraFS payload fetch length must echo request");
-    const dataBuffer = Buffer.from(fetchResponse.data_b64, "base64");
-    assert.ok(
-      dataBuffer.length > 0,
-      "SoraFS payload fetch should return at least one byte for configured length",
-    );
-    assert.equal(
-      dataBuffer.length,
-      fetchResponse.length,
-      "SoraFS payload fetch data must match reported length",
-    );
     t.diagnostic(
-      `SoraFS payload fetch read ${dataBuffer.length} bytes at offset ${offset} (provider=${
-        SORAFS_FETCH_PROVIDER ?? "auto"
-      })`,
+      "legacy /v1/sorafs/storage/fetch coverage moved to operator-authenticated canaries; public SDK integration must not send unsigned diagnostic reads",
     );
   },
 );
@@ -2799,10 +2732,9 @@ test(
     try {
       const publishResult = await client.publishSpaceDirectoryManifest({
         authority: AUTHORITY_ACCOUNT_ID,
-        privateKey: PRIVATE_KEY_HEX,
         manifest: manifestPayload,
         reason: publishReason,
-      });
+      }, { canonicalAuth: { accountId: AUTHORITY_ACCOUNT_ID, privateKey: PRIVATE_KEY_HEX } });
       assert.ok(
         publishResult === null || typeof publishResult === "object",
         "publishSpaceDirectoryManifest should return null or a JSON body",
@@ -2917,17 +2849,17 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
     try {
       const revokeReason = `js-integration revoke ${new Date().toISOString()}`;
       const revokeResult = await client.revokeSpaceDirectoryManifest({
         authority: AUTHORITY_ACCOUNT_ID,
-        privateKey: PRIVATE_KEY_HEX,
         uaid: uaidLiteral,
         dataspace: dataspaceId,
         revokedEpoch,
         reason: revokeReason,
-      });
+      }, { canonicalAuth: { accountId: AUTHORITY_ACCOUNT_ID, privateKey: PRIVATE_KEY_HEX } });
       assert.ok(
         revokeResult === null || typeof revokeResult === "object",
         "revokeSpaceDirectoryManifest should return null or a JSON body",
@@ -3394,9 +3326,9 @@ test(
       assert.ok(Array.isArray(peer.connectedPeers), "connectedPeers must be an array when present");
     }
 
-    const peerInventory = await client.listPeers();
+    const peerInventory = await OPERATOR_CLIENT.listPeers();
     assert.ok(Array.isArray(peerInventory), "peer inventory payload must be an array");
-    const typedPeerInventory = await client.listPeersTyped();
+    const typedPeerInventory = await OPERATOR_CLIENT.listPeersTyped();
     assert.ok(Array.isArray(typedPeerInventory), "typed peer inventory payload must be an array");
     if (typedPeerInventory.length === 0) {
       t.diagnostic("Torii peer inventory returned zero entries");
@@ -3492,11 +3424,7 @@ test(
     timeout: 90_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const telemetry = await client.getSumeragiTelemetryTyped();
+    const telemetry = await OPERATOR_CLIENT.getSumeragiTelemetryTyped();
     assert.ok(telemetry, "sumeragi telemetry response must be present");
 
     const availability = telemetry.availability;
@@ -3546,7 +3474,7 @@ test(
     assertNonNegativeInteger(vrf.roster_len, "sumeragi telemetry vrf.roster_len");
     assertNonNegativeInteger(vrf.participants_total, "sumeragi telemetry vrf.participants_total");
 
-    const phases = await client.getSumeragiPhases();
+    const phases = await OPERATOR_CLIENT.getSumeragiPhases();
     assert.ok(phases, "sumeragi phases payload must be present");
     assertNonNegativeInteger(phases.propose_ms, "sumeragi phases propose_ms");
     assertNonNegativeInteger(phases.collect_da_ms, "sumeragi phases collect_da_ms");
@@ -3556,7 +3484,7 @@ test(
       "sumeragi phases ema_ms must be present",
     );
 
-    const pacemaker = await client.getSumeragiPacemaker();
+    const pacemaker = await OPERATOR_CLIENT.getSumeragiPacemaker();
     if (!pacemaker) {
       t.diagnostic("sumeragi pacemaker endpoint disabled on target node");
     } else {
@@ -3579,11 +3507,7 @@ test(
     timeout: 60_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const keyMap = await client.getSumeragiBlsKeys();
+    const keyMap = await OPERATOR_CLIENT.getSumeragiBlsKeys();
     assert.ok(keyMap && typeof keyMap === "object", "BLS key map must be an object");
     const entries = Object.entries(keyMap);
     if (entries.length === 0) {
@@ -3606,11 +3530,7 @@ test(
     timeout: 60_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const leader = await client.getSumeragiLeader();
+    const leader = await OPERATOR_CLIENT.getSumeragiLeader();
     assert.ok(leader && typeof leader === "object", "leader snapshot must be present");
     assertNonNegativeInteger(leader.leader_index, "sumeragi leader_index");
     assert.ok(leader.prf && typeof leader.prf === "object", "leader prf snapshot must exist");
@@ -3629,11 +3549,7 @@ test(
     timeout: 60_000,
   },
   async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const params = await client.getSumeragiParams();
+    const params = await OPERATOR_CLIENT.getSumeragiParams();
     assert.ok(params && typeof params === "object", "params snapshot must be an object");
     assertNonNegativeInteger(params.block_time_ms, "sumeragi params block_time_ms");
     assertNonNegativeInteger(params.commit_time_ms, "sumeragi params commit_time_ms");

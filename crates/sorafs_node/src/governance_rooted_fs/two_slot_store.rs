@@ -1,12 +1,10 @@
 // Bounded two-slot retained-state store implementation.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotFileIdentityV1 {
     platform: u8,
     first: u64,
     second: u64,
 }
-
 impl From<FileIdentity> for TwoSlotFileIdentityV1 {
     fn from(identity: FileIdentity) -> Self {
         #[cfg(unix)]
@@ -36,7 +34,6 @@ impl From<FileIdentity> for TwoSlotFileIdentityV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotBindingMaterialV1 {
     format_version: u8,
@@ -50,20 +47,17 @@ struct TwoSlotBindingMaterialV1 {
     init_lock_identity: TwoSlotFileIdentityV1,
     slot_identities: [TwoSlotFileIdentityV1; 2],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotHeaderV1 {
     binding: TwoSlotBindingMaterialV1,
     binding_digest: [u8; 32],
     slot_id: u8,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotHeaderRegionV1 {
     header: TwoSlotHeaderV1,
     reserved: [u8; TWO_SLOT_HEADER_RESERVED_BYTES_V1],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotRecordHeaderV1 {
     format_version: u8,
@@ -74,13 +68,11 @@ struct TwoSlotRecordHeaderV1 {
     payload_len: u64,
     payload_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotRecordHeaderRegionV1 {
     header: TwoSlotRecordHeaderV1,
     reserved: [u8; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotCommitTrailerV1 {
     format_version: u8,
@@ -90,13 +82,11 @@ struct TwoSlotCommitTrailerV1 {
     record_digest: [u8; 32],
     commit_marker: [u8; 16],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotCommitTrailerRegionV1 {
     trailer: TwoSlotCommitTrailerV1,
     reserved: [u8; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],
 }
-
 #[derive(Debug, Clone, Copy)]
 struct TwoSlotLayoutV1 {
     header_region_bytes: usize,
@@ -106,7 +96,6 @@ struct TwoSlotLayoutV1 {
     commit_trailer_region_bytes: usize,
     slot_file_bytes: u64,
 }
-
 /// Immutable identity and byte bounds for one local two-slot V1 store.
 ///
 /// `store_nonce` is a caller-owned stable identifier. Callers must persist or
@@ -119,7 +108,6 @@ pub(super) struct TwoSlotStoreConfigV1 {
     store_nonce: [u8; 32],
     max_payload_bytes: usize,
 }
-
 /// Validated deadline and polling cadence for one two-slot initialization lock.
 ///
 /// This bound applies only while opening or creating the fixed store. Normal
@@ -130,7 +118,6 @@ pub(super) struct TwoSlotInitializationWaitV1 {
     timeout: Duration,
     retry_interval: Duration,
 }
-
 impl TwoSlotInitializationWaitV1 {
     /// Construct a non-zero initialization wait bounded by the V1 hard limit.
     pub(super) fn try_new(timeout: Duration, retry_interval: Duration) -> io::Result<Self> {
@@ -150,7 +137,6 @@ impl TwoSlotInitializationWaitV1 {
         })
     }
 }
-
 impl TwoSlotStoreConfigV1 {
     /// Validate and construct one stable two-slot store identity.
     pub(super) fn try_new(
@@ -197,14 +183,12 @@ impl TwoSlotStoreConfigV1 {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct TwoSlotFileV1 {
     handle: Arc<File>,
     identity: FileIdentity,
     name: OsString,
 }
-
 /// One exact selected record returned by a two-slot V1 store.
 ///
 /// The snapshot binds the complete store identity as well as its selected
@@ -220,24 +204,20 @@ pub(super) struct TwoSlotSnapshotV1 {
     record_digest: [u8; 32],
     payload: Vec<u8>,
 }
-
 impl TwoSlotSnapshotV1 {
     /// Return the committed monotonic generation.
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
-
     /// Borrow the exact committed payload.
     pub(super) fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     /// Return the domain-separated digest of this complete record.
     pub(super) fn record_digest(&self) -> [u8; 32] {
         self.record_digest
     }
 }
-
 /// Typed failure returned while attempting a nonblocking two-slot operation.
 #[derive(Debug)]
 pub(super) enum TwoSlotTryErrorV1 {
@@ -246,13 +226,11 @@ pub(super) enum TwoSlotTryErrorV1 {
     /// The operation reached the store and failed validation or I/O.
     Io(io::Error),
 }
-
 impl From<io::Error> for TwoSlotTryErrorV1 {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
     }
 }
-
 /// Typed result of one nonblocking two-slot compare-and-swap attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TwoSlotCasOutcomeV1 {
@@ -261,7 +239,6 @@ pub(super) enum TwoSlotCasOutcomeV1 {
     /// The selected record is not the requested predecessor.
     Conflict(TwoSlotSnapshotV1),
 }
-
 /// A bounded local store backed by two fixed, retained private files.
 #[derive(Debug, Clone)]
 pub(super) struct TwoSlotStoreV1 {
@@ -273,7 +250,6 @@ pub(super) struct TwoSlotStoreV1 {
     slots: [TwoSlotFileV1; 2],
     process_lock: Arc<Mutex<()>>,
 }
-
 /// Exact init-lock lease retained across a caller-owned composite operation.
 ///
 /// The init-lock identity is part of the immutable two-slot binding material,
@@ -283,7 +259,6 @@ pub(super) struct TwoSlotBoundOperationLeaseV1 {
     store: TwoSlotStoreV1,
     init_lock: Option<TwoSlotInitFileLockV1>,
 }
-
 impl fmt::Debug for TwoSlotBoundOperationLeaseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -293,7 +268,6 @@ impl fmt::Debug for TwoSlotBoundOperationLeaseV1 {
             .finish()
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TwoSlotCommittedRecordV1 {
     slot_id: usize,
@@ -302,7 +276,6 @@ struct TwoSlotCommittedRecordV1 {
     record_digest: [u8; 32],
     payload: Vec<u8>,
 }
-
 #[derive(Debug)]
 struct TwoSlotStageV1 {
     name: OsString,
@@ -310,28 +283,24 @@ struct TwoSlotStageV1 {
     byte_count: u64,
     complete: bool,
 }
-
 #[derive(Debug)]
 struct TwoSlotStageInventoryV1 {
     byte_count: u64,
     has_full_pair: bool,
     canonical_header_count: usize,
 }
-
 fn two_slot_codec_error(label: &str, error: impl fmt::Display) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!("{label} is not canonical Norito: {error}"),
     )
 }
-
 fn encode_two_slot_value<T: norito::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> io::Result<Vec<u8>> {
     norito::to_bytes(value).map_err(|error| two_slot_codec_error(label, error))
 }
-
 fn decode_two_slot_value<T>(bytes: &[u8], label: &str) -> io::Result<T>
 where
     for<'decode> T: norito::NoritoDeserialize<'decode> + norito::NoritoSerialize,
@@ -347,7 +316,6 @@ where
     }
     Ok(value)
 }
-
 fn zero_two_slot_binding_material() -> TwoSlotBindingMaterialV1 {
     TwoSlotBindingMaterialV1 {
         format_version: TWO_SLOT_FORMAT_VERSION_V1,
@@ -377,7 +345,6 @@ fn zero_two_slot_binding_material() -> TwoSlotBindingMaterialV1 {
         ],
     }
 }
-
 fn two_slot_layout(max_payload_bytes: usize) -> io::Result<TwoSlotLayoutV1> {
     let header_region_bytes = encode_two_slot_value(
         &TwoSlotHeaderRegionV1 {
@@ -443,14 +410,12 @@ fn two_slot_layout(max_payload_bytes: usize) -> io::Result<TwoSlotLayoutV1> {
             .map_err(|_| io::Error::other("governance two-slot file length exceeds u64"))?,
     })
 }
-
 fn two_slot_store_name_digest(config: &TwoSlotStoreConfigV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"sorafs.governance.two-slot.store-name.v1\0");
     hasher.update(config.store_name.as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn two_slot_store_namespace(config: &TwoSlotStoreConfigV1) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = two_slot_store_name_digest(config);
@@ -461,7 +426,6 @@ fn two_slot_store_namespace(config: &TwoSlotStoreConfigV1) -> String {
     }
     encoded
 }
-
 fn two_slot_binding_material(
     config: &TwoSlotStoreConfigV1,
     layout: TwoSlotLayoutV1,
@@ -487,7 +451,6 @@ fn two_slot_binding_material(
         slot_identities: identities.map(Into::into),
     })
 }
-
 fn two_slot_binding_digest(material: &TwoSlotBindingMaterialV1) -> io::Result<[u8; 32]> {
     let encoded = encode_two_slot_value(material, "governance two-slot binding material")?;
     let mut hasher = blake3::Hasher::new();
@@ -495,7 +458,6 @@ fn two_slot_binding_digest(material: &TwoSlotBindingMaterialV1) -> io::Result<[u
     hasher.update(&encoded);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn two_slot_record_digest(header: &TwoSlotRecordHeaderV1, payload: &[u8]) -> io::Result<[u8; 32]> {
     let encoded = encode_two_slot_value(header, "governance two-slot record header")?;
     let mut hasher = blake3::Hasher::new();
@@ -504,7 +466,6 @@ fn two_slot_record_digest(header: &TwoSlotRecordHeaderV1, payload: &[u8]) -> io:
     hasher.update(payload);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn read_exact_file_region(file: &File, offset: u64, bytes: usize) -> io::Result<Vec<u8>> {
     let mut region = vec![0; bytes];
     #[cfg(unix)]
@@ -546,7 +507,6 @@ fn read_exact_file_region(file: &File, offset: u64, bytes: usize) -> io::Result<
         Err(platform::unsupported())
     }
 }
-
 fn write_exact_file_region(file: &File, offset: u64, bytes: &[u8]) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -579,7 +539,6 @@ fn write_exact_file_region(file: &File, offset: u64, bytes: &[u8]) -> io::Result
     #[cfg(not(any(unix, windows)))]
     Err(platform::unsupported())
 }
-
 /// One exact opened regular-file binding retained across later verification.
 #[derive(Debug, Clone)]
 pub(super) struct FileBinding {
@@ -590,13 +549,11 @@ pub(super) struct FileBinding {
     max_bytes: usize,
     private: bool,
 }
-
 impl FileBinding {
     /// Return the stable identity of the retained object.
     pub(super) fn identity(&self) -> FileIdentity {
         self.identity
     }
-
     /// Revalidate the retained object and its parent-relative name.
     pub(super) fn verify(&self) -> io::Result<()> {
         self.parent.verify_file_binding(
@@ -608,31 +565,26 @@ impl FileBinding {
         )
     }
 }
-
 /// Bytes and an exact retained binding read through one opened file.
 #[derive(Debug, Clone)]
 pub(super) struct FileSnapshot {
     bytes: Vec<u8>,
     binding: FileBinding,
 }
-
 impl FileSnapshot {
     /// Borrow the authenticated bytes.
     pub(super) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Consume the snapshot and return its bytes.
     pub(super) fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
-
     /// Clone the exact opened binding for later snapshot-wide verification.
     pub(super) fn binding(&self) -> FileBinding {
         self.binding.clone()
     }
 }
-
 /// Required destination state for one atomic replacement.
 #[derive(Debug, Clone)]
 pub(super) enum ExpectedFile {
@@ -641,32 +593,27 @@ pub(super) enum ExpectedFile {
     /// The destination must still be this exact object at promotion time.
     Identity(FileBinding),
 }
-
 /// One exact regular file retained below a rooted directory.
 #[derive(Debug)]
 pub(super) struct RetainedFile {
     binding: FileBinding,
 }
-
 impl RetainedFile {
     /// Borrow the exact opened file handle.
     pub(super) fn handle(&self) -> &File {
         &self.binding.handle
     }
-
     /// Revalidate the handle and its current parent-relative binding.
     pub(super) fn verify(&self) -> io::Result<()> {
         self.binding.verify()
     }
 }
-
 #[derive(Debug, Clone)]
 struct DirectoryBinding {
     parent: Arc<File>,
     parent_identity: FileIdentity,
     name: OsString,
 }
-
 /// One retained, stable directory capability.
 #[derive(Debug, Clone)]
 pub(super) struct RootedDirectory {
@@ -680,7 +627,6 @@ pub(super) struct RootedDirectory {
     binding: Option<DirectoryBinding>,
     writable: bool,
 }
-
 impl RootedDirectory {
     /// Wrap a directory handle already retained by the Governance root guard.
     pub(super) fn from_retained(
@@ -705,7 +651,6 @@ impl RootedDirectory {
         directory.verify_handle()?;
         Ok(directory)
     }
-
     /// Open and retain a release-qualified root directory.
     #[cfg(windows)]
     pub(super) fn open_root(path: &Path, writable: bool) -> io::Result<Self> {
@@ -713,7 +658,6 @@ impl RootedDirectory {
         let handle = Arc::new(platform::open_root(path, writable)?);
         Self::from_retained(path.to_path_buf(), handle, writable)
     }
-
     /// Revalidate the retained object and its current pathname binding.
     pub(super) fn verify_path_binding(&self, path: &Path) -> io::Result<()> {
         self.verify_handle()?;
@@ -727,7 +671,6 @@ impl RootedDirectory {
         }
         Ok(())
     }
-
     /// Revalidate this directory's retained handle and parent-relative binding.
     pub(super) fn verify(&self) -> io::Result<()> {
         self.verify_handle()?;
@@ -752,7 +695,6 @@ impl RootedDirectory {
         }
         self.verify_handle()
     }
-
     /// Return a path-free digest of this exact retained directory identity.
     pub(super) fn identity_digest(&self) -> io::Result<[u8; 32]> {
         self.verify()?;
@@ -766,7 +708,6 @@ impl RootedDirectory {
         self.verify()?;
         Ok(digest)
     }
-
     fn verify_handle(&self) -> io::Result<()> {
         let before = self.handle.metadata()?;
         validate_directory_metadata(&self.display_path, &before)?;
@@ -798,7 +739,6 @@ impl RootedDirectory {
         }
         Ok(())
     }
-
     /// Validate descriptor-bound ACL policy for this exact directory.
     #[cfg(windows)]
     pub(super) fn validate_acl(&self) -> io::Result<()> {
@@ -806,7 +746,6 @@ impl RootedDirectory {
         validate_retained_directory_acl(&self.handle, &self.display_path)?;
         self.verify_handle()
     }
-
     /// Flush this exact directory handle.
     pub(super) fn sync_all(&self) -> io::Result<()> {
         if !self.writable {
@@ -819,7 +758,6 @@ impl RootedDirectory {
         self.handle.sync_all()?;
         self.verify()
     }
-
     /// Open one direct child directory without following links/reparse points.
     pub(super) fn open_directory(&self, name: &OsStr) -> io::Result<Self> {
         validate_component(name)?;
@@ -847,7 +785,6 @@ impl RootedDirectory {
         child.verify()?;
         Ok(child)
     }
-
     /// Open or durably create one direct child directory.
     pub(super) fn open_or_create_directory(&self, name: &OsStr) -> io::Result<Self> {
         if !self.writable {
@@ -874,7 +811,6 @@ impl RootedDirectory {
             Err(error) => Err(error),
         }
     }
-
     /// Create one direct child directory without adopting a pre-existing name.
     fn create_child_directory_exclusive(&self, name: &OsStr) -> io::Result<Self> {
         validate_component(name)?;
@@ -891,7 +827,6 @@ impl RootedDirectory {
         child.verify()?;
         Ok(child)
     }
-
     /// Move one exact retained child directory to a create-only rooted name.
     ///
     /// This operation never replaces or removes a pathname. The returned
@@ -949,7 +884,6 @@ impl RootedDirectory {
         {
             return Err(platform::unsupported());
         }
-
         let installed = destination_parent.open_directory(destination_name)?;
         if installed.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
             return Err(io::Error::new(
@@ -971,7 +905,6 @@ impl RootedDirectory {
         installed.verify()?;
         Ok(installed)
     }
-
     /// Open or atomically initialize a bounded two-fixed-slot V1 store.
     pub(super) fn open_or_create_two_slot_store_v1(
         &self,
@@ -980,7 +913,6 @@ impl RootedDirectory {
     ) -> io::Result<TwoSlotStoreV1> {
         open_or_create_two_slot_store_v1_with(self, config, initial_payload, |_| Ok(()))
     }
-
     /// Open or initialize a two-slot store under a bounded cross-process wait.
     pub(super) fn open_or_create_two_slot_store_v1_bounded(
         &self,
@@ -996,7 +928,6 @@ impl RootedDirectory {
             |_| Ok(()),
         )
     }
-
     /// Load an already initialized two-slot store without mutation.
     pub(super) fn load_existing_two_slot_store_v1(
         &self,
@@ -1004,7 +935,6 @@ impl RootedDirectory {
     ) -> io::Result<TwoSlotSnapshotV1> {
         load_existing_two_slot_store_v1(self, config)
     }
-
     #[cfg(test)]
     fn open_or_create_two_slot_store_v1_with_init_hook<Hook>(
         &self,
@@ -1017,7 +947,6 @@ impl RootedDirectory {
     {
         open_or_create_two_slot_store_v1_with(self, config, initial_payload, after_step)
     }
-
     /// Resolve a relative target below this retained directory.
     pub(super) fn resolve_parent(
         &self,
@@ -1054,12 +983,10 @@ impl RootedDirectory {
             "rooted governance target is empty",
         ))
     }
-
     /// Read one direct child through a no-follow handle.
     pub(super) fn read_file(&self, name: &OsStr, max_bytes: usize) -> io::Result<FileSnapshot> {
         self.read_file_with_policy(name, max_bytes, false)
     }
-
     /// Read one private direct child through a no-follow handle.
     pub(super) fn read_private_file(
         &self,
@@ -1068,7 +995,6 @@ impl RootedDirectory {
     ) -> io::Result<FileSnapshot> {
         self.read_file_with_policy(name, max_bytes, true)
     }
-
     fn read_file_with_policy(
         &self,
         name: &OsStr,
@@ -1127,7 +1053,6 @@ impl RootedDirectory {
             },
         })
     }
-
     /// Open or create one private direct child and retain its exact binding.
     pub(super) fn open_or_create_private_file(
         &self,
@@ -1171,7 +1096,6 @@ impl RootedDirectory {
             },
         })
     }
-
     fn verify_file_binding(
         &self,
         name: &OsStr,
@@ -1202,12 +1126,10 @@ impl RootedDirectory {
         }
         self.verify()
     }
-
     /// Return the stable identity of a direct regular child, if present.
     pub(super) fn file_identity(&self, name: &OsStr) -> io::Result<Option<FileIdentity>> {
         self.file_identity_with_policy(name, false)
     }
-
     /// Retain one direct regular child and its exact name binding, if present.
     pub(super) fn file_binding(
         &self,
@@ -1216,7 +1138,6 @@ impl RootedDirectory {
     ) -> io::Result<Option<FileBinding>> {
         self.file_binding_with_policy_and_access(name, max_bytes, false, false)
     }
-
     /// Retain one direct regular child with deletion access to its exact handle.
     pub(super) fn removal_file_binding(
         &self,
@@ -1225,7 +1146,6 @@ impl RootedDirectory {
     ) -> io::Result<Option<FileBinding>> {
         self.file_binding_with_policy_and_access(name, max_bytes, false, true)
     }
-
     /// Retain one private direct regular child with deletion access to its exact handle.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn private_removal_file_binding(
@@ -1235,7 +1155,6 @@ impl RootedDirectory {
     ) -> io::Result<Option<FileBinding>> {
         self.file_binding_with_policy_and_access(name, max_bytes, true, true)
     }
-
     fn file_binding_with_policy_and_access(
         &self,
         name: &OsStr,
@@ -1267,7 +1186,6 @@ impl RootedDirectory {
             private,
         }))
     }
-
     fn file_identity_with_policy(
         &self,
         name: &OsStr,
@@ -1295,7 +1213,6 @@ impl RootedDirectory {
             Err(error) => Err(error),
         }
     }
-
     /// Atomically replace the target only if its stable identity is unchanged.
     ///
     /// Linux/macOS exchange both bindings before retaining the predecessor.
@@ -1321,7 +1238,6 @@ impl RootedDirectory {
             |directory| directory.sync_all(),
         )
     }
-
     fn atomic_write_with_sync<BeforePromote, FileSync, DirectorySync>(
         &self,
         name: &OsStr,
@@ -1662,7 +1578,6 @@ impl RootedDirectory {
         // V1 slot. Windows never enters existing-target replacement.
         result
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn available_atomic_retained_name(
         &self,
@@ -1757,7 +1672,6 @@ impl RootedDirectory {
             })?;
         atomic_retained_name(OsStr::new(target_name), slot)
     }
-
     /// Atomically write, binding replacement to the currently opened target.
     pub(super) fn atomic_replace_current(
         &self,
@@ -1771,13 +1685,11 @@ impl RootedDirectory {
         };
         self.atomic_write(name, temporary_name, data, expected)
     }
-
     /// Enumerate direct child names while retaining this exact directory.
     #[cfg(test)]
     pub(super) fn child_names(&self) -> io::Result<Vec<OsString>> {
         self.child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)
     }
-
     /// Enumerate at most `max_entries` direct child names.
     pub(super) fn child_names_bounded(&self, max_entries: usize) -> io::Result<Vec<OsString>> {
         if max_entries == 0 {
@@ -1792,7 +1704,6 @@ impl RootedDirectory {
         self.verify()?;
         Ok(names)
     }
-
     /// Remove matching atomic crash temporaries below this exact directory.
     #[cfg(any(windows, test))]
     pub(super) fn remove_atomic_temps_for(&self, target_name: &str) -> io::Result<usize> {
@@ -1801,7 +1712,6 @@ impl RootedDirectory {
             candidate == target_name
         })
     }
-
     /// Remove bounded atomic crash temporaries whose decoded target is allowed.
     #[cfg(any(windows, test))]
     pub(super) fn remove_atomic_temps_matching<Allowed>(
@@ -1849,7 +1759,6 @@ impl RootedDirectory {
         self.verify()?;
         Ok(removed)
     }
-
     /// Atomically isolate one exact regular-file binding without unlinking it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn isolate_file_binding(
@@ -1860,7 +1769,6 @@ impl RootedDirectory {
     ) -> io::Result<FileSnapshot> {
         self.isolate_file_binding_with(binding, quarantine, quarantine_name, || Ok(()))
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn isolate_file_binding_with<BeforeRename>(
         &self,
@@ -1881,7 +1789,6 @@ impl RootedDirectory {
             |directory| directory.sync_all(),
         )
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn isolate_file_binding_with_sync<BeforeRename, SyncSource, SyncQuarantine>(
         &self,
@@ -1935,7 +1842,6 @@ impl RootedDirectory {
         let quarantine_sync = sync_quarantine(&quarantine.handle);
         source_sync?;
         quarantine_sync?;
-
         let snapshot = quarantine.read_file_with_policy(quarantine_name, max_bytes, private)?;
         if snapshot.binding.identity != identity || file_identity(&handle.metadata()?)? != identity
         {
@@ -1950,7 +1856,6 @@ impl RootedDirectory {
         quarantine.verify()?;
         Ok(snapshot)
     }
-
     /// Remove one direct regular child by exact opened identity.
     #[cfg(any(windows, test))]
     pub(super) fn remove_file_binding(&self, binding: FileBinding) -> io::Result<()> {
@@ -1976,7 +1881,6 @@ impl RootedDirectory {
         self.handle.sync_all()?;
         self.verify()
     }
-
     fn require_file_name_absent(&self, name: &OsStr) -> io::Result<()> {
         match platform::open_file(&self.handle, name, false) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -1993,7 +1897,6 @@ impl RootedDirectory {
             Err(error) => Err(error),
         }
     }
-
     /// Atomically isolate one exact empty directory without unlinking it.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn isolate_empty_directory_binding(
@@ -2004,7 +1907,6 @@ impl RootedDirectory {
     ) -> io::Result<()> {
         self.isolate_empty_directory_binding_with(child, quarantine, quarantine_name, || Ok(()))
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn isolate_empty_directory_binding_with<BeforeRename>(
         &self,
@@ -2025,7 +1927,6 @@ impl RootedDirectory {
             |directory| directory.sync_all(),
         )
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn isolate_empty_directory_binding_with_sync<BeforeRename, SyncSource, SyncQuarantine>(
         &self,
@@ -2084,7 +1985,6 @@ impl RootedDirectory {
         let quarantine_sync = sync_quarantine(&quarantine.handle);
         source_sync?;
         quarantine_sync?;
-
         let isolated = quarantine.open_directory(quarantine_name)?;
         if isolated.identity != identity || file_identity(&child.handle.metadata()?)? != identity {
             return Err(io::Error::new(
@@ -2112,12 +2012,10 @@ impl RootedDirectory {
         self.verify()?;
         quarantine.verify()
     }
-
     /// Remove one direct empty child directory by its exact retained identity.
     pub(super) fn remove_empty_directory_binding(&self, child: Self) -> io::Result<()> {
         self.remove_empty_directory_binding_with_hook(child, || Ok(()))
     }
-
     #[cfg(test)]
     pub(super) fn remove_empty_directory_binding_with<BeforeRemove>(
         &self,
@@ -2129,7 +2027,6 @@ impl RootedDirectory {
     {
         self.remove_empty_directory_binding_with_hook(child, before_remove)
     }
-
     fn remove_empty_directory_binding_with_hook<BeforeRemove>(
         &self,
         child: Self,
@@ -2190,7 +2087,6 @@ impl RootedDirectory {
         self.handle.sync_all()?;
         self.verify()
     }
-
     #[cfg(test)]
     fn atomic_write_with_test_sync<FileSync, DirectorySync>(
         &self,
@@ -2215,7 +2111,6 @@ impl RootedDirectory {
             sync_directory,
         )
     }
-
     #[cfg(test)]
     fn atomic_write_with_test_hooks<BeforePromote, FileSync, DirectorySync>(
         &self,
@@ -2243,12 +2138,10 @@ impl RootedDirectory {
         )
     }
 }
-
 fn two_slot_file_byte_limit(layout: TwoSlotLayoutV1) -> io::Result<usize> {
     usize::try_from(layout.slot_file_bytes)
         .map_err(|_| io::Error::other("governance two-slot file length exceeds host limits"))
 }
-
 fn expected_two_slot_header_region(
     material: &TwoSlotBindingMaterialV1,
     binding_digest: [u8; 32],
@@ -2268,7 +2161,6 @@ fn expected_two_slot_header_region(
         "governance two-slot header region",
     )
 }
-
 fn open_existing_two_slot_file(
     directory: &RootedDirectory,
     name: &OsStr,
@@ -2304,7 +2196,6 @@ fn open_existing_two_slot_file(
         name: name.to_os_string(),
     })
 }
-
 fn verify_two_slot_file(store: &TwoSlotStoreV1, slot: &TwoSlotFileV1) -> io::Result<()> {
     let max_bytes = two_slot_file_byte_limit(store.layout)?;
     let path = store.directory.display_path.join(&slot.name);
@@ -2324,7 +2215,6 @@ fn verify_two_slot_file(store: &TwoSlotStoreV1, slot: &TwoSlotFileV1) -> io::Res
         .directory
         .verify_file_binding(&slot.name, &slot.handle, slot.identity, max_bytes, true)
 }
-
 fn verify_two_slot_headers(store: &TwoSlotStoreV1) -> io::Result<()> {
     store.directory.verify()?;
     let mut children = store
@@ -2376,7 +2266,6 @@ fn verify_two_slot_headers(store: &TwoSlotStoreV1) -> io::Result<()> {
     }
     store.directory.verify()
 }
-
 fn open_existing_two_slot_store(
     directory: RootedDirectory,
     config: TwoSlotStoreConfigV1,
@@ -2422,7 +2311,6 @@ fn open_existing_two_slot_store(
     verify_two_slot_headers(&store)?;
     Ok(store)
 }
-
 fn read_two_slot_record_once(
     store: &TwoSlotStoreV1,
     slot_id: usize,
@@ -2544,7 +2432,6 @@ fn read_two_slot_record_once(
         payload,
     }))
 }
-
 fn read_two_slot_record_stable(
     store: &TwoSlotStoreV1,
     slot_id: usize,
@@ -2561,7 +2448,6 @@ fn read_two_slot_record_stable(
         "governance two-slot record did not stabilize during bounded read",
     ))
 }
-
 fn select_two_slot_record_unlocked(store: &TwoSlotStoreV1) -> io::Result<TwoSlotCommittedRecordV1> {
     verify_two_slot_headers(store)?;
     let left = read_two_slot_record_stable(store, 0)?;
@@ -2597,7 +2483,6 @@ fn select_two_slot_record_unlocked(store: &TwoSlotStoreV1) -> io::Result<TwoSlot
         }
     }
 }
-
 fn two_slot_snapshot(
     store: &TwoSlotStoreV1,
     record: TwoSlotCommittedRecordV1,
@@ -2612,18 +2497,15 @@ fn two_slot_snapshot(
         payload: record.payload,
     }
 }
-
 struct TwoSlotOsLock<'file> {
     file: &'file File,
     locked: bool,
 }
-
 impl<'file> TwoSlotOsLock<'file> {
     fn acquire(file: &'file File) -> io::Result<Self> {
         File::lock(file)?;
         Ok(Self { file, locked: true })
     }
-
     fn try_acquire(file: &'file File) -> Result<Self, TwoSlotTryErrorV1> {
         match File::try_lock(file) {
             Ok(()) => Ok(Self { file, locked: true }),
@@ -2631,7 +2513,6 @@ impl<'file> TwoSlotOsLock<'file> {
             Err(fs::TryLockError::Error(error)) => Err(TwoSlotTryErrorV1::Io(error)),
         }
     }
-
     fn release(mut self) -> io::Result<()> {
         let result = File::unlock(self.file);
         if result.is_ok() {
@@ -2640,7 +2521,6 @@ impl<'file> TwoSlotOsLock<'file> {
         result
     }
 }
-
 impl Drop for TwoSlotOsLock<'_> {
     fn drop(&mut self) {
         if self.locked {
@@ -2648,7 +2528,6 @@ impl Drop for TwoSlotOsLock<'_> {
         }
     }
 }
-
 struct TwoSlotInitFileLockV1 {
     root: RootedDirectory,
     name: OsString,
@@ -2656,7 +2535,6 @@ struct TwoSlotInitFileLockV1 {
     identity: FileIdentity,
     locked: bool,
 }
-
 impl TwoSlotInitFileLockV1 {
     fn open(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
         let name = two_slot_init_lock_name(config);
@@ -2676,14 +2554,12 @@ impl TwoSlotInitFileLockV1 {
         };
         Self::from_opened(root, name, handle, true)
     }
-
     fn open_existing(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
         let name = two_slot_init_lock_name(config);
         root.verify()?;
         let handle = platform::open_read_write_file(&root.handle, &name)?;
         Self::from_opened(root, name, handle, false)
     }
-
     fn from_opened(
         root: &RootedDirectory,
         name: OsString,
@@ -2717,7 +2593,6 @@ impl TwoSlotInitFileLockV1 {
             locked: false,
         })
     }
-
     fn acquire(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
         let mut lock = Self::open(root, config)?;
         File::lock(&lock.handle)?;
@@ -2725,7 +2600,6 @@ impl TwoSlotInitFileLockV1 {
         lock.verify()?;
         Ok(lock)
     }
-
     fn acquire_bounded(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -2760,7 +2634,6 @@ impl TwoSlotInitFileLockV1 {
             }
         }
     }
-
     fn try_acquire_bound(
         root: &RootedDirectory,
         config: &TwoSlotStoreConfigV1,
@@ -2789,7 +2662,6 @@ impl TwoSlotInitFileLockV1 {
             Err(fs::TryLockError::Error(error)) => Err(TwoSlotTryErrorV1::Io(error)),
         }
     }
-
     fn verify(&self) -> io::Result<()> {
         let metadata = self.handle.metadata()?;
         let path = self.root.display_path.join(&self.name);
@@ -2803,7 +2675,6 @@ impl TwoSlotInitFileLockV1 {
         self.root
             .verify_file_binding(&self.name, &self.handle, self.identity, 0, true)
     }
-
     fn release(mut self) -> io::Result<()> {
         let verification = self.verify();
         let unlock = File::unlock(&self.handle);
@@ -2816,13 +2687,11 @@ impl TwoSlotInitFileLockV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TwoSlotInitializationLockModeV1 {
     Blocking,
     Bounded(TwoSlotInitializationWaitV1),
 }
-
 impl Drop for TwoSlotInitFileLockV1 {
     fn drop(&mut self) {
         if self.locked {
@@ -2830,13 +2699,11 @@ impl Drop for TwoSlotInitFileLockV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TwoSlotCasModeV1 {
     LegacyBlocking,
     NonblockingTyped,
 }
-
 impl TwoSlotBoundOperationLeaseV1 {
     /// Revalidate the exact bound init lock and immutable two-slot headers.
     pub(super) fn verify(&self) -> io::Result<()> {
@@ -2857,7 +2724,6 @@ impl TwoSlotBoundOperationLeaseV1 {
         verify_two_slot_headers(&self.store)?;
         init_lock.verify()
     }
-
     /// Revalidate and release this exact bound init-lock lease.
     pub(super) fn release(mut self) -> io::Result<()> {
         let verification = self.verify();
@@ -2872,7 +2738,6 @@ impl TwoSlotBoundOperationLeaseV1 {
         }
     }
 }
-
 impl TwoSlotStoreV1 {
     /// Try to retain the exact init lock committed into this store's headers.
     ///
@@ -2901,7 +2766,6 @@ impl TwoSlotStoreV1 {
             }
         }
     }
-
     fn verify_exact_parent(&self, parent: &RootedDirectory) -> io::Result<()> {
         parent.verify()?;
         self.directory.verify()?;
@@ -2921,12 +2785,10 @@ impl TwoSlotStoreV1 {
         }
         parent.verify()
     }
-
     #[cfg(test)]
     pub(super) fn init_lock_name_for_test(&self) -> OsString {
         two_slot_init_lock_name(&self.config)
     }
-
     fn with_exclusive_lock<ResultValue>(
         &self,
         operation: impl FnOnce(&Self) -> io::Result<ResultValue>,
@@ -2946,7 +2808,6 @@ impl TwoSlotStoreV1 {
             (Ok(_), Err(error)) => Err(error),
         }
     }
-
     fn with_try_exclusive_lock<ResultValue>(
         &self,
         operation: impl FnOnce(&Self) -> io::Result<ResultValue>,
@@ -2974,21 +2835,18 @@ impl TwoSlotStoreV1 {
             (Ok(_), Err(error)) => Err(TwoSlotTryErrorV1::Io(error)),
         }
     }
-
     /// Load the highest complete record after strict pair and lineage checks.
     pub(super) fn load(&self) -> io::Result<TwoSlotSnapshotV1> {
         self.with_exclusive_lock(|store| {
             select_two_slot_record_unlocked(store).map(|record| two_slot_snapshot(store, record))
         })
     }
-
     /// Attempt to load the highest complete record without waiting for either lock.
     pub(super) fn try_load(&self) -> Result<TwoSlotSnapshotV1, TwoSlotTryErrorV1> {
         self.with_try_exclusive_lock(|store| {
             select_two_slot_record_unlocked(store).map(|record| two_slot_snapshot(store, record))
         })
     }
-
     /// Commit one direct successor of `expected`, or return an exact-byte no-op.
     pub(super) fn compare_and_swap(
         &self,
@@ -2997,7 +2855,6 @@ impl TwoSlotStoreV1 {
     ) -> io::Result<TwoSlotSnapshotV1> {
         self.compare_and_swap_with(expected, payload, |_| Ok(()))
     }
-
     /// Attempt one typed compare-and-swap without waiting for either lock.
     pub(super) fn try_compare_and_swap(
         &self,
@@ -3011,7 +2868,6 @@ impl TwoSlotStoreV1 {
             |_| Ok(()),
         )
     }
-
     fn compare_and_swap_with<Hook>(
         &self,
         expected: &TwoSlotSnapshotV1,
@@ -3039,7 +2895,6 @@ impl TwoSlotStoreV1 {
             )),
         }
     }
-
     fn compare_and_swap_attempt_with<Hook>(
         &self,
         expected: &TwoSlotSnapshotV1,
@@ -3119,7 +2974,6 @@ impl TwoSlotStoreV1 {
             inactive.handle.sync_all()?;
             after_step("inactive-trailer-invalidated")?;
             verify_two_slot_headers(store)?;
-
             let slot_id = u8::try_from(inactive_id)
                 .map_err(|_| io::Error::other("governance inactive slot id exceeds u8"))?;
             let header = TwoSlotRecordHeaderV1 {
@@ -3162,7 +3016,6 @@ impl TwoSlotStoreV1 {
             inactive.handle.sync_all()?;
             after_step("inactive-record-synced")?;
             verify_two_slot_headers(store)?;
-
             let record_digest = two_slot_record_digest(&header, payload)?;
             let trailer_region = encode_two_slot_value(
                 &TwoSlotCommitTrailerRegionV1 {
@@ -3224,7 +3077,6 @@ impl TwoSlotStoreV1 {
             TwoSlotCasModeV1::NonblockingTyped => self.with_try_exclusive_lock(operation),
         }
     }
-
     #[cfg(test)]
     fn compare_and_swap_with_test_hook<Hook>(
         &self,
@@ -3238,14 +3090,12 @@ impl TwoSlotStoreV1 {
         self.compare_and_swap_with(expected, payload, after_step)
     }
 }
-
 fn two_slot_stage_prefix(config: &TwoSlotStoreConfigV1) -> String {
     format!(
         ".iroha-two-slot-{}-stage-v1-",
         two_slot_store_namespace(config)
     )
 }
-
 fn two_slot_lost_found_name(config: &TwoSlotStoreConfigV1) -> OsString {
     format!(
         ".iroha-two-slot-{}-lost-found-v1",
@@ -3253,7 +3103,6 @@ fn two_slot_lost_found_name(config: &TwoSlotStoreConfigV1) -> OsString {
     )
     .into()
 }
-
 fn two_slot_init_lock_name(config: &TwoSlotStoreConfigV1) -> OsString {
     format!(
         ".iroha-two-slot-{}-init-lock-v1",
@@ -3261,12 +3110,10 @@ fn two_slot_init_lock_name(config: &TwoSlotStoreConfigV1) -> OsString {
     )
     .into()
 }
-
 fn is_canonical_two_slot_stage_name(name: &OsStr, prefix: &str) -> bool {
     fn is_lower_hex(byte: u8) -> bool {
         byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
     }
-
     let Some(name) = name.to_str() else {
         return false;
     };
@@ -3281,7 +3128,6 @@ fn is_canonical_two_slot_stage_name(name: &OsStr, prefix: &str) -> bool {
         && process.bytes().all(is_lower_hex)
         && sequence.bytes().all(is_lower_hex)
 }
-
 fn is_canonical_two_slot_lost_found_entry(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
@@ -3291,7 +3137,6 @@ fn is_canonical_two_slot_lost_found_entry(name: &OsStr) -> bool {
     };
     index.len() == 4 && index.bytes().all(|byte| byte.is_ascii_digit())
 }
-
 fn two_slot_stage_inventory(
     directory: &RootedDirectory,
     layout: TwoSlotLayoutV1,
@@ -3354,7 +3199,6 @@ fn two_slot_stage_inventory(
         canonical_header_count,
     })
 }
-
 fn two_slot_initial_stage_is_complete(
     store: &TwoSlotStoreV1,
     initial_payload: &[u8],
@@ -3380,7 +3224,6 @@ fn two_slot_initial_stage_is_complete(
         }
     })
 }
-
 fn classify_two_slot_stage(
     name: OsString,
     directory: RootedDirectory,
@@ -3416,7 +3259,6 @@ fn classify_two_slot_stage(
         complete,
     })
 }
-
 fn collect_two_slot_stages(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3455,7 +3297,6 @@ fn collect_two_slot_stages(
         })
         .collect()
 }
-
 fn open_or_create_two_slot_lost_found(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3478,7 +3319,6 @@ fn open_or_create_two_slot_lost_found(
         Err(error) => Err(error),
     }
 }
-
 fn two_slot_lost_found_state(
     directory: &RootedDirectory,
     layout: TwoSlotLayoutV1,
@@ -3529,7 +3369,6 @@ fn two_slot_lost_found_state(
     directory.verify()?;
     Ok((occupied, entry_count, total_bytes))
 }
-
 fn quarantine_two_slot_stages(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3585,7 +3424,6 @@ fn quarantine_two_slot_stages(
     }
     Ok(true)
 }
-
 fn create_unique_two_slot_stage(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3619,7 +3457,6 @@ fn create_unique_two_slot_stage(
         "governance two-slot could not allocate a unique bounded staging name",
     ))
 }
-
 fn create_two_slot_file<Hook>(
     directory: &RootedDirectory,
     name: &OsStr,
@@ -3661,7 +3498,6 @@ where
         name: name.to_os_string(),
     })
 }
-
 fn write_two_slot_record_unlocked<Hook>(
     store: &TwoSlotStoreV1,
     slot_id: usize,
@@ -3700,7 +3536,6 @@ where
     slot.handle.sync_all()?;
     after_step(labels[1])?;
     verify_two_slot_headers(store)?;
-
     let encoded_slot_id =
         u8::try_from(slot_id).map_err(|_| io::Error::other("governance two-slot id exceeds u8"))?;
     let header = TwoSlotRecordHeaderV1 {
@@ -3734,7 +3569,6 @@ where
     slot.handle.sync_all()?;
     after_step(labels[3])?;
     verify_two_slot_headers(store)?;
-
     let record_digest = two_slot_record_digest(&header, payload)?;
     let trailer_region = encode_two_slot_value(
         &TwoSlotCommitTrailerRegionV1 {
@@ -3779,7 +3613,6 @@ where
     }
     Ok(committed)
 }
-
 fn initialize_two_slot_stage<Hook>(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3795,7 +3628,6 @@ where
     after_step("stage-directory-created")?;
     root.sync_all()?;
     after_step("stage-parent-synced")?;
-
     let slot_0 = create_two_slot_file(
         &directory,
         OsStr::new(TWO_SLOT_NAMES_V1[0]),
@@ -3814,7 +3646,6 @@ where
     )?;
     slot_1.handle.sync_all()?;
     after_step("slot-1-sized-and-synced")?;
-
     let material = two_slot_binding_material(
         config,
         layout,
@@ -3881,7 +3712,6 @@ where
     }
     Ok(stage)
 }
-
 fn promote_two_slot_stage<Hook>(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3935,7 +3765,6 @@ where
     after_step("initialization-postcheck")?;
     Ok(store)
 }
-
 fn open_valid_two_slot_canonical(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -3952,7 +3781,6 @@ fn open_valid_two_slot_canonical(
         Err(error) => Err(error),
     }
 }
-
 fn load_existing_two_slot_store_v1(
     root: &RootedDirectory,
     config: TwoSlotStoreConfigV1,
@@ -3962,7 +3790,6 @@ fn load_existing_two_slot_store_v1(
     root.verify()?;
     Ok(snapshot)
 }
-
 fn open_existing_read_only_two_slot_store_v1(
     root: &RootedDirectory,
     config: TwoSlotStoreConfigV1,
@@ -3994,7 +3821,6 @@ fn open_existing_read_only_two_slot_store_v1(
     root.verify()?;
     Ok(store)
 }
-
 fn open_or_create_two_slot_store_v1_once<Hook>(
     root: &RootedDirectory,
     config: &TwoSlotStoreConfigV1,
@@ -4015,7 +3841,6 @@ where
         let _all_preserved = quarantine_two_slot_stages(root, config, stages)?;
         return Ok(store);
     }
-
     let mut stages = collect_two_slot_stages(root, config, init_lock_identity, initial_payload)?;
     if let Some(index) = stages.iter().position(|stage| stage.complete) {
         let selected = stages.remove(index);
@@ -4056,7 +3881,6 @@ where
         after_step,
     )
 }
-
 fn open_or_create_two_slot_store_v1_with<Hook>(
     root: &RootedDirectory,
     config: TwoSlotStoreConfigV1,
@@ -4074,7 +3898,6 @@ where
         after_step,
     )
 }
-
 fn open_or_create_two_slot_store_v1_with_mode<Hook>(
     root: &RootedDirectory,
     config: TwoSlotStoreConfigV1,

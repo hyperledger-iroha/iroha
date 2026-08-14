@@ -6,7 +6,19 @@
 //! HTTPS, explicit content encodings, and bounded response buffering.
 //! Construction also seals the canonical trust inventory into the runtime
 //! identity that the controller verifies at startup and around feed use.
-
+use super::compliance::{
+    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+    GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
+    GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError,
+    GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
+    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
+};
+use http::{
+    HeaderMap, HeaderName,
+    header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
+};
+use reqwest::{redirect::Policy, tls::TlsInfo};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -19,24 +31,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-use http::{
-    HeaderMap, HeaderName,
-    header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
-};
-use reqwest::{redirect::Policy, tls::TlsInfo};
-use sha2::{Digest as _, Sha256};
 use url::Host;
 use x509_parser::parse_x509_certificate;
-
-use super::compliance::{
-    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
-    GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
-    GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError,
-    GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
-    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
-};
-
 const RESOLVER_WORKERS: usize = 4;
 const RESOLVER_QUEUE_CAPACITY: usize = 16;
 const MAX_RESOLVED_ADDRESSES: usize = 64;
@@ -49,28 +45,23 @@ const MAX_RESPONSE_HEADER_BYTES: usize = 32 * 1_024;
 const READ_BUFFER_BYTES: usize = 8 * 1_024;
 const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
-
 type Resolver = dyn Fn(&str) -> Result<Vec<IpAddr>, ResolveFailure> + Send + Sync + 'static;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolveFailure {
     Deadline,
     Lookup,
     TooManyAddresses,
 }
-
 struct ResolveJob {
     hostname: String,
     deadline: Instant,
     reply: SyncSender<Result<Vec<IpAddr>, ResolveFailure>>,
 }
-
 struct ResolverPool {
     sender: SyncSender<ResolveJob>,
     worker_count: usize,
     queue_capacity: usize,
 }
-
 impl fmt::Debug for ResolverPool {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -80,7 +71,6 @@ impl fmt::Debug for ResolverPool {
             .finish()
     }
 }
-
 impl ResolverPool {
     fn new() -> Result<Self, GatewayComplianceError> {
         Self::new_with(
@@ -89,7 +79,6 @@ impl ResolverPool {
             Arc::new(resolve_system_hostname),
         )
     }
-
     fn new_with(
         worker_count: usize,
         queue_capacity: usize,
@@ -121,7 +110,6 @@ impl ResolverPool {
             queue_capacity,
         })
     }
-
     fn resolve(
         &self,
         hostname: &str,
@@ -188,7 +176,6 @@ impl ResolverPool {
         }
     }
 }
-
 fn resolver_worker(receiver: Arc<Mutex<Receiver<ResolveJob>>>, resolver: Arc<Resolver>) {
     loop {
         let job = {
@@ -208,7 +195,6 @@ fn resolver_worker(receiver: Arc<Mutex<Receiver<ResolveJob>>>, resolver: Arc<Res
         let _ = job.reply.try_send(result);
     }
 }
-
 fn resolve_system_hostname(hostname: &str) -> Result<Vec<IpAddr>, ResolveFailure> {
     let socket_addresses = (hostname, 443)
         .to_socket_addrs()
@@ -223,7 +209,6 @@ fn resolve_system_hostname(hostname: &str) -> Result<Vec<IpAddr>, ResolveFailure
     }
     Ok(addresses.into_iter().collect())
 }
-
 /// Credential-free, address-pinned production HTTPS transport.
 ///
 /// Construction creates a fixed-size system-resolver pool. A timed-out system
@@ -235,7 +220,6 @@ pub struct ProductionGatewayComplianceFeedTransport {
     accepted_spki_sha256_by_hostname: BTreeMap<String, BTreeSet<[u8; 32]>>,
     identity: GatewayComplianceFeedTransportIdentityV1,
 }
-
 impl fmt::Debug for ProductionGatewayComplianceFeedTransport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -250,7 +234,6 @@ impl fmt::Debug for ProductionGatewayComplianceFeedTransport {
             .finish()
     }
 }
-
 impl ProductionGatewayComplianceFeedTransport {
     /// Create the standard no-secret production transport from resolved trust
     /// pins keyed by canonical DNS hostname.
@@ -284,7 +267,6 @@ impl ProductionGatewayComplianceFeedTransport {
             identity,
         })
     }
-
     fn verify_spki(
         &self,
         hostname: &str,
@@ -301,7 +283,6 @@ impl ProductionGatewayComplianceFeedTransport {
         }
     }
 }
-
 impl GatewayComplianceFeedTransport for ProductionGatewayComplianceFeedTransport {
     fn qualification(
         &self,
@@ -309,7 +290,6 @@ impl GatewayComplianceFeedTransport for ProductionGatewayComplianceFeedTransport
     {
         Ok(self.identity.clone())
     }
-
     fn resolve(
         &self,
         hostname: &str,
@@ -317,7 +297,6 @@ impl GatewayComplianceFeedTransport for ProductionGatewayComplianceFeedTransport
     ) -> Result<Vec<IpAddr>, GatewayComplianceError> {
         self.resolver.resolve(hostname, timeout)
     }
-
     fn fetch(
         &self,
         request: &GatewayComplianceFetchRequest,
@@ -325,7 +304,6 @@ impl GatewayComplianceFeedTransport for ProductionGatewayComplianceFeedTransport
         fetch_pinned(self, request)
     }
 }
-
 fn fetch_pinned(
     transport: &ProductionGatewayComplianceFeedTransport,
     request: &GatewayComplianceFetchRequest,
@@ -422,7 +400,6 @@ fn fetch_pinned(
         elapsed,
     })
 }
-
 fn validate_fetch_request(
     request: &GatewayComplianceFetchRequest,
 ) -> Result<(&str, u16), GatewayComplianceError> {
@@ -480,7 +457,6 @@ fn validate_fetch_request(
     }
     Ok((hostname, 443))
 }
-
 fn validate_dns_hostname(hostname: &str) -> Result<(), GatewayComplianceError> {
     if hostname.is_empty()
         || hostname.len() > MAX_DNS_HOSTNAME_BYTES
@@ -521,14 +497,12 @@ fn validate_dns_hostname(hostname: &str) -> Result<(), GatewayComplianceError> {
     }
     Ok(())
 }
-
 fn is_public_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => is_public_ipv4(address),
         IpAddr::V6(address) => is_public_ipv6(address),
     }
 }
-
 fn is_public_ipv4(address: Ipv4Addr) -> bool {
     let [a, b, c, _] = address.octets();
     !(address.is_private()
@@ -545,7 +519,6 @@ fn is_public_ipv4(address: Ipv4Addr) -> bool {
         || (a == 192 && b == 88 && c == 99)
         || (a == 198 && (18..=19).contains(&b)))
 }
-
 fn is_public_ipv6(address: Ipv6Addr) -> bool {
     let segments = address.segments();
     let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
@@ -569,7 +542,6 @@ fn is_public_ipv6(address: Ipv6Addr) -> bool {
         || benchmark
         || transition)
 }
-
 fn remaining_time(
     started: Instant,
     total_timeout: Duration,
@@ -579,7 +551,6 @@ fn remaining_time(
         .filter(|remaining| !remaining.is_zero())
         .ok_or(GatewayComplianceError::FetchTimeout)
 }
-
 fn map_reqwest_error(error: reqwest::Error) -> GatewayComplianceError {
     if error.is_timeout() {
         GatewayComplianceError::FetchTimeout
@@ -587,7 +558,6 @@ fn map_reqwest_error(error: reqwest::Error) -> GatewayComplianceError {
         GatewayComplianceError::InvalidFeed("authenticated HTTPS request failed".into())
     }
 }
-
 fn parse_content_encoding(
     headers: &HeaderMap,
 ) -> Result<GatewayComplianceContentEncoding, GatewayComplianceError> {
@@ -616,7 +586,6 @@ fn parse_content_encoding(
         ))
     }
 }
-
 fn validate_response_headers(headers: &HeaderMap) -> Result<(), GatewayComplianceError> {
     if headers.len() > MAX_RESPONSE_HEADER_COUNT {
         return Err(GatewayComplianceError::ResourceLimit {
@@ -644,11 +613,9 @@ fn validate_response_headers(headers: &HeaderMap) -> Result<(), GatewayComplianc
     }
     Ok(())
 }
-
 fn parse_redirect_location(headers: &HeaderMap) -> Result<Option<String>, GatewayComplianceError> {
     parse_single_header(headers, &LOCATION, MAX_REDIRECT_LOCATION_BYTES, "Location")
 }
-
 fn parse_single_header(
     headers: &HeaderMap,
     name: &HeaderName,
@@ -675,7 +642,6 @@ fn parse_single_header(
     }
     Ok(Some(value.to_owned()))
 }
-
 fn parse_content_length(
     headers: &HeaderMap,
     maximum: usize,
@@ -715,7 +681,6 @@ fn parse_content_length(
     }
     Ok(Some(length))
 }
-
 fn read_body_bounded(
     reader: &mut impl Read,
     maximum: usize,
@@ -771,7 +736,6 @@ fn read_body_bounded(
         }
     }
 }
-
 fn spki_sha256(certificate_der: &[u8]) -> Result<[u8; 32], GatewayComplianceError> {
     let (remainder, certificate) = parse_x509_certificate(certificate_der).map_err(|_| {
         GatewayComplianceError::InvalidFeed("invalid HTTPS peer certificate".into())
@@ -783,9 +747,15 @@ fn spki_sha256(certificate_der: &[u8]) -> Result<[u8; 32], GatewayComplianceErro
     }
     Ok(Sha256::digest(certificate.public_key().raw).into())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use http::{
+        HeaderMap, HeaderValue,
+        header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
+    };
+    use rcgen::generate_simple_self_signed;
+    use sha2::{Digest as _, Sha256};
     use std::{
         collections::{BTreeMap, BTreeSet},
         io::Cursor,
@@ -798,17 +768,7 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
-
-    use http::{
-        HeaderMap, HeaderValue,
-        header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
-    };
-    use rcgen::generate_simple_self_signed;
-    use sha2::{Digest as _, Sha256};
     use x509_parser::parse_x509_certificate;
-
-    use super::*;
-
     #[test]
     fn canonical_dns_hostname_validation_is_strict() {
         for valid in ["feed.example", "a-b.c0.example"] {
@@ -829,7 +789,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn content_encoding_accepts_only_one_supported_token() {
         let mut headers = HeaderMap::new();
@@ -848,7 +807,6 @@ mod tests {
         headers.append(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
         assert!(parse_content_encoding(&headers).is_err());
     }
-
     #[test]
     fn response_header_bounds_are_checked_before_body_allocation() {
         let mut headers = HeaderMap::new();
@@ -864,7 +822,6 @@ mod tests {
         );
         headers.append(LOCATION, HeaderValue::from_static("/other"));
         assert!(parse_redirect_location(&headers).is_err());
-
         let mut excessive_count = HeaderMap::new();
         for _ in 0..=MAX_RESPONSE_HEADER_COUNT {
             excessive_count.append("x-feed-test", HeaderValue::from_static("a"));
@@ -873,7 +830,6 @@ mod tests {
             validate_response_headers(&excessive_count),
             Err(GatewayComplianceError::ResourceLimit { .. })
         ));
-
         let mut excessive_bytes = HeaderMap::new();
         excessive_bytes.insert(
             "x-feed-test",
@@ -885,7 +841,6 @@ mod tests {
             Err(GatewayComplianceError::ResourceLimit { .. })
         ));
     }
-
     #[test]
     fn fetch_request_requires_canonical_https_and_address_inventory() {
         let request = GatewayComplianceFetchRequest {
@@ -899,7 +854,6 @@ mod tests {
             max_encoded_bytes: 1_024,
         };
         assert!(validate_fetch_request(&request).is_err());
-
         let mut canonical = request;
         canonical.pinned_addresses.sort_unstable();
         validate_fetch_request(&canonical).expect("canonical request");
@@ -907,7 +861,6 @@ mod tests {
             url::Url::parse("https://user@feed.example/catalog").expect("credential URL");
         assert!(validate_fetch_request(&canonical).is_err());
     }
-
     #[test]
     fn body_reader_accepts_exact_limit_and_rejects_one_extra_byte() {
         let started = Instant::now();
@@ -955,7 +908,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn leaf_certificate_spki_digest_hashes_exact_der_spki() {
         let certified =
@@ -993,12 +945,10 @@ mod tests {
             .verify_spki("feed.example", digest)
             .expect("configured SPKI");
         assert!(transport.verify_spki("feed.example", [0x55; 32]).is_err());
-
         let mut non_canonical = certificate_der.to_vec();
         non_canonical.push(0);
         assert!(spki_sha256(&non_canonical).is_err());
     }
-
     #[test]
     fn resolver_timeout_leaves_only_bounded_worker_and_queue_work() {
         let calls = Arc::new(AtomicUsize::new(0));

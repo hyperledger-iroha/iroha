@@ -7,15 +7,17 @@
 //! deployment/routing policy, state mutation limits, agent-policy envelopes,
 //! and deterministic confidential-compute policy in a form suitable for
 //! validator admission and audit trails.
-
 #![allow(clippy::module_name_repetitions)]
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    sync::OnceLock,
+use crate::{
+    account::AccountId,
+    asset::AssetDefinitionId,
+    name::Name,
+    proof::ProofAttachment,
+    sorafs::pin_registry::{
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
+    },
+    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
-
 use iroha_crypto::{
     Hash, PublicKey, Signature,
     fhe_bfv::{
@@ -41,19 +43,12 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, Parser, Value};
-use thiserror::Error;
-
-use crate::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    name::Name,
-    proof::ProofAttachment,
-    sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
-    },
-    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    sync::OnceLock,
 };
-
+use thiserror::Error;
 /// Schema version for [`SoraContainerManifestV1`].
 pub const SORA_CONTAINER_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouManifestV1`].
@@ -64,7 +59,6 @@ pub const SORA_SERVICE_MANIFEST_VERSION_V1: u16 = 1;
 pub const SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1: u16 = 1;
 /// Ledger precision used by XOR-denominated Soracloud quantities.
 pub const SORACLOUD_XOR_SCALE: u32 = 9;
-
 fn xor_quantity_from_nanos(value: u128) -> Quantity {
     Quantity::from_canonical_numeric(Numeric::new(value, SORACLOUD_XOR_SCALE))
         .expect("u128 nano-XOR value fits the bounded Quantity domain")
@@ -298,7 +292,6 @@ pub const SORA_APP_INFRA_MANIFEST_VERSION_V1: u16 = 1;
 pub const SORA_APP_INFRA_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAppInfraAuditEventV1`].
 pub const SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1: u16 = 1;
-
 // These are textual includes, rather than nested modules, so the structural
 // split does not change public type paths or any path-derived wire identity.
 include!("soracloud/schema.rs");
@@ -307,7 +300,6 @@ include!("soracloud/deployment.rs");
 include!("soracloud/hosting.rs");
 include!("soracloud/host_protocol.rs");
 include!("soracloud/prelude.rs");
-
 #[cfg(test)]
 mod tests {
     include!("soracloud/tests/fixtures_and_manifests.rs");

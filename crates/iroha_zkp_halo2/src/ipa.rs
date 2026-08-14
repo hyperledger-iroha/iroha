@@ -3,14 +3,11 @@
 //! This module implements a standard IPA proof for inner products over a prime
 //! field with multiplicative group commitments. It follows the Bootle et al.
 //! style L/R reduction with transcript-derived challenges.
-
-use core::marker::PhantomData;
-
 use crate::{
     IpaGroup, IpaScalar, backend::IpaBackend, constants::DST, errors::Error, hash::sha3_256,
     params::Params, transcript::Transcript,
 };
-
+use core::marker::PhantomData;
 /// Computes the inner product <a, b> in the prime field.
 fn inner_product<B: IpaBackend>(a: &[B::Scalar], b: &[B::Scalar]) -> B::Scalar {
     debug_assert_eq!(a.len(), b.len());
@@ -20,7 +17,6 @@ fn inner_product<B: IpaBackend>(a: &[B::Scalar], b: &[B::Scalar]) -> B::Scalar {
     }
     acc
 }
-
 /// Commits to a vector `v` using the provided generator vector `g`.
 pub(crate) fn commit_vec<B: IpaBackend>(
     g: &[B::Group],
@@ -28,7 +24,6 @@ pub(crate) fn commit_vec<B: IpaBackend>(
 ) -> Result<B::Group, Error> {
     B::msm(g, v)
 }
-
 /// An IPA proof for <a, b> binding into L/R rounds and final scalars.
 #[derive(Clone, Debug)]
 pub struct IpaProof<B: IpaBackend> {
@@ -41,14 +36,12 @@ pub struct IpaProof<B: IpaBackend> {
     /// Final scalar after reductions for `b`.
     pub b_final: B::Scalar,
 }
-
 impl<B: IpaBackend> IpaProof<B> {
     /// Number of rounds in the proof.
     pub fn rounds(&self) -> usize {
         self.l_vec.len()
     }
 }
-
 /// Transcript projection for one verifier-side IPA reduction round.
 ///
 /// These values are useful as deterministic recursive-verifier witnesses: the
@@ -76,7 +69,6 @@ pub struct IpaRoundChallenge<S: IpaScalar> {
     /// Multiplicative inverse of `challenge`.
     pub challenge_inverse: S,
 }
-
 /// Public transcript projection for one verifier-side IPA proof.
 ///
 /// The projection records the exact transcript state boundary around
@@ -97,7 +89,6 @@ pub struct IpaVerifierTranscriptProjection<S: IpaScalar> {
     /// Transcript state after the last `ipa.x` challenge derivation.
     pub final_state: [u8; 32],
 }
-
 /// Field-friendly binding of one verifier transcript projection.
 ///
 /// The native verifier still validates the exact SHA3 transcript projection.
@@ -122,7 +113,6 @@ pub struct IpaVerifierTranscriptBinding<S: IpaScalar> {
     /// Pow5 accumulator binding all scalar projections and challenges.
     pub binding_digest: S,
 }
-
 /// Native verifier-side IPA accumulation state for one reduction round.
 ///
 /// The round records the scalar squares used in `Q' = L^{x^2} * Q *
@@ -145,7 +135,6 @@ pub struct IpaVerifierAccumulationRound<G: IpaGroup> {
     /// Folded `h` generator vector after this round.
     pub h_after: Vec<G>,
 }
-
 /// Native verifier-side `b`-vector reduction state for one IPA round.
 ///
 /// The round records the public-vector layer before and after applying the
@@ -163,7 +152,6 @@ pub struct IpaVerifierBVectorReductionRound<S: IpaScalar> {
     /// Vector layer after this reduction round.
     pub b_after: Vec<S>,
 }
-
 /// Native verifier-side public `b`-vector reduction projection.
 ///
 /// This is the scalar-side companion to [`IpaVerifierAccumulation`]. It gives a
@@ -178,7 +166,6 @@ pub struct IpaVerifierBVectorReduction<S: IpaScalar> {
     /// Final folded scalar expected to match `proof.b_final`.
     pub final_b: S,
 }
-
 /// Native verifier-side IPA accumulation projection.
 ///
 /// This is a deterministic witness layout for current recursive verification:
@@ -200,7 +187,6 @@ pub struct IpaVerifierAccumulation<G: IpaGroup> {
     /// Final expected term `g^a * h^b * u^{a*b}`.
     pub expected_term: G,
 }
-
 /// Combined native verifier-side IPA witness for recursive verification.
 ///
 /// This bundles the transcript challenge projection, public `b`-vector
@@ -224,7 +210,6 @@ pub struct IpaVerifierWitness<B: IpaBackend> {
     /// Final scalar `b` from the IPA proof.
     pub proof_b_final: B::Scalar,
 }
-
 fn ipa_round_bytes_digest(round_index: usize, l_bytes: [u8; 32], r_bytes: [u8; 32]) -> [u8; 32] {
     let mut buf = Vec::with_capacity(DST.len() + 8 + 32 + 32 + 16);
     buf.extend_from_slice(DST.as_bytes());
@@ -235,7 +220,6 @@ fn ipa_round_bytes_digest(round_index: usize, l_bytes: [u8; 32], r_bytes: [u8; 3
     buf.extend_from_slice(&r_bytes);
     sha3_256(&buf)
 }
-
 fn scalar_from_u64<S: IpaScalar>(value: u64) -> S {
     let mut out = S::zero();
     for _ in 0..value {
@@ -243,12 +227,10 @@ fn scalar_from_u64<S: IpaScalar>(value: u64) -> S {
     }
     out
 }
-
 fn scalar_pow5<S: IpaScalar>(value: S) -> S {
     let square = value.mul(value);
     square.mul(square).mul(value)
 }
-
 /// Transparent field compressor used by the transcript-binding accumulator.
 ///
 /// This is deliberately small and circuit-friendly: recursive verifier circuits
@@ -263,7 +245,6 @@ pub fn ipa_transcript_binding_compress<S: IpaScalar>(left: S, right: S) -> S {
         .mul(scalar_pow5(left_shifted))
         .add(scalar_from_u64::<S>(3).mul(scalar_pow5(right_shifted)))
 }
-
 /// Fold one round projection and challenge pair into a transcript-binding state.
 pub fn ipa_transcript_binding_round<S: IpaScalar>(
     state: S,
@@ -275,7 +256,6 @@ pub fn ipa_transcript_binding_round<S: IpaScalar>(
     let after_challenge = ipa_transcript_binding_compress(after_round, challenge);
     ipa_transcript_binding_compress(after_challenge, challenge_inverse)
 }
-
 fn projection_scalar<S: IpaScalar>(label: &[u8], body: &[u8]) -> S {
     let mut buf = Vec::with_capacity(DST.len() + label.len() + body.len() + 24);
     buf.extend_from_slice(DST.as_bytes());
@@ -289,7 +269,6 @@ fn projection_scalar<S: IpaScalar>(label: &[u8], body: &[u8]) -> S {
     bytes.copy_from_slice(&wide);
     S::from_uniform(&bytes)
 }
-
 fn transcript_header_projection_scalar<S: IpaScalar>(
     projection: &IpaVerifierTranscriptProjection<S>,
 ) -> S {
@@ -299,7 +278,6 @@ fn transcript_header_projection_scalar<S: IpaScalar>(
     body.extend_from_slice(&projection.state_after_ipa_n);
     projection_scalar(b"ipa.transcript.binding.header", &body)
 }
-
 fn transcript_round_projection_scalar<S: IpaScalar>(round: &IpaRoundChallenge<S>) -> S {
     let mut body = Vec::with_capacity(8 + 32 * 8);
     body.extend_from_slice(&(round.round_index as u64).to_le_bytes());
@@ -313,13 +291,11 @@ fn transcript_round_projection_scalar<S: IpaScalar>(round: &IpaRoundChallenge<S>
     body.extend_from_slice(&round.challenge_inverse.to_bytes());
     projection_scalar(b"ipa.transcript.binding.round", &body)
 }
-
 fn transcript_final_projection_scalar<S: IpaScalar>(
     projection: &IpaVerifierTranscriptProjection<S>,
 ) -> S {
     projection_scalar(b"ipa.transcript.binding.final", &projection.final_state)
 }
-
 /// Derive a field-friendly binding from a verified IPA transcript projection.
 ///
 /// # Errors
@@ -340,7 +316,6 @@ pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
             actual: projection.rounds.len(),
         });
     }
-
     let header_projection = transcript_header_projection_scalar(projection);
     let final_projection = transcript_final_projection_scalar(projection);
     let mut round_projections = Vec::with_capacity(expected_rounds);
@@ -370,7 +345,6 @@ pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
         challenge_inverses.push(round.challenge_inverse);
     }
     let binding_digest = ipa_transcript_binding_compress(state, final_projection);
-
     Ok(IpaVerifierTranscriptBinding {
         n: projection.n,
         header_projection,
@@ -381,7 +355,6 @@ pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
         binding_digest,
     })
 }
-
 /// Validate a supplied field-friendly binding against a transcript projection.
 ///
 /// # Errors
@@ -399,7 +372,6 @@ pub fn validate_ipa_verifier_transcript_binding<S: IpaScalar>(
         Err(Error::VerificationFailed)
     }
 }
-
 /// Derive the verifier-side IPA transcript projection from the current transcript.
 ///
 /// The caller must have already absorbed the polynomial-opening statement into
@@ -435,11 +407,9 @@ pub fn derive_ipa_verifier_transcript_projection<B: IpaBackend>(
             actual: proof.rounds(),
         });
     }
-
     let state_before_ipa_n = transcript.cur_digest();
     transcript.absorb("ipa.n", &(n as u64).to_le_bytes());
     let state_after_ipa_n = transcript.cur_digest();
-
     let mut rounds = Vec::with_capacity(proof.rounds());
     for (round_index, (&l, &r)) in proof.l_vec.iter().zip(proof.r_vec.iter()).enumerate() {
         let state_before_round = transcript.cur_digest();
@@ -475,7 +445,6 @@ pub fn derive_ipa_verifier_transcript_projection<B: IpaBackend>(
         final_state,
     })
 }
-
 /// Derive the verifier-side IPA round challenges from the current transcript.
 ///
 /// The caller must have already absorbed the polynomial-opening statement into
@@ -493,7 +462,6 @@ pub fn derive_ipa_verifier_round_challenges<B: IpaBackend>(
 ) -> Result<Vec<IpaRoundChallenge<B::Scalar>>, Error> {
     Ok(derive_ipa_verifier_transcript_projection::<B>(n, transcript, proof)?.rounds)
 }
-
 /// Validate a supplied transcript projection against the native IPA verifier.
 ///
 /// The caller must have already absorbed the polynomial-opening statement into
@@ -517,7 +485,6 @@ pub fn validate_ipa_verifier_transcript_projection<B: IpaBackend>(
         Err(Error::VerificationFailed)
     }
 }
-
 /// Project the verifier-side IPA public `b`-vector reduction.
 ///
 /// `round_challenges` must come from
@@ -546,7 +513,6 @@ pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
             actual: round_challenges.len(),
         });
     }
-
     let initial_b = b.to_vec();
     let mut current = initial_b.clone();
     let mut rounds = Vec::with_capacity(expected_rounds);
@@ -580,7 +546,6 @@ pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
         });
         current = b_after;
     }
-
     debug_assert_eq!(current.len(), 1);
     Ok(IpaVerifierBVectorReduction {
         initial_b,
@@ -588,7 +553,6 @@ pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
         final_b: current[0],
     })
 }
-
 /// Project the verifier-side IPA scalar-multiplication accumulation.
 ///
 /// `round_challenges` must come from
@@ -638,16 +602,13 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
             actual: round_challenges.len(),
         });
     }
-
     let hb = commit_vec::<B>(params.h(), b)?;
     let ut = params.u().pow(t);
     let mut q = p_g.mul(hb).mul(ut);
     let initial_q = q;
-
     let mut g_vec = params.g().to_vec();
     let mut h_vec = params.h().to_vec();
     let mut rounds = Vec::with_capacity(expected_rounds);
-
     for (round_index, ((&l, &r), round)) in proof
         .l_vec
         .iter()
@@ -671,12 +632,10 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
         let x2_inv = x_inv.mul(x_inv);
         let q_before = q;
         q = l.pow(x2).mul(q).mul(r.pow(x2_inv));
-
         let m = g_vec.len();
         let half = m / 2;
         let (g_l, g_r) = g_vec.split_at(half);
         let (h_l, h_r) = h_vec.split_at(half);
-
         let mut g_new = Vec::with_capacity(half);
         for i in 0..half {
             g_new.push(g_l[i].pow(x_inv).mul(g_r[i].pow(x)));
@@ -685,7 +644,6 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
         for i in 0..half {
             h_new.push(h_l[i].pow(x).mul(h_r[i].pow(x_inv)));
         }
-
         rounds.push(IpaVerifierAccumulationRound {
             round_index,
             challenge_square: x2,
@@ -698,7 +656,6 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
         g_vec = g_new;
         h_vec = h_new;
     }
-
     debug_assert_eq!(g_vec.len(), 1);
     debug_assert_eq!(h_vec.len(), 1);
     let final_g = g_vec[0];
@@ -709,7 +666,6 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
         .pow(a)
         .mul(final_h.pow(b_fin))
         .mul(params.u().pow(a.mul(b_fin)));
-
     Ok(IpaVerifierAccumulation {
         initial_q,
         rounds,
@@ -719,7 +675,6 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
         expected_term,
     })
 }
-
 /// Derive the complete native verifier-side witness for one IPA proof.
 ///
 /// The caller must have already absorbed the polynomial-opening statement into
@@ -760,7 +715,6 @@ pub fn derive_ipa_verifier_witness<B: IpaBackend>(
         proof_b_final: proof.b_final,
     })
 }
-
 /// Validate a supplied recursive-verifier IPA witness against the native verifier.
 ///
 /// The caller must have already absorbed the polynomial-opening statement into
@@ -798,10 +752,8 @@ pub fn validate_ipa_verifier_witness<B: IpaBackend>(
         Err(Error::VerificationFailed)
     }
 }
-
 /// Prover for the IPA opening.
 pub struct IpaProver<B: IpaBackend>(PhantomData<B>);
-
 impl<B: IpaBackend> IpaProver<B> {
     /// Creates an IPA proof that a committed vector `a` has inner product `t`
     /// with the public vector `b` under parameters `params` and transcript.
@@ -826,28 +778,22 @@ impl<B: IpaBackend> IpaProver<B> {
         let hb = commit_vec::<B>(params.h(), b)?;
         let ut = params.u().pow(t);
         let mut q = p_g.mul(hb).mul(ut);
-
         let mut a_vec = a.to_vec();
         let mut b_vec = b.to_vec();
         let mut g_vec = params.g().to_vec();
         let mut h_vec = params.h().to_vec();
-
         let mut l_vec = Vec::new();
         let mut r_vec = Vec::new();
-
         while a_vec.len() > 1 {
             let m = a_vec.len();
             debug_assert_eq!(m & (m - 1), 0, "vector length must stay power-of-two");
             let half = m / 2;
-
             let (a_l, a_r) = a_vec.split_at(half);
             let (b_l, b_r) = b_vec.split_at(half);
             let (g_l, g_r) = g_vec.split_at(half);
             let (h_l, h_r) = h_vec.split_at(half);
-
             let c_l = inner_product::<B>(a_l, b_r);
             let c_r = inner_product::<B>(a_r, b_l);
-
             // L = g_R^{a_L} · h_L^{b_R} · u^{c_l}
             let l = commit_vec::<B>(g_r, a_l)?
                 .mul(commit_vec::<B>(h_l, b_r)?)
@@ -856,7 +802,6 @@ impl<B: IpaBackend> IpaProver<B> {
             let r = commit_vec::<B>(g_l, a_r)?
                 .mul(commit_vec::<B>(h_r, b_l)?)
                 .mul(params.u().pow(c_r));
-
             // Absorb and derive challenge
             let mut lr_bytes = Vec::with_capacity(64);
             lr_bytes.extend_from_slice(&l.to_bytes());
@@ -864,7 +809,6 @@ impl<B: IpaBackend> IpaProver<B> {
             transcript.absorb("ipa.round", &lr_bytes);
             let x = transcript.challenge_scalar::<B::Scalar>("ipa.x");
             let x_inv = x.inv()?;
-
             // Fold vectors: a' = a_L*x + a_R*x^{-1}
             //               b' = b_L*x^{-1} + b_R*x
             let mut a_new = Vec::with_capacity(half);
@@ -873,7 +817,6 @@ impl<B: IpaBackend> IpaProver<B> {
                 a_new.push(a_l[i].mul(x).add(a_r[i].mul(x_inv)));
                 b_new.push(b_l[i].mul(x_inv).add(b_r[i].mul(x)));
             }
-
             // Fold generators: g' = g_L^{x^{-1}} || g_R^{x}
             //                  h' = h_L^{x}     || h_R^{x^{-1}}
             let mut g_tmp = Vec::with_capacity(half * 2);
@@ -886,7 +829,6 @@ impl<B: IpaBackend> IpaProver<B> {
                 .chunks_exact(2)
                 .map(|pair| pair[0].mul(pair[1]))
                 .collect::<Vec<_>>();
-
             for i in 0..half {
                 h_tmp.push(h_l[i].pow(x));
                 h_tmp.push(h_r[i].pow(x_inv));
@@ -895,26 +837,21 @@ impl<B: IpaBackend> IpaProver<B> {
                 .chunks_exact(2)
                 .map(|pair| pair[0].mul(pair[1]))
                 .collect::<Vec<_>>();
-
             // Update Q: Q' = L^{x^2} · Q · R^{x^{-2}}
             let x2 = x.mul(x);
             let x2_inv = x_inv.mul(x_inv);
             q = l.pow(x2).mul(q).mul(r.pow(x2_inv));
-
             l_vec.push(l);
             r_vec.push(r);
-
             a_vec = a_new;
             b_vec = b_new;
             g_vec = g_new;
             h_vec = h_new;
         }
-
         debug_assert_eq!(a_vec.len(), 1);
         debug_assert_eq!(b_vec.len(), 1);
         let a_final = a_vec[0];
         let b_final = b_vec[0];
-
         Ok(IpaProof {
             l_vec,
             r_vec,
@@ -923,10 +860,8 @@ impl<B: IpaBackend> IpaProver<B> {
         })
     }
 }
-
 /// Verifier for the IPA opening.
 pub struct IpaVerifier<B: IpaBackend>(PhantomData<B>);
-
 impl<B: IpaBackend> IpaVerifier<B> {
     /// Verifies an IPA proof that commitment `p_g` to `a` satisfies
     /// <a, b> == `t` for public vector `b`.
@@ -960,9 +895,7 @@ impl<B: IpaBackend> IpaVerifier<B> {
                 actual: proof.rounds(),
             });
         }
-
         let witness = derive_ipa_verifier_witness::<B>(params, transcript, b, p_g, t, proof)?;
-
         if witness.accumulation.final_q == witness.accumulation.expected_term {
             Ok(())
         } else {

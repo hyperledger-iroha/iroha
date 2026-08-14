@@ -18,20 +18,17 @@ const PRUNE_STAGE_PIPELINE_SIDECARS: usize = 12;
 const PRUNE_STAGE_MEMORY: usize = 13;
 const PRUNE_SIDECAR_PROMOTION_DATA: usize = 1;
 const PRUNE_SIDECAR_PROMOTION_INDEX: usize = 2;
-
 #[derive(Clone, Copy)]
 enum NativeAmxMergeAssociation<'a> {
     Live(Option<&'a MergeLedgerEntry>),
     Startup(Option<&'a MergeLedgerEntry>),
     CommittedOnly,
 }
-
 /// Clears the in-process prune gate on every return and unwind path.
 #[derive(Debug)]
 struct PruneInProgressGuard<'a> {
     flag: &'a AtomicBool,
 }
-
 impl<'a> PruneInProgressGuard<'a> {
     fn begin(flag: &'a AtomicBool) -> Self {
         flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -39,13 +36,11 @@ impl<'a> PruneInProgressGuard<'a> {
         Self { flag }
     }
 }
-
 impl Drop for PruneInProgressGuard<'_> {
     fn drop(&mut self) {
         self.flag.store(false, Ordering::Release);
     }
 }
-
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
@@ -63,7 +58,6 @@ struct BlockReplicaKey {
     executed_block_wire_hash: Hash,
 }
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
-
 #[derive(Debug, Default)]
 struct MergeCarrierIndex {
     initialized: bool,
@@ -75,7 +69,6 @@ struct MergeCarrierIndex {
     #[cfg(test)]
     full_inventory_clones: usize,
 }
-
 /// Exact retained output for one indexed-sidecar rewrite in a canonical prune.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct KuraPruneSidecarPairProjectionV2 {
@@ -86,14 +79,12 @@ struct KuraPruneSidecarPairProjectionV2 {
     /// Exact retained index bytes written to the temporary index file.
     retained_index_bytes: u64,
 }
-
 impl KuraPruneSidecarPairProjectionV2 {
     fn temp_pair_bytes(self) -> Option<u64> {
         self.retained_data_bytes
             .checked_add(self.retained_index_bytes)
     }
 }
-
 /// Authenticated sequential rewrite projection for both canonical sidecar pairs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct KuraPruneSidecarRewriteProjectionV2 {
@@ -104,7 +95,6 @@ struct KuraPruneSidecarRewriteProjectionV2 {
     /// Maximum temporary pair bytes allocated by the sequential rewrites.
     sequential_peak_bytes: u64,
 }
-
 impl KuraPruneSidecarRewriteProjectionV2 {
     #[cfg(test)]
     const fn none() -> Self {
@@ -122,11 +112,9 @@ impl KuraPruneSidecarRewriteProjectionV2 {
             sequential_peak_bytes: 0,
         }
     }
-
     fn has_work(self) -> bool {
         self.pipeline.required || self.roster.required
     }
-
     fn is_canonical(self) -> bool {
         let Some(pipeline) = self.pipeline.temp_pair_bytes() else {
             return false;
@@ -140,7 +128,6 @@ impl KuraPruneSidecarRewriteProjectionV2 {
                 || (self.roster.retained_data_bytes == 0 && self.roster.retained_index_bytes == 0))
             && self.sequential_peak_bytes == pipeline.max(roster)
     }
-
     fn authorizes(self, remaining: Self) -> bool {
         self.is_canonical()
             && remaining.is_canonical()
@@ -153,7 +140,6 @@ impl KuraPruneSidecarRewriteProjectionV2 {
             && remaining.sequential_peak_bytes <= self.sequential_peak_bytes
     }
 }
-
 /// Exact live capacity admission retained as forward-recovery authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -179,7 +165,6 @@ struct KuraPruneCapacityAdmissionV2 {
     /// Absolute no-deletion-credit peak admitted before the first write.
     admitted_peak_bytes: u64,
 }
-
 impl KuraPruneCapacityAdmissionV2 {
     fn reserved_bytes(self) -> Option<u64> {
         self.pending_canonical_bytes
@@ -187,21 +172,18 @@ impl KuraPruneCapacityAdmissionV2 {
             .and_then(|bytes| bytes.checked_add(self.certified_bundle_reserved_bytes))
             .and_then(|bytes| bytes.checked_add(self.autonomous_terminal_reserved_bytes))
     }
-
     fn transaction_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> Option<u64> {
         self.roster
             .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)
             .and_then(|bytes| self.marker_stable_growth_bytes.checked_add(bytes))
             .map(|post_marker| self.marker_temporary_bytes.max(post_marker))
     }
-
     fn required_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> Option<u64> {
         self.source_physical_bytes
             .checked_add(self.reserved_bytes()?)
             .and_then(|bytes| bytes.checked_add(self.intent_bytes))
             .and_then(|bytes| bytes.checked_add(self.transaction_peak_bytes(sidecar)?))
     }
-
     fn is_canonical(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> bool {
         self.intent_bytes > 0
             && self.intent_bytes <= PRUNE_INTENT_MAX_BYTES as u64
@@ -211,7 +193,6 @@ impl KuraPruneCapacityAdmissionV2 {
             && self.roster.is_canonical()
             && self.required_peak_bytes(sidecar) == Some(self.admitted_peak_bytes)
     }
-
     fn remaining_required_bytes(
         self,
         physical_bytes: u64,
@@ -224,7 +205,6 @@ impl KuraPruneCapacityAdmissionV2 {
             .and_then(|bytes| bytes.checked_add(self.reserved_bytes()?))
     }
 }
-
 /// Durable forward-recovery record for a canonical Kura prune transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -248,7 +228,6 @@ struct KuraPruneIntentV2 {
     /// Exact capacity proof admitted before publication and reused after crash.
     capacity: KuraPruneCapacityAdmissionV2,
 }
-
 impl Kura {
     /// Detect prune recovery state without cleaning or applying it while the
     /// signed snapshot lineage is still provisional.
@@ -270,13 +249,11 @@ impl Kura {
         Ok(None)
     }
 }
-
 #[derive(Debug, Clone)]
 struct QueuedFastpqProofSnapshot {
     snapshot: FastpqProofSnapshot,
     retries: usize,
 }
-
 /// Result of enqueueing pipeline recovery metadata for sidecar persistence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
@@ -294,7 +271,6 @@ pub enum PipelineSidecarEnqueueResult {
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
 }
-
 /// Result of enqueueing a FASTPQ proof snapshot for sidecar persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FastpqProofEnqueueResult {
@@ -323,7 +299,6 @@ pub enum FastpqProofEnqueueResult {
     /// A canonical prune is active or prune recovery requires a process restart.
     RejectedPruneRecovery,
 }
-
 /// Proof that Kura durably associated a canonical block with a v2 finality artifact.
 ///
 /// Fields are intentionally private and the type has no public constructor.
@@ -339,50 +314,42 @@ pub struct KuraV2CommitReceipt {
     certificate: QuorumCertificateRef,
     artifact_hash: HashOf<V2FinalityArtifact>,
 }
-
 impl KuraV2CommitReceipt {
     /// Return the durably associated block height.
     #[must_use]
     pub fn height(&self) -> u64 {
         self.height
     }
-
     /// Return the durably associated canonical block hash.
     #[must_use]
     pub fn block_hash(&self) -> HashOf<BlockHeader> {
         self.block_hash
     }
-
     /// Return the frozen height-context identifier.
     #[must_use]
     pub fn context_id(&self) -> HeightContextId {
         self.context_id
     }
-
     /// Return the exact subject durably certified by Kura.
     #[must_use]
     pub fn subject(&self) -> BlockSubject {
         self.subject
     }
-
     /// Return the exact CommitQC reference durably associated with the block.
     #[must_use]
     pub fn certificate(&self) -> QuorumCertificateRef {
         self.certificate
     }
-
     /// Return the hash of the exact artifact bytes represented by this receipt.
     #[must_use]
     pub fn artifact_hash(&self) -> HashOf<V2FinalityArtifact> {
         self.artifact_hash
     }
-
     #[cfg(test)]
     pub(crate) fn for_test(artifact: &V2FinalityArtifact) -> Self {
         v2_commit_receipt(artifact)
     }
 }
-
 fn v2_commit_receipt(artifact: &V2FinalityArtifact) -> KuraV2CommitReceipt {
     KuraV2CommitReceipt {
         height: artifact.height,
@@ -393,10 +360,8 @@ fn v2_commit_receipt(artifact: &V2FinalityArtifact) -> KuraV2CommitReceipt {
         artifact_hash: HashOf::new(artifact),
     }
 }
-
 #[derive(Clone, Default, Debug)]
 struct FastpqProofSidecarTelemetry;
-
 impl FastpqProofSidecarTelemetry {
     fn set_queue_depth(&self, depth: usize) {
         let _ = self;
@@ -407,7 +372,6 @@ impl FastpqProofSidecarTelemetry {
         #[cfg(not(feature = "telemetry"))]
         let _ = depth;
     }
-
     fn record_event(&self, event: &'static str) {
         let _ = self;
         #[cfg(feature = "telemetry")]
@@ -418,7 +382,6 @@ impl FastpqProofSidecarTelemetry {
         let _ = event;
     }
 }
-
 #[derive(Debug)]
 struct TransactionEntrypointIndex {
     complete: bool,
@@ -431,7 +394,6 @@ struct TransactionEntrypointIndex {
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
 }
-
 impl TransactionEntrypointIndex {
     fn complete_empty() -> Self {
         Self {
@@ -447,7 +409,6 @@ impl TransactionEntrypointIndex {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct WsvCheckpoint {
     height: u64,
@@ -457,7 +418,6 @@ pub(crate) struct WsvCheckpoint {
     #[norito(default)]
     commit_manifest_hash: Option<Hash>,
 }
-
 impl WsvCheckpoint {
     fn new(height: u64, block_hash: HashOf<BlockHeader>, state_hash: Hash) -> Self {
         Self {
@@ -467,12 +427,10 @@ impl WsvCheckpoint {
             commit_manifest_hash: None,
         }
     }
-
     pub(crate) fn state_hash(&self) -> Hash {
         self.state_hash
     }
 }
-
 /// Durable record tying a canonical block to the committed in-memory WSV root.
 ///
 /// WSV remains memory-only at runtime. In first-release v2, every replay-complete full-body commit
@@ -494,7 +452,6 @@ pub(crate) struct CommitManifest {
     #[norito(default)]
     commit_authority_hash: Option<Hash>,
 }
-
 /// Relationship between a durable manifest and the digest slot in its WSV checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommitManifestBindingState {
@@ -505,13 +462,11 @@ pub(crate) enum CommitManifestBindingState {
     /// The checkpoint names a different manifest digest and must fail closed.
     Mismatched,
 }
-
 #[derive(Encode)]
 struct V2CommitAuthoritySeal {
     domain: String,
     artifact: V2FinalityArtifact,
 }
-
 fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
     Hash::new(
         V2CommitAuthoritySeal {
@@ -521,7 +476,6 @@ fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
         .encode(),
     )
 }
-
 /// Known immutable Kagemusha top-up finality sidecar formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum KagemushaTopUpFinalitySidecarFormat {
@@ -529,7 +483,6 @@ pub enum KagemushaTopUpFinalitySidecarFormat {
     #[codec(index = 1)]
     Current,
 }
-
 /// One canonical Kagemusha top-up anchor and its block-local Merkle path.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct KagemushaTopUpFinalityLeaf {
@@ -544,7 +497,6 @@ pub struct KagemushaTopUpFinalityLeaf {
     /// Merkle siblings from leaf level to root.
     pub siblings: Vec<Hash>,
 }
-
 /// Immutable Kura record used to serve a finalized Kagemusha top-up proof.
 ///
 /// The sidecar intentionally retains only the bounded top-up subtree, the
@@ -572,11 +524,9 @@ pub struct KagemushaTopUpFinalitySidecar {
     /// Canonically sorted top-up leaves and their exact paths.
     pub leaves: Vec<KagemushaTopUpFinalityLeaf>,
 }
-
 impl KagemushaTopUpFinalitySidecar {
     /// Current numeric sidecar version.
     pub const VERSION: u16 = 1;
-
     /// Return the proof leaf for an exact operation id.
     #[must_use]
     pub fn leaf_for_operation(
@@ -589,7 +539,6 @@ impl KagemushaTopUpFinalitySidecar {
             .and_then(|index| self.leaves.get(index))
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct StagedKagemushaTopUpFinalitySidecar {
     format: KagemushaTopUpFinalitySidecarFormat,
@@ -601,7 +550,6 @@ struct StagedKagemushaTopUpFinalitySidecar {
     post_state_root: Hash,
     leaves: Vec<KagemushaTopUpFinalityLeaf>,
 }
-
 /// Immutable Kura proof that one block's receiver snapshot synthetic write is
 /// included in the ordinary-write root authenticated by its exact finality artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -623,12 +571,10 @@ pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
     pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
 }
-
 impl KagemushaActiveReceiverFinalitySidecarV1 {
     /// Current sidecar version.
     pub const VERSION: u16 = 1;
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
     version: u16,
@@ -639,7 +585,6 @@ struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
     witness_proof: KagemushaActiveReceiverWitnessProofV1,
     validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
 }
-
 impl CommitManifest {
     /// Construct a manifest for a committed height.
     pub(crate) fn new(
@@ -660,7 +605,6 @@ impl CommitManifest {
             commit_authority_hash: None,
         }
     }
-
     /// Bind the exact authenticated v2 finality artifact and its execution roots.
     ///
     /// The caller must first perform the artifact's structural and cryptographic verification.
@@ -678,11 +622,9 @@ impl CommitManifest {
         self.commit_authority_hash = Some(v2_commit_authority_hash(artifact));
         self
     }
-
     fn encoded_hash(&self) -> Hash {
         Hash::new(self.encode())
     }
-
     /// Return whether every retained root and authority byte matches this verified v2 artifact.
     pub(crate) fn binds_authenticated_v2_commit_authority(
         &self,
@@ -698,20 +640,17 @@ impl CommitManifest {
             && self.commit_authority_hash == Some(v2_commit_authority_hash(artifact))
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct BlockReplicaAdvert {
     keeper_index: u32,
     observed_at: Instant,
 }
-
 #[derive(Clone, Debug)]
 struct VerifiedKuraReplicaAuthority {
     key: BlockReplicaKey,
     network_id: NetworkId,
     selected_keepers: Vec<(u32, PeerId)>,
 }
-
 #[derive(Encode)]
 struct KuraReplicaKeeperScoreV1 {
     domain: Vec<u8>,
@@ -723,7 +662,6 @@ struct KuraReplicaKeeperScoreV1 {
     signer_index: u32,
     signer: PeerId,
 }
-
 /// Local body availability for a canonical block known to Kura.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -742,14 +680,12 @@ pub(crate) enum BlockBodyStatus {
     /// Body is neither local nor sufficiently replicated.
     Missing,
 }
-
 #[derive(Clone, Copy, Debug)]
 enum FsyncTarget {
     Data,
     Index,
     Hashes,
 }
-
 impl FsyncTarget {
     #[cfg(feature = "telemetry")]
     fn label(self) -> &'static str {
@@ -760,14 +696,12 @@ impl FsyncTarget {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct FsyncState {
     mode: FsyncMode,
     interval: Duration,
     pending_since: Option<Instant>,
 }
-
 impl FsyncState {
     fn new(mode: FsyncMode, interval: Duration) -> Self {
         Self {
@@ -776,15 +710,12 @@ impl FsyncState {
             pending_since: None,
         }
     }
-
     fn record_write(&mut self, now: Instant) {
         self.pending_since.get_or_insert(now);
     }
-
     fn clear(&mut self) {
         self.pending_since = None;
     }
-
     fn deadline(&self) -> Option<Instant> {
         match (self.mode, self.pending_since) {
             (_, None) => None,
@@ -792,7 +723,6 @@ impl FsyncState {
             (FsyncMode::Batched, Some(ts)) => Some(ts + self.interval),
         }
     }
-
     fn is_due(&self, now: Instant, force: bool) -> bool {
         match self.mode {
             FsyncMode::Always => self.pending_since.is_some(),
@@ -804,17 +734,14 @@ impl FsyncState {
         }
     }
 }
-
 #[derive(Clone, Default, Debug)]
 struct FsyncTelemetry;
-
 impl FsyncTelemetry {
     fn new(mode: FsyncMode) -> Self {
         let telemetry = Self;
         telemetry.update_mode(mode);
         telemetry
     }
-
     fn update_mode(&self, mode: FsyncMode) {
         let _ = self;
         #[cfg(feature = "telemetry")]
@@ -824,7 +751,6 @@ impl FsyncTelemetry {
         #[cfg(not(feature = "telemetry"))]
         let _ = mode;
     }
-
     fn record_success(&self, target: FsyncTarget, duration: Duration) {
         let _ = self;
         #[cfg(feature = "telemetry")]
@@ -834,7 +760,6 @@ impl FsyncTelemetry {
         #[cfg(not(feature = "telemetry"))]
         let _ = (target, duration);
     }
-
     fn record_failure(&self, target: FsyncTarget, duration: Option<Duration>) {
         let _ = self;
         #[cfg(feature = "telemetry")]
@@ -848,7 +773,6 @@ impl FsyncTelemetry {
         let _ = (target, duration);
     }
 }
-
 #[derive(Debug)]
 struct ChainValidation {
     hashes: Vec<HashOf<BlockHeader>>,
@@ -856,21 +780,18 @@ struct ChainValidation {
     hash_mismatch: bool,
     hard_fork_hash_only_block_count: usize,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ProvisionalSnapshotBootstrap {
     hash_only_prefix_height: usize,
     bootstrap_lineage_hash: Option<Hash>,
     hash_journal_digest: Option<Hash>,
 }
-
 #[derive(Clone, Debug)]
 enum SnapshotBootstrapRuntimeState {
     Authenticated,
     Pending(ProvisionalSnapshotBootstrap),
     Finalizing,
 }
-
 impl SnapshotBootstrapRuntimeState {
     fn pending_metadata(&self) -> Option<&ProvisionalSnapshotBootstrap> {
         let Self::Pending(metadata) = self else {
@@ -878,11 +799,9 @@ impl SnapshotBootstrapRuntimeState {
         };
         Some(metadata)
     }
-
     fn is_authenticated(&self) -> bool {
         matches!(self, Self::Authenticated)
     }
-
     fn begin_finalization(&mut self, expected: &ProvisionalSnapshotBootstrap) -> bool {
         if !matches!(self, Self::Pending(current) if current == expected) {
             return false;
@@ -890,7 +809,6 @@ impl SnapshotBootstrapRuntimeState {
         *self = Self::Finalizing;
         true
     }
-
     #[cfg(test)]
     fn finish_finalization(&mut self) -> bool {
         if !matches!(self, Self::Finalizing) {
@@ -900,13 +818,11 @@ impl SnapshotBootstrapRuntimeState {
         true
     }
 }
-
 /// Non-forgeable, instance-bound authority for the narrow set of deferred
 /// recovery writes performed while snapshot bootstrap is `Finalizing`.
 struct SnapshotFinalizationMutationAuthority<'a> {
     kura: &'a Kura,
 }
-
 impl<'a> SnapshotFinalizationMutationAuthority<'a> {
     fn new(kura: &'a Kura) -> Result<Self> {
         if !matches!(
@@ -917,7 +833,6 @@ impl<'a> SnapshotFinalizationMutationAuthority<'a> {
         }
         Ok(Self { kura })
     }
-
     fn validate_for(&self, kura: &Kura) -> Result<()> {
         if !std::ptr::eq(self.kura, kura)
             || !matches!(
@@ -930,12 +845,10 @@ impl<'a> SnapshotFinalizationMutationAuthority<'a> {
         kura.ensure_canonical_storage_not_poisoned()
     }
 }
-
 enum StartupRecoveryMutationAuthority<'a> {
     Authenticated,
     SnapshotFinalization(&'a SnapshotFinalizationMutationAuthority<'a>),
 }
-
 impl StartupRecoveryMutationAuthority<'_> {
     fn validate_for(&self, kura: &Kura) -> Result<()> {
         match self {
@@ -944,7 +857,6 @@ impl StartupRecoveryMutationAuthority<'_> {
         }
     }
 }
-
 #[derive(Debug)]
 struct CommitManifestReconciliation {
     manifests_present: bool,
@@ -952,7 +864,6 @@ struct CommitManifestReconciliation {
     pruned_checkpoints: bool,
     retained_height: usize,
 }
-
 #[derive(Debug)]
 struct MergeLedgerLog {
     file: Option<FileWrap>,
@@ -982,7 +893,6 @@ struct MergeLedgerLog {
     #[cfg(test)]
     fail_next_append_after: Option<MergeLedgerAppendFailurePoint>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MergeLedgerFrameIndex {
     frame_offset: u64,
@@ -990,7 +900,6 @@ struct MergeLedgerFrameIndex {
     epoch_id: u64,
     entry_hash: HashOf<MergeLedgerEntry>,
 }
-
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MergeLedgerAppendFailurePoint {
@@ -998,7 +907,6 @@ enum MergeLedgerAppendFailurePoint {
     AfterPayload,
     AfterSync,
 }
-
 /// Durable sparse association between one committed merge entry and the exact
 /// global block whose compact reference ordered its application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -1014,7 +922,6 @@ pub(crate) struct MergeLedgerCarrierRecord {
     /// Exact canonical global block hash at `block_height`.
     pub block_hash: HashOf<BlockHeader>,
 }
-
 impl MergeLedgerCarrierRecord {
     fn new(entry: &MergeLedgerEntry, block: &SignedBlock) -> Self {
         Self {

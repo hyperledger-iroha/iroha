@@ -10,12 +10,7 @@
 //! and hedge execution are deliberately absent from this V1 surface.
 
 #![cfg(feature = "app_api")]
-
-use std::{
-    sync::{Arc, LazyLock},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
+use crate::{JsonBody, SharedAppState};
 use axum::{
     body::{Body, Bytes},
     extract::{Path, RawQuery, Request, State},
@@ -39,9 +34,10 @@ use sorafs_node::hedging_billing_service::{
     HedgingBillingProjectionPageRequestV1, HedgingBillingRuntimeApiErrorV1,
     HedgingBillingRuntimeApiV1, SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1,
 };
-
-use crate::{JsonBody, SharedAppState};
-
+use std::{
+    sync::{Arc, LazyLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 pub(crate) const BILLING_STATUS_ROUTE_V1: &str = "/v1/sorafs/billing/status";
 pub(crate) const BILLING_STATEMENTS_ROUTE_V1: &str = "/v1/sorafs/billing/statements";
 pub(crate) const BILLING_STATEMENT_ROUTE_V1: &str = "/v1/sorafs/billing/statements/{statement_id}";
@@ -50,11 +46,9 @@ pub(crate) const BILLING_STATEMENT_ACKNOWLEDGEMENTS_ROUTE_V1: &str =
 pub(crate) const BILLING_RECONCILIATION_ROUTE_V1: &str = "/v1/sorafs/billing/reconciliation";
 pub(crate) const HEDGING_EXPOSURE_ROUTE_V1: &str = "/v1/sorafs/hedging/exposure";
 pub(crate) const HEDGING_INTENTS_ROUTE_V1: &str = "/v1/sorafs/hedging/intents";
-
 pub(crate) const SORAFS_BILLING_MANAGER_ROLE_V1: &str = "sorafs_billing_manager";
 pub(crate) const SORAFS_TREASURY_OBSERVER_ROLE_V1: &str = "sorafs_treasury_observer";
 pub(crate) const SORAFS_HEDGING_OBSERVER_ROLE_V1: &str = "sorafs_hedging_observer";
-
 const EXPECTED_CHECKPOINT_PARAMETER: &str = "expected_checkpoint_fingerprint";
 const AFTER_STATEMENT_PARAMETER: &str = "after_statement_id";
 const AFTER_PROJECTION_PARAMETER: &str = "after";
@@ -74,7 +68,6 @@ const _: () = assert!(
 );
 const CANONICAL_AUTH_VARY_V1: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
-
 static BILLING_MANAGER_ROLE_ID_V1: LazyLock<RoleId> = LazyLock::new(|| {
     SORAFS_BILLING_MANAGER_ROLE_V1
         .parse()
@@ -92,13 +85,11 @@ static HEDGING_OBSERVER_ROLE_ID_V1: LazyLock<RoleId> = LazyLock::new(|| {
 });
 static HEDGING_BILLING_BLOCKING_PERMITS_V1: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_BLOCKING_OPERATIONS_V1)));
-
 #[derive(Debug, JsonSerialize)]
 struct HedgingBillingApiErrorResponseV1 {
     schema: String,
     code: String,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueryInputError {
     TooLong,
@@ -111,7 +102,6 @@ enum QueryInputError {
     ZeroDigest,
     UnexpectedQuery,
 }
-
 impl QueryInputError {
     const fn code(self) -> &'static str {
         match self {
@@ -127,14 +117,12 @@ impl QueryInputError {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OwnerStatementPageQueryV1 {
     expected_checkpoint_fingerprint: [u8; 32],
     after_statement_id: Option<[u8; 32]>,
     limit: u16,
 }
-
 impl OwnerStatementPageQueryV1 {
     fn parse(raw: Option<&str>) -> Result<Self, QueryInputError> {
         let mut expected_checkpoint_fingerprint = None;
@@ -162,14 +150,12 @@ impl OwnerStatementPageQueryV1 {
         })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProjectionPageQueryV1 {
     expected_checkpoint_fingerprint: [u8; 32],
     after: Option<[u8; 32]>,
     limit: u16,
 }
-
 impl ProjectionPageQueryV1 {
     fn parse(raw: Option<&str>) -> Result<Self, QueryInputError> {
         let mut expected_checkpoint_fingerprint = None;
@@ -196,12 +182,10 @@ impl ProjectionPageQueryV1 {
         })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProjectionAnchorQueryV1 {
     expected_checkpoint_fingerprint: [u8; 32],
 }
-
 impl ProjectionAnchorQueryV1 {
     fn parse(raw: Option<&str>) -> Result<Self, QueryInputError> {
         let mut expected_checkpoint_fingerprint = None;
@@ -220,7 +204,6 @@ impl ProjectionAnchorQueryV1 {
         })
     }
 }
-
 pub(crate) async fn handle_get_sorafs_billing_status(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -230,7 +213,6 @@ pub(crate) async fn handle_get_sorafs_billing_status(
 ) -> Response {
     private_no_store_response(billing_status_inner(state, headers, method, uri, raw_query).await)
 }
-
 async fn billing_status_inner(
     state: SharedAppState,
     headers: HeaderMap,
@@ -261,7 +243,6 @@ async fn billing_status_inner(
         Err(response) => response,
     }
 }
-
 pub(crate) async fn handle_get_sorafs_billing_statements(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -273,7 +254,6 @@ pub(crate) async fn handle_get_sorafs_billing_statements(
         billing_statements_inner(state, headers, method, uri, raw_query).await,
     )
 }
-
 async fn billing_statements_inner(
     state: SharedAppState,
     headers: HeaderMap,
@@ -311,7 +291,6 @@ async fn billing_statements_inner(
         Err(response) => response,
     }
 }
-
 pub(crate) async fn handle_get_sorafs_billing_statement(
     State(state): State<SharedAppState>,
     Path(statement_id_hex): Path<String>,
@@ -324,7 +303,6 @@ pub(crate) async fn handle_get_sorafs_billing_statement(
         billing_statement_inner(state, statement_id_hex, headers, method, uri, raw_query).await,
     )
 }
-
 async fn billing_statement_inner(
     state: SharedAppState,
     statement_id_hex: String,
@@ -370,7 +348,6 @@ async fn billing_statement_inner(
         Err(response) => response,
     }
 }
-
 pub(crate) async fn handle_post_sorafs_billing_statement_acknowledgement(
     State(state): State<SharedAppState>,
     Path(statement_id_hex): Path<String>,
@@ -400,7 +377,6 @@ pub(crate) async fn handle_post_sorafs_billing_statement_acknowledgement(
         .await,
     )
 }
-
 async fn billing_statement_acknowledgement_inner(
     state: SharedAppState,
     statement_id_hex: String,
@@ -457,7 +433,6 @@ async fn billing_statement_acknowledgement_inner(
         Err(response) => response,
     }
 }
-
 pub(crate) async fn handle_get_sorafs_billing_reconciliation(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -469,7 +444,6 @@ pub(crate) async fn handle_get_sorafs_billing_reconciliation(
         billing_reconciliation_inner(state, headers, method, uri, raw_query).await,
     )
 }
-
 async fn billing_reconciliation_inner(
     state: SharedAppState,
     headers: HeaderMap,
@@ -499,7 +473,6 @@ async fn billing_reconciliation_inner(
         Err(response) => response,
     }
 }
-
 pub(crate) async fn handle_get_sorafs_hedging_exposure(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -519,7 +492,6 @@ pub(crate) async fn handle_get_sorafs_hedging_exposure(
         .await,
     )
 }
-
 pub(crate) async fn handle_get_sorafs_hedging_intents(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -539,13 +511,11 @@ pub(crate) async fn handle_get_sorafs_hedging_intents(
         .await,
     )
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProjectionKind {
     Exposure,
     Intents,
 }
-
 async fn hedging_projection_inner(
     state: SharedAppState,
     headers: HeaderMap,
@@ -592,14 +562,12 @@ async fn hedging_projection_inner(
         }
     }
 }
-
 fn runtime(state: &SharedAppState) -> Result<Arc<dyn HedgingBillingRuntimeApiV1>, Response> {
     state
         .sorafs_hedging_billing_runtime
         .clone()
         .ok_or_else(runtime_unavailable_response)
 }
-
 async fn run_runtime_call<T, F>(operation: F) -> Result<T, Response>
 where
     T: Send + 'static,
@@ -621,7 +589,6 @@ where
     .map_err(|_| runtime_unavailable_response())?
     .map_err(runtime_error_response)
 }
-
 async fn encode_norito_bounded<T>(value: T, max_bytes: usize) -> Result<Vec<u8>, Response>
 where
     T: NoritoSerialize + Send + 'static,
@@ -648,7 +615,6 @@ where
     .map_err(|_| runtime_unavailable_response())?
     .map_err(|()| runtime_unavailable_response())
 }
-
 fn require_canonical_auth(
     state: &SharedAppState,
     headers: &HeaderMap,
@@ -672,7 +638,6 @@ fn require_canonical_auth(
         )),
     }
 }
-
 fn require_billing_manager(state: &SharedAppState, account: &AccountId) -> Result<(), Response> {
     let world = state.state.world_view();
     if world
@@ -687,7 +652,6 @@ fn require_billing_manager(state: &SharedAppState, account: &AccountId) -> Resul
         ))
     }
 }
-
 fn require_treasury_or_hedging_observer(
     state: &SharedAppState,
     account: &AccountId,
@@ -705,7 +669,6 @@ fn require_treasury_or_hedging_observer(
         ))
     }
 }
-
 fn canonical_account_bytes(account: &AccountId) -> Result<Vec<u8>, Response> {
     let literal = account.canonical_i105().map_err(|_| {
         fixed_error(
@@ -727,7 +690,6 @@ fn canonical_account_bytes(account: &AccountId) -> Result<Vec<u8>, Response> {
     }
     Ok(literal.into_bytes())
 }
-
 fn validate_norito_request_headers_and_bound(
     headers: &HeaderMap,
     body: &[u8],
@@ -755,7 +717,6 @@ fn validate_norito_request_headers_and_bound(
     }
     Ok(())
 }
-
 fn decode_acknowledgement_proof(
     body: &[u8],
 ) -> Result<BillingAcknowledgementProofBodyV1, Response> {
@@ -798,7 +759,6 @@ fn decode_acknowledgement_proof(
     }
     Ok(request)
 }
-
 fn server_time_unix() -> Result<u64, Response> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -809,7 +769,6 @@ fn server_time_unix() -> Result<u64, Response> {
     }
     Ok(now)
 }
-
 fn bounded_query_pairs(raw: Option<&str>) -> Result<Vec<(String, String)>, QueryInputError> {
     let raw = raw.unwrap_or_default();
     if raw.len() > MAX_QUERY_BYTES_V1 {
@@ -823,7 +782,6 @@ fn bounded_query_pairs(raw: Option<&str>) -> Result<Vec<(String, String)>, Query
     }
     Ok(pairs)
 }
-
 fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), QueryInputError> {
     if slot.is_some() {
         return Err(QueryInputError::DuplicateParameter);
@@ -831,7 +789,6 @@ fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), QueryInputError> {
     *slot = Some(value);
     Ok(())
 }
-
 fn parse_page_limit(value: &str) -> Result<u16, QueryInputError> {
     if value.is_empty()
         || value.len() > 3
@@ -848,7 +805,6 @@ fn parse_page_limit(value: &str) -> Result<u16, QueryInputError> {
     }
     Ok(limit)
 }
-
 fn parse_lower_hex_digest(value: &str, reject_zero: bool) -> Result<[u8; 32], QueryInputError> {
     if value.len() != 64
         || !value
@@ -864,7 +820,6 @@ fn parse_lower_hex_digest(value: &str, reject_zero: bool) -> Result<[u8; 32], Qu
     }
     Ok(digest)
 }
-
 fn reject_query(raw: Option<&str>) -> Result<(), QueryInputError> {
     if raw.is_some_and(|query| !query.is_empty()) {
         Err(QueryInputError::UnexpectedQuery)
@@ -872,7 +827,6 @@ fn reject_query(raw: Option<&str>) -> Result<(), QueryInputError> {
         Ok(())
     }
 }
-
 fn require_method(actual: &Method, expected: Method) -> Result<(), Response> {
     if actual == &expected || (expected == Method::GET && actual == Method::HEAD) {
         Ok(())
@@ -883,7 +837,6 @@ fn require_method(actual: &Method, expected: Method) -> Result<(), Response> {
         ))
     }
 }
-
 fn runtime_error_response(error: HedgingBillingRuntimeApiErrorV1) -> Response {
     match error {
         HedgingBillingRuntimeApiErrorV1::InvalidRequest => {
@@ -905,18 +858,15 @@ fn runtime_error_response(error: HedgingBillingRuntimeApiErrorV1) -> Response {
         HedgingBillingRuntimeApiErrorV1::Unavailable => runtime_unavailable_response(),
     }
 }
-
 fn runtime_unavailable_response() -> Response {
     fixed_error(
         StatusCode::SERVICE_UNAVAILABLE,
         "hedging_billing_runtime_unavailable",
     )
 }
-
 fn query_error_response(error: QueryInputError) -> Response {
     fixed_error(StatusCode::BAD_REQUEST, error.code())
 }
-
 fn fixed_error(status: StatusCode, code: &'static str) -> Response {
     (
         status,
@@ -927,7 +877,6 @@ fn fixed_error(status: StatusCode, code: &'static str) -> Response {
     )
         .into_response()
 }
-
 fn bounded_json_response<T>(value: T) -> Response
 where
     T: norito::json::JsonSerialize,
@@ -938,7 +887,6 @@ where
     };
     binary_response(bytes, "application/json")
 }
-
 fn binary_response(bytes: Vec<u8>, content_type: &'static str) -> Response {
     let mut response = Response::new(Body::from(bytes));
     response
@@ -946,7 +894,6 @@ fn binary_response(bytes: Vec<u8>, content_type: &'static str) -> Response {
         .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
     response
 }
-
 fn private_no_store_response(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
@@ -957,11 +904,9 @@ fn private_no_store_response(mut response: Response) -> Response {
     );
     response
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn hedging_billing_auth_rejects_foreign_exact_network() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
@@ -975,16 +920,13 @@ mod tests {
         let (state, headers) = crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
             &method, &uri, body, 0xD3, 0xE3,
         );
-
         let response = require_canonical_auth(&state, &headers, &method, &uri, body)
             .expect_err("foreign-network billing authorization must fail closed");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
-
     fn digest_hex(byte: u8) -> String {
         hex::encode([byte; 32])
     }
-
     #[test]
     fn statement_page_query_is_bounded_and_rejects_aliases() {
         let checkpoint = digest_hex(0x11);
@@ -997,7 +939,6 @@ mod tests {
         assert_eq!(parsed.limit, 100);
         assert_eq!(parsed.after_statement_id, Some([0x22; 32]));
         assert_eq!(parsed.expected_checkpoint_fingerprint, [0x11; 32]);
-
         let alias = format!("checkpoint={checkpoint}&limit=1");
         assert_eq!(
             OwnerStatementPageQueryV1::parse(Some(&alias)),
@@ -1012,7 +953,6 @@ mod tests {
             Err(QueryInputError::DuplicateParameter)
         );
     }
-
     #[test]
     fn page_limit_requires_canonical_decimal_in_exact_range() {
         for invalid in ["", "0", "00", "01", "101", "+1", "-1", "1.0", " 1"] {
@@ -1025,7 +965,6 @@ mod tests {
         assert_eq!(parse_page_limit("1"), Ok(1));
         assert_eq!(parse_page_limit("100"), Ok(100));
     }
-
     #[test]
     fn get_routes_accept_implicit_head_but_post_does_not() {
         assert!(require_method(&Method::GET, Method::GET).is_ok());
@@ -1037,7 +976,6 @@ mod tests {
             StatusCode::METHOD_NOT_ALLOWED
         );
     }
-
     #[test]
     fn digest_parser_requires_exact_nonzero_lower_hex() {
         let valid = digest_hex(0xab);
@@ -1055,7 +993,6 @@ mod tests {
             Err(QueryInputError::ZeroDigest)
         );
     }
-
     #[test]
     fn projection_query_rejects_bombs_missing_anchor_and_unknown_cursor() {
         let checkpoint = digest_hex(0x31);
@@ -1077,7 +1014,6 @@ mod tests {
             Err(QueryInputError::TooLong)
         );
     }
-
     #[test]
     fn acknowledgement_body_is_exact_bounded_canonical_norito_and_debug_redacted() {
         let request = BillingAcknowledgementProofBodyV1 {
@@ -1090,7 +1026,6 @@ mod tests {
         let debug = format!("{request:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("165"));
-
         let empty = norito::to_bytes(&BillingAcknowledgementProofBodyV1 {
             request_nonce: [0x91; 32],
             authentication_proof: Vec::new(),
@@ -1102,7 +1037,6 @@ mod tests {
                 .status(),
             StatusCode::BAD_REQUEST
         );
-
         let oversized = norito::to_bytes(&BillingAcknowledgementProofBodyV1 {
             request_nonce: [0x91; 32],
             authentication_proof: vec![0; BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 + 1],
@@ -1114,7 +1048,6 @@ mod tests {
                 .status(),
             StatusCode::BAD_REQUEST
         );
-
         let zero_nonce = norito::to_bytes(&BillingAcknowledgementProofBodyV1 {
             request_nonce: [0; 32],
             authentication_proof: vec![0xa5],
@@ -1126,7 +1059,6 @@ mod tests {
                 .status(),
             StatusCode::BAD_REQUEST
         );
-
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert_eq!(
@@ -1142,7 +1074,6 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
     }
-
     #[test]
     fn acknowledgement_requires_exact_norito_media_type_and_bound() {
         let body = vec![1];
@@ -1178,7 +1109,6 @@ mod tests {
             StatusCode::PAYLOAD_TOO_LARGE
         );
     }
-
     #[test]
     fn runtime_errors_preserve_oracle_safe_owner_not_found_and_retry_classes() {
         assert_eq!(
@@ -1200,7 +1130,6 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
     }
-
     #[test]
     fn every_response_is_private_and_varies_on_all_canonical_auth_headers() {
         let response = private_no_store_response(StatusCode::OK.into_response());
@@ -1223,7 +1152,6 @@ mod tests {
             assert!(vary.contains(header), "missing {header}");
         }
     }
-
     #[test]
     fn v1_route_inventory_has_no_execution_or_feed_mutation() {
         assert_eq!(BILLING_STATUS_ROUTE_V1, "/v1/sorafs/billing/status");

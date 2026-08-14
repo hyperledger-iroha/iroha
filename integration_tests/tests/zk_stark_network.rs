@@ -1,12 +1,5 @@
 //! Multi-peer STARK integration coverage for governance voting and shielded IVM admission.
 #![cfg(feature = "zk-stark")]
-
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -37,7 +30,11 @@ use iroha_torii::{
     canonical_network_request_signature_message, signature_header_value,
 };
 use reqwest::{Client as HttpClient, StatusCode};
-
+use std::{
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 #[derive(norito::JsonSerialize)]
 struct ZkIvmDeriveRequest {
     vk_ref: VerifyingKeyId,
@@ -46,12 +43,10 @@ struct ZkIvmDeriveRequest {
     metadata: Metadata,
     bytecode: IvmBytecode,
 }
-
 #[derive(norito::JsonDeserialize)]
 struct ZkIvmDeriveResponse {
     proved: IvmProved,
 }
-
 #[derive(norito::JsonSerialize)]
 struct ZkIvmProveRequest {
     vk_ref: VerifyingKeyId,
@@ -61,19 +56,16 @@ struct ZkIvmProveRequest {
     bytecode: IvmBytecode,
     proved: Option<IvmProved>,
 }
-
 #[derive(norito::JsonDeserialize)]
 struct ZkIvmProveJobCreated {
     job_id: String,
 }
-
 #[derive(norito::JsonDeserialize)]
 struct ZkIvmProveJob {
     status: String,
     error: Option<String>,
     attachment: Option<ProofAttachment>,
 }
-
 fn has_test_network_feature(feature: &str) -> bool {
     std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -84,7 +76,6 @@ fn has_test_network_feature(feature: &str) -> bool {
         })
         .unwrap_or(false)
 }
-
 fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
     ensure!(
         has_test_network_feature(feature),
@@ -92,7 +83,6 @@ fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
     );
     Ok(())
 }
-
 fn sample_stark_vk_box(backend: &str, circuit_id: &str) -> VerifyingKeyBox {
     let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
         version: 1,
@@ -107,13 +97,11 @@ fn sample_stark_vk_box(backend: &str, circuit_id: &str) -> VerifyingKeyBox {
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
     VerifyingKeyBox::new(backend.to_owned(), bytes)
 }
-
 fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[..8].copy_from_slice(&limb.to_le_bytes());
     out
 }
-
 fn derive_ballot_nullifier(
     domain_tag: &str,
     chain_id: &iroha_data_model::ChainId,
@@ -139,7 +127,6 @@ fn derive_ballot_nullifier(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 async fn submit_and_wait_next_block<I>(
     client: &Client,
     network: &sandbox::SerializedNetwork,
@@ -164,7 +151,6 @@ where
         .wrap_err_with(|| format!("wait for commit after {context}"))?;
     Ok(())
 }
-
 fn torii_v2_url(client: &Client, segments: &[&str]) -> reqwest::Url {
     let mut url = client.torii_url.clone();
     let mut path_segments = url
@@ -175,14 +161,12 @@ fn torii_v2_url(client: &Client, segments: &[&str]) -> reqwest::Url {
     drop(path_segments);
     url
 }
-
 fn signing_uri(url: &reqwest::Url) -> Result<Uri> {
     match url.query() {
         Some(query) => Ok(format!("{}?{query}", url.path()).parse()?),
         None => Ok(url.path().parse()?),
     }
 }
-
 fn add_canonical_prove_headers(
     request: reqwest::RequestBuilder,
     client: &Client,
@@ -208,15 +192,14 @@ fn add_canonical_prove_headers(
         body,
         timestamp_ms,
         &nonce,
-    );
+    )?;
     let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
-        .header(HEADER_ACCOUNT, client.account.to_string())
-        .header(HEADER_SIGNATURE, signature_header_value(&signature))
+        .header(HEADER_ACCOUNT, client.account.to_canonical_hex()?)
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce))
 }
-
 async fn post_torii_json_v2(
     client: &Client,
     segments: &[&str],
@@ -241,7 +224,6 @@ async fn post_torii_json_v2(
     }
     Ok(norito::json::from_slice(&bytes)?)
 }
-
 async fn post_torii_json_v2_signed(
     client: &Client,
     segments: &[&str],
@@ -272,7 +254,6 @@ async fn post_torii_json_v2_signed(
     }
     Ok(norito::json::from_slice(&bytes)?)
 }
-
 async fn get_torii_json_v2_signed(
     client: &Client,
     segments: &[&str],
@@ -294,7 +275,6 @@ async fn get_torii_json_v2_signed(
     }
     Ok(norito::json::from_slice(&bytes)?)
 }
-
 async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<ProofAttachment> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
@@ -327,7 +307,6 @@ async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<Proo
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
-
 #[tokio::test]
 #[ignore = "no audited semantic governance STARK AIR is registered; generic Binding role labels fail closed"]
 async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
@@ -335,19 +314,16 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "zk-stark",
         stringify!(stark_governance_and_shielded_ivm_paths),
     )?;
-
     let backend = "stark/fri";
     let ivm_circuit_id = "ivm-execution-v1";
     let ballot_circuit_id = "vote-ballot";
     let tally_circuit_id = "vote-tally";
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(stark_governance_and_shielded_ivm_paths),
@@ -358,10 +334,8 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     let mut expected_height = 1_u64;
-
     let client = network.client();
     let election_id = "stark-vote-network-e2e".to_owned();
-
     submit_and_wait_next_block(
         &client,
         &network,
@@ -402,7 +376,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "grant CanEnactGovernance",
     )
     .await?;
-
     let ivm_vk_id = VerifyingKeyId::new(backend, "ivm_exec_stark");
     let ivm_vk_box = sample_stark_vk_box(backend, ivm_circuit_id);
     let mut ivm_vk_record = VerifyingKeyRecord::new(
@@ -429,7 +402,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "register ivm verifying key",
     )
     .await?;
-
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id);
     let ballot_schema = b"gov:vote:ballot:schema:v1".to_vec();
@@ -457,7 +429,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "register ballot verifying key",
     )
     .await?;
-
     let tally_vk_id = VerifyingKeyId::new(backend, "vote_tally");
     let tally_vk_box = sample_stark_vk_box(backend, tally_circuit_id);
     let tally_schema = b"gov:vote:tally:schema:v1".to_vec();
@@ -485,7 +456,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "register tally verifying key",
     )
     .await?;
-
     let nullifier_domain = "gov:ballot:v1".to_owned();
     let eligible_root = [0x22; 32];
     submit_and_wait_next_block(
@@ -505,7 +475,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "create election",
     )
     .await?;
-
     let bad_commit = [0x33; 32];
     let mismatched_ballot_proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
         backend,
@@ -535,7 +504,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         bad_ballot.is_err(),
         "mismatched ballot circuit/backend binding should be rejected"
     );
-
     let commit = [0x11; 32];
     let ballot_proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
         backend,
@@ -562,7 +530,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "submit valid ballot",
     )
     .await?;
-
     let tally = vec![7_u64, 2_u64];
     let tally_columns = tally
         .iter()
@@ -589,7 +556,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         "finalize election",
     )
     .await?;
-
     let meta = ivm::ProgramMetadata {
         mode: ivm::ivm_mode::ZK,
         ..Default::default()
@@ -599,7 +565,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let bytecode = IvmBytecode::from_compiled(program);
     let tx_meta = Metadata::default();
     let fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(50_000_000));
-
     let derive_req = ZkIvmDeriveRequest {
         vk_ref: ivm_vk_id.clone(),
         authority: client.account.clone(),
@@ -617,7 +582,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     .await?;
     let derive_resp: ZkIvmDeriveResponse =
         norito::json::from_value(derive_resp_json).wrap_err("decode derive response")?;
-
     let prove_req = ZkIvmProveRequest {
         vk_ref: ivm_vk_id.clone(),
         authority: client.account.clone(),
@@ -637,7 +601,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let prove_created: ZkIvmProveJobCreated =
         norito::json::from_value(prove_created_json).wrap_err("decode prove created response")?;
     let attachment = wait_for_prove_attachment(&client, &prove_created.job_id).await?;
-
     let tx_valid = TransactionBuilder::new(
         client.network_id,
         client.account.clone(),
@@ -653,7 +616,6 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     client
         .submit_transaction_blocking(&tx_valid)
         .wrap_err("submit STARK IvmProved tx after AIR proving is re-enabled")?;
-
     let bad_attachment =
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
     let tx_bad = TransactionBuilder::new(client.network_id, client.account.clone(), fee_payment)
@@ -669,6 +631,5 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         bad.is_err(),
         "mismatched backend/circuit attachment should be rejected"
     );
-
     Ok(())
 }

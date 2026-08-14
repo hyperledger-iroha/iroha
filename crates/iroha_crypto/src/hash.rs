@@ -1,5 +1,4 @@
-use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
-
+use crate::{ParseError, hex_decode};
 #[cfg(not(feature = "ffi_import"))]
 use blake2::{
     Blake2b,
@@ -17,9 +16,7 @@ use norito::literal;
 use sha2::Sha256;
 #[cfg(not(feature = "ffi_import"))]
 use sha3::Keccak256;
-
-use crate::{ParseError, hex_decode};
-
+use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
 /// Hash of Iroha entities. Currently supports only blake2b-32.
 /// The least significant bit of hash is set to 1.
 ///
@@ -32,26 +29,21 @@ use crate::{ParseError, hex_decode};
 #[debug("{}", hex::encode(self.as_ref()))]
 #[repr(transparent)]
 pub struct Hash([u8; Self::LENGTH]);
-
 impl Hash {
     /// Length of hash
     pub const LENGTH: usize = 32;
-
     /// Wrap the given bytes; they must be prehashed with Blake2b-32.
     pub fn prehashed(mut hash: [u8; Self::LENGTH]) -> Self {
         hash[Self::LENGTH - 1] |= 1;
         Self(hash)
     }
-
     /// Check if least significant bit of `[u8; Hash::LENGTH]` is 1
     fn is_lsb_1(hash: &[u8; Self::LENGTH]) -> bool {
         hash[Self::LENGTH - 1] & 1 == 1
     }
-
     fn from_marked_bytes(hash: [u8; Self::LENGTH]) -> Option<Self> {
         Self::is_lsb_1(&hash).then_some(Self(hash))
     }
-
     fn decode_archived(
         archived: &norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -62,21 +54,18 @@ impl Hash {
             .ok_or_else(|| norito::core::Error::Message("invalid hash lsb".into()))
     }
 }
-
 /// Compute raw SHA-256 bytes without Iroha hash marker semantics.
 #[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Sha256::digest(bytes.as_ref()).into()
 }
-
 /// Compute raw BLAKE3-256 bytes without Iroha hash marker semantics.
 #[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn blake3_256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     *blake3::hash(bytes.as_ref()).as_bytes()
 }
-
 /// Compute raw SHA-256 bytes from a reader without buffering the complete input.
 ///
 /// The reader is rejected after at most one buffer beyond `max_bytes`. This makes
@@ -93,10 +82,9 @@ pub fn sha256_reader_bounded(
     max_bytes: u64,
 ) -> std::io::Result<([u8; Hash::LENGTH], u64)> {
     const BUFFER_BYTES: usize = 64 * 1024;
-
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let mut buffer = vec![0_u8; BUFFER_BYTES];
+    let mut buffer = [0_u8; BUFFER_BYTES];
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
@@ -120,14 +108,12 @@ pub fn sha256_reader_bounded(
     }
     Ok((hasher.finalize().into(), total))
 }
-
 /// Compute raw Keccak-256 bytes without Iroha hash marker semantics.
 #[cfg(not(feature = "ffi_import"))]
 #[must_use]
 pub fn keccak256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Keccak256::digest(bytes.as_ref()).into()
 }
-
 impl Hash {
     /// Hash the given bytes.
     #[must_use]
@@ -136,7 +122,6 @@ impl Hash {
         Digest::update(&mut hasher, bytes.as_ref());
         finalize_blake2b(hasher)
     }
-
     /// Hash the concatenation of the provided byte chunks without first
     /// materializing them into one contiguous buffer.
     #[must_use]
@@ -147,7 +132,21 @@ impl Hash {
         }
         finalize_blake2b(hasher)
     }
-
+    /// Hash bytes emitted by a fallible streaming producer.
+    ///
+    /// The callback writes directly into the incremental hasher, so callers do
+    /// not need to materialize a response-sized concatenation buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's I/O error without producing a partial digest.
+    pub fn new_from_writer(
+        write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
+        let mut writer = HashWriter::new();
+        write(&mut writer)?;
+        Ok(writer.finalize())
+    }
     /// Hash bytes from a reader without buffering the complete input.
     ///
     /// Reading stops with [`std::io::ErrorKind::InvalidData`] once the input
@@ -162,10 +161,9 @@ impl Hash {
         max_bytes: u64,
     ) -> std::io::Result<(Self, u64)> {
         const BUFFER_BYTES: usize = 64 * 1024;
-
         let mut writer = HashWriter::new();
         let mut total = 0_u64;
-        let mut buffer = vec![0_u8; BUFFER_BYTES];
+        let mut buffer = [0_u8; BUFFER_BYTES];
         loop {
             let read = std::io::Read::read(&mut reader, &mut buffer)?;
             if read == 0 {
@@ -190,41 +188,33 @@ impl Hash {
         Ok((writer.finalize(), total))
     }
 }
-
 type Blake2b256 = Blake2b<U32>;
-
 fn finalize_blake2b(hasher: Blake2b256) -> Hash {
     let hash: [u8; Hash::LENGTH] = hasher.finalize().into();
     Hash::prehashed(hash)
 }
-
 struct HashWriter {
     hasher: Blake2b256,
 }
-
 impl HashWriter {
     fn new() -> Self {
         Self {
             hasher: Blake2b256::new(),
         }
     }
-
     fn finalize(self) -> Hash {
         finalize_blake2b(self.hasher)
     }
 }
-
 impl std::io::Write for HashWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         Digest::update(&mut self.hasher, buf);
         Ok(buf.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 fn ensure_uppercase_hex(candidate: &str, literal: &str) -> Result<(), json::Error> {
     if candidate.chars().any(|c| c.is_ascii_lowercase()) {
@@ -234,28 +224,24 @@ fn ensure_uppercase_hex(candidate: &str, literal: &str) -> Result<(), json::Erro
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn parse_hash_literal(value: &str) -> Result<Hash, json::Error> {
     let body = literal::parse("hash", value)?;
     ensure_uppercase_hex(body, value)?;
     Hash::from_str(body).map_err(|err| json::Error::Message(err.to_string()))
 }
-
 impl From<Hash> for [u8; Hash::LENGTH] {
     #[inline]
     fn from(hash: Hash) -> Self {
         hash.0
     }
 }
-
 impl AsRef<[u8; Hash::LENGTH]> for Hash {
     #[inline]
     fn as_ref(&self) -> &[u8; Hash::LENGTH] {
         &self.0
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for Hash {
     fn write_json(&self, out: &mut String) {
@@ -263,8 +249,17 @@ impl FastJsonWrite for Hash {
         let literal = literal::format("hash", &body);
         json::write_json_string(&literal, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // The canonical hash literal is fixed-width (32-byte body plus tag and
+        // checksum), so this scratch allocation cannot scale with a response.
+        let body = hex::encode_upper(self.as_ref());
+        let literal = literal::format("hash", &body);
+        json::write_json_string_to(&literal, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Hash {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -272,45 +267,37 @@ impl JsonDeserialize for Hash {
         parse_hash_literal(&value)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonKeyCodec for Hash {
     fn encode_json_key(&self, out: &mut String) {
         FastJsonWrite::write_json(self, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         parse_hash_literal(encoded)
     }
 }
-
 impl norito::core::NoritoSerialize for Hash {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.as_ref())?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(Self::LENGTH)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(Self::LENGTH)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for Hash {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Hash decode")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         Self::decode_archived(archived)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for Hash {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         if bytes.len() < Self::LENGTH {
@@ -323,10 +310,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Hash {
             .ok_or_else(|| norito::core::Error::Message("invalid hash lsb".into()))
     }
 }
-
 impl FromStr for Hash {
     type Err = ParseError;
-
     fn from_str(key: &str) -> Result<Self, Self::Err> {
         let hash: [u8; Self::LENGTH] = hex_decode(key)?.try_into().map_err(|hash_vec| {
             ParseError(format!(
@@ -334,12 +319,10 @@ impl FromStr for Hash {
                 Self::LENGTH
             ))
         })?;
-
         Hash::from_marked_bytes(hash)
             .ok_or_else(|| ParseError("expect least significant bit of hash to be 1".to_owned()))
     }
 }
-
 impl IntoSchema for Hash {
     fn type_name() -> String {
         "Hash".to_owned()
@@ -347,7 +330,6 @@ impl IntoSchema for Hash {
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         if !map.contains_key::<Self>() {
             <[u8; Self::LENGTH]>::update_schema_map(map);
-
             map.insert::<Self>(iroha_schema::Metadata::Tuple(
                 iroha_schema::UnnamedFieldsMeta {
                     types: vec![core::any::TypeId::of::<[u8; Self::LENGTH]>()],
@@ -356,13 +338,11 @@ impl IntoSchema for Hash {
         }
     }
 }
-
 impl<T> From<HashOf<T>> for Hash {
     fn from(HashOf(hash, _): HashOf<T>) -> Self {
         hash
     }
 }
-
 crate::ffi::ffi_item! {
     /// Represents hash of Iroha entities like `Block` or `Transaction`. Currently supports only blake2b-32.
     #[derive(Debug, Display, Deref, DerefMut, TypeId)]
@@ -375,18 +355,15 @@ crate::ffi::ffi_item! {
         Hash,
         PhantomData<T>,
     );
-
     // SAFETY: `HashOf` has no trap representation in `Hash`
     ffi_type(unsafe {robust})
 }
-
 impl<T> Clone for HashOf<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 impl<T> Copy for HashOf<T> {}
-
 #[allow(clippy::unconditional_recursion)] // False-positive
 impl<T> PartialEq for HashOf<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -394,7 +371,6 @@ impl<T> PartialEq for HashOf<T> {
     }
 }
 impl<T> Eq for HashOf<T> {}
-
 impl<T> PartialOrd for HashOf<T> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
@@ -405,42 +381,34 @@ impl<T> Ord for HashOf<T> {
         self.0.cmp(&other.0)
     }
 }
-
 impl<T> hash::Hash for HashOf<T> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
     }
 }
-
 impl<T> AsRef<[u8; Hash::LENGTH]> for HashOf<T> {
     fn as_ref(&self) -> &[u8; Hash::LENGTH] {
         self.0.as_ref()
     }
 }
-
 /// Archived representation of [`HashOf`].
 pub type ArchivedHashOf<T> = norito::core::Archived<HashOf<T>>;
-
 impl<T> norito::core::NoritoSerialize for HashOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.0.as_ref())?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(Hash::LENGTH)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(Hash::LENGTH)
     }
 }
-
 impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("HashOf decode")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -449,7 +417,6 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
         Ok(Self(hash, PhantomData))
     }
 }
-
 impl<T> HashOf<T> {
     /// Transmutes hash to some specific type.
     /// Don't use this method if not required.
@@ -458,7 +425,6 @@ impl<T> HashOf<T> {
     pub(crate) const fn transmute<F>(self) -> HashOf<F> {
         HashOf(self.0, PhantomData)
     }
-
     /// Adds type information to the hash. Be careful about using this function
     /// since it is not possible to validate the correctness of the conversion.
     /// Prefer creating new hashes with [`HashOf::new`] whenever possible
@@ -467,7 +433,6 @@ impl<T> HashOf<T> {
         HashOf(hash, PhantomData)
     }
 }
-
 impl<T: norito::codec::Encode> HashOf<T> {
     /// Construct typed hash
     #[must_use]
@@ -477,40 +442,39 @@ impl<T: norito::codec::Encode> HashOf<T> {
         Self(writer.finalize(), PhantomData)
     }
 }
-
 impl<T> FromStr for HashOf<T> {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse::<Hash>().map(Self::from_untyped_unchecked)
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> FastJsonWrite for HashOf<T> {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonDeserialize for HashOf<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Hash::json_deserialize(parser).map(|hash| HashOf(hash, PhantomData))
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonKeyCodec for HashOf<T> {
     fn encode_json_key(&self, out: &mut String) {
         FastJsonWrite::write_json(&self.0, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         parse_hash_literal(encoded).map(|hash| HashOf(hash, PhantomData))
     }
 }
-
 impl<T: IntoSchema> IntoSchema for HashOf<T> {
     fn type_name() -> String {
         format!("HashOf<{}>", T::type_name())
@@ -518,7 +482,6 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         if !map.contains_key::<Self>() {
             Hash::update_schema_map(map);
-
             map.insert::<Self>(iroha_schema::Metadata::Tuple(
                 iroha_schema::UnnamedFieldsMeta {
                     types: vec![core::any::TypeId::of::<Hash>()],
@@ -527,7 +490,6 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
         }
     }
 }
-
 // Provide slice-based decoding for HashOf<T> so it can be used inside
 // packed sequences and option fields with Norito's strict-safe path.
 impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
@@ -536,32 +498,25 @@ impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
         Ok((HashOf(hash, PhantomData), used))
     }
 }
-
 #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
 mod ffi {
     //! Manual implementations of FFI related functionality
-
     use super::*;
-
     // NOTE: Hash is FFI serialized as an array (a pointer in a function call, by value when part of a struct)
     iroha_ffi::ffi_type! {
         unsafe impl Transparent for Hash {
             type Target = [u8; Hash::LENGTH];
-
             validation_fn=unsafe {Hash::is_lsb_1},
             niche_value = [0; Hash::LENGTH]
         }
     }
-
     impl iroha_ffi::WrapperTypeOf<Hash> for [u8; Hash::LENGTH] {
         type Type = Hash;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn blake2_32b() {
         let mut hasher = Blake2b256::new();
@@ -572,7 +527,6 @@ mod tests {
             hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2")
         );
     }
-
     #[test]
     fn sha256_returns_raw_digest_bytes() {
         assert_eq!(
@@ -580,7 +534,6 @@ mod tests {
             hex_literal::hex!("BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD")
         );
     }
-
     #[test]
     fn blake3_256_returns_raw_digest_bytes() {
         assert_eq!(
@@ -588,24 +541,19 @@ mod tests {
             hex_literal::hex!("AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262")
         );
     }
-
     #[test]
     fn bounded_streaming_sha256_matches_contiguous_digest() {
         let bytes = vec![0x5a; 3 * 64 * 1024 + 17];
         let (digest, size) =
             sha256_reader_bounded(bytes.as_slice(), bytes.len() as u64).expect("bounded hash");
-
         assert_eq!(digest, sha256(&bytes));
         assert_eq!(size, bytes.len() as u64);
     }
-
     #[test]
     fn bounded_streaming_sha256_rejects_oversized_input() {
         let err = sha256_reader_bounded(&b"oversized"[..], 8).expect_err("input exceeds limit");
-
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn keccak256_returns_raw_digest_bytes() {
         assert_eq!(
@@ -613,17 +561,14 @@ mod tests {
             hex_literal::hex!("C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470")
         );
     }
-
     #[test]
     fn hash_new_matches_blake2b_32b_with_lsb_marker() {
         let bytes = hex_literal::hex!("6920616d2064617461");
         let mut expected =
             hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2");
         expected[Hash::LENGTH - 1] |= 1;
-
         assert_eq!(<[u8; Hash::LENGTH]>::from(Hash::new(bytes)), expected);
     }
-
     #[test]
     fn hash_storage_has_no_invalid_byte_pattern() {
         assert_eq!(
@@ -634,27 +579,23 @@ mod tests {
             core::mem::align_of::<Hash>(),
             core::mem::align_of::<[u8; Hash::LENGTH]>()
         );
-
         // Deliberately bypass the private logical marker invariant. The raw
         // storage itself must still be a valid Rust value so archived input can
         // be inspected safely before validation, including under Miri.
         let all_zero = Hash([0; Hash::LENGTH]);
         assert_eq!(<[u8; Hash::LENGTH]>::from(all_zero), [0; Hash::LENGTH]);
     }
-
     #[test]
     fn bounded_streaming_hash_matches_contiguous_hash_and_rejects_oversize() {
         let bytes = vec![0x5a; 3 * 64 * 1024 + 17];
         let (digest, size) = Hash::new_from_reader_bounded(bytes.as_slice(), bytes.len() as u64)
             .expect("bounded hash");
-
         assert_eq!(digest, Hash::new(&bytes));
         assert_eq!(size, bytes.len() as u64);
         let error = Hash::new_from_reader_bounded(bytes.as_slice(), bytes.len() as u64 - 1)
             .expect_err("input exceeds bound");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn hash_new_from_chunks_matches_concatenated_bytes() {
         let left: &[u8] = b"iroha:";
@@ -664,36 +605,50 @@ mod tests {
         concatenated.extend_from_slice(left);
         concatenated.extend_from_slice(middle);
         concatenated.extend_from_slice(right);
-
         assert_eq!(
             Hash::new_from_chunks(&[left, middle, right]),
             Hash::new(concatenated)
         );
     }
-
+    #[test]
+    fn hash_new_from_writer_matches_chunks_and_propagates_errors() {
+        let chunks: [&[u8]; 3] = [b"iroha:", b"streamed:", b"hash"];
+        let streamed = Hash::new_from_writer(|writer| {
+            for chunk in chunks {
+                writer.write_all(chunk)?;
+            }
+            Ok(())
+        })
+        .expect("stream hash");
+        assert_eq!(streamed, Hash::new_from_chunks(&chunks));
+        let error = Hash::new_from_writer(|writer| {
+            writer.write_all(b"partial")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "producer failed",
+            ))
+        })
+        .expect_err("producer failure must be returned");
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
     #[test]
     fn hash_of_roundtrip() {
         use norito::codec::{Decode, Encode};
-
         let original = HashOf::<()>::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
         let bytes = original.encode();
         let decoded = HashOf::<()>::decode(&mut &bytes[..]).expect("failed to decode HashOf");
         assert_eq!(original, decoded);
     }
-
     #[test]
     fn hash_of_new_matches_encoded_bytes_hash() {
         let value = vec![1_u64, 2, 3, 5, 8, 13];
         let encoded = norito::codec::Encode::encode(&value);
         let expected = HashOf::<Vec<u64>>::from_untyped_unchecked(Hash::new(encoded));
-
         assert_eq!(HashOf::new(&value), expected);
     }
-
     #[test]
     fn hash_of_decode_rejects_invalid_lsb() {
         use norito::codec::Decode;
-
         for final_byte in [0x00, 0x02] {
             let mut bytes = [0xA5; Hash::LENGTH];
             bytes[Hash::LENGTH - 1] = final_byte;
@@ -704,28 +659,23 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn hash_of_decode_from_slice_consumes_fixed_length() {
         let original = HashOf::<()>::from_untyped_unchecked(Hash::prehashed([2; Hash::LENGTH]));
         let hash: Hash = original.into();
         let mut bytes: Vec<u8> = <[u8; Hash::LENGTH]>::from(hash).to_vec();
         bytes.extend_from_slice(&[0xAA, 0xBB]);
-
         let (_decoded, used) =
             <HashOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
                 .expect("decode from slice");
         assert_eq!(used, Hash::LENGTH);
     }
-
     #[test]
     fn from_str_rejects_even_lsb() {
         // Hex string with the final byte ending in `0`, so its least significant bit is not set.
         let invalid_hex = "BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B0";
-
         assert!(Hash::from_str(invalid_hex).is_err());
     }
-
     #[test]
     fn hash_try_deserialize_rejects_invalid_lsb() {
         for final_byte in [0x00, 0x02] {
@@ -739,7 +689,6 @@ mod tests {
             assert!(matches!(err, norito::core::Error::Message(_)));
         }
     }
-
     #[test]
     fn hash_archived_decode_checks_every_final_byte_safely() {
         for final_byte in u8::MIN..=u8::MAX {
@@ -749,7 +698,6 @@ mod tests {
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
             let result = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived);
-
             if final_byte & 1 == 1 {
                 assert_eq!(
                     <[u8; Hash::LENGTH]>::from(result.expect("marked hash")),
@@ -763,14 +711,12 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn hash_decode_from_slice_checks_every_final_byte() {
         for final_byte in u8::MIN..=u8::MAX {
             let mut bytes = [0x5A; Hash::LENGTH];
             bytes[Hash::LENGTH - 1] = final_byte;
             let result = <Hash as norito::core::DecodeFromSlice>::decode_from_slice(&bytes);
-
             if final_byte & 1 == 1 {
                 let (hash, used) = result.expect("marked hash");
                 assert_eq!(<[u8; Hash::LENGTH]>::from(hash), bytes);
@@ -783,7 +729,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn hash_of_try_deserialize_rejects_invalid_final_bytes() {
         for final_byte in [0x00, 0x02] {
@@ -798,13 +743,10 @@ mod tests {
         }
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use norito::{json::FastJsonWrite, literal};
-
     use super::*;
-
+    use norito::{json::FastJsonWrite, literal};
     #[test]
     fn hash_json_roundtrip() {
         let hash = Hash::new(b"hash-json-roundtrip");
@@ -812,11 +754,9 @@ mod json_tests {
         let body = hex::encode_upper(hash.as_ref());
         let expected = literal::format("hash", &body);
         assert_eq!(json, format!("\"{expected}\""));
-
         let decoded: Hash = norito::json::from_str(&json).expect("deserialize hash");
         assert_eq!(decoded, hash);
     }
-
     #[test]
     fn hash_json_rejects_invalid_length() {
         let err =
@@ -832,7 +772,6 @@ mod json_tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn hash_of_json_roundtrip() {
         let hash = Hash::new(b"hash-of-json");
@@ -842,7 +781,6 @@ mod json_tests {
         let decoded: HashOf<()> = norito::json::from_json(&json).expect("deserialize hash_of");
         assert_eq!(decoded, hash_of);
     }
-
     #[test]
     fn hash_literal_rejects_bad_checksum() {
         let body = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
@@ -857,7 +795,6 @@ mod json_tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn hash_literal_rejects_lowercase_hex() {
         let body = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -869,7 +806,6 @@ mod json_tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn hash_raw_literal_is_rejected() {
         let raw = "\"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\"";
@@ -880,11 +816,9 @@ mod json_tests {
         }
     }
 }
-
 #[cfg(test)]
 mod prehashed_tests {
     use super::*;
-
     #[test]
     fn prehashed_sets_lsb() {
         let mut bytes = [0xff; Hash::LENGTH];

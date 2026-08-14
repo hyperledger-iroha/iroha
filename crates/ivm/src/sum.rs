@@ -1,14 +1,10 @@
 //! Runtime support for active-only compiler-owned Kotodama sums.
-
+use crate::{IVM, VMError};
 use ivm_abi::sum::SUM_WORD_BYTES_V1;
 pub use ivm_abi::sum::SumLayoutV1;
-
-use crate::{IVM, VMError};
-
 fn layout_error() -> VMError {
     VMError::DecodeError
 }
-
 /// Allocate one active-only `Option` or `Result` value.
 ///
 /// The complete larger-branch capacity is reserved once, but only the selected
@@ -38,7 +34,6 @@ pub fn allocate_words(
     }
     Ok(base)
 }
-
 /// Validate and read only the selected payload of one compiler-owned sum.
 ///
 /// Reserved words beyond the active branch must remain canonical zero, so an
@@ -73,25 +68,20 @@ pub fn read_words(vm: &IVM, base: u64, layout: SumLayoutV1) -> Result<(bool, Vec
     }
     Ok((raw_tag == 1, payload))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::Memory;
-
     #[test]
     fn option_none_and_some_materialize_only_the_active_payload() {
         let mut vm = IVM::new(0);
         let layout = SumLayoutV1::option(2).expect("Option layout");
-
         let none = allocate_words(&mut vm, layout, 0, &[]).expect("none");
         assert_eq!(none, Memory::HEAP_START);
         assert_eq!(read_words(&vm, none, layout), Ok((false, vec![])));
-
         let some = allocate_words(&mut vm, layout, 1, &[7, 9]).expect("some");
         assert_eq!(read_words(&vm, some, layout), Ok((true, vec![7, 9])));
     }
-
     #[test]
     fn result_branches_use_their_own_exact_width() {
         let mut vm = IVM::new(0);
@@ -101,7 +91,6 @@ mod tests {
         let ok = allocate_words(&mut vm, layout, 1, &[1, 2, 3]).expect("ok");
         assert_eq!(read_words(&vm, ok, layout), Ok((true, vec![1, 2, 3])));
     }
-
     #[test]
     fn malformed_values_and_forged_handles_fail_closed() {
         let mut vm = IVM::new(0);
@@ -114,7 +103,6 @@ mod tests {
             allocate_words(&mut vm, layout, 3, &[1]),
             Err(VMError::DecodeError)
         );
-
         let value = allocate_words(&mut vm, layout, 0, &[8]).expect("valid sum");
         vm.store_u64(value + 16, 9)
             .expect("forge inactive reserved payload");

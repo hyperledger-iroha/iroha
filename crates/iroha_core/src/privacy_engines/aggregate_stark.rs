@@ -7,29 +7,6 @@
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
-
-use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::io::{Read as _, Seek as _, Write as _};
-#[cfg(all(test, target_os = "linux"))]
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-#[cfg(test)]
-use chacha20poly1305::{
-    XChaCha20Poly1305,
-    aead::{Aead as _, KeyInit as _, Payload},
-};
-use rand::TryRngCore;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use rayon::prelude::*;
-#[cfg(all(test, target_os = "linux"))]
-use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-#[cfg(test)]
-use zeroize::Zeroizing;
-
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     Sha256MerkleTreeV1, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
@@ -47,7 +24,26 @@ use super::transparent_stark::{
     TRANSCRIPT_FRAME_DOMAIN_V1, goldilocks_ifft_v1, masked_trace_coefficients_on_coset_v1,
     masked_trace_coefficients_with_mask_v1, sample_trace_mask_v1,
 };
-
+#[cfg(test)]
+use chacha20poly1305::{
+    XChaCha20Poly1305,
+    aead::{Aead as _, KeyInit as _, Payload},
+};
+use rand::TryRngCore;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use rayon::prelude::*;
+#[cfg(all(test, target_os = "linux"))]
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use sha2::{Digest as _, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::io::{Read as _, Seek as _, Write as _};
+#[cfg(all(test, target_os = "linux"))]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use thiserror::Error;
+#[cfg(test)]
+use zeroize::Zeroizing;
 const FRI_MASK_LEAF_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-leaf:v1";
 const FRI_MASK_NODE_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-node:v1";
 const FRI_MASK_ROOT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-root:v1";
@@ -102,7 +98,6 @@ pub(crate) enum AggregateStarkErrorV1 {
     #[error("aggregate STARK internal invariant failed")]
     InternalInvariant,
 }
-
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
     match error {
         TransparentStarkErrorV1::RandomnessUnavailable => {
@@ -119,7 +114,6 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErr
         _ => AggregateStarkErrorV1::InternalInvariant,
     }
 }
-
 /// Immutable proof-system dimensions used by the generic aggregate core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStarkParametersV1 {
@@ -154,7 +148,6 @@ pub(crate) struct AggregateStarkParametersV1 {
     /// Exact proof-byte ceiling.
     pub(crate) maximum_proof_bytes: usize,
 }
-
 impl AggregateStarkParametersV1 {
     /// Terminal vector length.
     pub(crate) fn terminal_size(self) -> Result<usize, AggregateStarkErrorV1> {
@@ -162,7 +155,6 @@ impl AggregateStarkParametersV1 {
             .checked_shl(u32::from(self.terminal_log2))
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Exact trace-hiding dimension for all current/next query openings.
     ///
     /// Every query can expose two distinct positions in each trace group, so
@@ -172,7 +164,6 @@ impl AggregateStarkParametersV1 {
             .checked_mul(2)
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Validate every closed proof-system dimension.
     pub(crate) fn validate(self) -> Result<(), AggregateStarkErrorV1> {
         let terminal_size = self.terminal_size()?;
@@ -204,7 +195,6 @@ impl AggregateStarkParametersV1 {
         Ok(())
     }
 }
-
 /// SHA-256 and transcript domains supplied by one relation profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStarkDomainsV1 {
@@ -239,7 +229,6 @@ pub(crate) struct AggregateStarkDomainsV1 {
     /// Query-seed frame domain.
     pub(crate) query_seed: &'static [u8],
 }
-
 impl AggregateStarkDomainsV1 {
     /// Reject missing or duplicate cryptographic domains and labels.
     pub(crate) fn validate(self) -> Result<(), AggregateStarkErrorV1> {
@@ -273,7 +262,6 @@ impl AggregateStarkDomainsV1 {
         Ok(())
     }
 }
-
 /// One canonical group of equal-native-stride trace segments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateTraceGroupLayoutV1 {
@@ -286,7 +274,6 @@ pub(crate) struct AggregateTraceGroupLayoutV1 {
     /// Total committed auxiliary width across the group.
     pub(crate) aux_width: usize,
 }
-
 impl AggregateTraceGroupLayoutV1 {
     /// Derive the sole legal next-row stride on a common LDE domain.
     pub(crate) fn next_stride(self, common_lde_log2: u8) -> Result<usize, AggregateStarkErrorV1> {
@@ -298,14 +285,12 @@ impl AggregateTraceGroupLayoutV1 {
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
 }
-
 /// Verifier-derived ordered aggregate commitment layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateProofLayoutV1 {
     common_lde_log2: u8,
     trace_groups: Vec<AggregateTraceGroupLayoutV1>,
 }
-
 impl AggregateProofLayoutV1 {
     /// Construct from canonically ordered, non-empty group descriptors.
     ///
@@ -331,24 +316,20 @@ impl AggregateProofLayoutV1 {
         layout.validate(parameters)?;
         Ok(layout)
     }
-
     /// Common LDE logarithm.
     pub(crate) const fn common_lde_log2(&self) -> u8 {
         self.common_lde_log2
     }
-
     /// Common LDE row count.
     pub(crate) fn common_lde_size(&self) -> usize {
         1_usize
             .checked_shl(u32::from(self.common_lde_log2))
             .unwrap_or(0)
     }
-
     /// Ordered trace-group descriptors.
     pub(crate) fn trace_groups(&self) -> &[AggregateTraceGroupLayoutV1] {
         &self.trace_groups
     }
-
     /// Number of binary FRI rounds.
     pub(crate) fn fri_rounds(
         &self,
@@ -359,7 +340,6 @@ impl AggregateProofLayoutV1 {
             .map(usize::from)
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Maximum polynomial degree accepted by the terminal FRI check.
     pub(crate) fn maximum_fri_input_degree(
         &self,
@@ -378,7 +358,6 @@ impl AggregateProofLayoutV1 {
             .and_then(|coefficients| coefficients.checked_sub(1))
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Exclusive degree cap shared by traces, composition chunks, and FRI masks.
     pub(crate) fn fri_degree_cap(
         &self,
@@ -388,7 +367,6 @@ impl AggregateProofLayoutV1 {
             .checked_add(1)
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Maximum unsplit composition degree represented by all coefficient chunks.
     pub(crate) fn maximum_composition_degree(
         &self,
@@ -399,7 +377,6 @@ impl AggregateProofLayoutV1 {
             .and_then(|coefficients| coefficients.checked_sub(1))
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Exact coefficient count of each independent Protocol-2 FRI mask.
     ///
     /// The paper's minimum hiding space is
@@ -414,7 +391,6 @@ impl AggregateProofLayoutV1 {
     ) -> Result<usize, AggregateStarkErrorV1> {
         self.maximum_fri_input_degree(parameters)
     }
-
     fn minimum_protocol_fri_mask_coefficients(
         &self,
         parameters: AggregateStarkParametersV1,
@@ -428,7 +404,6 @@ impl AggregateProofLayoutV1 {
             .and_then(|count| count.checked_sub(1))
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Validate ordering, widths, instance count, common domain, and strides.
     pub(crate) fn validate(
         &self,
@@ -499,7 +474,6 @@ impl AggregateProofLayoutV1 {
         Ok(())
     }
 }
-
 /// Exact release certificate for the affine-batched binary-FRI theorem.
 ///
 /// `l_minus_one_*` represents the theorem's rational `L - 1`. `rho_*`
@@ -549,7 +523,6 @@ pub(crate) struct AggregateFriTheorem2CertificateV1 {
     /// Claimed floor for the query-error exponent.
     pub(crate) claimed_query_error_bits: u16,
 }
-
 /// Machine-checked error exponents for one FRI subproof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriTheorem2BoundV1 {
@@ -559,15 +532,12 @@ pub(crate) struct AggregateFriTheorem2BoundV1 {
     /// `2^-commitment_error_bits`.
     pub(crate) commitment_error_bits: u16,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct U256V1([u64; 4]);
-
 impl U256V1 {
     fn one() -> Self {
         Self([1, 0, 0, 0])
     }
-
     fn checked_mul_small(mut self, multiplier: u64) -> Option<Self> {
         let mut carry = 0_u128;
         for limb in &mut self.0 {
@@ -579,11 +549,9 @@ impl U256V1 {
         }
         (carry == 0).then_some(self)
     }
-
     fn checked_pow_small(base: u64, exponent: u8) -> Option<Self> {
         (0..exponent).try_fold(Self::one(), |value, _| value.checked_mul_small(base))
     }
-
     fn checked_shl(self, shift: u16) -> Option<Self> {
         if shift >= 256 {
             return None;
@@ -613,7 +581,6 @@ impl U256V1 {
         }
         Some(Self(shifted))
     }
-
     fn strictly_less_than(self, rhs: Self) -> bool {
         self.0
             .iter()
@@ -623,7 +590,6 @@ impl U256V1 {
             .unwrap_or(false)
     }
 }
-
 /// Validate every precondition and both error terms of the affine-batched
 /// binary-FRI theorem used by the release.
 ///
@@ -683,7 +649,6 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
     {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-
     // The eta/delta regime requires
     // `sqrt(rho) * (1 + 1/(2m)) < 1`. Squaring and clearing
     // denominators gives this exact integer inequality.
@@ -702,7 +667,6 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
     if eta_numerator >= eta_denominator {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-
     // With rho=1/32 and m=3, an even q gives the exact rational query term
     // `(49/1152)^(q/2)`. Compare it to the claimed power of two after
     // cancelling `1152 = 9 * 2^7`; the remaining integers fit in 256 bits for
@@ -723,7 +687,6 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
     if !query_numerator.strictly_less_than(query_denominator) {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-
     // Exact canonical constants conservatively bound the first commitment
     // term by `7^7 * |D|^2 / 2^252 < 2^-(252-2log|D|-20)`.
     // The second is below
@@ -747,7 +710,6 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
         commitment_error_bits,
     })
 }
-
 /// One group commitment and its two canonical multiproof frontiers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateTraceGroupProofV1 {
@@ -760,7 +722,6 @@ pub(crate) struct AggregateTraceGroupProofV1 {
     /// Minimal auxiliary-tree multiproof frontier.
     pub(crate) aux_frontier: Vec<[u8; 32]>,
 }
-
 /// One FRI round's low/high opening pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriRoundOpeningV1 {
@@ -769,14 +730,12 @@ pub(crate) struct AggregateFriRoundOpeningV1 {
     /// Canonical high-half quartic-extension value.
     pub(crate) high: [u64; 4],
 }
-
 /// All FRI round openings for one lane/query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriLaneQueryV1 {
     /// Round openings in folding order.
     pub(crate) rounds: Vec<AggregateFriRoundOpeningV1>,
 }
-
 /// Current and next vector rows for one trace group/query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateTraceGroupQueryV1 {
@@ -789,7 +748,6 @@ pub(crate) struct AggregateTraceGroupQueryV1 {
     /// Next auxiliary row at the verifier-derived group stride.
     pub(crate) aux_next: Vec<u64>,
 }
-
 /// All opened values at one shared common-domain query index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateQueryProofV1 {
@@ -804,7 +762,6 @@ pub(crate) struct AggregateQueryProofV1 {
     /// Shared FRI openings per lane.
     pub(crate) fri_lanes: Vec<AggregateFriLaneQueryV1>,
 }
-
 /// One complete shared FRI lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriLaneProofV1 {
@@ -815,7 +772,6 @@ pub(crate) struct AggregateFriLaneProofV1 {
     /// Minimal multiproof frontier for each non-terminal layer.
     pub(crate) round_frontiers: Vec<Vec<[u8; 32]>>,
 }
-
 /// Exact aggregate proof object before/after canonical encoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStarkProofV1 {
@@ -838,7 +794,6 @@ pub(crate) struct AggregateStarkProofV1 {
     /// Relation-verified grinding nonce.
     pub(crate) grinding_nonce: u64,
 }
-
 /// Current and next out-of-domain evaluations for one trace group.
 ///
 /// Each base trace polynomial is evaluated in Fp4 even though its committed
@@ -855,7 +810,6 @@ pub(crate) struct AggregateDeepTraceGroupOpeningV1 {
     /// Auxiliary-column evaluations at `z * omega_H`.
     pub(crate) aux_next: Vec<[u64; 4]>,
 }
-
 /// Exact out-of-domain opening payload carried by a DEEP-enabled aggregate.
 ///
 /// The point itself is not encoded: prover and verifier derive it uniformly
@@ -867,7 +821,6 @@ pub(crate) struct AggregateDeepProofV1 {
     /// Composition-chunk evaluations in lane-major order.
     pub(crate) composition_values: Vec<Vec<[u64; 4]>>,
 }
-
 /// Canonically decoded DEEP trace openings supplied to relation verifiers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateOpenedDeepTraceGroupV1 {
@@ -880,7 +833,6 @@ pub(crate) struct AggregateOpenedDeepTraceGroupV1 {
     /// Auxiliary-column evaluations at `z * omega_H`.
     pub(crate) aux_next: Vec<E>,
 }
-
 /// DEEP batching coefficients for one ordered trace group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateDeepTraceGroupMixV1 {
@@ -893,7 +845,6 @@ pub(crate) struct AggregateDeepTraceGroupMixV1 {
     /// Coefficients for `(aux(x) - aux(omega_H z)) / (x - omega_H z)`.
     pub(crate) aux_next: Vec<E>,
 }
-
 /// Complete DEEP batching coefficients for one FRI lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateDeepLaneMixV1 {
@@ -902,7 +853,6 @@ pub(crate) struct AggregateDeepLaneMixV1 {
     /// Composition-chunk mixes.
     pub(crate) composition: Vec<E>,
 }
-
 /// Canonical opened fields passed to a relation evaluator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateOpenedTraceGroupV1 {
@@ -915,7 +865,6 @@ pub(crate) struct AggregateOpenedTraceGroupV1 {
     /// Next auxiliary row.
     pub(crate) aux_next: Vec<F>,
 }
-
 /// Relation-evaluated values that the shared verifier binds to composition/FRI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateExpectedOpeningV1 {
@@ -924,7 +873,6 @@ pub(crate) struct AggregateExpectedOpeningV1 {
     /// Expected base value for the selected FRI lane.
     pub(crate) fri_base: E,
 }
-
 /// Relation-specific opened-row algebra called by the shared verifier.
 pub(crate) trait AggregateOpenedRowEvaluatorV1 {
     /// Evaluate one query/lane after canonical field decoding.
@@ -936,7 +884,6 @@ pub(crate) trait AggregateOpenedRowEvaluatorV1 {
         composition_chunks: &[E],
     ) -> Result<AggregateExpectedOpeningV1, AggregateStarkErrorV1>;
 }
-
 /// Decode an exact vector of canonical Goldilocks residues.
 pub(crate) fn canonical_fields_v1(
     values: &[u64],
@@ -951,7 +898,6 @@ pub(crate) fn canonical_fields_v1(
         .map(|value| F::canonical(value).ok_or(AggregateStarkErrorV1::NonCanonicalField))
         .collect()
 }
-
 /// Decode an exact vector of canonical Goldilocks-quartic residues.
 pub(crate) fn canonical_fp4_fields_v1(
     values: &[[u64; 4]],
@@ -966,16 +912,13 @@ pub(crate) fn canonical_fp4_fields_v1(
         .map(|value| E::canonical(value).ok_or(AggregateStarkErrorV1::NonCanonicalField))
         .collect()
 }
-
 fn fp4_is_in_trace_subgroup_v1(point: E, trace_size: usize) -> bool {
     point.pow(trace_size as u128) == E::ONE
 }
-
 fn fp4_is_in_evaluation_coset_v1(point: E, evaluation_size: usize) -> bool {
     let shift_power = F(GOLDILOCKS_GENERATOR_V1).pow(evaluation_size as u128);
     point.pow(evaluation_size as u128) == E::from_base(shift_power)
 }
-
 /// Check the complete public exclusion predicate for a shared DEEP point.
 pub(crate) fn deep_point_is_admissible_v1(
     point: E,
@@ -1003,7 +946,6 @@ pub(crate) fn deep_point_is_admissible_v1(
     }
     Ok(true)
 }
-
 /// Derive the sole uniform DEEP point outside every trace, evaluation, and
 /// query domain used by an aggregate proof.
 ///
@@ -1025,7 +967,6 @@ pub(crate) fn derive_deep_point_v1(
         })
         .map_err(map_transparent_error_v1)
 }
-
 /// Validate the exact statement-derived shape and canonicality of a DEEP
 /// opening payload.
 pub(crate) fn validate_deep_proof_shape_v1(
@@ -1061,7 +1002,6 @@ pub(crate) fn validate_deep_proof_shape_v1(
     }
     Ok(())
 }
-
 /// Canonically decode all DEEP trace openings for relation-specific checks.
 pub(crate) fn canonical_deep_trace_groups_v1(
     deep: &AggregateDeepProofV1,
@@ -1082,7 +1022,6 @@ pub(crate) fn canonical_deep_trace_groups_v1(
         })
         .collect()
 }
-
 /// Absorb all DEEP values in their sole group/lane/column order.
 ///
 /// This must run after the point is sampled and before any FRI batching or fold
@@ -1111,7 +1050,6 @@ pub(crate) fn absorb_deep_openings_v1(
         .absorb(DEEP_OPENINGS_LABEL_V1, &[&encoding])
         .map_err(map_transparent_error_v1)
 }
-
 fn ensure_canonical_base_fields_v1(values: &[u64]) -> Result<(), AggregateStarkErrorV1> {
     if values
         .iter()
@@ -1122,7 +1060,6 @@ fn ensure_canonical_base_fields_v1(values: &[u64]) -> Result<(), AggregateStarkE
     }
     Ok(())
 }
-
 fn ensure_canonical_fp4_fields_v1(values: &[[u64; 4]]) -> Result<(), AggregateStarkErrorV1> {
     if values
         .iter()
@@ -1133,7 +1070,6 @@ fn ensure_canonical_fp4_fields_v1(values: &[[u64; 4]]) -> Result<(), AggregateSt
     }
     Ok(())
 }
-
 fn row_at_v1(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, AggregateStarkErrorV1> {
     columns
         .iter()
@@ -1145,7 +1081,6 @@ fn row_at_v1(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, AggregateStarkE
         })
         .collect()
 }
-
 /// Hash one vector-row leaf with its ordered group index and exact width.
 pub(crate) fn row_leaf_hash_v1(
     domain: &[u8],
@@ -1172,7 +1107,6 @@ pub(crate) fn row_leaf_hash_v1(
     }
     sha256_frame_v1(domain, &[&group, &width, &fields]).map_err(map_transparent_error_v1)
 }
-
 fn composition_leaf_hash_unchecked_v1(
     domains: AggregateStarkDomainsV1,
     lane: usize,
@@ -1202,7 +1136,6 @@ fn composition_leaf_hash_unchecked_v1(
     sha256_frame_v1(domains.composition_leaf, &[&lane, &width, &fields])
         .map_err(map_transparent_error_v1)
 }
-
 /// Prover-only material for one independently sampled FRI mask oracle.
 ///
 /// The polynomial evaluations and Merkle tree are retained until the
@@ -1213,7 +1146,6 @@ pub(crate) struct AggregateFriMaskOracleMaterialV1 {
     /// Authenticated oracle commitment.
     pub(crate) tree: Sha256MerkleTreeV1,
 }
-
 fn fri_mask_leaf_hash_v1(lane: usize, value: E) -> Result<[u8; 32], AggregateStarkErrorV1> {
     let lane = u16::try_from(lane)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
@@ -1221,7 +1153,6 @@ fn fri_mask_leaf_hash_v1(lane: usize, value: E) -> Result<[u8; 32], AggregateSta
     sha256_frame_v1(FRI_MASK_LEAF_DOMAIN_V1, &[&lane, &value.to_be_bytes()])
         .map_err(map_transparent_error_v1)
 }
-
 fn fri_mask_tree_v1(
     lane: usize,
     evaluations: &[E],
@@ -1237,7 +1168,6 @@ fn fri_mask_tree_v1(
     Sha256MerkleTreeV1::from_leaves(leaves, FRI_MASK_NODE_DOMAIN_V1)
         .map_err(map_transparent_error_v1)
 }
-
 /// Sample and commit all independent Protocol-2 FRI mask polynomials.
 ///
 /// Each lane samples the normalized `D - 1` coefficients, which contains the
@@ -1283,7 +1213,6 @@ pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
     }
     Ok(oracles)
 }
-
 /// Add the independently committed mask oracle to one batched FRI lane.
 pub(crate) fn add_fri_mask_oracle_v1(
     base_values: &mut [E],
@@ -1297,7 +1226,6 @@ pub(crate) fn add_fri_mask_oracle_v1(
     }
     Ok(())
 }
-
 fn fri_leaf_hash_unchecked_v1(
     domains: AggregateStarkDomainsV1,
     lane: usize,
@@ -1313,7 +1241,6 @@ fn fri_leaf_hash_unchecked_v1(
     sha256_frame_v1(domains.fri_leaf, &[&lane, &round, &value.to_be_bytes()])
         .map_err(map_transparent_error_v1)
 }
-
 /// Commit vector-row columns on a common power-of-two domain.
 pub(crate) fn row_tree_v1(
     leaf_domain: &[u8],
@@ -1334,7 +1261,6 @@ pub(crate) fn row_tree_v1(
         .collect::<Result<Vec<_>, _>>()?;
     Sha256MerkleTreeV1::from_leaves(leaves, node_domain).map_err(map_transparent_error_v1)
 }
-
 /// Root and canonical minimal frontier produced without retaining a Merkle tree.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1344,7 +1270,6 @@ pub(crate) struct StreamingMerkleCommitmentV1 {
     /// Canonically ordered minimal frontier for the requested leaves.
     pub(crate) frontier: Vec<[u8; 32]>,
 }
-
 /// Incremental binary Merkle accumulator with a query-aware frontier plan.
 ///
 /// Leaves must be appended in ascending index order. The accumulator retains
@@ -1360,7 +1285,6 @@ pub(crate) struct StreamingMerkleAccumulatorV1 {
     frontier_positions: BTreeMap<(usize, usize), usize>,
     frontier: Vec<Option<[u8; 32]>>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingMerkleAccumulatorV1 {
     /// Create an accumulator for an exact leaf count and sorted unique opening set.
@@ -1433,7 +1357,6 @@ impl StreamingMerkleAccumulatorV1 {
             frontier,
         })
     }
-
     fn capture(
         &mut self,
         level: usize,
@@ -1452,7 +1375,6 @@ impl StreamingMerkleAccumulatorV1 {
         }
         Ok(())
     }
-
     /// Append the next leaf digest.
     pub(crate) fn append_leaf(&mut self, mut node: [u8; 32]) -> Result<(), AggregateStarkErrorV1> {
         if self.next_leaf >= self.leaf_count {
@@ -1486,7 +1408,6 @@ impl StreamingMerkleAccumulatorV1 {
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
         Ok(())
     }
-
     /// Finish the exact stream and return its root and requested frontier.
     pub(crate) fn finish(mut self) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1> {
         if self.next_leaf != self.leaf_count {
@@ -1508,7 +1429,6 @@ impl StreamingMerkleAccumulatorV1 {
         Ok(StreamingMerkleCommitmentV1 { root, frontier })
     }
 }
-
 /// Commit an exact leaf iterator with logarithmic tree memory.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn streaming_merkle_commitment_v1<I>(
@@ -1527,7 +1447,6 @@ where
     }
     accumulator.finish()
 }
-
 /// Result of one column-streamed vector-row commitment pass.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1537,7 +1456,6 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
     /// Exact requested vector rows keyed by ascending LDE index.
     pub(crate) opened_rows: BTreeMap<usize, Vec<F>>,
 }
-
 /// Column-at-a-time vector-row commitment builder.
 ///
 /// This is the bounded-memory replacement for retaining every LDE column.
@@ -1556,7 +1474,6 @@ pub(crate) struct StreamingRowCommitmentV1 {
     opening_indices: Vec<usize>,
     opened_rows: BTreeMap<usize, Vec<F>>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingRowCommitmentV1 {
     /// Start an exact row commitment pass.
@@ -1594,7 +1511,6 @@ impl StreamingRowCommitmentV1 {
             .and_then(|bytes| u64::try_from(bytes).ok())
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?
             .to_be_bytes();
-
         // Exact prefix of `sha256_frame_v1(leaf_domain,
         // &[group, width, concatenated_values])`, stopping immediately before
         // the first value byte.
@@ -1608,7 +1524,6 @@ impl StreamingRowCommitmentV1 {
         prefix.update(2_u64.to_be_bytes());
         prefix.update(width_u16);
         prefix.update(value_bytes);
-
         let mut hashers = Vec::new();
         hashers
             .try_reserve_exact(rows)
@@ -1636,7 +1551,6 @@ impl StreamingRowCommitmentV1 {
             opened_rows,
         })
     }
-
     /// Absorb the next complete LDE column in canonical column order.
     pub(crate) fn absorb_column(&mut self, column: &[F]) -> Result<(), AggregateStarkErrorV1> {
         if self.received_columns >= self.width || column.len() != self.rows {
@@ -1654,7 +1568,6 @@ impl StreamingRowCommitmentV1 {
         self.received_columns += 1;
         Ok(())
     }
-
     /// Finalize the exact-width vector rows into a streaming Merkle commitment.
     pub(crate) fn finish(self) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
         if self.received_columns != self.width
@@ -1681,7 +1594,6 @@ impl StreamingRowCommitmentV1 {
         })
     }
 }
-
 /// Secret replay material for one exact ordered set of streamed trace columns.
 ///
 /// This type deliberately implements neither `Clone` nor `Debug`. Dropping it
@@ -1693,12 +1605,10 @@ pub(crate) struct StreamingTraceMaskSetV1 {
     lde_log2: u8,
     masks: Vec<ReplayableTraceMaskV1>,
 }
-
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZeroizingFieldColumnV1 {
     /// Transfer ownership to another zeroizing container without duplicating
@@ -1707,54 +1617,44 @@ impl ZeroizingFieldColumnV1 {
         core::mem::take(&mut self.0)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
         zeroize_field_column_v1(&mut self.0);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
         value.0 = 0;
     }
 }
-
 /// Owner of one secret-bearing quartic-extension column that overwrites every
 /// base-field coefficient on every return path.
 struct ZeroizingExtensionFieldColumnV1(Vec<E>);
-
 impl core::ops::Deref for ZeroizingExtensionFieldColumnV1 {
     type Target = [E];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl Drop for ZeroizingExtensionFieldColumnV1 {
     fn drop(&mut self) {
         zeroize_extension_field_column_v1(&mut self.0);
     }
 }
-
 fn zeroize_extension_field_column_v1(values: &mut [E]) {
     for value in values {
         *value = E::ZERO;
     }
 }
-
 #[cfg(test)]
 impl StreamingTraceMaskSetV1 {
     /// Number of committed columns.
@@ -1762,7 +1662,6 @@ impl StreamingTraceMaskSetV1 {
         self.masks.len()
     }
 }
-
 /// Secret retained masked polynomials for one exact streamed trace commitment.
 ///
 /// Each column stores ascending coefficients of
@@ -1777,7 +1676,6 @@ pub(crate) struct MaskedTracePolynomialSetV1 {
     commitment_lde_log2: u8,
     columns: Vec<ZeroizingFieldColumnV1>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MaskedTracePolynomialSetV1 {
     fn validate_v1(&self) -> Result<(usize, usize), AggregateStarkErrorV1> {
@@ -1799,22 +1697,18 @@ impl MaskedTracePolynomialSetV1 {
         }
         Ok((native_rows, commitment_rows))
     }
-
     /// Number of committed columns.
     pub(crate) fn width(&self) -> usize {
         self.columns.len()
     }
-
     /// Native trace-domain logarithm shared by every retained polynomial.
     pub(crate) const fn native_trace_log2(&self) -> u8 {
         self.native_trace_log2
     }
-
     /// Logarithm of the domain used by the transcript-bound commitment.
     pub(crate) const fn commitment_lde_log2(&self) -> u8 {
         self.commitment_lde_log2
     }
-
     /// Exact ascending coefficients of one retained masked polynomial.
     pub(crate) fn column_coefficients_v1(
         &self,
@@ -1826,7 +1720,6 @@ impl MaskedTracePolynomialSetV1 {
             .map(|values| values.0.as_slice())
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Evaluate one retained column on a canonical generator coset.
     pub(crate) fn evaluate_column_on_coset_v1(
         &self,
@@ -1843,7 +1736,6 @@ impl MaskedTracePolynomialSetV1 {
             .map_err(map_transparent_error_v1)?,
         ))
     }
-
     /// Evaluate every retained column on one verifier-derived coset.
     #[cfg(test)]
     pub(crate) fn evaluate_columns_on_coset_v1(
@@ -1861,13 +1753,11 @@ impl MaskedTracePolynomialSetV1 {
         Ok(columns)
     }
 }
-
 fn checked_domain_size_v1(log2: u8) -> Result<usize, AggregateStarkErrorV1> {
     1_usize
         .checked_shl(u32::from(log2))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_masked_trace_commitment_shape_v1(
     leaf_domain: &[u8],
@@ -1900,7 +1790,6 @@ fn validate_masked_trace_commitment_shape_v1(
     }
     Ok((native_rows, lde_rows))
 }
-
 /// Sample replayable masks and commit columns generated one at a time.
 #[cfg(test)]
 pub(crate) fn commit_masked_trace_columns_v1<R, S>(
@@ -1968,7 +1857,6 @@ where
         },
     ))
 }
-
 /// Deterministically replay one streamed trace commitment with the original
 /// secret masks after Fiat–Shamir queries are fixed.
 #[cfg(test)]
@@ -2011,7 +1899,6 @@ where
     }
     commitment.finish()
 }
-
 /// Sample masks, commit their LDEs, and retain only the masked coefficients.
 ///
 /// All verifier-derived shape checks and commitment allocations finish before
@@ -2100,7 +1987,6 @@ where
     polynomials.validate_v1()?;
     Ok((commitment.finish()?, polynomials))
 }
-
 /// Replay a retained masked-polynomial commitment and requested row frontier.
 ///
 /// No native witness source or mask RNG is needed: the exact committed
@@ -2139,7 +2025,6 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     }
     commitment.finish()
 }
-
 #[cfg(test)]
 const ENCRYPTED_FIELD_SCRATCH_AAD_DOMAIN_V1: &[u8] =
     b"iroha:privacy:aggregate-stark:encrypted-field-scratch-record:v1";
@@ -2149,14 +2034,12 @@ const XCHACHA20_POLY1305_TAG_BYTES_V1: usize = 16;
 const XCHACHA20_NONCE_PREFIX_BYTES_V1: usize = 16;
 #[cfg(test)]
 const XCHACHA20_NONCE_BYTES_V1: usize = 24;
-
 /// Default number of common-domain rows authenticated in one scratch record.
 ///
 /// At eight bytes per field this keeps each plaintext record at 32 KiB. The
 /// value is a power of two and therefore divides every admitted aggregate LDE
 /// domain at or above this size.
 pub(crate) const DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1: usize = 1 << 12;
-
 #[cfg(test)]
 fn encrypted_field_scratch_record_aad_v1(
     rows: usize,
@@ -2180,7 +2063,6 @@ fn encrypted_field_scratch_record_aad_v1(
     )
     .map_err(map_transparent_error_v1)
 }
-
 #[cfg(test)]
 fn encrypted_field_scratch_nonce_v1(
     nonce_prefix: &[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1],
@@ -2191,7 +2073,6 @@ fn encrypted_field_scratch_nonce_v1(
     bytes[XCHACHA20_NONCE_PREFIX_BYTES_V1..].copy_from_slice(&record_index.to_be_bytes());
     bytes.into()
 }
-
 #[cfg(test)]
 fn encrypted_field_scratch_shape_v1(
     rows: usize,
@@ -2232,7 +2113,6 @@ fn encrypted_field_scratch_shape_v1(
         expected_file_bytes,
     ))
 }
-
 /// Sequential writer for one authenticated, anonymous field-matrix scratch.
 ///
 /// Columns must be appended in their canonical commitment order. The file is
@@ -2256,7 +2136,6 @@ pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
     key: Zeroizing<[u8; 32]>,
     nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
 }
-
 #[cfg(test)]
 fn encrypted_field_scratch_entropy_is_healthy_v1(
     key: &[u8; 32],
@@ -2267,13 +2146,11 @@ fn encrypted_field_scratch_entropy_is_healthy_v1(
     let repeated_prefix = key[..XCHACHA20_NONCE_PREFIX_BYTES_V1] == nonce_prefix[..];
     !key_constant && !nonce_constant && !repeated_prefix
 }
-
 #[cfg(test)]
 std::thread_local! {
     static ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 #[cfg(test)]
 fn create_anonymous_scratch_file_v1() -> Result<std::fs::File, AggregateStarkErrorV1> {
     #[cfg(test)]
@@ -2308,12 +2185,10 @@ fn create_anonymous_scratch_file_v1() -> Result<std::fs::File, AggregateStarkErr
         tempfile::tempfile().map_err(|_| AggregateStarkErrorV1::AllocationFailure)
     }
 }
-
 #[cfg(test)]
 fn encrypted_scratch_file_creation_attempts_v1() -> usize {
     ENCRYPTED_SCRATCH_FILE_CREATION_ATTEMPTS_V1.with(std::cell::Cell::get)
 }
-
 #[cfg(test)]
 impl EncryptedFieldMatrixScratchWriterV1 {
     /// Create an owner-private anonymous scratch with an independent ephemeral
@@ -2325,7 +2200,6 @@ impl EncryptedFieldMatrixScratchWriterV1 {
     ) -> Result<Self, AggregateStarkErrorV1> {
         Self::new_with_rng(rows, width, chunk_rows, &mut rand::rngs::OsRng)
     }
-
     /// Create a scratch writer with injected entropy.
     ///
     /// Shape validation and the complete key/nonce-prefix health check happen
@@ -2364,7 +2238,6 @@ impl EncryptedFieldMatrixScratchWriterV1 {
             nonce_prefix,
         })
     }
-
     fn record_index(&self, column: usize, chunk: usize) -> Result<u64, AggregateStarkErrorV1> {
         if column >= self.width || chunk >= self.chunks_per_column {
             return Err(AggregateStarkErrorV1::InvalidLayout);
@@ -2375,7 +2248,6 @@ impl EncryptedFieldMatrixScratchWriterV1 {
             .and_then(|index| u64::try_from(index).ok())
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     /// Encrypt and append the next exact column.
     pub(crate) fn append_column(&mut self, column: &[F]) -> Result<(), AggregateStarkErrorV1> {
         if self.next_column >= self.width || column.len() != self.rows {
@@ -2430,7 +2302,6 @@ impl EncryptedFieldMatrixScratchWriterV1 {
         self.next_column += 1;
         Ok(())
     }
-
     /// Seal the exact matrix after every declared column was appended.
     pub(crate) fn finish(mut self) -> Result<EncryptedFieldMatrixScratchV1, AggregateStarkErrorV1> {
         if self.next_column != self.width {
@@ -2465,7 +2336,6 @@ impl EncryptedFieldMatrixScratchWriterV1 {
         })
     }
 }
-
 /// Decrypted row-major view of one authenticated scratch chunk.
 ///
 /// This type deliberately implements neither `Clone` nor `Debug`; all
@@ -2477,19 +2347,16 @@ pub(crate) struct EncryptedFieldMatrixBlockV1 {
     width: usize,
     values: Vec<F>,
 }
-
 #[cfg(test)]
 impl EncryptedFieldMatrixBlockV1 {
     /// First common-domain row represented by this block.
     pub(crate) fn row_start(&self) -> usize {
         self.row_start
     }
-
     /// Number of rows represented by this block.
     pub(crate) fn row_count(&self) -> usize {
         self.row_count
     }
-
     /// Return one exact row by its global common-domain index.
     pub(crate) fn row(&self, index: usize) -> Result<&[F], AggregateStarkErrorV1> {
         let local = index
@@ -2507,7 +2374,6 @@ impl EncryptedFieldMatrixBlockV1 {
             .ok_or(AggregateStarkErrorV1::InternalInvariant)
     }
 }
-
 #[cfg(test)]
 impl Drop for EncryptedFieldMatrixBlockV1 {
     fn drop(&mut self) {
@@ -2516,7 +2382,6 @@ impl Drop for EncryptedFieldMatrixBlockV1 {
         }
     }
 }
-
 /// Sealed authenticated anonymous storage for one masked LDE matrix.
 ///
 /// Only masked polynomial evaluations are ever written. The anonymous file is
@@ -2535,34 +2400,28 @@ pub(crate) struct EncryptedFieldMatrixScratchV1 {
     key: Zeroizing<[u8; 32]>,
     nonce_prefix: Zeroizing<[u8; XCHACHA20_NONCE_PREFIX_BYTES_V1]>,
 }
-
 #[cfg(test)]
 impl EncryptedFieldMatrixScratchV1 {
     /// Number of common-domain rows in the stored matrix.
     pub(crate) fn rows(&self) -> usize {
         self.rows
     }
-
     /// Number of columns in the stored matrix.
     pub(crate) fn width(&self) -> usize {
         self.width
     }
-
     /// Number of rows in every independently authenticated record.
     pub(crate) fn chunk_rows(&self) -> usize {
         self.chunk_rows
     }
-
     /// Number of row chunks in every column.
     pub(crate) fn chunk_count(&self) -> usize {
         self.chunks_per_column
     }
-
     /// Exact ciphertext bytes occupied by the anonymous backing file.
     pub(crate) fn ciphertext_bytes(&self) -> u64 {
         self.expected_file_bytes
     }
-
     fn record_index(&self, column: usize, chunk: usize) -> Result<u64, AggregateStarkErrorV1> {
         if column >= self.width || chunk >= self.chunks_per_column {
             return Err(AggregateStarkErrorV1::InvalidLayout);
@@ -2573,7 +2432,6 @@ impl EncryptedFieldMatrixScratchV1 {
             .and_then(|index| u64::try_from(index).ok())
             .ok_or(AggregateStarkErrorV1::InvalidLayout)
     }
-
     fn validate_backing_file(&self) -> Result<(), AggregateStarkErrorV1> {
         let actual = self
             .file
@@ -2585,7 +2443,6 @@ impl EncryptedFieldMatrixScratchV1 {
         }
         Ok(())
     }
-
     /// Authenticate, decrypt, and transpose one row chunk.
     pub(crate) fn read_chunk(
         &mut self,
@@ -2675,7 +2532,6 @@ impl EncryptedFieldMatrixScratchV1 {
         })
     }
 }
-
 /// Commit the exact row framing of a sealed encrypted scratch while retaining
 /// only one decrypted block, logarithmic Merkle state, and requested rows.
 #[cfg(test)]
@@ -2727,7 +2583,6 @@ pub(crate) fn commit_encrypted_field_scratch_rows_v1(
         opened_rows,
     })
 }
-
 /// Replay a masked trace into authenticated anonymous scratch storage without
 /// retaining more than one native column and one LDE column in memory.
 #[cfg(test)]
@@ -2760,7 +2615,6 @@ where
     }
     writer.finish()
 }
-
 /// Sample masks, commit, and retain the exact encrypted masked-LDE matrix with
 /// an explicitly bounded authenticated scratch-record height.
 ///
@@ -2851,7 +2705,6 @@ where
         scratch,
     ))
 }
-
 /// Sample masks, commit, and retain the encrypted masked-LDE matrix using the
 /// generic bounded scratch-record height.
 #[cfg(test)]
@@ -2893,7 +2746,6 @@ where
         source,
     )
 }
-
 /// Low-resident-memory root-only alternative to
 /// [`commit_masked_trace_columns_v1`].
 ///
@@ -2932,7 +2784,6 @@ where
     drop(scratch);
     Ok((commitment, masks))
 }
-
 /// Low-resident-memory replay counterpart for an already sampled mask set.
 #[cfg(test)]
 pub(crate) fn replay_masked_trace_columns_via_encrypted_scratch_v1<S>(
@@ -2955,7 +2806,6 @@ where
         &mut scratch,
     )
 }
-
 /// Commit one aggregate composition lane.
 pub(crate) fn composition_tree_v1(
     domains: AggregateStarkDomainsV1,
@@ -2980,7 +2830,6 @@ pub(crate) fn composition_tree_v1(
     Sha256MerkleTreeV1::from_leaves(leaves, domains.composition_node)
         .map_err(map_transparent_error_v1)
 }
-
 /// Commit one aggregate composition lane without retaining a Merkle tree.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn streaming_composition_commitment_v1(
@@ -3008,7 +2857,6 @@ pub(crate) fn streaming_composition_commitment_v1(
         }),
     )
 }
-
 fn composition_chunks_from_coefficients_v1(
     coefficients: &[E],
     parameters: AggregateStarkParametersV1,
@@ -3056,7 +2904,6 @@ fn composition_chunks_from_coefficients_v1(
     }
     Ok(chunks)
 }
-
 /// Split one common-domain quotient codeword into canonical FRI chunks.
 pub(crate) fn split_composition_evaluations_v1(
     evaluations: &[E],
@@ -3082,7 +2929,6 @@ pub(crate) fn split_composition_evaluations_v1(
     }
     composition_chunks_from_coefficients_v1(&coefficients, parameters, layout)
 }
-
 /// Divide extension coefficients exactly by the trace vanishing polynomial.
 ///
 /// Synthetic division is performed by the monic polynomial `X^n - 1`. The
@@ -3134,7 +2980,6 @@ pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
     }
     Ok(core::mem::take(&mut quotient.0))
 }
-
 /// Divide a constraint-numerator codeword by `X^n - 1` on a quotient coset.
 ///
 /// The generator shift is checked to be disjoint from both the native trace
@@ -3199,7 +3044,6 @@ pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
     }
     Ok(quotient)
 }
-
 /// Convert a minimal quotient-coset codeword into common-domain FRI chunks.
 ///
 /// `maximum_quotient_degree` is the relation's exact inclusive `q_max`, not
@@ -3242,7 +3086,6 @@ pub(crate) fn composition_chunks_from_quotient_coset_v1(
     }
     composition_chunks_from_coefficients_v1(&coefficients, parameters, layout)
 }
-
 /// Divide one constraint coset and canonically chunk the exact quotient.
 #[cfg(test)]
 pub(crate) fn composition_chunks_from_constraint_coset_v1(
@@ -3266,7 +3109,6 @@ pub(crate) fn composition_chunks_from_constraint_coset_v1(
         layout,
     )
 }
-
 /// Reconstruct one unsplit quotient value from its authenticated chunks.
 pub(crate) fn recompose_composition_value_v1(
     chunks: &[E],
@@ -3286,7 +3128,6 @@ pub(crate) fn recompose_composition_value_v1(
     }
     Ok(value)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
     coefficients
@@ -3297,7 +3138,6 @@ fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
             value.mul(point).add(E::from_base(coefficient))
         })
 }
-
 fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
     coefficients
         .iter()
@@ -3307,7 +3147,6 @@ fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
             value.mul(point).add(coefficient)
         })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn base_coset_coefficients_v1(
     evaluations: &[F],
@@ -3329,7 +3168,6 @@ fn base_coset_coefficients_v1(
     }
     Ok(coefficients)
 }
-
 fn fp4_coset_coefficients_v1(
     evaluations: &[E],
     lde_log2: u8,
@@ -3350,7 +3188,6 @@ fn fp4_coset_coefficients_v1(
     }
     Ok(coefficients)
 }
-
 /// Evaluate one committed base-field coset codeword at arbitrary Fp4 points.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_base_coset_polynomial_at_fp4_points_v1(
@@ -3368,7 +3205,6 @@ pub(crate) fn evaluate_base_coset_polynomial_at_fp4_points_v1(
         .map(|point| evaluate_base_coefficients_at_fp4_v1(&coefficients, point))
         .collect())
 }
-
 /// Evaluate one committed Fp4 coset codeword at an arbitrary Fp4 point.
 pub(crate) fn evaluate_fp4_coset_polynomial_at_point_v1(
     evaluations: &[E],
@@ -3378,7 +3214,6 @@ pub(crate) fn evaluate_fp4_coset_polynomial_at_point_v1(
     let coefficients = fp4_coset_coefficients_v1(evaluations, lde_log2)?;
     Ok(evaluate_fp4_coefficients_at_fp4_v1(&coefficients, point))
 }
-
 #[cfg(test)]
 fn evaluate_masked_native_column_at_points_v1(
     native: &[F],
@@ -3403,7 +3238,6 @@ fn evaluate_masked_native_column_at_points_v1(
         })
         .collect())
 }
-
 /// Evaluate all replayable masked-native columns at `z` and
 /// `z * omega_H` without retaining their common-domain LDEs.
 #[cfg(test)]
@@ -3441,7 +3275,6 @@ where
     }
     Ok((current, next))
 }
-
 /// Evaluate every retained masked polynomial at `z` and `z * omega_H`.
 ///
 /// The DEEP point must be canonical and outside the native trace subgroup.
@@ -3472,7 +3305,6 @@ pub(crate) fn evaluate_masked_trace_polynomial_columns_at_deep_v1(
     }
     Ok((current, next))
 }
-
 /// Evaluate all composition chunks at the transcript-derived DEEP point.
 pub(crate) fn evaluate_composition_chunks_at_deep_v1(
     compositions: &[Vec<Vec<E>>],
@@ -3502,7 +3334,6 @@ pub(crate) fn evaluate_composition_chunks_at_deep_v1(
         })
         .collect()
 }
-
 /// Build a DEEP payload from retained materialized common-domain codewords.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_materialized_deep_proof_v1(
@@ -3574,7 +3405,6 @@ pub(crate) fn build_materialized_deep_proof_v1(
     validate_deep_proof_shape_v1(&deep, parameters, layout)?;
     Ok(deep)
 }
-
 /// Batch-invert canonical nonzero Fp4 values using one extension-field
 /// inversion.
 ///
@@ -3605,7 +3435,6 @@ pub(crate) fn batch_invert_fp4_nonzero_v1(values: &mut [E]) -> Result<(), Aggreg
     }
     Ok(())
 }
-
 /// Validate verifier-derived DEEP batching dimensions.
 pub(crate) fn validate_deep_lane_mixes_v1(
     mixes: &[AggregateDeepLaneMixV1],
@@ -3634,7 +3463,6 @@ pub(crate) fn validate_deep_lane_mixes_v1(
     }
     Ok(())
 }
-
 fn accumulate_fp4_deep_quotients_v1(
     mut accumulator: E,
     query: &[E],
@@ -3650,7 +3478,6 @@ fn accumulate_fp4_deep_quotients_v1(
     }
     Ok(accumulator)
 }
-
 fn accumulate_base_deep_quotients_v1(
     mut accumulator: E,
     query: &[F],
@@ -3671,7 +3498,6 @@ fn accumulate_base_deep_quotients_v1(
     }
     Ok(accumulator)
 }
-
 /// Evaluate the complete batched DEEP-ALI quotient at one authenticated query
 /// row.
 pub(crate) fn deep_ali_mixed_opening_v1(
@@ -3750,7 +3576,6 @@ pub(crate) fn deep_ali_mixed_opening_v1(
     )?;
     Ok(quotient)
 }
-
 /// Commit one shared FRI layer.
 pub(crate) fn fri_tree_v1(
     domains: AggregateStarkDomainsV1,
@@ -3766,7 +3591,6 @@ pub(crate) fn fri_tree_v1(
         .collect::<Result<Vec<_>, _>>()?;
     Sha256MerkleTreeV1::from_leaves(leaves, domains.fri_node).map_err(map_transparent_error_v1)
 }
-
 /// Commit one FRI layer without retaining a Merkle tree.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn streaming_fri_commitment_v1(
@@ -3787,7 +3611,6 @@ pub(crate) fn streaming_fri_commitment_v1(
             .map(|value| fri_leaf_hash_unchecked_v1(domains, lane, round, value)),
     )
 }
-
 /// Absorb the complete relation domain and ordered group layout before roots.
 pub(crate) fn absorb_layout_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -3839,7 +3662,6 @@ pub(crate) fn absorb_layout_v1(
         .absorb(domains.layout_label, &[&encoding])
         .map_err(map_transparent_error_v1)
 }
-
 /// Absorb all ordered base roots before any relation auxiliary challenge.
 pub(crate) fn absorb_base_roots_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -3849,7 +3671,6 @@ pub(crate) fn absorb_base_roots_v1(
     domains.validate()?;
     absorb_group_roots_v1(transcript, domains.base_root_label, groups, true)
 }
-
 /// Absorb all ordered auxiliary roots before constraint-composition challenges.
 pub(crate) fn absorb_aux_roots_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -3859,7 +3680,6 @@ pub(crate) fn absorb_aux_roots_v1(
     domains.validate()?;
     absorb_group_roots_v1(transcript, domains.aux_root_label, groups, false)
 }
-
 fn absorb_group_roots_v1(
     transcript: &mut TransparentTranscriptV1,
     label: &[u8],
@@ -3884,7 +3704,6 @@ fn absorb_group_roots_v1(
     }
     Ok(())
 }
-
 /// Absorb all aggregate composition roots in fixed lane order.
 pub(crate) fn absorb_composition_roots_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -3907,7 +3726,6 @@ pub(crate) fn absorb_composition_roots_v1(
     }
     Ok(())
 }
-
 /// Bind all independently committed FRI-mask roots before batching challenges.
 pub(crate) fn absorb_fri_mask_roots_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -3928,7 +3746,6 @@ pub(crate) fn absorb_fri_mask_roots_v1(
     }
     Ok(())
 }
-
 /// Absorb one FRI root in fixed lane/round order.
 pub(crate) fn absorb_fri_root_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -3948,7 +3765,6 @@ pub(crate) fn absorb_fri_root_v1(
         .absorb(domains.fri_root_label, &[&lane, &round, root])
         .map_err(map_transparent_error_v1)
 }
-
 /// Derive the shared unique query positions from the post-grinding transcript.
 pub(crate) fn query_indices_v1(
     transcript: &TransparentTranscriptV1,
@@ -3966,7 +3782,6 @@ pub(crate) fn query_indices_v1(
     derive_unique_query_indices_v1(&seed, layout.common_lde_size(), parameters.query_count)
         .map_err(map_transparent_error_v1)
 }
-
 fn validate_canonical_index_set_v1(
     leaf_count: usize,
     indices: &[usize],
@@ -3981,7 +3796,6 @@ fn validate_canonical_index_set_v1(
     }
     Ok(())
 }
-
 /// Derive the sorted current/next leaf set for one trace group.
 pub(crate) fn trace_group_opening_indices_v1(
     queries: &[AggregateQueryProofV1],
@@ -4005,7 +3819,6 @@ pub(crate) fn trace_group_opening_indices_v1(
     }
     Ok(indices.into_iter().collect())
 }
-
 /// Derive the sorted unique aggregate-composition leaf set.
 pub(crate) fn composition_opening_indices_v1(
     queries: &[AggregateQueryProofV1],
@@ -4021,7 +3834,6 @@ pub(crate) fn composition_opening_indices_v1(
     }
     Ok(indices.into_iter().collect())
 }
-
 /// Derive the sorted low/high leaf set for one shared FRI round.
 pub(crate) fn fri_opening_indices_v1(
     queries: &[AggregateQueryProofV1],
@@ -4047,7 +3859,6 @@ pub(crate) fn fri_opening_indices_v1(
     }
     Ok(indices.into_iter().collect())
 }
-
 /// Exact number of hashes in the unique canonical minimal frontier.
 pub(crate) fn multiproof_frontier_len_v1(
     leaf_count: usize,
@@ -4070,7 +3881,6 @@ pub(crate) fn multiproof_frontier_len_v1(
     }
     Ok(frontier_len)
 }
-
 /// Construct the unique sorted minimal batched Merkle frontier.
 pub(crate) fn canonical_multiproof_frontier_v1(
     tree: &Sha256MerkleTreeV1,
@@ -4114,7 +3924,6 @@ pub(crate) fn canonical_multiproof_frontier_v1(
     }
     Ok(frontier)
 }
-
 /// Verify one exact canonical minimal batched Merkle multiproof.
 pub(crate) fn verify_canonical_multiproof_v1(
     node_domain: &[u8],
@@ -4167,7 +3976,6 @@ pub(crate) fn verify_canonical_multiproof_v1(
     }
     Ok(())
 }
-
 fn insert_opened_leaf_v1(
     leaves: &mut BTreeMap<usize, [u8; 32]>,
     index: usize,
@@ -4181,7 +3989,6 @@ fn insert_opened_leaf_v1(
     }
     Ok(())
 }
-
 /// Exact worst-case minimal-frontier length for at most `maximum_opened_leaves`.
 pub(crate) fn maximum_multiproof_frontier_len_v1(
     leaf_count: usize,
@@ -4245,7 +4052,6 @@ pub(crate) fn maximum_multiproof_frontier_len_v1(
     }
     Ok(maximum)
 }
-
 /// Validate the entire statement-derived proof shape and canonical frontier sizes.
 pub(crate) fn validate_proof_shape_v1(
     proof: &AggregateStarkProofV1,
@@ -4345,23 +4151,19 @@ pub(crate) fn validate_proof_shape_v1(
     }
     Ok(())
 }
-
 fn append_hash_v1(bytes: &mut Vec<u8>, hash: &[u8; 32]) {
     bytes.extend_from_slice(hash);
 }
-
 fn append_hashes_v1(bytes: &mut Vec<u8>, hashes: &[[u8; 32]]) {
     for hash in hashes {
         append_hash_v1(bytes, hash);
     }
 }
-
 fn append_base_fields_v1(bytes: &mut Vec<u8>, fields: &[u64]) {
     for field in fields {
         append_u64_v1(bytes, *field);
     }
 }
-
 fn append_fp4_fields_v1(bytes: &mut Vec<u8>, fields: &[[u64; 4]]) {
     for field in fields {
         for coefficient in field {
@@ -4369,7 +4171,6 @@ fn append_fp4_fields_v1(bytes: &mut Vec<u8>, fields: &[[u64; 4]]) {
         }
     }
 }
-
 /// Exact byte count of the statement-shaped DEEP opening payload.
 pub(crate) fn exact_deep_opening_bytes_v1(
     parameters: AggregateStarkParametersV1,
@@ -4396,7 +4197,6 @@ pub(crate) fn exact_deep_opening_bytes_v1(
         .and_then(|fields| fields.checked_mul(core::mem::size_of::<[u64; 4]>()))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 fn deep_insertion_offset_v1(
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
@@ -4422,7 +4222,6 @@ fn deep_insertion_offset_v1(
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 fn encode_deep_openings_raw_v1(
     deep: &AggregateDeepProofV1,
     parameters: AggregateStarkParametersV1,
@@ -4448,7 +4247,6 @@ fn encode_deep_openings_raw_v1(
     }
     Ok(bytes)
 }
-
 fn decode_deep_openings_raw_v1(
     bytes: &[u8],
     parameters: AggregateStarkParametersV1,
@@ -4481,7 +4279,6 @@ fn decode_deep_openings_raw_v1(
     validate_deep_proof_shape_v1(&deep, parameters, layout)?;
     Ok(deep)
 }
-
 fn encoded_non_frontier_bytes_v1(
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
@@ -4577,7 +4374,6 @@ fn encoded_non_frontier_bytes_v1(
         .checked_add(query_bytes)
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 /// Exact encoded byte length for one validated proof object.
 pub(crate) fn exact_encoded_proof_bytes_v1(
     proof: &AggregateStarkProofV1,
@@ -4634,7 +4430,6 @@ pub(crate) fn exact_encoded_proof_bytes_v1(
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 /// Exact encoded byte length of one validated DEEP-enabled proof.
 pub(crate) fn exact_encoded_proof_with_deep_bytes_v1(
     proof: &AggregateStarkProofV1,
@@ -4647,7 +4442,6 @@ pub(crate) fn exact_encoded_proof_with_deep_bytes_v1(
         .checked_add(exact_deep_opening_bytes_v1(parameters, layout)?)
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 /// Hard maximum encoded length over all legal query/frontier arrangements.
 pub(crate) fn maximum_encoded_proof_bytes_v1(
     parameters: AggregateStarkParametersV1,
@@ -4707,7 +4501,6 @@ pub(crate) fn maximum_encoded_proof_bytes_v1(
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 /// Hard maximum encoded length of a DEEP-enabled proof.
 pub(crate) fn maximum_encoded_proof_with_deep_bytes_v1(
     parameters: AggregateStarkParametersV1,
@@ -4717,7 +4510,6 @@ pub(crate) fn maximum_encoded_proof_with_deep_bytes_v1(
         .checked_add(exact_deep_opening_bytes_v1(parameters, layout)?)
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-
 /// Encode the sole canonical exact aggregate proof wire.
 pub(crate) fn encode_proof_v1(
     proof: &AggregateStarkProofV1,
@@ -4788,7 +4580,6 @@ pub(crate) fn encode_proof_v1(
     }
     Ok(bytes)
 }
-
 /// Encode the sole canonical DEEP-enabled aggregate wire.
 ///
 /// DEEP values are inserted after every trace/composition/mask root and before
@@ -4818,25 +4609,21 @@ pub(crate) fn encode_proof_with_deep_v1(
     }
     Ok(bytes)
 }
-
 fn reader_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
     match error {
         TransparentStarkErrorV1::NonCanonicalField => AggregateStarkErrorV1::NonCanonicalField,
         _ => AggregateStarkErrorV1::MalformedProof,
     }
 }
-
 fn take_hash_v1(reader: &mut ExactProofReaderV1<'_>) -> Result<[u8; 32], AggregateStarkErrorV1> {
     reader.take().map_err(reader_error_v1)
 }
-
 fn take_hashes_v1(
     reader: &mut ExactProofReaderV1<'_>,
     count: usize,
 ) -> Result<Vec<[u8; 32]>, AggregateStarkErrorV1> {
     (0..count).map(|_| take_hash_v1(reader)).collect()
 }
-
 fn take_base_fields_v1(
     reader: &mut ExactProofReaderV1<'_>,
     count: usize,
@@ -4845,7 +4632,6 @@ fn take_base_fields_v1(
         .map(|_| reader.field().map(|field| field.0).map_err(reader_error_v1))
         .collect()
 }
-
 fn take_fp4_fields_v1(
     reader: &mut ExactProofReaderV1<'_>,
     count: usize,
@@ -4859,7 +4645,6 @@ fn take_fp4_fields_v1(
         })
         .collect()
 }
-
 /// Decode one exact statement-shaped proof and reject every suffix.
 pub(crate) fn decode_proof_v1(
     bytes: &[u8],
@@ -4998,7 +4783,6 @@ pub(crate) fn decode_proof_v1(
     }
     Ok(proof)
 }
-
 /// Decode the sole canonical DEEP-enabled aggregate wire.
 pub(crate) fn decode_proof_with_deep_v1(
     bytes: &[u8],
@@ -5038,7 +4822,6 @@ pub(crate) fn decode_proof_with_deep_v1(
     }
     Ok((proof, deep))
 }
-
 /// Prover material for one ordered trace group on the common LDE domain.
 #[derive(Clone)]
 pub(crate) struct AggregateTraceGroupMaterialV1 {
@@ -5051,7 +4834,6 @@ pub(crate) struct AggregateTraceGroupMaterialV1 {
     /// Auxiliary vector-row Merkle tree.
     pub(crate) aux_tree: Sha256MerkleTreeV1,
 }
-
 /// Prover material for one shared FRI lane.
 #[derive(Clone)]
 pub(crate) struct AggregateFriLaneMaterialV1 {
@@ -5064,7 +4846,6 @@ pub(crate) struct AggregateFriLaneMaterialV1 {
     /// Exact terminal evaluations.
     pub(crate) terminal_values: Vec<E>,
 }
-
 fn fold_fri_layer_v1(
     current: &[E],
     beta: E,
@@ -5098,7 +4879,6 @@ fn fold_fri_layer_v1(
     }
     Ok(next)
 }
-
 /// Build and transcript-bind one complete shared binary-FRI lane.
 pub(crate) fn build_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
@@ -5162,7 +4942,6 @@ pub(crate) fn build_fri_lane_v1(
         terminal_values,
     })
 }
-
 /// Bounded-memory transcript material for one FRI lane.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5174,7 +4953,6 @@ pub(crate) struct AggregateStreamingFriLaneMaterialV1 {
     /// Exact terminal evaluations.
     pub(crate) terminal_values: Vec<E>,
 }
-
 /// Post-query openings and frontiers for one streamed FRI lane.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5184,7 +4962,6 @@ pub(crate) struct AggregateStreamingFriLaneOpeningsV1 {
     /// Canonical minimal frontier for each non-terminal layer.
     pub(crate) round_frontiers: Vec<Vec<[u8; 32]>>,
 }
-
 /// Commit and transcript-bind a complete FRI lane while retaining only one
 /// current layer and one half-sized successor layer.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -5249,7 +5026,6 @@ pub(crate) fn build_streaming_fri_lane_v1(
         terminal_values: current,
     })
 }
-
 /// Replay a committed FRI lane after transcript queries are fixed, retaining
 /// only the exact opened pairs and canonical minimal frontiers.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -5342,7 +5118,6 @@ pub(crate) fn open_streaming_fri_lane_v1(
         round_frontiers,
     })
 }
-
 /// Construct all exact opened values for one shared query index.
 pub(crate) fn build_query_v1(
     parameters: AggregateStarkParametersV1,
@@ -5444,7 +5219,6 @@ pub(crate) fn build_query_v1(
         fri_lanes: fri_queries,
     })
 }
-
 /// Build every canonical trace/composition/FRI frontier after queries are fixed.
 pub(crate) fn build_all_frontiers_v1(
     parameters: AggregateStarkParametersV1,
@@ -5530,7 +5304,6 @@ pub(crate) fn build_all_frontiers_v1(
         fri_frontiers,
     ))
 }
-
 /// Verify all base, auxiliary, composition, and non-terminal FRI multiproofs.
 pub(crate) fn verify_all_merkle_openings_v1(
     proof: &AggregateStarkProofV1,
@@ -5693,7 +5466,6 @@ pub(crate) fn verify_all_merkle_openings_v1(
     }
     Ok(())
 }
-
 /// Verify and transcript-bind terminal FRI vectors, returning fold challenges.
 pub(crate) fn verify_fri_commitments_v1(
     proof: &AggregateStarkProofV1,
@@ -5741,7 +5513,6 @@ pub(crate) fn verify_fri_commitments_v1(
     }
     Ok((all_betas, all_terminals))
 }
-
 fn verify_fri_query_v1(
     query_index: usize,
     expected_base: E,
@@ -5789,7 +5560,6 @@ fn verify_fri_query_v1(
     }
     Ok(())
 }
-
 /// Invoke the relation callback for every opened row and bind its results to FRI.
 #[cfg(test)]
 pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEvaluatorV1>(
@@ -5866,7 +5636,6 @@ pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEval
     }
     Ok(())
 }
-
 /// Verify opened AIR constraints and the complete DEEP-ALI quotient before
 /// binding every query to FRI.
 ///
@@ -5975,17 +5744,13 @@ pub(crate) fn verify_opened_query_relations_with_deep_v1<
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[path = "aggregate_stark/retained_polynomial_tests.rs"]
 mod retained_polynomial_tests;
-
 #[cfg(test)]
 mod tests {
-    use rand::{SeedableRng as _, rngs::StdRng};
-
     use super::*;
-
+    use rand::{SeedableRng as _, rngs::StdRng};
     const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
         proof_version: 1,
@@ -6003,7 +5768,6 @@ mod tests {
         maximum_aux_columns_per_instance: 4,
         maximum_proof_bytes: 1 << 20,
     };
-
     const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
         base_leaf: b"aggregate-test-base-leaf",
         base_node: b"aggregate-test-base-node",
@@ -6021,12 +5785,10 @@ mod tests {
         fri_beta_label: b"aggregate-test-fri-beta-label",
         query_seed: b"aggregate-test-query-seed",
     };
-
     fn transcript() -> TransparentTranscriptV1 {
         TransparentTranscriptV1::new(b"aggregate-test-suite", &[7; 32], &[9; 32])
             .expect("transcript")
     }
-
     #[test]
     fn aggregate_domains_cannot_alias_fixed_deep_transcript_labels() {
         assert!(DOMAINS.validate().is_ok());
@@ -6041,7 +5803,6 @@ mod tests {
             );
         }
     }
-
     fn layout() -> AggregateProofLayoutV1 {
         AggregateProofLayoutV1::new(
             PARAMETERS,
@@ -6054,7 +5815,6 @@ mod tests {
         )
         .expect("layout")
     }
-
     fn release_fri_parameters_v1() -> AggregateStarkParametersV1 {
         AggregateStarkParametersV1 {
             proof_magic: *b"FRI2",
@@ -6074,7 +5834,6 @@ mod tests {
             maximum_proof_bytes: 8 << 20,
         }
     }
-
     fn release_fri_layout_v1(parameters: AggregateStarkParametersV1) -> AggregateProofLayoutV1 {
         AggregateProofLayoutV1::new(
             parameters,
@@ -6087,7 +5846,6 @@ mod tests {
         )
         .expect("release FRI layout")
     }
-
     fn release_fri_certificate_v1() -> AggregateFriTheorem2CertificateV1 {
         AggregateFriTheorem2CertificateV1 {
             l_minus_one_numerator: 3,
@@ -6111,7 +5869,6 @@ mod tests {
             claimed_query_error_bits: 132,
         }
     }
-
     #[test]
     fn affine_batched_fri_theorem_certificate_checks_every_precondition() {
         let parameters = release_fri_parameters_v1();
@@ -6125,7 +5882,6 @@ mod tests {
                 commitment_error_bits: 181,
             }
         );
-
         let mutations = [
             AggregateFriTheorem2CertificateV1 {
                 l_minus_one_numerator: 2,
@@ -6198,7 +5954,6 @@ mod tests {
                 "theorem-precondition mutation {index} must fail closed"
             );
         }
-
         let mut weak_parameters = parameters;
         weak_parameters.query_count = 56;
         let weak_layout = release_fri_layout_v1(weak_parameters);
@@ -6216,7 +5971,6 @@ mod tests {
             "q=56 cannot substantiate the claimed 132-bit query term"
         );
     }
-
     fn fixture() -> (
         AggregateProofLayoutV1,
         AggregateStarkProofV1,
@@ -6358,7 +6112,6 @@ mod tests {
         };
         (layout, proof, compositions, vec![vec![E::ZERO; rows]; 2])
     }
-
     fn deep_fixture(layout: &AggregateProofLayoutV1) -> AggregateDeepProofV1 {
         let mut next_value = 1_u64;
         let mut values = |count: usize| {
@@ -6393,7 +6146,6 @@ mod tests {
             composition_values,
         }
     }
-
     #[test]
     fn deep_point_exclusion_covers_trace_evaluation_query_and_next_domains() {
         let layout = layout();
@@ -6425,7 +6177,6 @@ mod tests {
                 .expect("derived-point predicate")
         );
     }
-
     #[test]
     fn deep_codec_is_exact_and_every_value_is_transcript_bound() {
         let (layout, proof, _, _) = fixture();
@@ -6449,7 +6200,6 @@ mod tests {
                 + exact_deep_opening_bytes_v1(PARAMETERS, &layout)
                     .expect("exact DEEP payload length")
         );
-
         let insertion = deep_insertion_offset_v1(PARAMETERS, &layout).expect("DEEP offset");
         let deep_len = exact_deep_opening_bytes_v1(PARAMETERS, &layout).expect("DEEP bytes");
         let field_count = deep_len / core::mem::size_of::<[u64; 4]>();
@@ -6485,7 +6235,6 @@ mod tests {
                 "DEEP field {field} must affect the transcript"
             );
         }
-
         let mut reordered = bytes.clone();
         let first = reordered[insertion..insertion + 32].to_vec();
         let second = reordered[insertion + 32..insertion + 64].to_vec();
@@ -6504,7 +6253,6 @@ mod tests {
         )
         .expect("reordered absorption");
         assert_ne!(reordered_transcript.state(), canonical_state);
-
         let mut omitted = bytes.clone();
         omitted.drain(insertion..insertion + 32);
         assert!(decode_proof_with_deep_v1(&omitted, PARAMETERS, &layout).is_err());
@@ -6523,7 +6271,6 @@ mod tests {
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn fp4_batch_inversion_is_exact_and_rejects_zero_or_empty_inputs() {
         let original = [
@@ -6546,9 +6293,7 @@ mod tests {
             Err(AggregateStarkErrorV1::DeepOpening)
         );
     }
-
     struct ZeroEvaluator;
-
     impl AggregateOpenedRowEvaluatorV1 for ZeroEvaluator {
         fn evaluate_opened_row_v1(
             &mut self,
@@ -6563,7 +6308,6 @@ mod tests {
             })
         }
     }
-
     #[test]
     fn streaming_merkle_matches_materialized_tree_and_canonical_frontier() {
         let leaves = (0_u64..64)
@@ -6614,7 +6358,6 @@ mod tests {
             .expect("streaming frontier verifies");
         }
     }
-
     #[test]
     fn streaming_merkle_rejects_noncanonical_or_inexact_streams() {
         let leaves = (0_u64..8)
@@ -6642,7 +6385,6 @@ mod tests {
             )
             .is_err()
         );
-
         let missing = streaming_merkle_commitment_v1(
             b"aggregate-streaming-hostile-node",
             leaves.len(),
@@ -6662,7 +6404,6 @@ mod tests {
         );
         assert_eq!(trailing, Err(AggregateStarkErrorV1::InvalidProofShape));
     }
-
     #[test]
     fn column_streamed_vector_rows_match_exact_leaf_framing_and_openings() {
         let rows = 64;
@@ -6718,7 +6459,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn column_streamed_vector_rows_reject_shape_and_order_abuse() {
         assert!(
@@ -6752,7 +6492,6 @@ mod tests {
             incomplete.finish(),
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
-
         let mut overfull = StreamingRowCommitmentV1::new(
             b"aggregate-streaming-row-leaf",
             b"aggregate-streaming-row-node",
@@ -6768,7 +6507,6 @@ mod tests {
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
     }
-
     #[test]
     fn replayable_masked_column_commitment_matches_materialized_lde() {
         let native_columns = (0_u64..5)
@@ -6803,7 +6541,6 @@ mod tests {
         )
         .expect("masked replay");
         assert_eq!(replay.commitment.root, root_only.commitment.root);
-
         let materialized = native_columns
             .iter()
             .zip(&masks.masks)
@@ -6837,7 +6574,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn encrypted_scratch_commitment_strategy_is_byte_exact_with_fast_path() {
         let columns = (0_u64..4)
@@ -6909,7 +6645,6 @@ mod tests {
             assert_eq!(retained_mask.coefficients(), fast_mask.coefficients());
             assert_eq!(scratch_mask.coefficients(), fast_mask.coefficients());
         }
-
         let replay_indices = [1, 7, 31, 62];
         let fast_replay = replay_masked_trace_columns_v1(
             b"aggregate-strategy-leaf",
@@ -6940,7 +6675,6 @@ mod tests {
         assert_eq!(retained_replay, fast_replay);
         assert_eq!(scratch_replay, fast_replay);
     }
-
     #[test]
     fn explicit_scratch_chunk_height_is_exact_and_rejects_invalid_geometry_before_source() {
         let columns = (0_u64..2)
@@ -6987,7 +6721,6 @@ mod tests {
         for (actual, expected) in chunked_masks.masks.iter().zip(expected_masks.masks) {
             assert_eq!(actual.coefficients(), expected.coefficients());
         }
-
         for hostile_chunk_rows in [0, 3, 128] {
             let calls = std::cell::Cell::new(0_usize);
             let mut rng = StdRng::from_seed([0xB7; 32]);
@@ -7014,7 +6747,6 @@ mod tests {
             assert_eq!(calls.get(), 0);
         }
     }
-
     #[test]
     fn retaining_scratch_commitment_rejects_every_shape_before_calling_source() {
         fn reject_before_source(
@@ -7052,7 +6784,6 @@ mod tests {
                 "invalid retained-scratch shape must reject before source work"
             );
         }
-
         reject_before_source(b"", b"node", 3, 6, 2, 7, &[]);
         reject_before_source(b"leaf", b"", 3, 6, 2, 7, &[]);
         reject_before_source(b"leaf", b"node", 3, 3, 2, 7, &[]);
@@ -7061,7 +6792,6 @@ mod tests {
         reject_before_source(b"leaf", b"node", 3, 6, 2, 7, &[1, 1]);
         reject_before_source(b"leaf", b"node", 3, 6, 2, 7, &[2, 1]);
         reject_before_source(b"leaf", b"node", 3, 6, 2, 7, &[64]);
-
         let calls = std::cell::Cell::new(0_usize);
         let mut rng = StdRng::from_seed([0xA5; 32]);
         assert!(
@@ -7084,7 +6814,6 @@ mod tests {
         );
         assert_eq!(calls.get(), 1, "first malformed native column must stop");
     }
-
     #[test]
     fn replayable_masked_column_commitment_rejects_shape_substitution() {
         let columns = [vec![F::ZERO; 8], vec![F::ONE; 8]];
@@ -7140,7 +6869,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn retained_masked_polynomials_are_exact_commitment_coset_and_deep_replays() {
         let native_columns = (0_u64..3)
@@ -7183,7 +6911,6 @@ mod tests {
         assert_eq!(polynomials.width(), native_columns.len());
         assert_eq!(polynomials.native_trace_log2(), 3);
         assert_eq!(polynomials.commitment_lde_log2(), 6);
-
         for (column, mask) in masks.masks.iter().enumerate() {
             let expected = masked_trace_coefficients_with_mask_v1(
                 &native_columns[column],
@@ -7198,7 +6925,6 @@ mod tests {
                 expected
             );
         }
-
         let replay_indices = [0, 7, 17, 63];
         let replayable = replay_masked_trace_columns_v1(
             b"aggregate-retained-polynomial-leaf",
@@ -7228,7 +6954,6 @@ mod tests {
             ),
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
-
         let reduced_coset = polynomials
             .evaluate_columns_on_coset_v1(4)
             .expect("reduced quotient coset");
@@ -7242,7 +6967,6 @@ mod tests {
             .expect("reference reduced coset");
             assert_eq!(&*reduced_coset[column], &expected);
         }
-
         let point = E::canonical([7, 1, 2, 3]).expect("canonical extension point");
         let replayable_deep = evaluate_masked_native_columns_at_deep_v1(&masks, point, |column| {
             Ok(native_columns[column].clone())
@@ -7257,7 +6981,6 @@ mod tests {
             Err(AggregateStarkErrorV1::DeepOpening)
         );
     }
-
     #[test]
     fn retained_polynomial_shape_and_secret_zeroizers_reject_mutation() {
         let columns = [vec![F::ONE; 8], vec![F(2); 8]];
@@ -7286,7 +7009,6 @@ mod tests {
             ),
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
-
         let mut base_values = vec![F(9), F(17), F(33)];
         zeroize_field_column_v1(&mut base_values);
         assert!(base_values.iter().all(|value| *value == F::ZERO));
@@ -7297,7 +7019,6 @@ mod tests {
         zeroize_extension_field_column_v1(&mut extension_values);
         assert!(extension_values.iter().all(|value| *value == E::ZERO));
     }
-
     #[test]
     fn reduced_quotient_coset_chunks_match_common_domain_and_exact_division() {
         let layout = layout();
@@ -7337,7 +7058,6 @@ mod tests {
         )
         .expect("reduced quotient chunks");
         assert_eq!(reduced, expected);
-
         let trace_log2 = 3;
         let trace_size = 1_usize << trace_log2;
         let mut numerator_coefficients = vec![E::ZERO; quotient_coefficients.len() + trace_size];
@@ -7380,7 +7100,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn quotient_coset_rejects_tail_remainder_shape_and_adversarial_mutations() {
         let layout = layout();
@@ -7397,7 +7116,6 @@ mod tests {
             F(GOLDILOCKS_GENERATOR_V1),
         )
         .expect("quotient evaluations");
-
         coefficients.resize(quotient_size, E::ZERO);
         coefficients[20] = E::ONE;
         let forbidden_tail = goldilocks_fp4_evaluate_coset_v1(
@@ -7417,7 +7135,6 @@ mod tests {
             ),
             Err(AggregateStarkErrorV1::FriDegree)
         );
-
         let mut single_evaluation_mutation = evaluations.clone();
         single_evaluation_mutation[7] = single_evaluation_mutation[7].add(E::ONE);
         assert_eq!(
@@ -7476,7 +7193,6 @@ mod tests {
             ),
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
-
         let trace_size = 8;
         let quotient_coefficients = coefficients[..20].to_vec();
         let mut numerator = vec![E::ZERO; quotient_coefficients.len() + trace_size];
@@ -7494,7 +7210,6 @@ mod tests {
             Err(AggregateStarkErrorV1::InvalidLayout)
         );
     }
-
     #[test]
     fn streaming_composition_and_fri_match_materialized_commitments_and_openings() {
         let layout = layout();
@@ -7510,7 +7225,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let indices = vec![1, 7];
-
         let composition_chunks = vec![values.clone()];
         let composition_tree =
             composition_tree_v1(DOMAINS, 0, &composition_chunks).expect("composition tree");
@@ -7523,7 +7237,6 @@ mod tests {
             canonical_multiproof_frontier_v1(&composition_tree, rows, &indices)
                 .expect("composition frontier")
         );
-
         let mut materialized_transcript = transcript();
         let materialized = build_fri_lane_v1(
             PARAMETERS,
@@ -7550,7 +7263,6 @@ mod tests {
             streaming_transcript.state(),
             materialized_transcript.state()
         );
-
         let openings = open_streaming_fri_lane_v1(
             PARAMETERS, DOMAINS, &layout, 0, values, &streamed, &indices,
         )
@@ -7592,7 +7304,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn streaming_fri_replay_rejects_material_and_query_substitution() {
         let layout = layout();
@@ -7617,7 +7328,6 @@ mod tests {
         )
         .expect("streaming FRI");
         let indices = [1, 7];
-
         let mut changed = material.clone();
         changed.roots[0][0] ^= 1;
         assert!(
@@ -7675,7 +7385,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_codec_multiproofs_fri_and_callback_roundtrip() {
         let (layout, proof, _, _) = fixture();
@@ -7692,7 +7401,6 @@ mod tests {
         assert_eq!(decoded, proof);
         verify_all_merkle_openings_v1(&decoded, PARAMETERS, DOMAINS, &layout, &[1, 7])
             .expect("multiproofs");
-
         let mut verifier_transcript = transcript();
         absorb_layout_v1(
             &mut verifier_transcript,
@@ -7736,7 +7444,6 @@ mod tests {
             &mut ZeroEvaluator,
         )
         .expect("callback");
-
         for length in [0, 1, encoded.len() / 2, encoded.len() - 1] {
             assert!(decode_proof_v1(&encoded[..length], PARAMETERS, &layout).is_err());
         }
@@ -7744,40 +7451,34 @@ mod tests {
         trailing.push(0);
         assert!(decode_proof_v1(&trailing, PARAMETERS, &layout).is_err());
     }
-
     #[test]
     fn exact_codec_rejects_noncanonical_base_and_every_extension_opening_class() {
         let (layout, proof, _, _) = fixture();
         let noncanonical = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
-
         let mut changed = proof.clone();
         changed.queries[0].trace_groups[0].base_current[0] = noncanonical;
         assert_eq!(
             encode_proof_v1(&changed, PARAMETERS, &layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
-
         changed = proof.clone();
         changed.queries[0].composition_values[0][0][1] = noncanonical;
         assert_eq!(
             encode_proof_v1(&changed, PARAMETERS, &layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
-
         changed = proof.clone();
         changed.queries[0].fri_mask_values[0][2] = noncanonical;
         assert_eq!(
             encode_proof_v1(&changed, PARAMETERS, &layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
-
         changed = proof.clone();
         changed.queries[0].fri_lanes[0].rounds[0].low[3] = noncanonical;
         assert_eq!(
             encode_proof_v1(&changed, PARAMETERS, &layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
-
         changed = proof;
         changed.fri_lanes[0].terminal_values[0][0] = noncanonical;
         assert_eq!(
@@ -7785,7 +7486,6 @@ mod tests {
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn layout_domains_and_frontiers_are_fail_closed() {
         let mut groups = vec![
@@ -7809,11 +7509,9 @@ mod tests {
         AggregateProofLayoutV1::new(PARAMETERS, groups)
             .expect("independent equal-domain groups remain distinct");
         assert!(AggregateProofLayoutV1::new(PARAMETERS, Vec::new()).is_err());
-
         let mut domains = DOMAINS;
         domains.fri_node = domains.fri_leaf;
         assert!(domains.validate().is_err());
-
         let (layout, proof, _, _) = fixture();
         let mut changed = proof.clone();
         changed.trace_groups[0].base_frontier.pop();
@@ -7826,7 +7524,6 @@ mod tests {
             verify_all_merkle_openings_v1(&decoded, PARAMETERS, DOMAINS, &layout, &[1, 7]).is_err()
         );
     }
-
     fn encrypted_scratch_fixture() -> EncryptedFieldMatrixScratchV1 {
         let rows = 16;
         let width = 3;
@@ -7841,7 +7538,6 @@ mod tests {
         }
         writer.finish().expect("finish scratch")
     }
-
     #[derive(Clone, Copy)]
     enum ScratchEntropyModeV1 {
         FailAt(u8),
@@ -7849,42 +7545,34 @@ mod tests {
         RepeatedPrefix,
         Healthy,
     }
-
     #[derive(Debug)]
     struct ScratchEntropyErrorV1;
-
     impl core::fmt::Display for ScratchEntropyErrorV1 {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected encrypted-scratch entropy failure")
         }
     }
-
     struct ScratchEntropyRngV1 {
         mode: ScratchEntropyModeV1,
         fills: usize,
     }
-
     impl ScratchEntropyRngV1 {
         fn new(mode: ScratchEntropyModeV1) -> Self {
             Self { mode, fills: 0 }
         }
     }
-
     impl TryRngCore for ScratchEntropyRngV1 {
         type Error = ScratchEntropyErrorV1;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0_u8; 4];
             self.try_fill_bytes(&mut bytes)?;
             Ok(u32::from_le_bytes(bytes))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0_u8; 8];
             self.try_fill_bytes(&mut bytes)?;
             Ok(u64::from_le_bytes(bytes))
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             let fill = self.fills;
             self.fills = self.fills.saturating_add(1);
@@ -7920,7 +7608,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn encrypted_field_scratch_entropy_is_injected_healthy_and_precedes_file_creation() {
         for mode in [
@@ -7942,14 +7629,12 @@ mod tests {
                 "no anonymous file may be created before entropy validation"
             );
         }
-
         let attempts = encrypted_scratch_file_creation_attempts_v1();
         let mut healthy = ScratchEntropyRngV1::new(ScratchEntropyModeV1::Healthy);
         let writer = EncryptedFieldMatrixScratchWriterV1::new_with_rng(16, 2, 4, &mut healthy)
             .expect("healthy injected entropy");
         assert_eq!(encrypted_scratch_file_creation_attempts_v1(), attempts + 1);
         drop(writer);
-
         let attempts = encrypted_scratch_file_creation_attempts_v1();
         let mut healthy = ScratchEntropyRngV1::new(ScratchEntropyModeV1::Healthy);
         assert!(matches!(
@@ -7959,12 +7644,10 @@ mod tests {
         assert_eq!(healthy.fills, 0, "invalid shape must not consume entropy");
         assert_eq!(encrypted_scratch_file_creation_attempts_v1(), attempts);
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn encrypted_field_scratch_memfd_is_anonymous_owner_private_and_exec_sealed() {
         use rustix::fs::{Mode, fchmod};
-
         let file = create_anonymous_scratch_file_v1().expect("Linux 6.3+ sealed scratch memfd");
         let metadata = file.metadata().expect("scratch metadata");
         assert!(metadata.file_type().is_file());
@@ -7986,7 +7669,6 @@ mod tests {
             0o600
         );
     }
-
     #[test]
     fn encrypted_field_scratch_roundtrips_exact_row_chunks_without_plaintext_storage() {
         let mut scratch = encrypted_scratch_fixture();
@@ -7998,7 +7680,6 @@ mod tests {
             scratch.ciphertext_bytes(),
             u64::try_from(3 * 4 * (4 * 8 + XCHACHA20_POLY1305_TAG_BYTES_V1)).expect("small")
         );
-
         scratch
             .file
             .seek(std::io::SeekFrom::Start(0))
@@ -8014,7 +7695,6 @@ mod tests {
                 .windows(first_plaintext_chunk.len())
                 .any(|window| window == first_plaintext_chunk)
         );
-
         for chunk in 0..scratch.chunk_count() {
             let block = scratch.read_chunk(chunk).expect("authenticated block");
             assert_eq!(block.row_start(), chunk * 4);
@@ -8033,7 +7713,6 @@ mod tests {
         }
         assert!(scratch.read_chunk(scratch.chunk_count()).is_err());
     }
-
     #[test]
     fn encrypted_field_scratch_rejects_shape_and_incomplete_writes() {
         assert!(EncryptedFieldMatrixScratchWriterV1::new(0, 1, 1).is_err());
@@ -8041,14 +7720,12 @@ mod tests {
         assert!(EncryptedFieldMatrixScratchWriterV1::new(16, 0, 4).is_err());
         assert!(EncryptedFieldMatrixScratchWriterV1::new(16, 1, 3).is_err());
         assert!(EncryptedFieldMatrixScratchWriterV1::new(16, 1, 32).is_err());
-
         let mut writer = EncryptedFieldMatrixScratchWriterV1::new(16, 2, 4).expect("valid writer");
         assert!(writer.append_column(&[F::ZERO; 15]).is_err());
         writer
             .append_column(&[F::ONE; 16])
             .expect("first exact column");
         assert!(writer.finish().is_err());
-
         let mut writer = EncryptedFieldMatrixScratchWriterV1::new(16, 1, 4).expect("valid writer");
         writer
             .append_column(&[F::ONE; 16])
@@ -8056,7 +7733,6 @@ mod tests {
         assert!(writer.append_column(&[F::ONE; 16]).is_err());
         writer.finish().expect("complete writer");
     }
-
     #[test]
     fn encrypted_field_scratch_authenticates_bytes_key_nonce_order_and_length() {
         let mut mutated = encrypted_scratch_fixture();
@@ -8073,15 +7749,12 @@ mod tests {
             .expect("seek");
         mutated.file.write_all(&byte).expect("mutate");
         assert!(mutated.read_chunk(0).is_err());
-
         let mut wrong_key = encrypted_scratch_fixture();
         wrong_key.key[0] ^= 1;
         assert!(wrong_key.read_chunk(0).is_err());
-
         let mut wrong_nonce = encrypted_scratch_fixture();
         wrong_nonce.nonce_prefix[0] ^= 1;
         assert!(wrong_nonce.read_chunk(0).is_err());
-
         let mut reordered = encrypted_scratch_fixture();
         let record_bytes = reordered.ciphertext_chunk_bytes;
         let mut first = vec![0_u8; record_bytes];
@@ -8099,7 +7772,6 @@ mod tests {
         reordered.file.write_all(&second).expect("swap first");
         reordered.file.write_all(&first).expect("swap second");
         assert!(reordered.read_chunk(0).is_err());
-
         let mut duplicated = encrypted_scratch_fixture();
         let mut first = vec![0_u8; duplicated.ciphertext_chunk_bytes];
         duplicated
@@ -8115,14 +7787,12 @@ mod tests {
             .expect("seek second");
         duplicated.file.write_all(&first).expect("duplicate");
         assert!(duplicated.read_chunk(1).is_err());
-
         let mut truncated = encrypted_scratch_fixture();
         truncated
             .file
             .set_len(truncated.expected_file_bytes - 1)
             .expect("truncate");
         assert!(truncated.read_chunk(0).is_err());
-
         let mut extended = encrypted_scratch_fixture();
         extended
             .file
@@ -8130,6 +7800,5 @@ mod tests {
             .expect("extend");
         assert!(extended.read_chunk(0).is_err());
     }
-
     include!("aggregate_stark_scratch_replay_tests.rs");
 }

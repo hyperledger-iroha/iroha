@@ -1,13 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/proofs/query (signed core query wrapper).
 #![cfg(feature = "app_api")]
-
-use std::{
-    num::{NonZeroU64, NonZeroUsize},
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
@@ -26,13 +19,16 @@ use iroha_torii::QueryOptions;
 use iroha_version::codec::EncodeVersioned as _;
 use mv::storage::StorageReadOnly;
 use norito::json;
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tower::ServiceExt as _;
-
 fn checked_proof_query_authority_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .expect("generate checked ZK proof query authority fixture keypair")
 }
-
 #[test]
 fn proof_query_authority_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_proof_query_authority_fixture();
@@ -40,16 +36,13 @@ fn proof_query_authority_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture proof query public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn proofs_query_find_by_id_returns_norito() {
     let backend = "halo2/ipa";
     let proof_hash = [0xAA; 32];
-
     // Authority registered in state so query validation succeeds
     let key_pair = checked_proof_query_authority_fixture();
     let domain_name = "wonderland";
@@ -62,14 +55,12 @@ async fn proofs_query_find_by_id_returns_norito() {
         [account],
         std::iter::empty::<iroha_data_model::asset::definition::AssetDefinition>(),
     );
-
     // Minimal state and live query store
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
     let live_for_route = live.clone();
     let state = State::new_for_testing(world, kura, live);
     let mut state = state;
-
     // Seed one proof record
     let id = ProofId {
         backend: backend.into(),
@@ -92,7 +83,6 @@ async fn proofs_query_find_by_id_returns_norito() {
             "proof record not inserted"
         );
     }
-
     let state = Arc::new(state);
     let network_id =
         NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -111,7 +101,6 @@ async fn proofs_query_find_by_id_returns_norito() {
     let tel = iroha_torii::MaybeTelemetry::for_tests();
     #[cfg(not(feature = "telemetry"))]
     let tel = iroha_torii::MaybeTelemetry::for_tests();
-
     let app = Router::new().route(
         "/v1/proofs/query",
         post({
@@ -134,7 +123,6 @@ async fn proofs_query_find_by_id_returns_norito() {
             }
         }),
     );
-
     let signed_query =
         QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
             id: proof_id.clone(),

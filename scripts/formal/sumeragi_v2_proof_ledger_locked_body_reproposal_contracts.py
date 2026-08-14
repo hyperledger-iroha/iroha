@@ -1035,6 +1035,7 @@ assert_eq!(
         "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
         """
 let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+assert!(!recovered.exactly_matches_directive(foreign_lock));
 assert!(
     LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
         .attempted
@@ -1052,6 +1053,7 @@ assert!(
     "the replayed proposal round must match its reducer tag"
 );
 let decided = directive(Some(subject), Some(subject));
+assert!(!recovered.exactly_matches_directive(decided));
 assert!(
     LocalProposalState::from_replayed_proposal(Some(replayed), decided)
         .attempted

@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii accounts endpoints.
 #![cfg(feature = "app_api")]
-
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -12,10 +11,8 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
 };
 use iroha_test_samples::ALICE_ID;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // test builds complex state; splitting would reduce clarity
 async fn accounts_endpoints_exist() {
@@ -29,7 +26,6 @@ async fn accounts_endpoints_exist() {
         World::with_assets([domain], [account], [], [], []),
     );
     let app = torii.router();
-
     // GET /v1/accounts
     let resp = fixtures::request(
         &app,
@@ -45,7 +41,6 @@ async fn accounts_endpoints_exist() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     // POST /v1/accounts/query
     let resp = fixtures::request(
         &app,
@@ -63,7 +58,6 @@ async fn accounts_endpoints_exist() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     // GET /v1/accounts/{account}/permissions
     let canonical_account = &fixtures::TX_QUERY_ACCOUNT.canonical;
     let resp = fixtures::request(

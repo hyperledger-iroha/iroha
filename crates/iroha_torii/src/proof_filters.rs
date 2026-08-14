@@ -1,6 +1,5 @@
 use iroha_data_model::events::EventBox;
 use iroha_data_model::prelude::DataEvent;
-
 pub fn normalize_proof_filters(
     proof_backend: Option<Vec<String>>,
     proof_call_hash: Option<Vec<[u8; 32]>>,
@@ -16,7 +15,6 @@ pub fn normalize_proof_filters(
         normalize_vec(proof_envelope_hash),
     )
 }
-
 pub fn has_any_proof_filters(
     proof_backend: Option<&Vec<String>>,
     proof_call_hash: Option<&Vec<[u8; 32]>>,
@@ -24,7 +22,6 @@ pub fn has_any_proof_filters(
 ) -> bool {
     has_values(proof_backend) || has_values(proof_call_hash) || has_values(proof_envelope_hash)
 }
-
 pub fn event_matches_proof_filters(
     event: &EventBox,
     proof_backend: Option<&Vec<String>>,
@@ -37,7 +34,6 @@ pub fn event_matches_proof_filters(
     let proof_envelope_hash = proof_envelope_hash.filter(|values| !values.is_empty());
     let has_filters =
         proof_backend.is_some() || proof_call_hash.is_some() || proof_envelope_hash.is_some();
-
     let proof_event = match event {
         EventBox::Data(ev) => match ev.as_ref() {
             DataEvent::Proof(pe) => pe,
@@ -45,11 +41,9 @@ pub fn event_matches_proof_filters(
         },
         _ => return !proof_only,
     };
-
     if !has_filters {
         return true;
     }
-
     match proof_event {
         iroha_data_model::events::data::proof::ProofEvent::Verified(v) => {
             if let Some(backends) = proof_backend {
@@ -116,22 +110,18 @@ pub fn event_matches_proof_filters(
         }
     }
 }
-
 fn normalize_vec<T>(value: Option<Vec<T>>) -> Option<Vec<T>> {
     match value {
         Some(values) if values.is_empty() => None,
         other => other,
     }
 }
-
 fn has_values<T>(value: Option<&Vec<T>>) -> bool {
     value.is_some_and(|values| !values.is_empty())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -143,14 +133,12 @@ mod tests {
         prelude::DataEvent,
         proof::ProofId,
     };
-
     fn proof_id(backend: &str, proof_hash: [u8; 32]) -> ProofId {
         ProofId {
             backend: backend.to_string(),
             proof_hash,
         }
     }
-
     fn verified_event(
         backend: &str,
         call_hash: Option<[u8; 32]>,
@@ -167,7 +155,6 @@ mod tests {
             .into(),
         )
     }
-
     fn rejected_event(backend: &str, call_hash: Option<[u8; 32]>) -> EventBox {
         EventBox::Data(
             DataEvent::Proof(ProofEvent::Rejected(ProofRejected {
@@ -180,7 +167,6 @@ mod tests {
             .into(),
         )
     }
-
     fn checked_prune_authority_fixture() -> AccountId {
         AccountId::of(
             KeyPair::try_random()
@@ -189,7 +175,6 @@ mod tests {
                 .clone(),
         )
     }
-
     #[test]
     fn prune_authority_fixture_uses_checked_ed25519_key_generation() {
         let account = checked_prune_authority_fixture();
@@ -197,10 +182,8 @@ mod tests {
             .expect_single_signatory()
             .try_algorithm()
             .expect("fixture proof-prune authority public key has a valid algorithm");
-
         assert_eq!(algorithm, Algorithm::Ed25519);
     }
-
     fn pruned_event(backend: &str) -> EventBox {
         let account = checked_prune_authority_fixture();
         EventBox::Data(
@@ -218,7 +201,6 @@ mod tests {
             .into(),
         )
     }
-
     fn time_event() -> EventBox {
         EventBox::Time(TimeEvent {
             interval: TimeInterval {
@@ -227,14 +209,12 @@ mod tests {
             },
         })
     }
-
     #[test]
     fn proof_filters_match_verified_with_all_fields() {
         let event = verified_event("halo2/ipa", Some([0xAA; 32]), Some([0xBB; 32]));
         let proof_backend = Some(vec!["halo2/ipa".to_string()]);
         let proof_call_hash = Some(vec![[0xAA; 32]]);
         let proof_envelope_hash = Some(vec![[0xBB; 32]]);
-
         assert!(event_matches_proof_filters(
             &event,
             proof_backend.as_ref(),
@@ -243,12 +223,10 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn proof_filters_drop_verified_without_call_hash() {
         let event = verified_event("halo2/ipa", None, Some([0xBB; 32]));
         let proof_call_hash = Some(vec![[0xAA; 32]]);
-
         assert!(!event_matches_proof_filters(
             &event,
             None,
@@ -257,12 +235,10 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn proof_filters_drop_pruned_when_hash_filters_present() {
         let event = pruned_event("halo2/ipa");
         let proof_call_hash = Some(vec![[0xAA; 32]]);
-
         assert!(!event_matches_proof_filters(
             &event,
             None,
@@ -271,12 +247,10 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn proof_filters_allow_pruned_with_backend_only() {
         let event = pruned_event("halo2/ipa");
         let proof_backend = Some(vec!["halo2/ipa".to_string()]);
-
         assert!(event_matches_proof_filters(
             &event,
             proof_backend.as_ref(),
@@ -285,12 +259,10 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn proof_filters_gate_non_proof_events_when_proof_only() {
         let event = time_event();
         let proof_backend = Some(vec!["halo2/ipa".to_string()]);
-
         assert!(!event_matches_proof_filters(
             &event,
             proof_backend.as_ref(),
@@ -306,12 +278,10 @@ mod tests {
             false,
         ));
     }
-
     #[test]
     fn proof_filters_match_rejected_backend_only() {
         let event = rejected_event("halo2/ipa", Some([0x44; 32]));
         let proof_backend = Some(vec!["halo2/ipa".to_string()]);
-
         assert!(event_matches_proof_filters(
             &event,
             proof_backend.as_ref(),

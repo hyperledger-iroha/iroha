@@ -1014,22 +1014,26 @@ _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
 
 _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
     "v2_worker_reply_route_cases.rs": (
-        "5c54036dc21414a420e214fc70e433c232d79332a482afed1850ea21c54d1069"
+        "c742bc186239447a039bc823aa2efd3bd654291811f7508538bb0194aa660217"
     ),
     "v2_worker_backpressure_cases.rs": (
-        "f34cb362edeb6bef5fdd48d415430c335e6524d90e63501e8604d0d03d360a07"
+        "fdbcc73d2d6dbe68e0ffa683f9a6413043e58a7b5013df9c8f080ca4185b26e5"
+    ),
+    "v2_worker_recovered_lifecycle_output_cases.rs": (
+        "df81ef557c420ac5050c91aae97335066f53b3aa223a6a0a3eed0d89b95c3922"
     ),
     "v2_worker_serve_unsealed_cases.rs": (
-        "a49afec0c61b432106c46b3c4fce99a8b6b23485b6a0a032e79f32d104d63b23"
+        "aaeeebba50f95dff140bda57b82be1c2379dc2e7c5330639e9cb0a02fe77b842"
     ),
     "v2_worker_serve_decision_restart_cases.rs": (
-        "e6a04d1a8b5fd6ab63f88f2cae91d8d39a056c07d2fad6c7e12923d578c8cf73"
+        "4756497a5ce66a906a0b1e8195afe6e6978c55f88acb1ea7ca0ae0bbce131de6"
     ),
 }
 
 _WORKER_TEST_INCLUDE_TEST_COUNT = {
     "v2_worker_reply_route_cases.rs": 22,
     "v2_worker_backpressure_cases.rs": 21,
+    "v2_worker_recovered_lifecycle_output_cases.rs": 8,
     "v2_worker_serve_unsealed_cases.rs": 23,
     "v2_worker_serve_decision_restart_cases.rs": 11,
 }
@@ -1369,9 +1373,6 @@ _SERVICED_CANDIDATE_V4_STORE_STRUCT_SHA256 = {
     "PersistedServicedCandidate": (
         "b270b68c01fa0b0f10f8415fd36c9f2fa80f8ff627fee866ca0bf3c35b86b207"
     ),
-    "PersistedServicedCandidatesV3": (
-        "bb1e47bffc2d32ebcea3f96f98072eca3713fb508264bd6624380af71e061d67"
-    ),
     "ProducerContinuationAddress": (
         "7fd1d0c883e804f99c21932bdee838f7916ba6b40a199bba8dfd9d8a9754b4fd"
     ),
@@ -1467,11 +1468,8 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
     "encode_frame_v4": (
         "14296fa8c429ee49f9ccba935bdc06f984941eefda1b0e995d091741e6130ad2"
     ),
-    "encode_frame_v3": (
-        "bd12646c0dfab04045c7d8527c2c920e31fc7bf8200058ffe87589b86ef0b195"
-    ),
     "decode_frame": (
-        "c6d86c1a78e3df5299570c3a409750c852ba7552ce54fcbff48b5e4833bf7d48"
+        "97f0a238c245499678a700ffb079238580d5998b8fb73858245a2bffa51ddf92"
     ),
 }
 _SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256 = {
@@ -1646,7 +1644,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+    "run_inner": "1e7318e786447b609ca49df416eeda61dea95fd6ef529ffddddbcc4154325a2a",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
     "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (
@@ -1669,8 +1667,8 @@ _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     "serviced_candidate_recovery_rejects_substituted_wal_directory": (
         "bef464622aa061ccf1d5e580647f03a3222d3897069acf4a581d7cdcc9bf1d01"
     ),
-    "v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically": (
-        "10a637f7e21143470bdd72792630231d35801c52bbfa745786c836067b7dd244"
+    "v4_roundtrips_terminal_producer_continuations": (
+        "c67045239305a98a9110b7e71cd665dc6fc6e86b775a8e8b9733897a8a5c6c51"
     ),
     "leader_wire_gate_reconciles_producer_first_terminal_crash": (
         "f225f861684b5a468fd1e45a9424e614b91b8bfebfd75e10e429c91dbd32b58d"
@@ -1688,10 +1686,10 @@ _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
         "ef03bf7b54f58eb0ee9e358a780c023aedce3abc15e0e453041c6b1a905c9d9a"
     ),
     "snapshot_rejects_truncation_version_ordering_duplicates_and_oversize": (
-        "11a74c656afed6467421484b12819a41ae85d8f974e5baf22deaac81d6f218ac"
+        "42c3d3e1698a4bb437bb37e61e363b7ff77930814d2cf218bea09c9bdac684fd"
     ),
     "v4_rejects_noncanonical_or_over_capacity_producer_tables": (
-        "5067bd4555946a59ee5abe37e5b9f473df832bb3f0337f15f14c269d78b8b578"
+        "78776cdef7779455e547040a79b4a32c2b188f416b5875cbd88d93b896a14679"
     ),
     "producer_identity_stage_projection_rejects_foreign_root_and_successor_stages": (
         "ec16de15110425ee5c28d0dbaf66cd52445dc5f2cd97439877f079aede5ad2a8"
@@ -1768,7 +1766,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
         "e2d69a7243f71d2818ffabcbdd78e9585c6245b447a882e8f6dc319067a956ee"
     ),
     "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate": (
-        "232a2b6cc3059cf2a7d0525037eb6d26c30c6fe334ab47646c8c1531c0e61561"
+        "5101761ebb164505896814130b9260cce1644306e914d27f2a72fe5e5f701dd6"
     ),
     "serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner": (
         "ed7172e200b6ebe76d6c6048a08e6610b83e709b66dc8e0dd972998d5e8f2b0f"
@@ -1804,6 +1802,181 @@ _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
     "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
         "d02a7f409972d645e46479269a11297493023132831fd299f487b0b202df6294"
     ),
+}
+_CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES = {
+    "outer_ingress_cursor": """
+self.next_turn = match turn {
+    OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
+    OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
+    OuterIngressTurn::Ingress => {
+        self.cycles_remaining -= 1;
+        OuterIngressTurn::Completion
+    }
+};
+Some(turn)
+""",
+    "route_shadow": """
+let routes_before = queued.inbound.reply_routes.clone();
+let routes_candidate = inbound.reply_routes.clone();
+let prior_evidence = queued
+    .inbound
+    .ingress_ownership
+    .as_ref()
+    .expect("every queued semantic owner retains ingress evidence");
+let action = match fair_v2_ingress_route_action(
+    &prior_evidence.attempts,
+    routes_candidate.as_ref(),
+) {
+    Ok(action) => action,
+    Err(_) => {
+        return Err(FairV2IngressPushError::rejected(
+            inbound,
+            FairV2IngressRejectReason::RouteOwnershipInvalid,
+        ));
+    }
+};
+let routes_after = match (&routes_before, &routes_candidate) {
+    (Some(retained), Some(candidate)) => {
+        let mut merged = retained.clone();
+        let Ok(receipt) = merged.merge_with_receipt(candidate) else {
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ));
+        };
+        let Some(receipt_output) = receipt.into_output(retained, candidate) else {
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ));
+        };
+        Some(receipt_output)
+    }
+    (None, Some(candidate)) => Some(candidate.clone()),
+    (Some(retained), None) => Some(retained.clone()),
+    (None, None) => None,
+};
+let Some(route_capacity) = fair_v2_ingress_route_capacity(
+    routes_before.as_ref(),
+    routes_candidate.as_ref(),
+    routes_after.as_ref(),
+) else {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::RouteOwnershipInvalid,
+    ));
+};
+let attempts_before = prior_evidence.attempts.clone();
+let candidate_attempts =
+    fair_v2_ingress_attempts_for_routes(&attempts_before, routes_candidate.as_ref());
+let Some(attempts_after) = fair_v2_ingress_merge_attempt_cursors(
+    &attempts_before,
+    &candidate_attempts,
+    routes_after.as_ref(),
+) else {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::AttemptCursorInvalid,
+    ));
+};
+let attempts_before_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_before);
+let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
+""",
+    "route_atomic_commit": """
+if !occurrence.validate_exact() {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+    ));
+}
+let Some(evidence) = prior_evidence.merged(occurrence) else {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+    ));
+};
+let ownership_snapshot = Arc::new(evidence.clone());
+let lane = state
+    .lanes
+    .get_mut(&owner_source)
+    .expect("globally indexed fair-ingress owner lane remains present");
+let queued = lane
+    .entries
+    .iter_mut()
+    .find(|entry| entry.wire_key.as_ref() == Some(key))
+    .expect("global pending wire key has one queued owner");
+let queued_inbound = Arc::make_mut(&mut queued.inbound);
+queued_inbound.reply_routes = routes_after;
+queued_inbound.ingress_ownership = Some(evidence);
+queued.ownership_snapshot = ownership_snapshot;
+return Ok(FairV2IngressPushDisposition::Coalesced);
+""",
+    "queue_gate": """
+let has_live_control_predecessor = lane
+    .entries
+    .iter()
+    .take(index)
+    .any(|prior| fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound));
+""",
+    "queue_gate_verdict": """
+if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
+    FairV2IngressQueueGateVerdict::Blocked
+} else if dependency_bypass {
+    FairV2IngressQueueGateVerdict::Dependency
+} else {
+    FairV2IngressQueueGateVerdict::Strict
+}
+""",
+    "scheduler_blockers": """
+let ordinary_candidate =
+    if timers_enabled && fifo_ready && !self.driver.deferred_work_is_serviceable() {
+        self.ingress
+            .ordinary_candidate_owner_and_fence_state(|queued| {
+                (
+                    self.driver
+                        .command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
+                        || self.fence_retry_blocked_fifo_owners.iter().any(|owner| {
+                            owner.matches_queued(queue_source_identity, queued)
+                        }),
+                    self.driver
+                        .command_matches_deferred_authenticated_owner(&queued.command),
+                )
+            })?
+    } else {
+        None
+    };
+let deferred_owner_blocks_fifo =
+    ordinary_candidate
+        .as_ref()
+        .is_some_and(|(candidate, blocked, deferred_alias)| {
+            self.deferred_lifecycle_ownership.values().any(|target| {
+                let post_cut = candidate.is_post_physical_cut(target.physical_cut);
+                (*blocked && !post_cut) || (*deferred_alias && post_cut)
+            })
+        });
+let older_signer_blocks_fifo =
+    ordinary_candidate
+        .as_ref()
+        .is_some_and(|(candidate, _, _)| {
+            self.driver.signature_fence_is_active()
+                && self.external_lifecycle_owners.iter().any(|owner| {
+                    owner.lifecycle_ordinal() < candidate.lifecycle_ordinal()
+                        || owner
+                            .causal_origin()
+                            .root_ingress_physical_ownership
+                            .is_some_and(|root| {
+                                candidate.is_post_physical_cut(root.physical_cut)
+                            })
+                })
+        });
+if ordinary_candidate.is_some() && (deferred_owner_blocks_fifo || older_signer_blocks_fifo)
+{
+    fifo_ready = false;
+    completion_ready = false;
+    progress_ready = false;
+    normal_ready = false;
+}
+""",
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
     "semantic_ingress_capacity": (

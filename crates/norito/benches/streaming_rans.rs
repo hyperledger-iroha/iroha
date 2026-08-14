@@ -1,11 +1,9 @@
-use std::iter;
-
 use criterion::{Criterion, criterion_group, criterion_main};
 use norito::streaming::{
     BundleAcceleration, EntropyMode,
     codec::{BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame},
 };
-
+use std::iter;
 fn bench_bundled_scalar(c: &mut Criterion) {
     let dimensions = FrameDimensions::new(32, 32);
     let frames: Vec<RawFrame> = iter::repeat_with(|| {
@@ -13,7 +11,6 @@ fn bench_bundled_scalar(c: &mut Criterion) {
     })
     .take(5)
     .collect();
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dimensions,
         frames_per_segment: frames.len() as u16,
@@ -22,7 +19,6 @@ fn bench_bundled_scalar(c: &mut Criterion) {
         bundle_width: 3,
         ..BaselineEncoderConfig::default()
     };
-
     c.bench_function("streaming_rans_bundled_scalar", |b| {
         b.iter(|| {
             let mut encoder = BaselineEncoder::new(config.clone());
@@ -32,7 +28,6 @@ fn bench_bundled_scalar(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_bundled_simd(c: &mut Criterion) {
     #[allow(unreachable_code)]
     let simd_available = {
@@ -49,18 +44,15 @@ fn bench_bundled_simd(c: &mut Criterion) {
             false
         }
     };
-
     if !simd_available {
         return;
     }
-
     let dimensions = FrameDimensions::new(32, 32);
     let frames: Vec<RawFrame> = iter::repeat_with(|| {
         RawFrame::new(dimensions, vec![0x33; dimensions.pixel_count()]).expect("frame")
     })
     .take(5)
     .collect();
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dimensions,
         frames_per_segment: frames.len() as u16,
@@ -71,7 +63,6 @@ fn bench_bundled_simd(c: &mut Criterion) {
         bundle_prefetch_distance: 4,
         ..BaselineEncoderConfig::default()
     };
-
     c.bench_function("streaming_rans_bundled_simd", |b| {
         b.iter(|| {
             let mut encoder = BaselineEncoder::new(config.clone());
@@ -81,6 +72,5 @@ fn bench_bundled_simd(c: &mut Criterion) {
         })
     });
 }
-
 criterion_group!(streaming_bundled, bench_bundled_scalar, bench_bundled_simd);
 criterion_main!(streaming_bundled);

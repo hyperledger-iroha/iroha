@@ -3,11 +3,6 @@
 #![allow(clippy::similar_names)]
 #![allow(clippy::too_many_lines)]
 #![cfg(feature = "iroha-core-tests")]
-
-#[cfg(feature = "app_api")]
-use std::collections::BTreeMap;
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
-
 use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
 use iroha_core::block::BlockBuilder;
@@ -52,18 +47,18 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
+#[cfg(feature = "app_api")]
+use std::collections::BTreeMap;
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 fn ensure_alias_resolver() {
     // No-op by design.
 }
-
 const FIXTURE_AUTHORITY_PUBLIC_KEY: &str =
     "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
 const FIXTURE_MERCHANT_ACCOUNT_LITERAL: &str =
     "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888";
 const FIXTURE_VENDOR_ACCOUNT_LITERAL: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const AXT_TEST_CHAIN_ID: &[u8] = b"iroha-corehost-axt-test-chain";
-
 macro_rules! assert_ok_gas {
     ($expr:expr $(,)?) => {{
         let gas = $expr.expect("syscall should succeed");
@@ -71,34 +66,28 @@ macro_rules! assert_ok_gas {
         gas
     }};
 }
-
 fn fixture_authority() -> AccountId {
     let public_key = FIXTURE_AUTHORITY_PUBLIC_KEY
         .parse()
         .expect("authority public key");
     AccountId::new(public_key)
 }
-
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("IVM Corehost AXT fixture key generation should succeed")
 }
-
 fn axt_test_issuer() -> KeyPair {
     KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519)
 }
-
 fn axt_test_network_id() -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::new(b"iroha-corehost-axt-test-network"),
     ))
 }
-
 fn axt_test_issuer_id() -> iroha_data_model::nexus::UniversalAccountId {
     iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
         b"iroha-corehost-axt-test-issuer",
     ))
 }
-
 fn axt_test_issuer_context(
     dataspace: DataSpaceId,
     manifest_root: [u8; 32],
@@ -113,7 +102,6 @@ fn axt_test_issuer_context(
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
     }
 }
-
 fn signed_model_handle(
     handle: iroha_data_model::nexus::AssetHandleDraft,
     dataspace: DataSpaceId,
@@ -123,7 +111,6 @@ fn signed_model_handle(
         .sign_by_issuer_v1(context, axt_test_issuer().private_key())
         .expect("sign AXT issuer fixture")
 }
-
 fn signed_abi_handle(handle: AssetHandle, dataspace: DataSpaceId) -> AssetHandle {
     let binding = handle
         .binding_array()
@@ -160,7 +147,6 @@ fn signed_abi_handle(handle: AssetHandle, dataspace: DataSpaceId) -> AssetHandle
     );
     abi_asset_handle_from_signed_model(model)
 }
-
 fn abi_asset_handle_from_signed_model(handle: iroha_data_model::nexus::AssetHandle) -> AssetHandle {
     AssetHandle {
         scope: handle.scope,
@@ -187,7 +173,6 @@ fn abi_asset_handle_from_signed_model(handle: iroha_data_model::nexus::AssetHand
         issuer_signature: handle.issuer_signature,
     }
 }
-
 fn configure_axt_test_host(
     host: &mut CoreHost,
     policies: impl IntoIterator<Item = (DataSpaceId, [u8; 32])>,
@@ -204,12 +189,10 @@ fn configure_axt_test_host(
         );
     }
 }
-
 #[test]
 fn checked_keypair_preserves_default_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
 }
-
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(ty as u16).to_be_bytes());
@@ -221,22 +204,18 @@ fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&hash);
     tlv
 }
-
 fn store_tlv_bytes(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
     let tlv = make_tlv(ty, payload);
     vm.alloc_input_tlv(&tlv).expect("alloc input TLV")
 }
-
 fn store_tlv_codec<T: norito::NoritoSerialize>(vm: &mut IVM, ty: PointerType, value: &T) -> u64 {
     let payload = norito::to_bytes(value).expect("serialize Norito payload");
     store_tlv_bytes(vm, ty, &payload)
 }
-
 fn store_tlv_norito<T: norito::NoritoSerialize>(vm: &mut IVM, ty: PointerType, value: &T) -> u64 {
     let payload = norito::to_bytes(value).expect("serialize Norito payload");
     store_tlv_bytes(vm, ty, &payload)
 }
-
 fn make_policy_snapshot(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -260,7 +239,6 @@ fn make_policy_snapshot(
         entries: vec![entry],
     }
 }
-
 #[test]
 fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
     let mut snapshot =
@@ -268,7 +246,6 @@ fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
     let expected = snapshot.version;
     snapshot.version = snapshot.version.wrapping_add(1);
     let actual = snapshot.version;
-
     let result = CoreHost::new(fixture_authority()).with_axt_policy_snapshot(&snapshot);
     assert!(matches!(
         result,
@@ -278,7 +255,6 @@ fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
         }) if computed == expected && advertised == actual
     ));
 }
-
 fn proof_blob_for(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -351,7 +327,6 @@ fn proof_blob_for(
         expiry_slot: Some(expiry_slot),
     }
 }
-
 fn model_proof_blob_for(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -364,7 +339,6 @@ fn model_proof_blob_for(
         expiry_slot: proof.expiry_slot,
     }
 }
-
 fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     let mut payload = Vec::new();
     payload.extend_from_slice(domain);
@@ -373,7 +347,6 @@ fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     }
     iroha_crypto::Hash::new(payload)
 }
-
 fn host_with_policy(
     authority: AccountId,
     dsid: DataSpaceId,
@@ -388,7 +361,6 @@ fn host_with_policy(
     configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     host
 }
-
 #[cfg(feature = "app_api")]
 fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) -> AssetHandle {
     AssetHandle {
@@ -416,15 +388,12 @@ fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) ->
         issuer_signature: handle.issuer_signature.clone(),
     }
 }
-
 fn nexus_with_lane_catalog(
     lane_catalog: iroha_data_model::nexus::LaneCatalog,
 ) -> iroha_config::parameters::actual::Nexus {
-    use std::collections::BTreeSet;
-
     use iroha_config::parameters::actual::LaneRoutingPolicy;
     use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata};
-
+    use std::collections::BTreeSet;
     let mut dataspace_ids: BTreeSet<DataSpaceId> = lane_catalog
         .lanes()
         .iter()
@@ -447,7 +416,6 @@ fn nexus_with_lane_catalog(
             .collect(),
     )
     .expect("dataspace catalog derived from lane catalog");
-
     let default_lane = lane_catalog
         .lanes()
         .first()
@@ -458,7 +426,6 @@ fn nexus_with_lane_catalog(
         rules: Vec::new(),
     };
     let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-
     iroha_config::parameters::actual::Nexus {
         enabled: true,
         lane_config,
@@ -468,7 +435,6 @@ fn nexus_with_lane_catalog(
         ..iroha_config::parameters::actual::Nexus::default()
     }
 }
-
 #[test]
 fn axt_policy_snapshot_refreshes_current_slot() {
     use iroha_core::{
@@ -476,11 +442,9 @@ fn axt_policy_snapshot_refreshes_current_slot() {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query_handle);
-
     let dsid = DataSpaceId::new(9);
     let target_lane = LaneId::new(3);
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
@@ -494,13 +458,11 @@ fn axt_policy_snapshot_refreshes_current_slot() {
     )
     .expect("slot refresh lane catalog");
     *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
-
     // Seed block hashes so the synthetic state exposes a non-zero AXT slot.
     let h1 = iroha_crypto::Hash::prehashed([0xAA; 32]);
     let typed: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> =
         iroha_crypto::HashOf::from_untyped_unchecked(h1);
     state.push_block_hash_for_testing(typed);
-
     let entry = AxtPolicyEntry {
         manifest_root: [0x11; 32],
         target_lane,
@@ -509,22 +471,18 @@ fn axt_policy_snapshot_refreshes_current_slot() {
         current_slot: 0,
     };
     state.set_axt_policy(dsid, entry);
-
     let snapshot = state.axt_policy_snapshot();
     assert_eq!(snapshot.entries.len(), 1);
     let policy = snapshot.entries.first().expect("entry present").policy;
     assert_eq!(policy.current_slot, state.block_hashes.view().len() as u64);
 }
-
 #[test]
 fn core_host_handles_axt_flow() {
     let authority = fixture_authority();
-
     let dsid = DataSpaceId::new(7);
     let manifest_root = [0x21; 32];
     let mut vm = IVM::new(1_000_000);
     let mut host = host_with_policy(authority.clone(), dsid, manifest_root, LaneId::new(0), 5);
-
     // Prepare descriptor and begin envelope
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -537,7 +495,6 @@ fn core_host_handles_axt_flow() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     // Provide manifest to match descriptor prefixes
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -548,14 +505,12 @@ fn core_host_handles_axt_flow() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     // Declare dataspace proof artifact
     let proof = proof_blob_for(dsid, manifest_root, vec![0xA5, 0x5A], 25);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-
     // Prepare handle/intents and use handle
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = signed_abi_handle(
@@ -600,10 +555,8 @@ fn core_host_handles_axt_flow() {
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-
     // Commit the envelope
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
-
     // Subsequent operations without an active envelope must fail
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
@@ -612,7 +565,6 @@ fn core_host_handles_axt_flow() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_rejects_proof_envelope_for_other_dataspace() {
     let authority = fixture_authority();
@@ -621,7 +573,6 @@ fn core_host_rejects_proof_envelope_for_other_dataspace() {
     let manifest_root = [0x31; 32];
     let mut vm = IVM::new(1_000_000);
     let mut host = host_with_policy(authority, dsid, manifest_root, LaneId::new(0), 5);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -633,7 +584,6 @@ fn core_host_rejects_proof_envelope_for_other_dataspace() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/0".into()],
@@ -643,7 +593,6 @@ fn core_host_rejects_proof_envelope_for_other_dataspace() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let wrong_proof = proof_blob_for(other_dsid, manifest_root, b"other-dsid".to_vec(), 25);
     let wrong_proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &wrong_proof);
     vm.set_register(10, ds_ptr);
@@ -658,7 +607,6 @@ fn core_host_rejects_proof_envelope_for_other_dataspace() {
     assert_eq!(reject.reason, AxtRejectReason::Manifest);
     assert!(reject.detail.contains("proof does not match policy"));
 }
-
 #[test]
 fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
     let authority = fixture_authority();
@@ -666,7 +614,6 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
     let manifest_root = [0x32; 32];
     let mut vm = IVM::new(1_000_000);
     let mut host = host_with_policy(authority, dsid, manifest_root, LaneId::new(0), 5);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -678,7 +625,6 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/0".into()],
@@ -688,7 +634,6 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let mut proof = proof_blob_for(dsid, manifest_root, b"source-dsid-mismatch".to_vec(), 25);
     let mut envelope: axt::AxtProofEnvelope =
         norito::decode_from_bytes(&proof.payload).expect("decode proof envelope");
@@ -698,7 +643,6 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
         .expect("proof helper should bind FastPQ metadata")
         .source_dsid = dsid.as_u64() + 1;
     proof.payload = norito::to_bytes(&envelope).expect("re-encode mutated proof envelope");
-
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
@@ -712,7 +656,6 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
     assert_eq!(reject.reason, AxtRejectReason::Proof);
     assert!(reject.detail.contains("source_dsid mismatch"));
 }
-
 #[test]
 fn axt_policy_reject_exposes_context() {
     let authority = fixture_authority();
@@ -733,7 +676,6 @@ fn axt_policy_reject_exposes_context() {
         .with_axt_policy_snapshot(&snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
     configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
-
     // Begin envelope and record a touch for the dataspace.
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -747,7 +689,6 @@ fn axt_policy_reject_exposes_context() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     // Build a handle with a mismatched manifest root to trigger a policy rejection.
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = signed_abi_handle(
@@ -792,7 +733,6 @@ fn axt_policy_reject_exposes_context() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
@@ -809,11 +749,9 @@ fn axt_policy_reject_exposes_context() {
         "detail should mention manifest mismatch"
     );
 }
-
 #[test]
 fn axt_handle_allows_configured_clock_skew_window() {
     let authority = fixture_authority();
-
     let dsid = DataSpaceId::new(31);
     let manifest_root = [0x66; 32];
     let mut vm = IVM::new(10_000);
@@ -830,7 +768,6 @@ fn axt_handle_allows_configured_clock_skew_window() {
         .with_axt_policy_snapshot(&snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
     configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -842,7 +779,6 @@ fn axt_handle_allows_configured_clock_skew_window() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/".into()],
@@ -852,13 +788,11 @@ fn axt_handle_allows_configured_clock_skew_window() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xE5], 10);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = signed_abi_handle(
         AssetHandle {
@@ -903,11 +837,9 @@ fn axt_handle_allows_configured_clock_skew_window() {
     vm.set_register(12, 0);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 }
-
 #[test]
 fn axt_handle_rejects_clock_skew_above_config() {
     let authority = fixture_authority();
-
     let dsid = DataSpaceId::new(32);
     let manifest_root = [0x67; 32];
     let mut vm = IVM::new(10_000);
@@ -924,7 +856,6 @@ fn axt_handle_rejects_clock_skew_above_config() {
         .with_axt_policy_snapshot(&snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
     configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -936,7 +867,6 @@ fn axt_handle_rejects_clock_skew_above_config() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/".into()],
@@ -946,7 +876,6 @@ fn axt_handle_rejects_clock_skew_above_config() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = signed_abi_handle(
         AssetHandle {
@@ -994,11 +923,8 @@ fn axt_handle_rejects_clock_skew_above_config() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn axt_replay_ledger_persists_through_kura_replay() {
-    use std::collections::BTreeMap;
-
     use iroha_core::block::{BlockBuilder, ValidBlock};
     use iroha_crypto::HashOf;
     use iroha_data_model::{
@@ -1014,23 +940,19 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         transaction::TransactionEntrypoint,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-
+    use std::collections::BTreeMap;
     ensure_alias_resolver();
-
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(99);
     let lane = LaneId::new(0);
     let manifest_root = [0x58; 32];
-
     let genesis_account = iroha_data_model::account::AccountId::new(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
     );
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
     let genesis_domain = genesis_domain.build(&genesis_account);
     let genesis_account_value = Account::new(genesis_account.clone()).build(&genesis_account);
-
     let world = World::with([genesis_domain], [genesis_account_value], []);
-
     let lane_meta = LaneConfig {
         id: lane,
         dataspace_id: dsid,
@@ -1046,7 +968,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
@@ -1063,7 +984,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             current_slot: 0,
         },
     );
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1140,7 +1060,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         }],
         commit_height: 1,
     };
-
     let snapshot = state.view().axt_policy_snapshot();
     let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
     let signer = checked_keypair();
@@ -1171,7 +1090,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         .expect("commit state after AXT envelope");
     kura.store_block(Arc::new(committed.clone().into()))
         .expect("store block with AXT envelope");
-
     let replay_world = {
         let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
         let genesis_domain = genesis_domain.build(&genesis_account);
@@ -1193,13 +1111,10 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             current_slot: 0,
         },
     );
-
     let mut replay_block = replay_state.block(committed.as_ref().header());
     let _ = replay_block.apply_without_execution(&committed, vec![peer_id.clone()]);
     replay_block.commit().expect("commit replayed state");
-
     let replay_key = AxtHandleReplayKey::from_handle(&envelope.handles[0].handle);
-
     let replay_view = replay_state.view();
     let Some(ledger_entry) = replay_view.world().axt_replay_ledger().get(&replay_key) else {
         return;
@@ -1219,16 +1134,13 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         envelope.handles[0].handle.sub_nonce.saturating_add(1)
     );
     drop(replay_view);
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &replay_state)
         .expect("replayed fixture state should produce a valid CoreHost");
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/replay".into()],
@@ -1239,7 +1151,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1282,7 +1193,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     let err = host
         .syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
         .expect_err("replay should be rejected after kura replay");
@@ -1297,7 +1207,6 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         reject.reason
     );
 }
-
 #[test]
 fn axt_replay_ledger_rejects_reuse_after_restart() {
     ensure_alias_resolver();
@@ -1305,7 +1214,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     let dsid = DataSpaceId::new(48);
     let lane = LaneId::new(1);
     let manifest_root = [0x42; 32];
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query_handle);
@@ -1319,7 +1227,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             current_slot: 0,
         },
     );
-
     let binding = AxtBinding::new([0xBE; 32]);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 25, 0);
     let mut block = state.block(header);
@@ -1330,7 +1237,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         };
         let mut stx = block.transaction();
-
         let handle = ModelAssetHandle {
             scope: vec!["transfer".into()],
             subject: ModelHandleSubject {
@@ -1390,7 +1296,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         stx.apply();
     }
     block.commit().expect("commit replay ledger setup");
-
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -1401,11 +1306,9 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             current_slot: 0,
         },
     );
-
     let mut vm = IVM::new(10_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1417,7 +1320,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: Vec::new(),
@@ -1427,7 +1329,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
@@ -1466,7 +1367,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
     assert_eq!(result, Err(ivm::VMError::PermissionDenied));
     let reject = host
@@ -1482,7 +1382,6 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     );
     assert_eq!(reject.dataspace.unwrap_or(dsid), dsid);
 }
-
 #[test]
 fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
     ensure_alias_resolver();
@@ -1490,7 +1389,6 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
     let dsid = DataSpaceId::new(49);
     let lane = LaneId::new(2);
     let manifest_root = [0x24; 32];
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query_handle);
@@ -1506,7 +1404,6 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
             current_slot: 0,
         },
     );
-
     let binding = AxtBinding::new([0xCD; 32]);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
     let mut block = state.block(header);
@@ -1517,7 +1414,6 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
             RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         };
         let mut stx = block.transaction();
-
         let handle = ModelAssetHandle {
             scope: vec!["transfer".into()],
             subject: ModelHandleSubject {
@@ -1580,29 +1476,24 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
         1,
         "ledger entry should be present after recording"
     );
-
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 10, 0);
     let mut block2 = state.block(header2);
     {
         let _stx = block2.transaction();
     }
     block2.commit().expect("commit second replay block");
-
     assert!(
         WorldReadOnly::axt_replay_ledger(state.view().world()).is_empty(),
         "expired replay entries should be pruned on slot rollover"
     );
 }
-
 #[test]
 fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     ensure_alias_resolver();
     let authority = fixture_authority();
-
     let dsid = DataSpaceId::new(17);
     let target_lane = LaneId::new(0);
     let manifest_root = [0xAB; 32];
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1612,7 +1503,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         }],
     };
     let binding_bytes = axt::compute_binding(&descriptor).expect("binding");
-
     let model_handle = iroha_data_model::nexus::AssetHandle {
         scope: vec!["transfer".into()],
         subject: iroha_data_model::nexus::HandleSubject {
@@ -1637,7 +1527,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
@@ -1664,7 +1553,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
             current_slot: 0,
         },
     );
-
     let model_descriptor = AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![AxtTouchSpec {
@@ -1709,15 +1597,12 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         stx.apply();
     }
     block.commit().expect("commit replay ledger envelope");
-
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/replay".into()],
@@ -1727,13 +1612,11 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0x55], 40);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-
     let intent = iroha_data_model::nexus::RemoteSpendIntent {
         asset_dsid: dsid,
         op: iroha_data_model::nexus::SpendOp {
@@ -1748,7 +1631,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     let reuse_result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
     if let Err(err @ (VMError::PermissionDenied | VMError::NoritoInvalid)) = reuse_result {
         if let Some(context) = host.take_axt_reject_for_tests() {
@@ -1761,7 +1643,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     } else if reuse_result.is_err() {
         panic!("unexpected result from reuse attempt: {reuse_result:?}");
     }
-
     // Advance the ledger a few slots and rebuild the host to simulate a restart; the replay guard
     // should still block reuse until the retention window elapses.
     for i in 0..10_u8 {
@@ -1770,15 +1651,12 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
             iroha_crypto::HashOf::from_untyped_unchecked(hash);
         state.push_block_hash_for_testing(typed);
     }
-
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/replay".into()],
@@ -1788,13 +1666,11 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0x55], 40);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-
     let handle = AssetHandle {
         scope: model_handle.scope.clone(),
         subject: HandleSubject {
@@ -1819,13 +1695,11 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         issuer_context: Default::default(),
         issuer_signature: model_handle.issuer_signature.clone(),
     };
-
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
     assert!(
         matches!(
@@ -1842,7 +1716,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         assert_eq!(context.lane, Some(target_lane));
     }
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
@@ -1855,14 +1728,11 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         TouchManifest as ModelTouchManifest,
     };
-
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(45);
     let lane = LaneId::new(0);
     let manifest_root = [0x33; 32];
-
     let world = World::new();
-
     let lane_meta = iroha_data_model::nexus::LaneConfig {
         id: lane,
         dataspace_id: dsid,
@@ -1878,7 +1748,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
@@ -1895,7 +1764,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             current_slot: 0,
         },
     );
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -1955,7 +1823,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         amount: Some(Quantity::from(10_u64)),
         amount_commitment: None,
     };
-
     let envelope = ModelAxtEnvelopeRecord {
         binding,
         lane,
@@ -1976,7 +1843,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         handles: vec![handle_fragment.clone()],
         commit_height: 1,
     };
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1985,7 +1851,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         .expect("exact replay-ledger AXT sequence should stage");
     stx.apply();
     block.commit().expect("commit initial replay envelope");
-
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -1996,16 +1861,13 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             current_slot: 0,
         },
     );
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/replay".into()],
@@ -2016,7 +1878,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -2039,7 +1900,6 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     let reject = host.take_axt_reject_for_tests().expect("reject context");
     assert_eq!(reject.reason, AxtRejectReason::ReplayCache);
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn axt_replay_ledger_persists_across_apply_without_execution() {
@@ -2052,14 +1912,11 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         TouchManifest as ModelTouchManifest,
     };
-
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(58);
     let lane = LaneId::new(1);
     let manifest_root = [0x44; 32];
-
     let world = World::new();
-
     let lane_meta = iroha_data_model::nexus::LaneConfig {
         id: lane,
         dataspace_id: dsid,
@@ -2075,7 +1932,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     };
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
@@ -2092,7 +1948,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             current_slot: 0,
         },
     );
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2152,7 +2007,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         amount: Some(Quantity::from(10_u64)),
         amount_commitment: None,
     };
-
     let envelope = ModelAxtEnvelopeRecord {
         binding,
         lane,
@@ -2173,7 +2027,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         handles: vec![handle_fragment.clone()],
         commit_height: 1,
     };
-
     let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
     let signer = checked_keypair();
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
@@ -2219,7 +2072,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     );
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit replay ledger");
-
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -2230,16 +2082,13 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             current_slot: 0,
         },
     );
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/replayed".into()],
@@ -2250,14 +2099,12 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xCC], 180);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
         .expect("verify proof");
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -2273,7 +2120,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     let err = host
         .syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
         .expect_err("replay should be rejected after resync");
@@ -2281,7 +2127,6 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     let reject = host.take_axt_reject_for_tests().expect("reject context");
     assert_eq!(reject.reason, AxtRejectReason::ReplayCache);
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn axt_replay_entries_expire_after_retention_window() {
@@ -2295,12 +2140,10 @@ fn axt_replay_entries_expire_after_retention_window() {
         GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
         HandleSubject as ModelHandleSubject,
     };
-
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(46);
     let lane = LaneId::new(0);
     let manifest_root = [0x55; 32];
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2311,9 +2154,7 @@ fn axt_replay_entries_expire_after_retention_window() {
     };
     let binding_bytes = axt::compute_binding(&descriptor).expect("binding");
     let binding = AxtBinding::new(binding_bytes);
-
     let world = World::new();
-
     let lane_meta = LaneConfig {
         id: lane,
         dataspace_id: dsid,
@@ -2336,7 +2177,6 @@ fn axt_replay_entries_expire_after_retention_window() {
         replay_retention_slots: nonzero!(2_u64),
     };
     let retention_slots = nexus.axt.replay_retention_slots.get();
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
@@ -2354,7 +2194,6 @@ fn axt_replay_entries_expire_after_retention_window() {
             current_slot: 10,
         },
     );
-
     // Seed the replay ledger with a stale entry that should expire once the retention window elapses.
     state.insert_axt_replay_entry_for_tests(
         AxtHandleReplayKey::from_handle(&ModelAssetHandle {
@@ -2389,16 +2228,13 @@ fn axt_replay_entries_expire_after_retention_window() {
     );
     // Advance logical slot so the seeded entry expires before hydration.
     state.prune_axt_replay_ledger_for_tests(5, retention_slots);
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/ttl".into()],
@@ -2409,7 +2245,6 @@ fn axt_replay_entries_expire_after_retention_window() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let handle = axt::AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
@@ -2448,7 +2283,6 @@ fn axt_replay_entries_expire_after_retention_window() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-
     let result = host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm);
     assert!(
         result.is_ok(),
@@ -2456,11 +2290,9 @@ fn axt_replay_entries_expire_after_retention_window() {
     );
     assert!(host.take_axt_reject_for_tests().is_none());
 }
-
 #[test]
 fn axt_commit_enforces_amx_budget() {
     let authority = fixture_authority();
-
     let dsid = DataSpaceId::new(11);
     let manifest_root = [0x31; 32];
     let mut vm = IVM::new(1_000_000);
@@ -2479,7 +2311,6 @@ fn axt_commit_enforces_amx_budget() {
         memory: MemoryAccesses::default(),
         syscalls: Vec::new(),
     });
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2491,7 +2322,6 @@ fn axt_commit_enforces_amx_budget() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/0".into()],
@@ -2501,13 +2331,11 @@ fn axt_commit_enforces_amx_budget() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAB], 20);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
@@ -2548,7 +2376,6 @@ fn axt_commit_enforces_amx_budget() {
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-
     match host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm) {
         Err(VMError::AmxBudgetExceeded { stage, .. }) => {
             assert_eq!(stage, iroha_data_model::errors::AmxStage::Commit);
@@ -2556,11 +2383,9 @@ fn axt_commit_enforces_amx_budget() {
         other => panic!("expected AMX budget error, got {other:?}"),
     }
 }
-
 #[test]
 fn core_host_requires_proof_for_all_dataspaces() {
     let authority = fixture_authority();
-
     let ds_a = DataSpaceId::new(101);
     let ds_b = DataSpaceId::new(102);
     let root_a = [0xA5; 32];
@@ -2591,7 +2416,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![ds_a, ds_b],
         touches: vec![
@@ -2607,7 +2431,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
             },
         ],
     };
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority.clone())
         .with_axt_policy_snapshot(&snapshot)
@@ -2615,7 +2438,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let touch_a = TouchManifest {
         read: vec!["orders/a/1".into()],
         write: vec!["ledger/a/1".into()],
@@ -2625,7 +2447,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(10, ds_a_ptr);
     vm.set_register(11, touch_a_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let touch_b = TouchManifest {
         read: vec!["orders/b/1".into()],
         write: vec!["ledger/b/1".into()],
@@ -2635,7 +2456,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(10, ds_b_ptr);
     vm.set_register(11, touch_b_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = AssetHandle {
         scope: vec!["transfer".into()],
@@ -2670,10 +2490,8 @@ fn core_host_requires_proof_for_all_dataspaces() {
         manifest_view_root: root_b.to_vec(),
         ..handle_a.clone()
     };
-
     let proof_a = proof_blob_for(ds_a, root_a, vec![0xAA], 12);
     let proof_b = proof_blob_for(ds_b, root_b, vec![0xBB], 12);
-
     let intent_a = RemoteSpendIntent {
         asset_dsid: ds_a,
         op: SpendOp {
@@ -2692,7 +2510,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
             amount: Some(Quantity::from(1_u64)),
         },
     };
-
     let handle_a_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_a);
     let intent_a_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_a);
     let proof_a_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_a);
@@ -2700,7 +2517,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(11, intent_a_ptr);
     vm.set_register(12, proof_a_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
     let proof_b_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_b);
@@ -2708,9 +2524,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(11, intent_b_ptr);
     vm.set_register(12, proof_b_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
-
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
-
     // Omit proof for ds_b to confirm rejection
     let mut vm_fail = IVM::new(1_000_000);
     let mut host_fail = CoreHost::new(authority)
@@ -2729,7 +2543,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm_fail.set_register(10, ds_b_ptr_fail);
     vm_fail.set_register(11, touch_b_ptr_fail);
     assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail));
-
     let handle_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::AssetHandle, &handle_a);
     let intent_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &intent_a);
     vm_fail.set_register(10, handle_a_ptr_fail);
@@ -2737,7 +2550,6 @@ fn core_host_requires_proof_for_all_dataspaces() {
     let proof_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::ProofBlob, &proof_a);
     vm_fail.set_register(12, proof_a_ptr_fail);
     assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm_fail));
-
     assert!(matches!(
         host_fail.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm_fail),
         Err(VMError::PermissionDenied)
@@ -2749,7 +2561,6 @@ fn core_host_rejects_invalid_descriptor() {
     let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority);
-
     let dup_descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(7), DataSpaceId::new(7)],
         touches: Vec::new(),
@@ -2771,7 +2582,6 @@ fn core_host_rejects_invalid_descriptor() {
         !ctx.detail.is_empty(),
         "descriptor rejection should provide detail"
     );
-
     let bad_touch_descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(8)],
         touches: vec![axt::AxtTouchSpec {
@@ -2797,7 +2607,6 @@ fn core_host_rejects_invalid_descriptor() {
         !ctx.detail.is_empty(),
         "descriptor rejection should include detail"
     );
-
     let dup_touch_descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(9)],
         touches: vec![
@@ -2831,11 +2640,9 @@ fn core_host_rejects_invalid_descriptor() {
         "descriptor rejection should surface validation failure detail"
     );
 }
-
 struct DenyTouchPolicy {
     denied: DataSpaceId,
 }
-
 impl axt::AxtPolicy for DenyTouchPolicy {
     fn allow_touch(
         &self,
@@ -2848,14 +2655,11 @@ impl axt::AxtPolicy for DenyTouchPolicy {
             Ok(())
         }
     }
-
     fn allow_handle(&self, _usage: &axt::HandleUsage) -> Result<(), VMError> {
         Ok(())
     }
 }
-
 struct DenyHandlePolicy;
-
 impl axt::AxtPolicy for DenyHandlePolicy {
     fn allow_touch(
         &self,
@@ -2864,12 +2668,10 @@ impl axt::AxtPolicy for DenyHandlePolicy {
     ) -> Result<(), VMError> {
         Ok(())
     }
-
     fn allow_handle(&self, _usage: &axt::HandleUsage) -> Result<(), VMError> {
         Err(VMError::PermissionDenied)
     }
 }
-
 #[test]
 fn core_host_policy_rejects_touch() {
     let authority = fixture_authority();
@@ -2877,7 +2679,6 @@ fn core_host_policy_rejects_touch() {
     let mut host = CoreHost::new(authority).with_axt_policy(Arc::new(DenyTouchPolicy {
         denied: DataSpaceId::new(50),
     }));
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![DataSpaceId::new(50)],
         touches: vec![axt::AxtTouchSpec {
@@ -2889,7 +2690,6 @@ fn core_host_policy_rejects_touch() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &descriptor.dsids[0]);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
@@ -2898,13 +2698,11 @@ fn core_host_policy_rejects_touch() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_policy_rejects_handle() {
     let authority = fixture_authority();
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority.clone()).with_axt_policy(Arc::new(DenyHandlePolicy));
-
     let dsid = DataSpaceId::new(51);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2917,12 +2715,10 @@ fn core_host_policy_rejects_handle() {
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
@@ -2967,7 +2763,6 @@ fn core_host_policy_rejects_handle() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 fn use_handle_with_snapshot(
     authority: &AccountId,
     dsid: DataSpaceId,
@@ -2978,7 +2773,6 @@ fn use_handle_with_snapshot(
     let mut host = CoreHost::new(authority.clone())
         .with_axt_policy_snapshot(snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -2990,12 +2784,10 @@ fn use_handle_with_snapshot(
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
-
     let binding = axt::compute_binding(&descriptor).expect("descriptor binding");
     handle.axt_binding = binding.to_vec();
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
@@ -3014,7 +2806,6 @@ fn use_handle_with_snapshot(
     vm.set_register(12, 0);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
-
 #[test]
 fn axt_snapshot_policy_enforces_lanes_and_counters() {
     let authority = fixture_authority();
@@ -3034,7 +2825,6 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-
     let base_handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
@@ -3059,42 +2849,36 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(1);
     assert_eq!(
         use_handle_with_snapshot(&authority, dsid, &snapshot, wrong_lane),
         Err(VMError::PermissionDenied)
     );
-
     let mut expired = base_handle.clone();
     expired.expiry_slot = 40;
     assert_eq!(
         use_handle_with_snapshot(&authority, dsid, &snapshot, expired),
         Err(VMError::PermissionDenied)
     );
-
     let mut wrong_root = base_handle.clone();
     wrong_root.manifest_view_root = vec![0xBB; 32];
     assert_eq!(
         use_handle_with_snapshot(&authority, dsid, &snapshot, wrong_root),
         Err(VMError::PermissionDenied)
     );
-
     let mut old_era = base_handle.clone();
     old_era.handle_era = 1;
     assert_eq!(
         use_handle_with_snapshot(&authority, dsid, &snapshot, old_era),
         Err(VMError::PermissionDenied)
     );
-
     let mut stale_nonce = base_handle.clone();
     stale_nonce.sub_nonce = 1;
     assert_eq!(
         use_handle_with_snapshot(&authority, dsid, &snapshot, stale_nonce),
         Err(VMError::PermissionDenied)
     );
-
     assert_ok_gas!(use_handle_with_snapshot(
         &authority,
         dsid,
@@ -3102,7 +2886,6 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         base_handle
     ));
 }
-
 #[test]
 fn core_host_reports_amx_budget_timeout() {
     let authority = AccountId::new(
@@ -3110,10 +2893,8 @@ fn core_host_reports_amx_budget_timeout() {
             .parse()
             .expect("budget authority key"),
     );
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority);
-
     let analysis = ProgramAnalysis {
         metadata: ProgramMetadata {
             version_major: 1,
@@ -3134,7 +2915,6 @@ fn core_host_reports_amx_budget_timeout() {
         group_budget_ms: 0,
         ..AmxLimits::default()
     });
-
     let dsid = DataSpaceId::new(33);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -3148,17 +2928,14 @@ fn core_host_reports_amx_budget_timeout() {
         read: vec!["budget/read".into()],
         write: vec!["budget/write".into()],
     };
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-
     let result = host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm);
     match result {
         Err(VMError::AmxBudgetExceeded {
@@ -3175,7 +2952,6 @@ fn core_host_reports_amx_budget_timeout() {
         other => panic!("expected AMX budget error, got {other:?}"),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn use_handle_with_state_policy(
     state: &State,
@@ -3187,11 +2963,9 @@ fn use_handle_with_state_policy(
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), state)
         .expect("fixture state should produce a valid CoreHost");
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = descriptor
         .touches
@@ -3211,10 +2985,8 @@ fn use_handle_with_state_policy(
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
-
     let binding = axt::compute_binding(descriptor).expect("descriptor binding");
     handle.axt_binding = binding.to_vec();
-
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -3231,14 +3003,12 @@ fn use_handle_with_state_policy(
     vm.set_register(12, 0);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_from_state_enforces_space_directory_policy() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(77);
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-state"));
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::default(),
         uaid,
@@ -3252,12 +3022,10 @@ fn core_host_from_state_enforces_space_directory_policy() {
     manifest_record.lifecycle.mark_activated(3);
     let mut manifest_set = SpaceDirectoryManifestSet::default();
     manifest_set.upsert(manifest_record.clone());
-
     let mut world = World::new();
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, manifest_set);
-
     let lane_meta = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: dsid,
@@ -3273,7 +3041,6 @@ fn core_host_from_state_enforces_space_directory_policy() {
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
@@ -3284,7 +3051,6 @@ fn core_host_from_state_enforces_space_directory_policy() {
         state.view().world().axt_policies().get(&dsid).is_some(),
         "Space Directory manifests should seed AXT policy cache"
     );
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3322,7 +3088,6 @@ fn core_host_from_state_enforces_space_directory_policy() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     assert_ok_gas!(use_handle_with_state_policy(
         &state,
         &authority,
@@ -3330,21 +3095,18 @@ fn core_host_from_state_enforces_space_directory_policy() {
         &descriptor,
         base_handle.clone()
     ));
-
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(1);
     assert_eq!(
         use_handle_with_state_policy(&state, &authority, dsid, &descriptor, wrong_lane),
         Err(VMError::PermissionDenied)
     );
-
     let mut wrong_root = base_handle.clone();
     wrong_root.manifest_view_root = vec![0xCC; 32];
     assert_eq!(
         use_handle_with_state_policy(&state, &authority, dsid, &descriptor, wrong_root),
         Err(VMError::PermissionDenied)
     );
-
     let mut low_era = base_handle.clone();
     low_era.handle_era = 1;
     assert_eq!(
@@ -3352,20 +3114,17 @@ fn core_host_from_state_enforces_space_directory_policy() {
         Err(VMError::PermissionDenied)
     );
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(88);
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-placeholder"));
-
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let account = Account::new(authority.clone())
         .with_uaid(Some(uaid))
         .build(&authority);
     let domain = Domain::new(domain_id).build(&authority);
-
     let mut world = World::with([domain], [account], []);
     let mut bindings = UaidDataspaceBindings::default();
     bindings.bind_account(dsid, authority.clone());
@@ -3387,7 +3146,6 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, manifest_set);
-
     let lane_meta = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: dsid,
@@ -3404,14 +3162,12 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     let lane_catalog =
         LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("lane catalog populated");
     let nexus = nexus_with_lane_catalog(lane_catalog);
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
     state
         .set_nexus(nexus)
         .expect("apply Nexus catalog for AXT snapshot");
-
     let snapshot = state.view().axt_policy_snapshot();
     let policy = snapshot
         .entries
@@ -3423,7 +3179,6 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
         policy.manifest_root.iter().all(|byte| *byte == 0),
         "placeholder policies must carry zeroed manifest roots"
     );
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3456,11 +3211,9 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     let result = use_handle_with_state_policy(&state, &authority, dsid, &descriptor, handle);
     assert_eq!(result, Err(VMError::PermissionDenied));
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_binds_proof_to_manifest_root() {
@@ -3481,12 +3234,10 @@ fn core_host_binds_proof_to_manifest_root() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new(authority.clone())
         .with_axt_policy_snapshot(&snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3499,7 +3250,6 @@ fn core_host_binds_proof_to_manifest_root() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/proof".into()],
@@ -3510,7 +3260,6 @@ fn core_host_binds_proof_to_manifest_root() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let bad_proof = axt::ProofBlob {
         payload: vec![0x01, 0x02],
         expiry_slot: Some(10),
@@ -3522,7 +3271,6 @@ fn core_host_binds_proof_to_manifest_root() {
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     let raw_root_proof = axt::ProofBlob {
         payload: manifest_root.to_vec(),
         expiry_slot: Some(10),
@@ -3534,19 +3282,16 @@ fn core_host_binds_proof_to_manifest_root() {
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::NoritoInvalid)
     );
-
     let ok_proof = proof_blob_for(dsid, manifest_root, vec![0x03, 0x04], 10);
     let ok_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ok_proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, ok_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-
     // Cache hit in the same slot should also succeed.
     vm.set_register(10, ds_ptr);
     vm.set_register(11, ok_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_exports_axt_envelopes_to_state_block() {
@@ -3554,10 +3299,8 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     let lane = LaneId::new(3);
     let dsid = DataSpaceId::new(21);
     let manifest_root = [0xCC; 32];
-
     let mut vm = IVM::new(1_000_000);
     let mut host = host_with_policy(authority.clone(), dsid, manifest_root, lane, 4);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -3570,7 +3313,6 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let touch_manifest = TouchManifest {
         read: vec!["orders/1".into()],
@@ -3581,14 +3323,12 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0xBB, 0xCC], 20);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
         .expect("proof");
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
@@ -3632,7 +3372,6 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         .expect("use handle");
     host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
         .expect("commit");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
@@ -3640,13 +3379,11 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
-
     let queued = host
         .apply_queued(&mut stx, &authority)
         .expect("apply queued");
     assert!(queued.is_empty());
     stx.apply();
-
     let envelopes = block.axt_envelopes();
     assert_eq!(envelopes.len(), 1);
     let record = &envelopes[0];
@@ -3660,17 +3397,14 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         record.handles[0].intent.op.amount,
         Some(Quantity::from(5_u64))
     );
-
     let drained = block.drain_axt_envelopes();
     assert_eq!(drained.len(), 1);
     assert!(block.axt_envelopes().is_empty());
 }
-
 #[test]
 fn core_host_rejects_cached_proof_after_manifest_rotation() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(55);
-
     let entries_current = vec![AxtPolicyBinding {
         dsid,
         policy: AxtPolicyEntry {
@@ -3688,7 +3422,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     let mut host = CoreHost::new(authority.clone())
         .with_axt_policy_snapshot(&snapshot_current)
         .expect("current AXT policy snapshot should be canonical");
-
     let mut vm = IVM::new(1_000_000);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -3702,7 +3435,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/cache".into()],
@@ -3713,14 +3445,12 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let proof_current = proof_blob_for(dsid, [0x11; 32], b"manifest-v1".to_vec(), 20);
     let proof_v1_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_current);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v1_ptr);
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
         .expect("proof matches manifest v1");
-
     let entries_v2 = vec![AxtPolicyBinding {
         dsid,
         policy: AxtPolicyEntry {
@@ -3735,7 +3465,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         version: AxtPolicySnapshot::compute_version(&entries_v2),
         entries: entries_v2,
     };
-
     let mut noncanonical_snapshot_v2 = snapshot_v2.clone();
     let expected_v2 = noncanonical_snapshot_v2.version;
     noncanonical_snapshot_v2.version = expected_v2.wrapping_add(1);
@@ -3747,7 +3476,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
             actual,
         }) if expected == expected_v2 && actual == advertised_v2
     ));
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v1_ptr);
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
@@ -3756,7 +3484,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         host.axt_recorded_proof_payload(dsid).is_some(),
         "rejected refresh must preserve the active envelope"
     );
-
     host.refresh_axt_policy_snapshot(&snapshot_v2)
         .expect("rotated AXT policy snapshot should be canonical");
     assert!(
@@ -3772,7 +3499,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         Err(VMError::PermissionDenied),
         "an envelope accepted under the prior policy must not commit"
     );
-
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("restart envelope after policy refresh");
@@ -3780,14 +3506,12 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch after policy refresh");
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v1_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::PermissionDenied)
     );
-
     let proof_v2 = proof_blob_for(dsid, [0x22; 32], b"manifest-v2".to_vec(), 20);
     let proof_v2_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_v2);
     vm.set_register(10, ds_ptr);
@@ -3795,7 +3519,6 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 }
-
 #[test]
 fn core_host_timing_change_aborts_active_envelope() {
     let authority = fixture_authority();
@@ -3805,7 +3528,6 @@ fn core_host_timing_change_aborts_active_envelope() {
     let mut host = CoreHost::new(authority)
         .with_axt_policy_snapshot(&snapshot)
         .expect("AXT policy snapshot should be canonical");
-
     let mut vm = IVM::new(1_000_000);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -3819,7 +3541,6 @@ fn core_host_timing_change_aborts_active_envelope() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/timing".into()],
@@ -3830,7 +3551,6 @@ fn core_host_timing_change_aborts_active_envelope() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let proof = proof_blob_for(dsid, manifest_root, b"timing-change".to_vec(), 20);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
@@ -3838,7 +3558,6 @@ fn core_host_timing_change_aborts_active_envelope() {
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
         .expect("proof matches current timing");
     assert!(host.axt_recorded_proof_payload(dsid).is_some());
-
     let timing = ActualAxtTiming {
         slot_length_ms: NonZeroU64::new(2).expect("slot length"),
         max_clock_skew_ms: 1,
@@ -3860,7 +3579,6 @@ fn core_host_timing_change_aborts_active_envelope() {
         Err(VMError::PermissionDenied),
         "an envelope accepted under the prior timing must not commit"
     );
-
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("restart envelope after timing replacement");
@@ -3873,14 +3591,12 @@ fn core_host_timing_change_aborts_active_envelope() {
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn core_host_records_multi_dataspace_envelope() {
     let authority = fixture_authority();
     let dsid_a = DataSpaceId::new(31);
     let dsid_b = DataSpaceId::new(32);
-
     let entries = vec![
         AxtPolicyBinding {
             dsid: dsid_a,
@@ -3911,7 +3627,6 @@ fn core_host_records_multi_dataspace_envelope() {
         .with_axt_policy_snapshot(&snapshot)
         .expect("fixture AXT policy snapshot should be canonical");
     let mut vm = IVM::new(1_000_000);
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid_a, dsid_b],
         touches: vec![
@@ -3931,7 +3646,6 @@ fn core_host_records_multi_dataspace_envelope() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_a_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid_a);
     let ds_b_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid_b);
     let manifest_a = TouchManifest {
@@ -3952,7 +3666,6 @@ fn core_host_records_multi_dataspace_envelope() {
     vm.set_register(11, manifest_b_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch b");
-
     let proof_a = proof_blob_for(dsid_a, [0xA1; 32], b"multi-ds-a".to_vec(), 50);
     let proof_b = proof_blob_for(dsid_b, [0xB2; 32], b"multi-ds-b".to_vec(), 50);
     let proof_a_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_a);
@@ -3965,7 +3678,6 @@ fn core_host_records_multi_dataspace_envelope() {
     vm.set_register(11, proof_b_ptr);
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
         .expect("proof b");
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = AssetHandle {
         scope: vec!["transfer".into()],
@@ -4015,7 +3727,6 @@ fn core_host_records_multi_dataspace_envelope() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     let intent_a = RemoteSpendIntent {
         asset_dsid: dsid_a,
         op: SpendOp {
@@ -4034,7 +3745,6 @@ fn core_host_records_multi_dataspace_envelope() {
             amount: Some(Quantity::from(15_u64)),
         },
     };
-
     let handle_a_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_a);
     let intent_a_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_a);
     vm.set_register(10, handle_a_ptr);
@@ -4042,7 +3752,6 @@ fn core_host_records_multi_dataspace_envelope() {
     vm.set_register(12, proof_a_ptr);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
         .expect("use handle a");
-
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
     vm.set_register(10, handle_b_ptr);
@@ -4050,10 +3759,8 @@ fn core_host_records_multi_dataspace_envelope() {
     vm.set_register(12, proof_b_ptr);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
         .expect("use handle b");
-
     host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
         .expect("commit");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
@@ -4061,13 +3768,11 @@ fn core_host_records_multi_dataspace_envelope() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(LaneId::new(1));
-
     let queued = host
         .apply_queued(&mut stx, &authority)
         .expect("apply queued");
     assert!(queued.is_empty());
     stx.apply();
-
     let envelopes = block.axt_envelopes();
     assert_eq!(envelopes.len(), 1);
     let record = &envelopes[0];
@@ -4076,7 +3781,6 @@ fn core_host_records_multi_dataspace_envelope() {
     assert_eq!(record.proofs.len(), 2);
     assert_eq!(record.handles.len(), 2);
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn axt_sub_nonce_floor_persists_across_restart() {
@@ -4088,10 +3792,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
         TouchManifest as ModelTouchManifest,
     };
-
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(44);
-
     let world = World::new();
     let lane_meta = LaneConfig {
         id: LaneId::new(0),
@@ -4108,7 +3810,6 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     };
     let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
     let nexus = nexus_with_lane_catalog(lane_catalog);
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
@@ -4135,7 +3836,6 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             current_slot: 0,
         },
     );
-
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
         touches: vec![axt::AxtTouchSpec {
@@ -4213,7 +3913,6 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         }],
         commit_height: 1,
     };
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -4224,7 +3923,6 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     block
         .commit()
         .expect("commit replay envelope before restart");
-
     let view = state.view();
     let cached_policy = view
         .world()
@@ -4233,16 +3931,13 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         .expect("policy cached");
     assert_eq!(cached_policy.next_handle_counter, 6);
     assert_eq!(cached_policy.active_handle_era, 2);
-
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
-
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/replay".into()],
@@ -4253,7 +3948,6 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-
     let stale_handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
@@ -4278,7 +3972,6 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {

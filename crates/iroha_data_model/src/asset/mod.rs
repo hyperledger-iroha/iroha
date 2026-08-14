@@ -1,9 +1,6 @@
 //! Asset-related types and instructions.
-
-use std::collections::btree_map;
-
 use iroha_primitives::numeric::Quantity;
-
+use std::collections::btree_map;
 pub mod alias;
 pub mod definition;
 pub mod id;
@@ -11,7 +8,6 @@ pub mod instructions;
 pub mod policy;
 pub mod transfer_control;
 pub mod value;
-
 pub use alias::{AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1};
 pub use definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition};
 pub use id::{AssetBalanceScope, AssetDefinitionId, AssetId};
@@ -26,10 +22,8 @@ pub use transfer_control::{
     validate_asset_transfer_availability_reason,
 };
 pub use value::{Asset, AssetEntry, AssetValue};
-
 /// [`AssetTotalQuantityMap`] stores canonical non-negative totals by asset definition.
 pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Quantity>;
-
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{

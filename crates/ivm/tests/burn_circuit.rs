@@ -6,12 +6,10 @@ use ivm::{
     },
     pedersen_commit_truncated, poseidon6,
 };
-
 fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.is_empty() {
         return 0;
     }
-
     let mut idx = 0usize;
     let mut acc = 0u64;
     let mut first = true;
@@ -42,7 +40,6 @@ fn poseidon_hash(inputs: &[u64]) -> u64 {
     }
     acc
 }
-
 fn expected_public(w: &BurnWitness) -> BurnPublic {
     let nullifier = compute_nullifier(w.secret_key, w.serial);
     let value_commitment = ECPoint {
@@ -74,7 +71,6 @@ fn expected_public(w: &BurnWitness) -> BurnPublic {
         sig_public,
     }
 }
-
 #[test]
 fn test_burn_circuit_verify_ok() {
     let witness = BurnWitness {
@@ -101,7 +97,6 @@ fn test_burn_circuit_verify_ok() {
         sig_public: ECPoint { x: 0, y: 0 },
     };
     let mut circuit = BurnCircuit::new(witness, public);
-
     circuit.public.nullifier =
         compute_nullifier(circuit.witness.secret_key, circuit.witness.serial);
     circuit.public.value_commitment = ECPoint {
@@ -130,10 +125,8 @@ fn test_burn_circuit_verify_ok() {
         poseidon_hash(&[circuit.witness.hook_data, circuit.witness.hook_blind]);
     circuit.public.hook_id = circuit.witness.hook_id;
     circuit.public.sig_public = derive_public_key(circuit.witness.sig_secret);
-
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_burn_circuit_bad_nullifier() {
     let witness = BurnWitness {
@@ -160,7 +153,6 @@ fn test_burn_circuit_bad_nullifier() {
         sig_public: ECPoint { x: 0, y: 0 },
     };
     let mut circuit = BurnCircuit::new(witness, public);
-
     // compute correct values for other outputs
     circuit.public.value_commitment = ECPoint {
         x: pedersen_commit_truncated(circuit.witness.value, circuit.witness.value_blind),
@@ -188,10 +180,8 @@ fn test_burn_circuit_bad_nullifier() {
         poseidon_hash(&[circuit.witness.hook_data, circuit.witness.hook_blind]);
     circuit.public.hook_id = circuit.witness.hook_id;
     circuit.public.sig_public = derive_public_key(circuit.witness.sig_secret);
-
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_bad_signature_key() {
     let witness = BurnWitness {
@@ -218,7 +208,6 @@ fn test_burn_circuit_bad_signature_key() {
         sig_public: ECPoint { x: 999, y: 0 }, // incorrect
     };
     let mut circuit = BurnCircuit::new(witness, public);
-
     circuit.public.nullifier =
         compute_nullifier(circuit.witness.secret_key, circuit.witness.serial);
     circuit.public.value_commitment = ECPoint {
@@ -247,10 +236,8 @@ fn test_burn_circuit_bad_signature_key() {
         poseidon_hash(&[circuit.witness.hook_data, circuit.witness.hook_blind]);
     circuit.public.hook_id = circuit.witness.hook_id;
     // do not correct sig_public; keep wrong value
-
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_bad_merkle_root() {
     let witness = BurnWitness {
@@ -272,7 +259,6 @@ fn test_burn_circuit_bad_merkle_root() {
     let circuit = BurnCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_bad_value_commitment() {
     let witness = BurnWitness {
@@ -294,7 +280,6 @@ fn test_burn_circuit_bad_value_commitment() {
     let circuit = BurnCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_bad_token_commitment() {
     let witness = BurnWitness {
@@ -316,7 +301,6 @@ fn test_burn_circuit_bad_token_commitment() {
     let circuit = BurnCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_bad_hook_commitment() {
     let witness = BurnWitness {
@@ -338,7 +322,6 @@ fn test_burn_circuit_bad_hook_commitment() {
     let circuit = BurnCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_hook_id_mismatch() {
     let witness = BurnWitness {
@@ -360,7 +343,6 @@ fn test_burn_circuit_hook_id_mismatch() {
     let circuit = BurnCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_burn_circuit_zero_value_dummy() {
     let witness = BurnWitness {
@@ -381,7 +363,6 @@ fn test_burn_circuit_zero_value_dummy() {
     let circuit = BurnCircuit::new(witness, public);
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_burn_circuit_large_index_parity() {
     // Exercise large leaf_index with a nontrivial path to ensure bit handling

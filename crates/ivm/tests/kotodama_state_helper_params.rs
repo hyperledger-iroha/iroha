@@ -1,7 +1,5 @@
 //! Compile-fail coverage for removed first-class durable-state parameters.
-
 use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-
 fn assert_state_parameter_rejected(source: &str) {
     let error = KotodamaCompiler::new()
         .compile_source(source)
@@ -11,7 +9,6 @@ fn assert_state_parameter_rejected(source: &str) {
         "unexpected diagnostic: {error}"
     );
 }
-
 #[test]
 fn scalar_state_parameter_is_rejected() {
     assert_state_parameter_rejected(
@@ -22,7 +19,6 @@ fn scalar_state_parameter_is_rejected() {
         "#,
     );
 }
-
 #[test]
 fn state_map_parameter_is_rejected() {
     assert_state_parameter_rejected(

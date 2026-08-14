@@ -1,7 +1,6 @@
 fn invalid_privacy_parameter(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
 }
-
 fn has_exact_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -15,7 +14,6 @@ fn has_exact_permission(
     {
         return true;
     }
-
     state_transaction
         .world
         .account_roles
@@ -29,7 +27,6 @@ fn has_exact_permission(
         })
         .any(|role| role.permissions().any(|permission| permission == required))
 }
-
 fn ensure_privacy_governance(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,

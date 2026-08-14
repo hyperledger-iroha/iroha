@@ -1,19 +1,15 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-
 use super::super::comm::PRNG;
 use super::flr::FLR;
 use super::poly::*;
-
 // ========================================================================
 // Gaussian sampling
 // ========================================================================
-
 // The sampler generates random integer values that follow a Gaussian
 // distribution. The centre and standard deviation of that distribution
 // are not integral, vary within each signature generation, and are
 // secret.
-
 // A sampler state includes a PRNG, from which random bytes are obtained,
 // and the (logarithmic) degree for the overall scheme (some constants
 // depend on the used degree).
@@ -22,41 +18,31 @@ pub(crate) struct Sampler<T: PRNG> {
     logn: u32,
     remaining_proposals: u32,
 }
-
 pub(super) const MAX_PROPOSALS_PER_COEFFICIENT: u32 = 256;
-
 impl<T: PRNG> core::fmt::Debug for Sampler<T> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("Falcon512Sampler(<redacted>)")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     struct RejectingPrng;
-
     impl PRNG for RejectingPrng {
         fn new(_seed: &[u8]) -> Self {
             Self
         }
-
         fn next_u8(&mut self) -> u8 {
             u8::MAX
         }
-
         fn next_u16(&mut self) -> u16 {
             u16::MAX
         }
-
         fn next_u64(&mut self) -> u64 {
             u64::MAX
         }
-
         fn zeroize(&mut self) {}
     }
-
     #[test]
     fn one_coefficient_stops_after_exact_public_proposal_cap() {
         let mut sampler = Sampler::<RejectingPrng>::new(9, &[], MAX_PROPOSALS_PER_COEFFICIENT + 1);
@@ -64,7 +50,6 @@ mod tests {
         assert_eq!(sampler.remaining_proposals, 1);
     }
 }
-
 impl<T: PRNG> Drop for Sampler<T> {
     fn drop(&mut self) {
         self.rng.zeroize();
@@ -72,10 +57,8 @@ impl<T: PRNG> Drop for Sampler<T> {
         self.remaining_proposals = 0;
     }
 }
-
 // 1/(2*(1.8205^2))
 const INV_2SQRSIGMA0: FLR = FLR::scaled(5435486223186882, -55);
-
 // For logn = 1 to 10, n = 2^logn:
 //    q = 12289
 //    gs_norm = (117/100)*sqrt(q)
@@ -118,7 +101,6 @@ const SIGMA_MIN: [FLR; 11] = [
     FLR::scaled(5754851361258101, -52), // 1.2778336969128335860
     FLR::scaled(5846934829975396, -52), // 1.2982803343442918540
 ];
-
 // Distribution for gaussian0() (this is the RCDT table from the
 // specification, expressed in base 2^24).
 const GAUSS0: [[u32; 3]; 18] = [
@@ -141,13 +123,10 @@ const GAUSS0: [[u32; 3]; 18] = [
     [0, 0, 198],
     [0, 0, 1],
 ];
-
 // log(2)
 const LOG2: FLR = FLR::scaled(6243314768165359, -53);
-
 // 1/log(2)
 const INV_LOG2: FLR = FLR::scaled(6497320848556798, -52);
-
 impl<T: PRNG> Sampler<T> {
     pub(crate) fn new(logn: u32, seed: &[u8], total_proposal_budget: u32) -> Self {
         let rng = T::new(seed);
@@ -157,26 +136,20 @@ impl<T: PRNG> Sampler<T> {
             remaining_proposals: total_proposal_budget,
         }
     }
-
     // SSE2 variant of next() (for 32-bit x86).
-
     // Sample the next small integer, using the proper Gaussian
     // distribution with centre mu and inverse of the standard
     // deviation isigma.
-
     pub(crate) fn next(&mut self, mu: FLR, isigma: FLR) -> Option<i32> {
         // Centre is mu. We split it into s + r, for an integer
         // s, and 0 <= r < 1.
         let s = mu.floor();
         let r = mu - FLR::from_i64(s);
         let s = s as i32;
-
         // dss = 1/(2*sigma^2) = 0.5*(isigma^2)
         let dss = isigma.square().half();
-
         // ccs = sigma_min / sigma = sigma_min * isigma
         let ccs = isigma * SIGMA_MIN[self.logn as usize];
-
         // We need to sample on centre r.
         for _ in 0..MAX_PROPOSALS_PER_COEFFICIENT {
             self.remaining_proposals = self.remaining_proposals.checked_sub(1)?;
@@ -192,7 +165,6 @@ impl<T: PRNG> Sampler<T> {
             let z0 = self.gaussian0();
             let b = (self.rng.next_u8() as i32) & 1;
             let z = b + ((b << 1) - 1) * z0;
-
             // Rejection sampling. We want a Gaussian centred on r,
             // but we sampled against a bimodal Gaussian (with "centres"
             // at 0 and 1). However, we know that z is always in the
@@ -227,7 +199,6 @@ impl<T: PRNG> Sampler<T> {
         }
         None
     }
-
     // Sample a value from a given half-Gaussian centred on zero; only
     // non-negative values are returned. 72 bits from the random source
     // are used.
@@ -238,7 +209,6 @@ impl<T: PRNG> Sampler<T> {
         let v0 = (lo as u32) & 0xFFFFFF;
         let v1 = ((lo >> 24) as u32) & 0xFFFFFF;
         let v2 = ((lo >> 48) as u32) | ((hi as u32) << 16);
-
         // Sampled value is z, such that v0..v2 is lower than the first
         // z elements of the table.
         let mut z = 0;
@@ -250,16 +220,13 @@ impl<T: PRNG> Sampler<T> {
         }
         z
     }
-
     // Sample a bit with probability ccs*exp(-x) (with x >= 0).
-
     fn ber_exp(&mut self, x: FLR, ccs: FLR) -> bool {
         // Reduce x modulo log(2): x = s*log(2) + r, with s an integer,
         // and 0 <= r < log(2). We can use trunc() because x >= 0
         // (trunc() is presumably a bit faster than floor()).
         let s = (x * INV_LOG2).trunc();
         let r = x - FLR::from_i64(s) * LOG2;
-
         // If s >= 64, sigma = 1.2, r = 0 and b = 1, then we get s >= 64
         // if the half-Gaussian produced z >= 13, which happens with
         // probability about 2^(-32). When s >= 64, ber_exp() will return
@@ -271,7 +238,6 @@ impl<T: PRNG> Sampler<T> {
         // to ber_exp()).
         let sw = s as u32;
         let s = (sw | (63u32.wrapping_sub(sw) >> 16)) & 63;
-
         // Compute ccs*exp(-x). Since x = s*log(2) + r, we compute
         // ccs*exp(-r)/2^s. We know that 0 <= r < log(2) at this
         // point, so we can use FLR::expm_p63(), which yields a result
@@ -302,7 +268,6 @@ impl<T: PRNG> Sampler<T> {
             target_arch = "riscv64"
         )))]
         let z = (z ^ ((z ^ (z >> 32)) & ((s >> 5) as u64).wrapping_neg())) >> (s & 31);
-
         // Sample a bit with probability ccs*exp(-x). We lazily compare
         // the value z with a uniform 64-bit integer, consuming only as
         // many bytes as necessary. Note that since the PRNG is good
@@ -319,11 +284,8 @@ impl<T: PRNG> Sampler<T> {
         }
         false
     }
-
     // Variant of ber_exp() for 32-bit x86 with SSE2.
-
     // Variant of expm_p63() for 32-bit x86 with SSE2.
-
     // Fast Fourier Sampling.
     // The target vector is t, provided as two polynomials t0 and t1.
     // The Gram matrix is provided (G = [[g00, g01], [adj(g01), g11]]).
@@ -341,7 +303,6 @@ impl<T: PRNG> Sampler<T> {
     ) -> bool {
         self.ffsamp_fft_inner(self.logn, t0, t1, g00, g01, g11, tmp)
     }
-
     // Inner function for Fast Fourier Sampling (recursive). The
     // degree at this level is provided as the 'logn' parameter (the
     // overall degree is in self.logn).
@@ -356,7 +317,6 @@ impl<T: PRNG> Sampler<T> {
         tmp: &mut [FLR],
     ) -> bool {
         // When logn = 1, arrays have length 2; we unroll the last steps.
-
         if logn == 1 {
             // Decompose G into LDL. g00 and g11 are self-adjoint and thus
             // use one coefficient each.
@@ -370,18 +330,14 @@ impl<T: PRNG> Sampler<T> {
             let l01_re = mu_re;
             let l01_im = -mu_im;
             let d11_re = g11_re - zo_re;
-
             // No split on d00 and d11, since they have a single coefficient.
-
             // The half-size Gram matrices for the recursive LDL tree
             // exploration are now:
             //   - left sub-tree:   d00_re, zero, d00_re
             //   - right sub-tree:  d11_re, zero, d11_re
-
             // t1 split is trivial, since logn = 1.
             let w0 = t1[0];
             let w1 = t1[1];
-
             // Recursive call on the two halves, using the right sub-tree.
             let leaf = d11_re.sqrt() * INV_SIGMA[self.logn as usize];
             let Some(y0) = self.next(w0, leaf).map(FLR::from_i32) else {
@@ -390,9 +346,7 @@ impl<T: PRNG> Sampler<T> {
             let Some(y1) = self.next(w1, leaf).map(FLR::from_i32) else {
                 return false;
             };
-
             // Merge is trivial, since logn = 1.
-
             // At this point:
             //   t0 and t1 are unmodified; t1 is also [w0, w1]
             //   l10 is in [l01_re, l01_im]
@@ -404,7 +358,6 @@ impl<T: PRNG> Sampler<T> {
             let (x0, x1) = (t0[0] + b_re, t0[1] + b_im);
             t1[0] = y0;
             t1[1] = y1;
-
             // Second recursive invocation, on the split tb0, using the
             // left sub-tree. tb0 is [x0, x1] and its split is trivial
             // since logn = 1.
@@ -417,17 +370,13 @@ impl<T: PRNG> Sampler<T> {
             };
             t0[0] = y0;
             t0[1] = y1;
-
             return true;
         }
-
         // General case: logn >= 2.
         let n = 1usize << logn;
         let hn = n >> 1;
-
         // Decompose G into LDL; the decomposed matrix replaces G.
         poly_LDL_fft(logn, &*g00, g01, g11);
-
         // Split d00 and d11 (currently in g00 and g11) and expand them
         // into half-size quasi-cyclic Gram matrices. We also
         // save l10 (in g01) into tmp.
@@ -444,7 +393,6 @@ impl<T: PRNG> Sampler<T> {
         tmp[0..n].copy_from_slice(&g01[0..n]);
         g01[0..hn].copy_from_slice(&g00[0..hn]);
         g01[hn..n].copy_from_slice(&g11[0..hn]);
-
         // The half-size Gram matrices for the recursive LDL tree
         // exploration are now:
         //   - left sub-tree:   g00[0..hn], g00[hn..n], g01[0..hn]
@@ -453,7 +401,6 @@ impl<T: PRNG> Sampler<T> {
         let (left_00, left_01) = g00.split_at_mut(hn);
         let (right_00, right_01) = g11.split_at_mut(hn);
         let (left_11, right_11) = g01.split_at_mut(hn);
-
         // We split t1 and use the first recursive call on the two
         // halves, using the right sub-tree. The result is merged
         // back into tmp[2*n..3*n].
@@ -467,7 +414,6 @@ impl<T: PRNG> Sampler<T> {
             }
             poly_merge_fft(logn, tmp, &*w0, &*w1);
         }
-
         // At this point:
         //   t0 and t1 are unmodified
         //   l10 is in tmp[0..n]
@@ -485,7 +431,6 @@ impl<T: PRNG> Sampler<T> {
             poly_mul_fft(logn, l10, &*w);
             poly_add(logn, t0, &*l10);
         }
-
         // Second recursive invocation, on the split tb0 (currently in t0),
         // using the left sub-tree.
         // tmp is free at this point.

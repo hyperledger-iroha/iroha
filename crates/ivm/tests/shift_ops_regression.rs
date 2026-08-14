@@ -1,6 +1,5 @@
 use ivm::{IVM, encoding, kotodama::wide};
 mod common;
-
 fn program_shift_ops() -> Vec<u8> {
     // Build: SLL x5 = x1 << x2; SRL x6 = x3 >> x2; SRA x7 = x4 >>> x2; HALT
     let sll = wide::encode_sll(5, 1, 2);
@@ -14,7 +13,6 @@ fn program_shift_ops() -> Vec<u8> {
     code.extend_from_slice(&halt.to_le_bytes());
     common::assemble(&code)
 }
-
 #[test]
 fn shift_ops_parallel_vs_sequential_match() {
     // Inputs
@@ -30,7 +28,6 @@ fn shift_ops_parallel_vs_sequential_match() {
     let r5_ilp = vm_ilp.register(5);
     let r6_ilp = vm_ilp.register(6);
     let r7_ilp = vm_ilp.register(7);
-
     // Sequential path (disable ILP by setting max_cycles)
     let mut vm_seq = IVM::new(10_000);
     vm_seq.set_register(1, 1);
@@ -43,7 +40,6 @@ fn shift_ops_parallel_vs_sequential_match() {
     prog_seq[8..16].copy_from_slice(&max_cycles);
     vm_seq.load_program(&prog_seq).unwrap();
     vm_seq.run().unwrap();
-
     assert_eq!(r5_ilp, vm_seq.register(5));
     assert_eq!(r6_ilp, vm_seq.register(6));
     assert_eq!(r7_ilp, vm_seq.register(7));

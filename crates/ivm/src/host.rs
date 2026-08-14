@@ -6,12 +6,18 @@
 //!
 //! The host also exposes basic hardware feature discovery and proof generation
 //! helpers used by some tests.
-use std::{
-    any::Any,
-    collections::{BTreeMap, HashSet},
-    num::NonZeroU16,
+use crate::{
+    SyscallPolicy,
+    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
+    error::VMError,
+    gas,
+    ivm::IVM,
+    memory::Memory,
+    parallel::{StateAccessSet, StateKey, StateUpdate},
+    pointer_abi::{self, PointerType},
+    syscall_metering::SyscallMetering,
+    syscalls,
 };
-
 use iroha_crypto::{
     Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key,
     blake2::{
@@ -51,20 +57,11 @@ use norito::{
 };
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
-
-use crate::{
-    SyscallPolicy,
-    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
-    error::VMError,
-    gas,
-    ivm::IVM,
-    memory::Memory,
-    parallel::{StateAccessSet, StateKey, StateUpdate},
-    pointer_abi::{self, PointerType},
-    syscall_metering::SyscallMetering,
-    syscalls,
+use std::{
+    any::Any,
+    collections::{BTreeMap, HashSet},
+    num::NonZeroU16,
 };
-
 /// Runtime record of logical state touches performed by a host during a transaction.
 #[derive(Clone, Default, Debug)]
 pub struct AccessLog {
@@ -81,7 +78,6 @@ pub struct AccessLog {
     pub reg_tags: HashSet<usize>,
     pub state_writes: Vec<StateUpdate>,
 }
-
 /// Minimal Halo2 verification config enforced by the default host.
 #[derive(Clone, Copy, Debug)]
 pub struct ZkHalo2Config {
@@ -96,7 +92,6 @@ pub struct ZkHalo2Config {
     pub max_transcript_label_len: usize,
     pub enforce_transcript_label_ascii: bool,
 }
-
 impl Default for ZkHalo2Config {
     fn default() -> Self {
         Self {
@@ -113,7 +108,6 @@ impl Default for ZkHalo2Config {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZkCurve {
     Pallas,
@@ -121,13 +115,11 @@ pub enum ZkCurve {
     Goldilocks,
     Bn254,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZkHalo2Backend {
     Ipa,
     Unsupported,
 }
-
 pub const ERR_DISABLED: u64 = 1;
 pub const ERR_BACKEND: u64 = 2;
 pub const ERR_CURVE: u64 = 3;
@@ -143,11 +135,9 @@ pub const ERR_VK_MISMATCH: u64 = 12;
 pub const ERR_VK_INACTIVE: u64 = 13;
 pub const ERR_NAMESPACE: u64 = 14;
 pub const ERR_DOMAIN_TAG: u64 = 15;
-
 pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v2";
 pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v2";
 pub const LABEL_BATCH: &str = "zk_verify_batch/v2";
-
 /// Per-host counters used to prove the ZK reserve/decode/backend/allocation ordering.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ZkExecutionCounters {
@@ -158,7 +148,6 @@ pub struct ZkExecutionCounters {
     /// Guest-visible batch response allocations made after verification.
     pub response_allocations: u64,
 }
-
 /// Per-host counters used to prove VRF reserve/decode/backend/allocation ordering.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct VrfExecutionCounters {
@@ -169,7 +158,6 @@ pub struct VrfExecutionCounters {
     /// Successful guest-visible response allocations.
     pub response_allocations: u64,
 }
-
 const PUBLIC_INPUT_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const PUBLIC_INPUT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 #[cfg(test)]
@@ -202,7 +190,6 @@ const SM4_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 /// scans then spend one additional gas unit per examined item and stop as soon
 /// as the pre-debited reserve is exhausted.
 pub const STATE_QUERY_GAS_BASE: u64 = gas::STATE_QUERY_GAS_BASE;
-
 /// Validate and return a durable-state path's canonical pointer payload size.
 ///
 /// # Errors
@@ -216,7 +203,6 @@ pub fn quote_state_path_payload_len_at(vm: &IVM, address: u64) -> Result<usize, 
     }
     Ok(path_len)
 }
-
 /// Return the framed Norito payload length used by a `StateMap` base `Name`.
 ///
 /// # Errors
@@ -225,7 +211,6 @@ pub fn quote_state_path_payload_len_at(vm: &IVM, address: u64) -> Result<usize, 
 pub fn state_path_name_payload_len(name: &Name) -> Result<usize, VMError> {
     state_path_text_payload_len(name.as_ref(), core::mem::align_of::<Name>())
 }
-
 /// Return the framed Norito payload length used by a durable-state `StatePath`.
 ///
 /// # Errors
@@ -234,7 +219,6 @@ pub fn state_path_name_payload_len(name: &Name) -> Result<usize, VMError> {
 pub fn state_path_payload_len(path: &StatePath) -> Result<usize, VMError> {
     state_path_text_payload_len(path.as_ref(), core::mem::align_of::<StatePath>())
 }
-
 fn state_path_text_payload_len(path: &str, align: usize) -> Result<usize, VMError> {
     let encoded = state_key_encoded_len_from_text(path)?;
     let padding = if align <= 1 {
@@ -248,7 +232,6 @@ fn state_path_text_payload_len(path: &str, align: usize) -> Result<usize, VMErro
         .and_then(|bytes| bytes.checked_add(encoded))
         .ok_or(VMError::NoritoInvalid)
 }
-
 /// Validate canonical durable-state path text without applying `Name`'s
 /// business-identifier length bound.
 ///
@@ -258,7 +241,6 @@ pub fn validate_state_path_text(path: &str) -> Result<(), VMError> {
     let path: StatePath = path.parse().map_err(|_| VMError::NoritoInvalid)?;
     validate_state_path(&path)
 }
-
 /// Validate a canonical durable-state path against the V1 text and
 /// canonical-frame bounds.
 ///
@@ -273,7 +255,6 @@ pub fn validate_state_path(path: &StatePath) -> Result<(), VMError> {
     }
     Ok(())
 }
-
 /// Validate a V1 durable-state value payload length.
 ///
 /// # Errors
@@ -285,19 +266,16 @@ pub fn validate_state_value_payload_len(value_len: usize) -> Result<(), VMError>
     }
     Ok(())
 }
-
 /// Exact gas for a bounded path-only durable-state operation.
 #[must_use]
 pub fn state_path_gas(path_len: usize) -> u64 {
     STATE_QUERY_GAS_BASE.saturating_add(u64::try_from(path_len).unwrap_or(u64::MAX))
 }
-
 /// Exact gas for a bounded durable-state value operation.
 #[must_use]
 pub fn state_value_gas(path_len: usize, value_len: usize) -> u64 {
     state_path_gas(path_len).saturating_add(u64::try_from(value_len).unwrap_or(u64::MAX))
 }
-
 /// Prepare-time worst-case quote for `STATE_GET` without consulting host state.
 #[must_use]
 pub fn state_get_gas_quote(path_len: usize) -> u64 {
@@ -311,12 +289,10 @@ const TLV_LEN_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const TLV_LEN_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 const VERIFY_GAS_BASE: u64 = gas::HOST_VERIFY_GAS_BASE;
 const VERIFY_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
-
 pub(crate) fn debug_log_gas(payload_len: usize) -> u64 {
     DEBUG_GAS.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
 }
 pub(crate) const TLV_ENVELOPE_OVERHEAD: usize = 7 + iroha_crypto::Hash::LENGTH;
-
 /// Build the injective V1 durable-map path for canonical Norito key bytes.
 pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<StatePath, VMError> {
     if base.as_ref().len() > syscalls::STATE_MAP_MAX_BASE_BYTES
@@ -335,7 +311,6 @@ pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<StatePath, VM
     validate_state_path(&path)?;
     Ok(path)
 }
-
 fn declared_state_map_key_type<'a>(
     vm: &'a IVM,
     base: &Name,
@@ -354,12 +329,10 @@ fn declared_state_map_key_type<'a>(
         _ => Err(VMError::NoritoInvalid),
     }
 }
-
 /// Require `base` to name exactly one declared top-level `StateMap`.
 pub(crate) fn validate_declared_state_map_base(vm: &IVM, base: &Name) -> Result<(), VMError> {
     declared_state_map_key_type(vm, base).map(drop)
 }
-
 fn validate_canonical_pointer_key<T>(key: &[u8], expected_type: PointerType) -> Result<(), VMError>
 where
     T: norito::NoritoSerialize,
@@ -372,13 +345,11 @@ where
     let _: T = decode_canonical_norito(tlv.payload)?;
     Ok(())
 }
-
 pub(crate) fn canonical_norito_bytes<T: norito::NoritoSerialize>(
     value: &T,
 ) -> Result<Vec<u8>, VMError> {
     encode_canonical_norito(value)
 }
-
 /// Validate canonical `StateMap` key bytes against the loaded CNTR declaration.
 ///
 /// The key carrier contains a complete pointer envelope for pointer-backed
@@ -390,7 +361,6 @@ pub(crate) fn validate_declared_state_map_key(
     key: &[u8],
 ) -> Result<(), VMError> {
     use crate::metadata::EmbeddedStateType;
-
     match declared_state_map_key_type(vm, base)? {
         EmbeddedStateType::Int => crate::numeric_tlv::decode_int_bytes(key).map(drop),
         EmbeddedStateType::Decimal => crate::numeric_tlv::decode_decimal_bytes(key).map(drop),
@@ -444,7 +414,6 @@ pub(crate) fn validate_declared_state_map_key(
         | EmbeddedStateType::List { .. } => Err(VMError::NoritoInvalid),
     }
 }
-
 /// Build a map path only after binding the canonical key to its CNTR type.
 pub(crate) fn canonical_typed_state_map_path(
     vm: &IVM,
@@ -455,12 +424,10 @@ pub(crate) fn canonical_typed_state_map_path(
     validate_declared_state_map_key(vm, base, key)?;
     Ok(path)
 }
-
 enum DeclaredStatePath<'a> {
     Value(&'a crate::metadata::EmbeddedStateType),
     MapBase,
 }
-
 fn resolve_declared_state_path<'a>(
     vm: &'a IVM,
     path: &StatePath,
@@ -477,7 +444,6 @@ fn resolve_declared_state_path<'a>(
     if matches.next().is_some() {
         return Err(VMError::NoritoInvalid);
     }
-
     match (&state.ty, suffix) {
         (crate::metadata::EmbeddedStateType::StateMap { .. }, None) => {
             Ok(Some(DeclaredStatePath::MapBase))
@@ -504,7 +470,6 @@ fn resolve_declared_state_path<'a>(
         (_, Some(_)) => Err(VMError::NoritoInvalid),
     }
 }
-
 /// Bind one value operation to the loaded CNTR durable-state declaration.
 ///
 /// The VM rejects every durable-state syscall from generic programs before
@@ -518,7 +483,6 @@ pub fn validate_declared_state_path(vm: &IVM, path: &StatePath) -> Result<(), VM
         Some(DeclaredStatePath::Value(_)) | None => Ok(()),
     }
 }
-
 /// Bind a scan/count prefix to the loaded CNTR durable-state declaration.
 ///
 /// Unlike value operations, scans may address the bare base of a declared
@@ -528,7 +492,6 @@ pub fn validate_declared_state_path(vm: &IVM, path: &StatePath) -> Result<(), VM
 pub fn validate_declared_state_scan_path(vm: &IVM, path: &StatePath) -> Result<(), VMError> {
     resolve_declared_state_path(vm, path).map(drop)
 }
-
 /// Validate a `STATE_SET` payload against the exact type declared by CNTR.
 ///
 /// Compiler-emitted durable values are canonical `StateValueRecordV1`
@@ -548,7 +511,6 @@ pub fn validate_declared_state_value_payload(
     let schema = crate::state_value_runtime::schema_for_embedded_state_type(ty)?;
     crate::state_value_runtime::validate_state_value_record(vm, &schema, payload)
 }
-
 /// Validate header-only `StateMap` path inputs and return their gas lengths.
 ///
 /// `base_payload_len` is the framed canonical `Name` payload length from the
@@ -583,7 +545,6 @@ pub(crate) fn quote_canonical_state_map_path_lengths(
         .ok_or(VMError::NoritoInvalid)?;
     Ok((input_len, output_bound))
 }
-
 /// Decode one canonical key from a `STATE_KEYS` page and validate its map path.
 pub(crate) fn canonical_state_map_key_at(
     page_payload: &[u8],
@@ -614,7 +575,6 @@ pub(crate) fn canonical_state_map_key_at(
             return Err(VMError::NoritoInvalid);
         }
         previous = Some(path);
-
         let suffix = path
             .as_ref()
             .strip_prefix(base.as_ref())
@@ -657,7 +617,6 @@ pub(crate) fn canonical_state_map_key_at(
     }
     Ok(Some(key))
 }
-
 /// Validate the hard V1 page bound and return its platform-sized limit.
 ///
 /// # Errors
@@ -670,7 +629,6 @@ pub fn checked_state_keys_limit(limit: u64) -> Result<usize, VMError> {
     }
     usize::try_from(limit).map_err(|_| VMError::NoritoInvalid)
 }
-
 fn parse_tlv_header(vm: &IVM, header: &[u8]) -> Result<(PointerType, usize), VMError> {
     let raw_type = u16::from_be_bytes([header[0], header[1]]);
     let pointer_type = PointerType::from_u16(raw_type).ok_or(VMError::NoritoInvalid)?;
@@ -686,17 +644,14 @@ fn parse_tlv_header(vm: &IVM, header: &[u8]) -> Result<(PointerType, usize), VME
     let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
     Ok((pointer_type, payload_len))
 }
-
 fn quote_tlv_header_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
     vm.ensure_owned_public_tlv_range(address, 7)?;
     parse_tlv_header(vm, vm.memory.inspect_region(address, 7)?)
 }
-
 fn read_tlv_header_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
     vm.ensure_owned_public_tlv_range(address, 7)?;
     parse_tlv_header(vm, vm.memory.load_region(address, 7)?)
 }
-
 fn validate_quoted_tlv_range(vm: &IVM, address: u64, payload_len: usize) -> Result<(), VMError> {
     let total = 7usize
         .checked_add(payload_len)
@@ -707,7 +662,6 @@ fn validate_quoted_tlv_range(vm: &IVM, address: u64, payload_len: usize) -> Resu
     vm.memory.inspect_region(address, total)?;
     Ok(())
 }
-
 fn quote_bounded_tlv_payload_len_at(
     vm: &IVM,
     address: u64,
@@ -725,7 +679,6 @@ fn quote_bounded_tlv_payload_len_at(
     validate_quoted_tlv_range(vm, address, payload_len)?;
     Ok(payload_len)
 }
-
 fn read_bounded_tlv_payload_len_at(
     vm: &IVM,
     address: u64,
@@ -739,7 +692,6 @@ fn read_bounded_tlv_payload_len_at(
     validate_quoted_tlv_range(vm, address, payload_len)?;
     Ok(payload_len)
 }
-
 /// Inspect a TLV header for gas quoting without decoding, hashing, or allocating.
 ///
 /// # Errors
@@ -750,7 +702,6 @@ pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), 
     validate_quoted_tlv_range(vm, address, payload_len)?;
     Ok((pointer_type, payload_len))
 }
-
 /// Inspect a typed TLV header for gas quoting without decoding, hashing, or allocating.
 ///
 /// # Errors
@@ -767,7 +718,6 @@ pub fn quote_tlv_payload_len_at(
     }
     Ok(payload_len)
 }
-
 /// Header-only quote for one encoded ZK batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkBatchGasQuote {
@@ -778,7 +728,6 @@ pub struct ZkBatchGasQuote {
     /// Conservative schedule cost debited before host execution.
     pub gas: u64,
 }
-
 /// Inspect one ZK envelope TLV and compute its conservative pre-decode quote.
 ///
 /// # Errors
@@ -798,7 +747,6 @@ pub fn quote_zk_single_at(
         schedule.conservative_single_gas(payload_bytes),
     ))
 }
-
 /// Inspect a ZK batch TLV and compute a conservative pre-decode quote.
 ///
 /// Only the fixed archive header, bounded alignment padding, and top-level
@@ -819,7 +767,6 @@ pub fn quote_zk_batch_at(
     const LENGTH_OFFSET: usize = COMPRESSION_OFFSET + 1;
     const LENGTH_END: usize = LENGTH_OFFSET + 8;
     const MAX_ALIGNMENT_PADDING: usize = 64;
-
     let payload_len = quote_tlv_payload_len_at(vm, address, PointerType::NoritoBytes)?;
     if u64::try_from(payload_len).unwrap_or(u64::MAX) > schedule.max_payload_bytes {
         return Err(VMError::NoritoInvalid);
@@ -867,7 +814,6 @@ pub fn quote_zk_batch_at(
         gas: schedule.conservative_batch_gas(quoted_proof_count, payload_len),
     })
 }
-
 /// Decode the sole ABI-v1 public ZK envelope schema canonically.
 ///
 /// # Errors
@@ -881,7 +827,6 @@ pub fn decode_canonical_zk_envelope(payload: &[u8]) -> Result<OpenVerifyEnvelope
     // when required.
     decode_canonical_norito(payload).map_err(|_| ERR_DECODE)
 }
-
 /// Decode the sole ABI-v1 public ZK batch schema with a bounded item count.
 ///
 /// # Errors
@@ -930,7 +875,6 @@ pub fn decode_canonical_zk_batch(
     }
     Ok(batch)
 }
-
 /// Map canonical data-model envelope validation failures to stable ABI statuses.
 #[must_use]
 pub const fn map_open_verify_validation_error(error: OpenVerifyEnvelopeValidationError) -> u64 {
@@ -950,7 +894,6 @@ pub const fn map_open_verify_validation_error(error: OpenVerifyEnvelopeValidatio
         | OpenVerifyEnvelopeValidationError::AllZeroProofBytes => ERR_DECODE,
     }
 }
-
 /// Security-relevant host work class used by ABI-v1 syscall metering.
 ///
 /// This is deliberately separate from a compiler builtin's source-level gas
@@ -973,7 +916,6 @@ pub enum HostSyscallGasClass {
     /// Nested, opaque, or externally routed work.
     Dynamic,
 }
-
 /// Default quote strategy required for a host syscall class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostSyscallQuoteStrategy {
@@ -984,7 +926,6 @@ pub enum HostSyscallQuoteStrategy {
     /// Escrow all currently available gas and enforce bounded post-debit work.
     ReserveAvailable,
 }
-
 /// Stable prepare/execute gas formula assigned to one ABI syscall.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostSyscallGasFormula {
@@ -1023,7 +964,6 @@ pub enum HostSyscallGasFormula {
     /// Conservative pointer-input and complete-output-region envelope.
     ConservativeEnvelope,
 }
-
 /// Canonical gas-parameter family consumed by a syscall formula.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostSyscallGasParameters {
@@ -1052,7 +992,6 @@ pub enum HostSyscallGasParameters {
     /// V1 ledger-query bases, item/sort rates, byte rate, and formula version.
     LedgerQueryV1,
 }
-
 /// Exhaustive ABI-v1 host metering metadata for one syscall.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostSyscallMeteringSpec {
@@ -1071,7 +1010,6 @@ pub struct HostSyscallMeteringSpec {
     /// Minimum reserve required before host-state work may begin.
     pub minimum_gas: u64,
 }
-
 /// Return the explicitly registered gas formula for one ABI-v1 syscall.
 ///
 /// This registry deliberately does not derive a formula from the access class:
@@ -1308,7 +1246,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     }
     None
 }
-
 /// Return the registered metering metadata for an allowed syscall.
 ///
 /// The access registry has no fallback. Consequently, adding a number to the
@@ -1401,7 +1338,6 @@ pub fn host_syscall_metering_spec(
         minimum_gas,
     })
 }
-
 /// Return the complete, sorted ABI-v1 host metering registry.
 ///
 /// An allowed syscall missing explicit access metadata is intentionally absent.
@@ -1418,7 +1354,6 @@ pub fn abi_v1_host_syscall_metering_registry() -> &'static [HostSyscallMeteringS
             .into_boxed_slice()
     })
 }
-
 /// Require registered metering metadata for an allowed host syscall.
 ///
 /// # Errors
@@ -1430,7 +1365,6 @@ pub fn require_host_syscall_metering_spec(
 ) -> Result<HostSyscallMeteringSpec, VMError> {
     host_syscall_metering_spec(policy, number).ok_or(VMError::UnknownSyscall(number))
 }
-
 /// Conservative deterministic gas bound for host implementations whose exact
 /// response size is unavailable during syscall preparation.
 ///
@@ -1459,7 +1393,6 @@ pub fn conservative_syscall_gas_quote(number: u32, vm: &IVM) -> u64 {
             gas::CONSERVATIVE_SYSCALL_RESPONSE_MULTIPLIER.saturating_mul(response_bytes),
         )
 }
-
 /// Reserve all gas currently available to a syscall whose exact cost depends on host state.
 ///
 /// The host must call [`preflight_reserved_syscall_gas`] with the exact cost after reading its
@@ -1468,7 +1401,6 @@ pub fn conservative_syscall_gas_quote(number: u32, vm: &IVM) -> u64 {
 pub fn reserve_available_syscall_gas(vm: &IVM) -> Result<u64, VMError> {
     reserve_available_syscall_gas_at_least(vm, 1)
 }
-
 /// Reserve all currently available syscall gas after enforcing a minimum.
 ///
 /// The minimum is checked during side-effect-free preparation. This prevents a
@@ -1482,7 +1414,6 @@ pub fn reserve_available_syscall_gas_at_least(vm: &IVM, minimum: u64) -> Result<
         Ok(available)
     }
 }
-
 /// Check an exact state-dependent syscall cost against the gas reserved before host execution.
 ///
 /// Direct host calls have no reserve and remain supported for low-level tests. A VM-dispatched
@@ -1495,7 +1426,6 @@ pub fn preflight_reserved_syscall_gas(vm: &IVM, actual: u64) -> Result<(), VMErr
     }
     Ok(())
 }
-
 /// Charge the next state-scan item against the pre-debited syscall reserve.
 ///
 /// `examined_before` is the number of items whose host work has already begun.
@@ -1510,7 +1440,6 @@ pub fn preflight_reserved_syscall_gas(vm: &IVM, actual: u64) -> Result<(), VMErr
 pub fn preflight_reserved_state_scan_item(vm: &IVM, examined_before: usize) -> Result<(), VMError> {
     preflight_reserved_state_scan_work(vm, u64::try_from(examined_before).unwrap_or(u64::MAX), 0)
 }
-
 /// Charge one key comparison against a state scan's reserved work budget.
 ///
 /// `charged_before` includes the encoded prefix and every previously examined
@@ -1528,7 +1457,6 @@ pub fn preflight_reserved_state_scan_work(
 ) -> Result<(), VMError> {
     preflight_reserved_state_scan_work_with_tail(vm, charged_before, next_key_len, 0)
 }
-
 /// Charge one key comparison while preserving gas for later response work.
 ///
 /// `reserved_tail_gas` is the cumulative response or allocation bound that
@@ -1558,7 +1486,6 @@ pub fn preflight_reserved_state_scan_work_with_tail(
         .saturating_add(reserved_tail_gas);
     preflight_reserved_syscall_gas(vm, actual)
 }
-
 /// Return a conservative framed-Norito byte bound for one `STATE_KEYS` page.
 ///
 /// The calculation borrows the selected paths and performs no serialization or
@@ -1593,13 +1520,11 @@ fn state_keys_page_payload_bound_from_parts(
     }
     Ok(framed)
 }
-
 fn state_key_encoded_len_from_text(key: &str) -> Result<usize, VMError> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     <&str as NoritoSerialize>::encoded_len_exact(&key).ok_or(VMError::NoritoInvalid)
 }
-
 /// Compute the exact encoded-element total and framed page bound after adding
 /// one canonical durable-state key to a selected page.
 ///
@@ -1621,7 +1546,6 @@ pub fn state_keys_response_tail_after_item(
     let response = state_keys_page_payload_bound_from_parts(selected, encoded_elements)?;
     Ok((encoded_elements, response))
 }
-
 fn state_keys_page_payload_bound(
     keys: &[StatePath],
     offset: u64,
@@ -1641,7 +1565,6 @@ fn state_keys_page_payload_bound(
     })?;
     state_keys_page_payload_bound_from_parts(selected.len(), elements)
 }
-
 /// Return the prepare-time minimum for a `STATE_KEYS` response page.
 ///
 /// Preparation reserves the empty framed page plus the decoded prefix. During
@@ -1662,7 +1585,6 @@ pub fn state_keys_prepare_minimum(path_len: usize, limit: u64) -> Result<u64, VM
     let framed = state_keys_page_payload_bound_from_parts(0, 0)?;
     Ok(state_path_gas(path_len).saturating_add(u64::try_from(framed).unwrap_or(u64::MAX)))
 }
-
 /// Quote the complete `STATE_KEYS` scan-and-response bound.
 ///
 /// Compute this after the item-bounded scan but before cloning the selected page,
@@ -1685,7 +1607,6 @@ pub fn state_keys_page_gas_quote(
         .saturating_add(scan_work_gas)
         .saturating_add(u64::try_from(payload_bound).unwrap_or(u64::MAX)))
 }
-
 /// Preflight the complete `STATE_KEYS` scan-and-response bound.
 ///
 /// # Errors
@@ -1704,7 +1625,6 @@ pub fn preflight_reserved_state_keys_page(
         state_keys_page_gas_quote(keys, scan_work_gas, offset, limit)?,
     )
 }
-
 /// Deterministic gas for one contiguous heap allocation.
 ///
 /// Charging by eight-byte ABI words makes bounded collection capacity visible
@@ -1715,7 +1635,6 @@ pub(crate) const fn allocation_gas(bytes: u64) -> u64 {
         bytes.saturating_add(gas::ALLOCATION_GAS_WORD_BYTES - 1) / gas::ALLOCATION_GAS_WORD_BYTES,
     )
 }
-
 /// Return whether a syscall belongs to the optional ShangMi family.
 #[must_use]
 pub(crate) const fn is_sm_syscall(number: u32) -> bool {
@@ -1729,7 +1648,6 @@ pub(crate) const fn is_sm_syscall(number: u32) -> bool {
             | syscalls::SYSCALL_SM4_CCM_OPEN
     )
 }
-
 /// Compute exact, side-effect-free gas quotes for VM-local helper syscalls
 /// shared by the standalone, core, and world-state hosts.
 ///
@@ -1743,7 +1661,6 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
             PointerType::Blob,
         )
     };
-
     let quote = match number {
         syscalls::SYSCALL_DEBUG_PRINT
         | syscalls::SYSCALL_EXIT
@@ -1891,7 +1808,6 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
     };
     Ok(Some(quote))
 }
-
 /// Canonicalize a public byte carrier as a fresh host-owned `NoritoBytes` TLV.
 ///
 /// The payload is copied verbatim; only the pointer-ABI type tag and envelope
@@ -1915,7 +1831,6 @@ pub(crate) fn normalize_norito_bytes(vm: &mut IVM) -> Result<u64, VMError> {
     vm.set_register(10, normalized);
     Ok(gas)
 }
-
 /// Trait for IVM host environment to handle syscalls (SCALL).
 pub trait IVMHost {
     /// Return a deterministic upper bound for the syscall's additional gas.
@@ -1925,7 +1840,6 @@ pub trait IVMHost {
     /// invoking [`Self::syscall`] and refunds the unused portion afterwards.
     /// The VM does not invoke this method for registered staged syscalls.
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError>;
-
     /// Handle a syscall invoked by the VM. `number` is the syscall ID and the
     /// mutable reference to the VM gives access to registers and memory.
     ///
@@ -1939,7 +1853,6 @@ pub trait IVMHost {
     /// returns zero. Returning non-zero actual gas or a [`VMError::Metered`]
     /// wrapper from a staged handler is a metering-mode violation.
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError>;
-
     /// Whether this host accepts `number` for a program running under `policy`.
     ///
     /// This policy check must be side-effect-free because it runs before gas is
@@ -1951,55 +1864,46 @@ pub trait IVMHost {
     fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
         syscalls::is_syscall_allowed(policy, number)
     }
-
     /// Downcast support for hosts with extra methods/state.
     fn as_any(&mut self) -> &mut dyn Any
     where
         Self: 'static;
-
     /// Whether this host is safe to share across worker threads during block execution.
     /// Hosts with internal mutable state should override and return `false` so the VM
     /// falls back to sequential execution.
     fn supports_concurrent_blocks(&self) -> bool {
         false
     }
-
     /// Hint that a transaction is about to start. Hosts can reset per-tx state here.
     /// Returning an error aborts the transaction before execution begins.
     fn begin_tx(&mut self, _declared: &StateAccessSet) -> Result<(), VMError> {
         Ok(())
     }
-
     /// Report the actual logical state accesses performed during the last transaction.
     /// Errors propagate to the caller and trigger a host rollback via `restore()`.
     fn finish_tx(&mut self) -> Result<AccessLog, VMError> {
         Ok(AccessLog::default())
     }
-
     /// Optional: inject external verifying key bytes for a backend label.
     /// Defaults to no-op for hosts that do not support VK injection.
     fn set_external_vk_bytes(&mut self, backend: String, bytes: Vec<u8>) {
         let _ = backend;
         let _ = bytes;
     }
-
     /// Optional transactional checkpoint. When provided, the VM will restore this snapshot
     /// if a transaction fails during block execution to avoid leaking side effects.
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         None
     }
-
     /// Attempt to restore from a previously taken checkpoint.
     fn restore(&mut self, _snapshot: &dyn Any) -> bool {
         false
     }
-
     /// Indicate whether this host reports logical state accesses via `finish_tx`.
     fn access_logging_supported(&self) -> bool {
         false
     }
 }
-
 // Compile-time signature guards keep the host lifecycle and syscall quote
 // contracts uniform across downstream implementations.
 type PrepareSyscallSignatureGuard =
@@ -2015,32 +1919,26 @@ fn prepare_syscall_signature_guard(
 ) -> Result<u64, VMError> {
     IVMHost::prepare_syscall(host, number, vm)
 }
-
 fn allows_syscall_signature_guard(host: &dyn IVMHost, policy: SyscallPolicy, number: u32) -> bool {
     IVMHost::allows_syscall(host, policy, number)
 }
-
 fn begin_tx_signature_guard(
     host: &mut dyn IVMHost,
     declared: &StateAccessSet,
 ) -> Result<(), VMError> {
     IVMHost::begin_tx(host, declared)
 }
-
 fn finish_tx_signature_guard(host: &mut dyn IVMHost) -> Result<AccessLog, VMError> {
     IVMHost::finish_tx(host)
 }
-
 const _: PrepareSyscallSignatureGuard = prepare_syscall_signature_guard;
 const _: AllowsSyscallSignatureGuard = allows_syscall_signature_guard;
 const _: BeginTxSignatureGuard = begin_tx_signature_guard;
 const _: FinishTxSignatureGuard = finish_tx_signature_guard;
-
 /// A basic host implementation used in tests. It supports heap allocation and
 /// reading private inputs.
 #[derive(Clone, Default)]
 struct DefaultHostNestedCallJournal;
-
 /// Lightweight rollback token for the subset of [`DefaultHost`] operations
 /// forwarded by the production Iroha host during a nested contract call.
 ///
@@ -2052,7 +1950,6 @@ pub struct DefaultHostForwardedCallCheckpoint {
     journal_depth: usize,
     pub_output: Vec<u8>,
 }
-
 #[derive(Clone)]
 pub struct DefaultHost {
     private_inputs: Vec<Vec<u8>>,
@@ -2076,7 +1973,6 @@ pub struct DefaultHost {
     access_log: AccessLog,
     nested_call_journals: Vec<DefaultHostNestedCallJournal>,
 }
-
 impl DefaultHost {
     pub fn new() -> Self {
         DefaultHost {
@@ -2102,7 +1998,6 @@ impl DefaultHost {
             nested_call_journals: Vec::new(),
         }
     }
-
     /// Provide typed private inputs retrieved by `SYSCALL_GET_PRIVATE_INPUT`.
     ///
     /// # Errors
@@ -2118,7 +2013,6 @@ impl DefaultHost {
             .collect::<Result<Vec<_>, _>>()?;
         Self::with_encoded_private_inputs(private_inputs)
     }
-
     /// Provide bounded, untrusted encoded private-input records from transport.
     ///
     /// Records are deliberately not decoded here. Runtime execution validates
@@ -2149,7 +2043,6 @@ impl DefaultHost {
         host.private_inputs = inputs;
         Ok(host)
     }
-
     /// Install arbitrary encoded records without transport admission checks.
     ///
     /// This exists only for unit tests proving runtime decoding remains
@@ -2160,7 +2053,6 @@ impl DefaultHost {
         host.private_inputs = inputs;
         host
     }
-
     /// Begin a rollback scope for operations forwarded by the production host.
     ///
     /// The matching commit or rollback method must be called in LIFO order.
@@ -2173,7 +2065,6 @@ impl DefaultHost {
         self.nested_call_journals.push(Default::default());
         checkpoint
     }
-
     /// Commit a nested-call rollback scope without copying host state.
     ///
     /// Returns `false` when `checkpoint` is not the innermost active scope.
@@ -2187,7 +2078,6 @@ impl DefaultHost {
         self.nested_call_journals.pop();
         true
     }
-
     /// Roll back operations forwarded during a nested-call scope.
     ///
     /// Returns `false` when `checkpoint` is not the innermost active scope.
@@ -2204,74 +2094,61 @@ impl DefaultHost {
         self.pub_output = checkpoint.pub_output;
         true
     }
-
     /// Configure Halo2 verification limits for this host.
     pub fn with_zk_halo2_config(mut self, cfg: ZkHalo2Config) -> Self {
         self.zk_cfg = cfg;
         self
     }
-
     /// Replace Halo2 verification limits without discarding other host state.
     pub fn set_zk_halo2_config(&mut self, cfg: ZkHalo2Config) {
         self.zk_cfg = cfg;
     }
-
     /// Configure the immutable ZK syscall gas snapshot for this host.
     #[must_use]
     pub const fn with_zk_gas_schedule(mut self, schedule: gas::ZkGasScheduleV1) -> Self {
         self.zk_gas_schedule = schedule;
         self
     }
-
     /// Replace the immutable ZK syscall gas snapshot.
     pub fn set_zk_gas_schedule(&mut self, schedule: gas::ZkGasScheduleV1) {
         self.zk_gas_schedule = schedule;
     }
-
     /// Return the immutable ZK syscall gas snapshot.
     #[must_use]
     pub const fn zk_gas_schedule(&self) -> gas::ZkGasScheduleV1 {
         self.zk_gas_schedule
     }
-
     /// Return the current ZK execution-order counters.
     #[must_use]
     pub const fn zk_execution_counters(&self) -> ZkExecutionCounters {
         self.zk_execution_counters
     }
-
     /// Reset the ZK execution-order counters.
     pub fn reset_zk_execution_counters(&mut self) {
         self.zk_execution_counters = ZkExecutionCounters::default();
     }
-
     /// Return the current VRF execution-order counters.
     #[must_use]
     pub const fn vrf_execution_counters(&self) -> VrfExecutionCounters {
         self.vrf_execution_counters
     }
-
     /// Reset the VRF execution-order counters.
     pub fn reset_vrf_execution_counters(&mut self) {
         self.vrf_execution_counters = VrfExecutionCounters::default();
     }
-
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
     pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
         self.public_inputs = inputs;
         self
     }
-
     /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
     pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
         self.public_inputs = inputs;
     }
-
     /// Expose the current Halo2 verifier config (for tests/introspection).
     pub fn zk_config(&self) -> ZkHalo2Config {
         self.zk_cfg
     }
-
     /// Install an AXT policy sourced from a data-model snapshot.
     ///
     /// # Errors
@@ -2285,7 +2162,6 @@ impl DefaultHost {
         self.axt_policy = std::sync::Arc::new(axt::SnapshotAxtPolicy::new(snapshot)?);
         Ok(self)
     }
-
     /// Convenience: select ZK curve backend from a string.
     /// Accepts: "toy" | "pasta" | "goldilocks" | "bn254" (case-insensitive). Unknown values are ignored.
     pub fn with_zk_curve_str(mut self, curve: &str) -> Self {
@@ -2299,13 +2175,11 @@ impl DefaultHost {
         self.zk_cfg.curve = c;
         self
     }
-
     /// Set the display chain label returned by `SYSVAR_CHAIN_ID`.
     pub fn with_chain_id(mut self, chain_id: Vec<u8>) -> Self {
         self.chain_id = Some(chain_id);
         self
     }
-
     /// Set the host-owned exact network identity used for VRF prehash binding.
     ///
     /// VRF verification fails closed when this context is absent and rejects
@@ -2314,44 +2188,36 @@ impl DefaultHost {
         self.network_id = Some(network_id);
         self
     }
-
     /// Set maximum supported k (where n = 2^k) for Halo2 IPA verifier.
     pub fn with_max_k(mut self, max_k: u32) -> Self {
         self.zk_cfg.max_k = max_k;
         self
     }
-
     /// Mutably set the display chain label without moving the host.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id = Some(chain_id);
     }
-
     /// Mutably set the host-owned exact network identity without moving the host.
     pub fn set_network_id(&mut self, network_id: iroha_data_model::NetworkId) {
         self.network_id = Some(network_id);
     }
-
     /// Enable or disable SM helper syscalls for this host.
     pub fn with_sm_enabled(mut self, enabled: bool) -> Self {
         self.sm_enabled = enabled;
         self
     }
-
     /// Toggle SM helper support at runtime.
     pub fn set_sm_enabled(&mut self, enabled: bool) {
         self.sm_enabled = enabled;
     }
-
     /// Set the deterministic block time returned by time syscalls.
     pub fn set_current_time_ms(&mut self, time_ms: u64) {
         self.current_time_ms = time_ms;
     }
-
     /// Set the deterministic block height returned by sysvar syscalls.
     pub fn set_current_block_height(&mut self, block_height: u64) {
         self.current_block_height = block_height;
     }
-
     fn validate_zk_open_envelope(&self, envelope: &OpenVerifyEnvelope) -> Result<(), u64> {
         envelope
             .validate_with_bounds(OpenVerifyEnvelopeBounds {
@@ -2370,7 +2236,6 @@ impl DefaultHost {
         // the canonical envelope to an active registered key.
         Err(ERR_BACKEND)
     }
-
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
             return Err(VMError::metered(
@@ -2382,7 +2247,6 @@ impl DefaultHost {
         self.fastpq_batch_has_entries = false;
         Ok(gas::G_FASTPQ_BATCH)
     }
-
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if !self.fastpq_batch_active {
             return Err(VMError::PermissionDenied);
@@ -2395,7 +2259,6 @@ impl DefaultHost {
         self.fastpq_batch_has_entries = true;
         Ok(gas)
     }
-
     fn finish_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if !self.fastpq_batch_active {
             return Err(VMError::metered(
@@ -2410,7 +2273,6 @@ impl DefaultHost {
         self.fastpq_batch_has_entries = false;
         Ok(gas::G_FASTPQ_BATCH)
     }
-
     fn apply_fastpq_batch(&mut self, vm: &IVM) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
             return Err(VMError::PermissionDenied);
@@ -2419,7 +2281,6 @@ impl DefaultHost {
         preflight_reserved_syscall_gas(vm, gas)?;
         Ok(gas)
     }
-
     fn fastpq_batch_apply_gas_quote(vm: &IVM) -> Result<u64, VMError> {
         let ptr = vm.register(10);
         let tlv = vm.validate_tlv(ptr)?;
@@ -2433,7 +2294,6 @@ impl DefaultHost {
         }
         Ok(MUTATION_GAS.saturating_mul(u64::try_from(batch.entries().len()).unwrap_or(u64::MAX)))
     }
-
     fn unsupported_syscall_error(number: u32) -> VMError {
         if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
             VMError::metered_not_implemented(MUTATION_GAS, number)
@@ -2441,12 +2301,10 @@ impl DefaultHost {
             VMError::UnknownSyscall(number)
         }
     }
-
     /// Retrieve and clear the output committed by the last program run.
     pub fn take_output(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.pub_output)
     }
-
     /// Validate a TLV pointer in register `reg` has the expected `PointerType`.
     fn expect_tlv<'a>(
         vm: &'a IVM,
@@ -2466,7 +2324,6 @@ impl DefaultHost {
         }
         Ok(tlv)
     }
-
     fn expect_quantity(vm: &IVM, reg: usize) -> Result<usize, VMError> {
         let pointer = Self::resolve_code_tlv_addr(vm, vm.register(reg));
         let payload_len = read_bounded_tlv_payload_len_at(
@@ -2484,12 +2341,10 @@ impl DefaultHost {
         debug_assert_eq!(tlv.payload.len(), payload_len);
         Ok(payload_len)
     }
-
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
         let address = u64::try_from(src).ok()?;
         vm.is_validated_literal_pointer(address).then_some(src)
     }
-
     fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
         let input_lo = Memory::INPUT_START;
         let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
@@ -2502,7 +2357,6 @@ impl DefaultHost {
             .and_then(|resolved| u64::try_from(resolved).ok())
             .unwrap_or(addr)
     }
-
     fn decode_any_tlv<'a>(vm: &'a IVM, ptr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
         let resolved = Self::resolve_code_tlv_addr(vm, ptr);
         if crate::dev_env::decode_trace_enabled() {
@@ -2510,10 +2364,8 @@ impl DefaultHost {
         }
         vm.validate_tlv(resolved)
     }
-
     fn alloc_blob_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
         use iroha_crypto::Hash;
-
         let mut out = Vec::with_capacity(7 + payload.len() + 32);
         out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
         out.push(1);
@@ -2523,10 +2375,8 @@ impl DefaultHost {
         out.extend_from_slice(&h);
         vm.alloc_host_tlv(&out)
     }
-
     fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
         use iroha_crypto::Hash;
-
         let mut out = Vec::with_capacity(7 + payload.len() + 32);
         out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
         out.push(1);
@@ -2537,7 +2387,6 @@ impl DefaultHost {
         out.extend_from_slice(&h);
         vm.alloc_host_tlv(&out)
     }
-
     fn blake2b256(payload: &[u8]) -> [u8; 32] {
         let mut digest = [0u8; 32];
         let mut hasher =
@@ -2548,17 +2397,14 @@ impl DefaultHost {
             .expect("fixed Blake2b output buffer has the requested length");
         digest
     }
-
     fn hash_syscall_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         HASH_GAS_BASE.saturating_add(HASH_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn axt_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         AXT_GAS_BASE.saturating_add(AXT_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn axt_commit_gas(state: &axt::HostAxtState) -> u64 {
         let entries = state
             .touches()
@@ -2567,63 +2413,52 @@ impl DefaultHost {
             .saturating_add(state.handles().len());
         Self::axt_gas(entries)
     }
-
     fn pointer_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         POINTER_GAS_BASE.saturating_add(POINTER_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn sm4_gas(aad_len: usize, data_len: usize) -> u64 {
         let bytes = u64::try_from(aad_len)
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(data_len).unwrap_or(u64::MAX));
         SM4_GAS_BASE.saturating_add(SM4_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn verify_gas(input_len: usize) -> u64 {
         let bytes = u64::try_from(input_len).unwrap_or(u64::MAX);
         VERIFY_GAS_BASE.saturating_add(VERIFY_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn vrf_verify_gas(examined_items: usize, input_len: usize) -> u64 {
         gas::vrf_verify_gas(
             u64::try_from(examined_items).unwrap_or(u64::MAX),
             u64::try_from(input_len).unwrap_or(u64::MAX),
         )
     }
-
     fn sysvar_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         SYSVAR_GAS_BASE.saturating_add(SYSVAR_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn state_query_gas(payload_len: usize) -> u64 {
         STATE_QUERY_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
-
     fn path_gas(input_len: usize, output_len: usize) -> u64 {
         STATE_QUERY_GAS_BASE
             .saturating_add(u64::try_from(input_len).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(output_len).unwrap_or(u64::MAX))
     }
-
     fn tlv_eq_gas(left_len: usize, right_len: usize) -> u64 {
         let bytes = u64::try_from(left_len)
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(right_len).unwrap_or(u64::MAX));
         TLV_EQ_GAS_BASE.saturating_add(TLV_EQ_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn tlv_len_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         TLV_LEN_GAS_BASE.saturating_add(TLV_LEN_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn input_publish_gas(envelope_len: usize) -> u64 {
         let bytes = u64::try_from(envelope_len).unwrap_or(u64::MAX);
         INPUT_PUBLISH_GAS_BASE.saturating_add(INPUT_PUBLISH_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn grow_heap_gas(additional: u64) -> u64 {
         let pages = if additional == 0 {
             0
@@ -2634,23 +2469,19 @@ impl DefaultHost {
         };
         GROW_HEAP_GAS_BASE.saturating_add(GROW_HEAP_GAS_PER_PAGE.saturating_mul(pages))
     }
-
     fn merkle_path_gas(depth: usize) -> u64 {
         let nodes = u64::try_from(depth).unwrap_or(u64::MAX);
         MERKLE_PATH_GAS_BASE.saturating_add(MERKLE_PATH_GAS_PER_NODE.saturating_mul(nodes))
     }
-
     fn complete_tree_depth(leaf_count: usize) -> usize {
         usize::try_from(usize::BITS - leaf_count.max(1).saturating_sub(1).leading_zeros())
             .unwrap_or(usize::MAX)
     }
-
     fn memory_merkle_path_depth(vm: &IVM) -> usize {
         let byte_len = vm.memory.stack_top().saturating_add(Memory::STACK_SLOP);
         let leaf_count = (usize::try_from(byte_len).unwrap_or(usize::MAX) / 32).max(1);
         Self::complete_tree_depth(leaf_count)
     }
-
     fn compact_merkle_depth(full_depth: usize, requested: u64) -> usize {
         if requested == 0 {
             full_depth
@@ -2658,7 +2489,6 @@ impl DefaultHost {
             full_depth.min(usize::try_from(requested).unwrap_or(usize::MAX).min(32))
         }
     }
-
     fn execution_proof_gas_quote(vm: &IVM) -> Result<u64, VMError> {
         let payload_len = crate::execution_proof::ExecutionProof::encoded_len_v1()
             .map_err(|_| VMError::NoritoInvalid)?;
@@ -2666,7 +2496,6 @@ impl DefaultHost {
             .saturating_add(vm.execution_proof_event_count().saturating_mul(2))
             .saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX)))
     }
-
     fn signature_verify_gas(
         message_len: usize,
         signature_len: usize,
@@ -2679,7 +2508,6 @@ impl DefaultHost {
         SIGNATURE_VERIFY_GAS_BASE
             .saturating_add(SIGNATURE_VERIFY_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn sm4_ccm_tag_len(raw: u64) -> Option<usize> {
         let normalized = match raw {
             0 => 16,
@@ -2688,7 +2516,6 @@ impl DefaultHost {
         };
         usize::try_from(normalized).ok()
     }
-
     fn decode_signature_inputs(vm: &IVM) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), VMError> {
         let message_tlv = vm.validate_tlv(vm.register(10))?;
         if message_tlv.type_id != PointerType::Blob {
@@ -2704,7 +2531,6 @@ impl DefaultHost {
         };
         Ok((message, decode_blob(11)?, decode_blob(12)?))
     }
-
     fn signature_verify_gas_quote(vm: &IVM) -> Result<u64, VMError> {
         let message_len = quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Blob)?;
         let signature_len = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::Blob)?;
@@ -2715,12 +2541,10 @@ impl DefaultHost {
             public_key_len,
         ))
     }
-
     fn mutation_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         MUTATION_GAS.saturating_add(MUTATION_GAS_PER_BYTE.saturating_mul(bytes))
     }
-
     fn decode_state_path_tlv(vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
         let tlv = Self::expect_tlv(vm, reg, PointerType::NoritoBytes)?;
         if tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES {
@@ -2732,7 +2556,6 @@ impl DefaultHost {
         validate_declared_state_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
     }
-
     fn decode_state_scan_path_tlv(vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
         let tlv = Self::expect_tlv(vm, reg, PointerType::NoritoBytes)?;
         if tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES {
@@ -2744,7 +2567,6 @@ impl DefaultHost {
         validate_declared_state_scan_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
     }
-
     fn state_key_matches_prefix(key: &StatePath, prefix: &StatePath) -> bool {
         let key = key.as_ref();
         let prefix = prefix.as_ref();
@@ -2753,7 +2575,6 @@ impl DefaultHost {
                 .strip_prefix(prefix)
                 .is_some_and(|suffix| suffix.starts_with('/'))
     }
-
     fn state_keys_page_with_prefix(
         &self,
         vm: &IVM,
@@ -2809,13 +2630,11 @@ impl DefaultHost {
         }
         Ok((selected, total, scan_work_gas))
     }
-
     /// Override the default allow-all AXT policy (test/dependency injection).
     pub fn with_axt_policy(mut self, policy: std::sync::Arc<dyn axt::AxtPolicy>) -> Self {
         self.axt_policy = policy;
         self
     }
-
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let ptr = vm.register(10);
         let tlv = vm.validate_tlv(ptr)?;
@@ -2829,7 +2648,6 @@ impl DefaultHost {
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
         Ok(gas)
     }
-
     fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let ds_ptr = vm.register(10);
@@ -2863,7 +2681,6 @@ impl DefaultHost {
         state.record_touch(dsid, manifest)?;
         Ok(gas)
     }
-
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let ds_ptr = vm.register(10);
@@ -2894,7 +2711,6 @@ impl DefaultHost {
         // is diagnostic only, so proof-consuming AXT calls fail closed here.
         Err(VMError::PermissionDenied)
     }
-
     fn validate_axt_handle_proof_binding(
         handle: &AssetHandle,
         dsid: DataSpaceId,
@@ -2914,7 +2730,6 @@ impl DefaultHost {
         // The standalone host cannot accept a FastPQ AXT proof without a real verifier.
         Err(VMError::PermissionDenied)
     }
-
     fn handle_axt_use_asset_handle(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let handle_ptr = vm.register(10);
@@ -2931,7 +2746,6 @@ impl DefaultHost {
         if binding != state.binding() {
             return Err(VMError::PermissionDenied);
         }
-
         let op_ptr = vm.register(11);
         let op_tlv = vm.validate_tlv(op_ptr)?;
         if op_tlv.type_id != PointerType::NoritoBytes {
@@ -2946,7 +2760,6 @@ impl DefaultHost {
         if !state.has_touch(&intent.asset_dsid) {
             return Err(VMError::PermissionDenied);
         }
-
         let proof: Option<ProofBlob> = match vm.register(12) {
             0 => None,
             ptr => {
@@ -2977,7 +2790,6 @@ impl DefaultHost {
         {
             return Err(VMError::PermissionDenied);
         }
-
         let usage = axt::HandleUsage {
             handle,
             intent,
@@ -2991,7 +2803,6 @@ impl DefaultHost {
         state.record_handle(usage)?;
         Ok(gas)
     }
-
     fn handle_axt_commit(&mut self, vm: &IVM) -> Result<u64, VMError> {
         let gas = self
             .axt_state
@@ -3011,7 +2822,6 @@ impl DefaultHost {
             }
         }
     }
-
     fn validate_axt_commit(state: &axt::HostAxtState) -> Result<(), VMError> {
         state.validate_commit()?;
         for usage in state.handles() {
@@ -3025,13 +2835,11 @@ impl DefaultHost {
         Ok(())
     }
 }
-
 impl Default for DefaultHost {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl IVMHost for DefaultHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
         let metering = require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
@@ -3293,7 +3101,6 @@ impl IVMHost for DefaultHost {
         };
         Ok(quote)
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if crate::syscalls::is_numeric_v1_syscall(number) {
@@ -3772,7 +3579,6 @@ impl IVMHost for DefaultHost {
                 // Envelope-based syscall: r10 = &NoritoBytes(VrfVerifyRequest)
                 // Return: r10 = &Blob(32 bytes) on success; r11 = status code (0=ok, >0 = error)
                 use crate::vrf::VrfVerifyRequest;
-
                 // Status codes specific to VRF_VERIFY
                 const OK: u64 = 0;
                 const ERR_TYPE: u64 = 1; // wrong TLV type
@@ -3782,7 +3588,6 @@ impl IVMHost for DefaultHost {
                 const ERR_PROOF: u64 = 5; // bad proof encoding/length
                 const ERR_VERIFY: u64 = 6; // pairing check failed
                 const ERR_NETWORK: u64 = 8; // network_id mismatch
-
                 let ptr = vm.register(10);
                 let (pointer_type, payload_len) = read_tlv_header_at(vm, ptr)?;
                 let decode_gas = Self::vrf_verify_gas(0, payload_len);
@@ -3817,7 +3622,6 @@ impl IVMHost for DefaultHost {
                 };
                 let actual = Self::vrf_verify_gas(1, payload_len);
                 preflight_reserved_syscall_gas(vm, actual)?;
-
                 // VRF domains are host-owned consensus context. A guest-supplied
                 // network identifier is only a claimed binding and can never
                 // substitute for an absent host configuration.
@@ -3840,12 +3644,10 @@ impl IVMHost for DefaultHost {
                 in_buf.push(b'|');
                 in_buf.extend_from_slice(&req.input);
                 let msg: [u8; 32] = iroha_crypto::Hash::new(&in_buf).into();
-
                 // BLS helpers using blstrs
                 use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
                 use group::{Curve, Group as _, prime::PrimeCurveAffine};
                 use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
-
                 fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
                     if bytes.len() != 48 {
                         return None;
@@ -3896,7 +3698,6 @@ impl IVMHost for DefaultHost {
                     buf.extend_from_slice(msg);
                     G1Projective::hash_to_curve(&buf, DST, &[]).to_affine()
                 }
-
                 // Verify and produce y
                 let ok: bool = match req.variant {
                     // 1 = SigInG2 (Normal): pk in G1 (48), proof in G2 (96)
@@ -3953,20 +3754,17 @@ impl IVMHost for DefaultHost {
                         return Ok(actual);
                     }
                 };
-
                 if !ok {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_VERIFY);
                     return Ok(actual);
                 }
-
                 // Derive output y = Hash(b"iroha:vrf:v1:output" || proof)
                 let mut out_buf =
                     Vec::with_capacity(b"iroha:vrf:v1:output".len() + req.proof.len());
                 out_buf.extend_from_slice(b"iroha:vrf:v1:output");
                 out_buf.extend_from_slice(&req.proof);
                 let y: [u8; 32] = iroha_crypto::Hash::new(&out_buf).into();
-
                 // Build a host-owned Blob TLV and return its public pointer.
                 let mut tlv = Vec::with_capacity(7 + 32 + 32);
                 tlv.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
@@ -3998,7 +3796,6 @@ impl IVMHost for DefaultHost {
                 const ERR_VERIFY: u64 = 6;
                 const ERR_NETWORK: u64 = 8;
                 const ERR_BATCH: u64 = 9;
-
                 let ptr = vm.register(10);
                 let (pointer_type, payload_len) = read_tlv_header_at(vm, ptr)?;
                 let decode_gas = Self::vrf_verify_gas(0, payload_len);
@@ -4043,7 +3840,6 @@ impl IVMHost for DefaultHost {
                 }
                 let success_gas = Self::vrf_verify_gas(req.items.len(), payload_len);
                 preflight_reserved_syscall_gas(vm, success_gas)?;
-
                 // Shared helpers
                 use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
                 use group::{Curve, Group as _, prime::PrimeCurveAffine};
@@ -4098,7 +3894,6 @@ impl IVMHost for DefaultHost {
                     buf.extend_from_slice(msg);
                     G1Projective::hash_to_curve(&buf, DST, &[]).to_affine()
                 }
-
                 let mut outputs: Vec<[u8; 32]> = Vec::with_capacity(req.items.len());
                 for (idx, it) in req.items.iter().enumerate() {
                     let examined_gas = Self::vrf_verify_gas(idx.saturating_add(1), payload_len);
@@ -4195,7 +3990,6 @@ impl IVMHost for DefaultHost {
                     let y: [u8; 32] = iroha_crypto::Hash::new(&out_buf).into();
                     outputs.push(y);
                 }
-
                 // Encode outputs Vec<[u8;32]> as NoritoBytes and return pointer
                 let body = encode_canonical_norito(&outputs)
                     .map_err(|error| VMError::metered(success_gas, error))?;
@@ -4241,7 +4035,6 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM => {
                 use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
-
                 // The two complete opaque inputs are snapshotted and validated
                 // before any public result allocation occurs.
                 let value =
@@ -4429,14 +4222,12 @@ impl IVMHost for DefaultHost {
                 let msg_tlv = vm.validate_tlv(vm.register(10))?;
                 let sig_tlv = vm.validate_tlv(vm.register(11))?;
                 let pk_tlv = vm.validate_tlv(vm.register(12))?;
-
                 if msg_tlv.type_id != PointerType::Blob
                     || sig_tlv.type_id != PointerType::Blob
                     || pk_tlv.type_id != PointerType::Blob
                 {
                     return Err(VMError::NoritoInvalid);
                 }
-
                 let distid_ptr = vm.register(13);
                 let mut input_len = msg_tlv
                     .payload
@@ -4456,7 +4247,6 @@ impl IVMHost for DefaultHost {
                     Sm2PublicKey::default_distid()
                 };
                 let gas = Self::verify_gas(input_len);
-
                 let msg = msg_tlv.payload;
                 let sig_bytes = sig_tlv.payload;
                 if sig_bytes.len() != Sm2Signature::LENGTH {
@@ -4472,7 +4262,6 @@ impl IVMHost for DefaultHost {
                         return Ok(gas);
                     }
                 };
-
                 let public_key = match Sm2PublicKey::from_sec1_bytes(&distid, pk_tlv.payload) {
                     Ok(pk) => pk,
                     Err(_) => {
@@ -4480,7 +4269,6 @@ impl IVMHost for DefaultHost {
                         return Ok(gas);
                     }
                 };
-
                 let ok = public_key.verify(msg, &signature).is_ok();
                 vm.set_register(10, if ok { 1 } else { 0 });
                 Ok(gas)
@@ -4497,7 +4285,6 @@ impl IVMHost for DefaultHost {
                     Some(vm.validate_tlv(vm.register(12))?)
                 };
                 let pt_tlv = vm.validate_tlv(vm.register(13))?;
-
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
                     || pt_tlv.type_id != PointerType::Blob
@@ -4511,7 +4298,6 @@ impl IVMHost for DefaultHost {
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, pt_tlv.payload.len());
-
                 if key_tlv.payload.len() != 16 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4519,7 +4305,6 @@ impl IVMHost for DefaultHost {
                 let mut key_bytes = [0u8; 16];
                 key_bytes.copy_from_slice(key_tlv.payload);
                 let key = Sm4Key::new(key_bytes);
-
                 if nonce_tlv.payload.len() != 12 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4527,7 +4312,6 @@ impl IVMHost for DefaultHost {
                 let mut nonce = [0u8; 12];
                 nonce.copy_from_slice(nonce_tlv.payload);
                 let aad = aad_opt.as_ref().map(|tlv| tlv.payload).unwrap_or(&[]);
-
                 match key.encrypt_gcm(&nonce, aad, pt_tlv.payload) {
                     Ok((cipher, tag)) => {
                         let mut payload = cipher;
@@ -4553,7 +4337,6 @@ impl IVMHost for DefaultHost {
                     Some(vm.validate_tlv(vm.register(12))?)
                 };
                 let ct_tlv = vm.validate_tlv(vm.register(13))?;
-
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
                     || ct_tlv.type_id != PointerType::Blob
@@ -4567,7 +4350,6 @@ impl IVMHost for DefaultHost {
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, ct_tlv.payload.len());
-
                 if key_tlv.payload.len() != 16 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4575,7 +4357,6 @@ impl IVMHost for DefaultHost {
                 let mut key_bytes = [0u8; 16];
                 key_bytes.copy_from_slice(key_tlv.payload);
                 let key = Sm4Key::new(key_bytes);
-
                 if nonce_tlv.payload.len() != 12 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4583,7 +4364,6 @@ impl IVMHost for DefaultHost {
                 let mut nonce = [0u8; 12];
                 nonce.copy_from_slice(nonce_tlv.payload);
                 let aad = aad_opt.as_ref().map(|tlv| tlv.payload).unwrap_or(&[]);
-
                 if ct_tlv.payload.len() < 16 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4592,7 +4372,6 @@ impl IVMHost for DefaultHost {
                 let (cipher_bytes, tag_bytes) = ct_tlv.payload.split_at(split);
                 let mut tag = [0u8; 16];
                 tag.copy_from_slice(tag_bytes);
-
                 match key.decrypt_gcm(&nonce, aad, cipher_bytes, &tag) {
                     Ok(plaintext) => {
                         let addr = DefaultHost::alloc_blob_tlv(vm, &plaintext)?;
@@ -4617,7 +4396,6 @@ impl IVMHost for DefaultHost {
                 };
                 let pt_tlv = vm.validate_tlv(vm.register(13))?;
                 let tag_len_raw = vm.register(14);
-
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
                     || pt_tlv.type_id != PointerType::Blob
@@ -4635,7 +4413,6 @@ impl IVMHost for DefaultHost {
                     vm.set_register(10, 0);
                     return Ok(gas);
                 };
-
                 if key_tlv.payload.len() != 16 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4643,9 +4420,7 @@ impl IVMHost for DefaultHost {
                 let mut key_bytes = [0u8; 16];
                 key_bytes.copy_from_slice(key_tlv.payload);
                 let key = Sm4Key::new(key_bytes);
-
                 let aad = aad_opt.as_ref().map(|tlv| tlv.payload).unwrap_or(&[]);
-
                 match key.encrypt_ccm(nonce_tlv.payload, aad, pt_tlv.payload, tag_len) {
                     Ok((mut cipher, tag)) => {
                         cipher.extend_from_slice(&tag);
@@ -4671,7 +4446,6 @@ impl IVMHost for DefaultHost {
                 };
                 let ct_tlv = vm.validate_tlv(vm.register(13))?;
                 let tag_len_raw = vm.register(14);
-
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
                     || ct_tlv.type_id != PointerType::Blob
@@ -4689,7 +4463,6 @@ impl IVMHost for DefaultHost {
                     vm.set_register(10, 0);
                     return Ok(gas);
                 };
-
                 if key_tlv.payload.len() != 16 {
                     vm.set_register(10, 0);
                     return Ok(gas);
@@ -4697,16 +4470,13 @@ impl IVMHost for DefaultHost {
                 let mut key_bytes = [0u8; 16];
                 key_bytes.copy_from_slice(key_tlv.payload);
                 let key = Sm4Key::new(key_bytes);
-
                 let aad = aad_opt.as_ref().map(|tlv| tlv.payload).unwrap_or(&[]);
-
                 if ct_tlv.payload.len() < tag_len {
                     vm.set_register(10, 0);
                     return Ok(gas);
                 }
                 let split = ct_tlv.payload.len() - tag_len;
                 let (cipher_bytes, tag_bytes) = ct_tlv.payload.split_at(split);
-
                 match key.decrypt_ccm(nonce_tlv.payload, aad, cipher_bytes, tag_bytes) {
                     Ok(plaintext) => {
                         let addr = DefaultHost::alloc_blob_tlv(vm, &plaintext)?;
@@ -4976,7 +4746,6 @@ impl IVMHost for DefaultHost {
                     public_input_count,
                 );
                 preflight_reserved_syscall_gas(vm, actual)?;
-
                 let mut first_error = None;
                 let mut first_error_index = u64::MAX;
                 for (index, envelope) in envelopes.iter().enumerate() {
@@ -5024,7 +4793,6 @@ impl IVMHost for DefaultHost {
             _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
-
     /// Downcast support for hosts with extra methods/state.
     fn as_any(&mut self) -> &mut dyn Any
     where
@@ -5032,11 +4800,9 @@ impl IVMHost for DefaultHost {
     {
         self
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         false
     }
-
     fn begin_tx(&mut self, _declared: &StateAccessSet) -> Result<(), VMError> {
         self.access_log.read_keys.clear();
         self.access_log.write_keys.clear();
@@ -5044,15 +4810,12 @@ impl IVMHost for DefaultHost {
         self.access_log.state_writes.clear();
         Ok(())
     }
-
     fn finish_tx(&mut self) -> Result<AccessLog, VMError> {
         Ok(self.access_log.clone())
     }
-
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         Some(Box::new(self.clone()))
     }
-
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         if let Some(saved) = snapshot.downcast_ref::<DefaultHost>() {
             *self = saved.clone();
@@ -5061,16 +4824,13 @@ impl IVMHost for DefaultHost {
             false
         }
     }
-
     fn access_logging_supported(&self) -> bool {
         true
     }
-
     fn set_external_vk_bytes(&mut self, backend: String, bytes: Vec<u8>) {
         self.halo2_external_vks.insert(backend, bytes);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5079,7 +4839,6 @@ mod tests {
     use iroha_data_model::name::MAX_NAME_BYTES;
     use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::zk::BackendTag;
-
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
         out.extend_from_slice(&(kind as u16).to_be_bytes());
@@ -5094,7 +4853,6 @@ mod tests {
         out.extend_from_slice(&hash);
         out
     }
-
     #[test]
     fn encoded_private_input_transport_rejects_unbounded_state_before_retention() {
         let too_many = vec![Vec::new(); MAX_PRIVATE_INPUTS_V1 + 1];
@@ -5102,13 +4860,11 @@ mod tests {
             DefaultHost::with_encoded_private_inputs(too_many),
             Err(VMError::NoritoInvalid)
         ));
-
         let too_large = vec![vec![0_u8; MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1]];
         assert!(matches!(
             DefaultHost::with_encoded_private_inputs(too_large),
             Err(VMError::NoritoInvalid)
         ));
-
         let bounded_but_malformed = vec![vec![0xA5; MAX_PRIVATE_INPUT_RECORD_BYTES_V1]];
         let host = DefaultHost::with_encoded_private_inputs(bounded_but_malformed)
             .expect("bounded bytes are decoded only after runtime metering");
@@ -5118,7 +4874,6 @@ mod tests {
             MAX_PRIVATE_INPUT_RECORD_BYTES_V1
         );
     }
-
     #[test]
     fn unchecked_private_input_injector_is_test_only() {
         let oversized = vec![vec![0_u8; MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1]];
@@ -5128,14 +4883,12 @@ mod tests {
             MAX_PRIVATE_INPUT_RECORD_BYTES_V1 + 1
         );
     }
-
     #[test]
     fn default_host_rejects_noncanonical_axt_policy_snapshot_without_panicking() {
         let snapshot = AxtPolicySnapshot {
             version: 1,
             entries: Vec::new(),
         };
-
         assert!(matches!(
             DefaultHost::new().with_axt_policy_from_snapshot(&snapshot),
             Err(AxtPolicySnapshotValidationError::VersionMismatch {
@@ -5144,7 +4897,6 @@ mod tests {
             })
         ));
     }
-
     fn dummy_zk_batch_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope::new(
             BackendTag::Halo2IpaPasta,
@@ -5154,7 +4906,6 @@ mod tests {
             vec![0x33; 96],
         )
     }
-
     fn test_network_id(marker: u8) -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -5162,14 +4913,12 @@ mod tests {
             iroha_crypto::Hash::prehashed([marker; iroha_crypto::Hash::LENGTH]),
         ))
     }
-
     fn valid_vrf_request(
         network_id: iroha_data_model::NetworkId,
         input: &[u8],
     ) -> crate::vrf::VrfVerifyRequest {
         use blstrs::{G1Projective, G2Projective, Scalar};
         use group::{Curve as _, Group as _};
-
         let secret = Scalar::from(7_u64);
         let public_key = (G1Projective::generator() * secret)
             .to_affine()
@@ -5195,7 +4944,6 @@ mod tests {
             input: input.to_vec(),
         }
     }
-
     fn run_vm_dispatched_vrf_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
@@ -5223,7 +4971,6 @@ mod tests {
             .expect("VRF status paths do not trap");
         (vm, host, quote)
     }
-
     fn run_vm_dispatched_zk_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
@@ -5251,19 +4998,16 @@ mod tests {
             .expect("ZK status paths do not trap");
         (vm, host, quote)
     }
-
     #[test]
     fn downcast_default_host() {
         let mut host: Box<dyn IVMHost + Send + Sync> = Box::new(DefaultHost::new());
         assert!(host.as_any().downcast_mut::<DefaultHost>().is_some());
     }
-
     #[test]
     fn default_host_public_input_result_spills_to_owned_heap() {
         let mut vm = IVM::new(u64::MAX);
         vm.alloc_input_tlv(&vec![0; Memory::INPUT_SIZE as usize])
             .expect("fill INPUT exactly");
-
         let name: Name = "payload".parse().expect("public input name");
         let name_payload = norito::to_bytes(&name).expect("encode public input name");
         let name_pointer = vm
@@ -5274,10 +5018,8 @@ mod tests {
         inputs.insert(name, expected);
         let mut host = DefaultHost::new().with_public_inputs(inputs);
         vm.set_register(10, name_pointer);
-
         host.syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
             .expect("materialize public input after INPUT exhaustion");
-
         let output_pointer = vm.register(10);
         assert!((Memory::HEAP_START..Memory::INPUT_START).contains(&output_pointer));
         let output = vm
@@ -5286,7 +5028,6 @@ mod tests {
         assert_eq!(output.type_id, PointerType::Blob);
         assert_eq!(output.payload, b"heap-backed-public-input");
     }
-
     #[test]
     fn default_host_large_public_input_dispatch_stays_within_reserved_quote() {
         let name: Name = "large_payload".parse().expect("public input name");
@@ -5311,10 +5052,8 @@ mod tests {
             .alloc_input_tlv(&test_tlv(PointerType::Name, &name_payload))
             .expect("allocate input name");
         vm.set_register(10, name_pointer);
-
         vm.run_with_host(&mut host)
             .expect("dispatcher must reconcile the heap-sized result quote");
-
         let output_pointer = vm.register(10);
         assert!((Memory::HEAP_START..Memory::INPUT_START).contains(&output_pointer));
         let output = vm
@@ -5323,18 +5062,15 @@ mod tests {
         assert_eq!(output.type_id, PointerType::Blob);
         assert_eq!(output.payload, payload);
     }
-
     #[test]
     fn nested_call_rollback_restores_committed_output() {
         let mut host = DefaultHost::new();
         host.pub_output = vec![1, 2, 3];
         let checkpoint = host.begin_forwarded_call();
         host.pub_output = vec![9; 1024];
-
         assert!(host.rollback_forwarded_call(checkpoint));
         assert_eq!(host.pub_output, [1, 2, 3]);
     }
-
     #[test]
     fn conservative_quote_ignores_registers_outside_the_syscall_signature() {
         let mut vm = IVM::new(u64::MAX);
@@ -5343,7 +5079,6 @@ mod tests {
             .expect("allocate quote fixture");
         let syscall = syscalls::SYSCALL_REGISTER_DOMAIN;
         let baseline = conservative_syscall_gas_quote(syscall, &vm);
-
         vm.set_register(15, pointer);
         vm.registers.set_tag(15, true);
         assert_eq!(
@@ -5351,14 +5086,12 @@ mod tests {
             baseline,
             "an unrelated secret register must not influence public gas"
         );
-
         vm.set_register(10, pointer);
         assert!(
             conservative_syscall_gas_quote(syscall, &vm) > baseline,
             "the documented r10 argument must remain part of the quote"
         );
     }
-
     fn maximum_bounded_state_path(index: usize) -> StatePath {
         let prefix = format!("k{index:02}/");
         let suffix_len = syscalls::STATE_MAX_PATH_BYTES
@@ -5379,7 +5112,6 @@ mod tests {
         );
         path
     }
-
     fn maximum_bounded_state_map_fixture(fill: u8) -> (Name, Vec<u8>) {
         let base: Name = "b"
             .repeat(syscalls::STATE_MAP_MAX_BASE_BYTES)
@@ -5397,7 +5129,6 @@ mod tests {
         );
         (base, key)
     }
-
     #[test]
     fn maximum_state_map_base_and_key_fit_final_framed_path() {
         let (base, key) = maximum_bounded_state_map_fixture(0xa5);
@@ -5415,7 +5146,6 @@ mod tests {
         )
         .expect("configured maximum header lengths");
         assert!(configured_output_bound <= syscalls::STATE_MAX_PATH_FRAME_BYTES);
-
         assert_eq!(
             canonical_state_map_path(&base, &[0u8; syscalls::STATE_MAP_MAX_KEY_BYTES + 1]),
             Err(VMError::NoritoInvalid)
@@ -5431,7 +5161,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn state_keys_page_bound_covers_admissible_pages_and_rejects_item_overflow() {
         let maximum_items = usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS)
@@ -5464,7 +5193,6 @@ mod tests {
             Err(VMError::NoritoInvalid)
         );
     }
-
     #[test]
     fn state_path_and_page_bounds_ignore_ambient_layout() {
         let path: StatePath = "state/ambient_layout_probe"
@@ -5475,9 +5203,7 @@ mod tests {
             state_path_payload_len(&path).expect("canonical state path length");
         let canonical_tail = state_keys_response_tail_after_item(0, 0, path.as_ref())
             .expect("canonical state-key page tail");
-
         assert_eq!(canonical_path_len, canonical_name.len());
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -5497,7 +5223,6 @@ mod tests {
             "page selection and response bounds must use canonical V1 lengths"
         );
     }
-
     #[test]
     fn maximum_state_map_page_is_accepted_by_key_decoder() {
         let (base, maximum_key) = maximum_bounded_state_map_fixture(0xa5);
@@ -5526,7 +5251,6 @@ mod tests {
             Some(expected_last)
         );
     }
-
     #[test]
     fn state_map_key_decoder_rejects_pages_not_produced_by_ordered_base_scan() {
         let base: Name = "orders".parse().expect("map base");
@@ -5534,7 +5258,6 @@ mod tests {
         let first = canonical_state_map_path(&base, &[0x01]).expect("first map path");
         let second = canonical_state_map_path(&base, &[0x02]).expect("second map path");
         let foreign = canonical_state_map_path(&other, &[0x03]).expect("foreign map path");
-
         for paths in [
             vec![second.clone(), first.clone()],
             vec![first.clone(), first.clone()],
@@ -5548,7 +5271,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn state_map_key_decoder_rejects_oversized_sequence_during_bounded_decode() {
         let base: Name = "orders".parse().expect("map base");
@@ -5559,14 +5281,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let page = encode_canonical_norito(&paths).expect("encode oversized map page");
-
         assert_eq!(
             canonical_state_map_key_at(&page, &base, 0),
             Err(VMError::DecodeError),
             "the top-level sequence limit must reject before Vec<StatePath> materialization"
         );
     }
-
     #[test]
     fn state_keys_prepare_minimum_fits_default_and_rejects_bad_limits() {
         let empty =
@@ -5589,7 +5309,6 @@ mod tests {
             Err(VMError::NoritoInvalid)
         );
     }
-
     #[test]
     fn debug_log_quote_and_execution_charge_payload_bytes() {
         let mut vm = IVM::new(u64::MAX);
@@ -5598,7 +5317,6 @@ mod tests {
             .expect("allocate debug log fixture");
         vm.set_register(10, pointer);
         let mut host = DefaultHost::new();
-
         let quoted = host
             .prepare_syscall(syscalls::SYSCALL_DEBUG_LOG, &vm)
             .expect("quote debug log");
@@ -5608,16 +5326,13 @@ mod tests {
         assert_eq!(quoted, actual);
         assert_eq!(actual, debug_log_gas(256));
     }
-
     #[test]
     fn default_host_accepts_only_the_canonical_envelope_schema() {
         let host = DefaultHost::new();
         let envelope = dummy_zk_batch_envelope();
         assert_eq!(host.validate_zk_open_envelope(&envelope), Err(ERR_BACKEND));
-
         let legacy = norito::to_bytes(&42_u64).expect("encode non-envelope archive");
         assert_eq!(decode_canonical_zk_envelope(&legacy), Err(ERR_DECODE));
-
         let canonical =
             encode_canonical_norito(&envelope).expect("encode canonical data-model envelope");
         assert!(decode_canonical_zk_envelope(&canonical).is_ok());
@@ -5634,7 +5349,6 @@ mod tests {
         );
         assert_eq!(decode_canonical_zk_envelope(&alternate), Err(ERR_DECODE));
     }
-
     #[test]
     fn default_host_rejects_every_reserved_privacy_circuit_label_before_dispatch() {
         let host = DefaultHost::new();
@@ -5656,7 +5370,6 @@ mod tests {
                     "reserved circuit id {circuit_id:?}"
                 );
             }
-
             for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
                 let mut envelope = dummy_zk_batch_envelope();
                 envelope.circuit_id = near_miss.clone();
@@ -5668,19 +5381,16 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn time_syscalls_use_configured_deterministic_value() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_CURRENT_TIME_MS, &mut vm),
             Ok(DefaultHost::sysvar_gas(0))
         );
         assert_eq!(vm.register(10), 0);
-
         host.set_current_time_ms(42);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS, &mut vm),
@@ -5688,19 +5398,16 @@ mod tests {
         );
         assert_eq!(vm.register(10), 42);
     }
-
     #[test]
     fn block_height_syscall_uses_configured_deterministic_value() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT, &mut vm),
             Ok(DefaultHost::sysvar_gas(0))
         );
         assert_eq!(vm.register(10), 0);
-
         host.set_current_block_height(77);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT, &mut vm),
@@ -5708,14 +5415,12 @@ mod tests {
         );
         assert_eq!(vm.register(10), 77);
     }
-
     #[test]
     fn chain_id_sysvar_charges_returned_bytes() {
         crate::set_banner_enabled(false);
         let chain_id = b"chain-A".to_vec();
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new().with_chain_id(chain_id.clone());
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_SYSVAR_CHAIN_ID, &mut vm),
             Ok(DefaultHost::sysvar_gas(chain_id.len()))
@@ -5724,14 +5429,12 @@ mod tests {
         assert_eq!(tlv.type_id, PointerType::Blob);
         assert_eq!(tlv.payload, chain_id.as_slice());
     }
-
     #[test]
     fn default_host_vrf_verify_status_paths_charge_bytes_and_examined_items() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let network_id = test_network_id(0x71);
         let mut host = DefaultHost::new().with_network_id(network_id);
-
         let wrong_type_payload = b"{\"not\":\"vrf\"}";
         let wrong_type_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::Blob, wrong_type_payload))
@@ -5743,7 +5446,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 1);
-
         let malformed = [0xff];
         let malformed_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &malformed))
@@ -5755,7 +5457,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 2);
-
         let bad_pk = crate::vrf::VrfVerifyRequest {
             variant: 1,
             pk: vec![1],
@@ -5783,7 +5484,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn default_host_vrf_batch_empty_request_is_rejected_without_output() {
         crate::set_banner_enabled(false);
@@ -5794,7 +5494,6 @@ mod tests {
         let ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &body))
             .expect("alloc batch request");
-
         let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
         let canonical_probe =
             encode_canonical_norito(&ambient_probe).expect("encode canonical ambient probe");
@@ -5804,7 +5503,6 @@ mod tests {
         let ambient_before =
             norito::to_bytes(&ambient_probe).expect("encode alternate-layout ambient probe");
         assert_ne!(ambient_before, canonical_probe);
-
         vm.set_register(10, ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &mut vm),
@@ -5827,7 +5525,6 @@ mod tests {
             "host canonical decode and encode must restore the ambient layout"
         );
     }
-
     #[test]
     fn default_host_vrf_verification_rejects_absent_host_network_context() {
         crate::set_banner_enabled(false);
@@ -5845,14 +5542,12 @@ mod tests {
             .expect("allocate VRF request");
         vm.set_register(10, pointer);
         let mut host = DefaultHost::new();
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY, &mut vm),
             Ok(DefaultHost::vrf_verify_gas(1, body.len()))
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 8);
-
         let batch = crate::vrf::VrfVerifyBatchRequest {
             items: vec![request],
         };
@@ -5864,7 +5559,6 @@ mod tests {
         vm.set_register(10, batch_pointer);
         vm.set_register(11, u64::MAX);
         vm.set_register(12, u64::MAX);
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &mut vm),
             Ok(DefaultHost::vrf_verify_gas(1, batch_body.len()))
@@ -5881,7 +5575,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn vm_dispatched_vrf_batch_count_boundaries_have_stable_refunds() {
         let invalid = crate::vrf::VrfVerifyRequest {
@@ -5920,7 +5613,6 @@ mod tests {
                 }
             );
         }
-
         for count in [1_usize, crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1] {
             let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
                 items: vec![invalid.clone(); count],
@@ -5948,7 +5640,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn vm_dispatched_vrf_batch_rejects_alternate_layout_and_restores_ambient_flags() {
         let request = crate::vrf::VrfVerifyBatchRequest {
@@ -5972,7 +5663,6 @@ mod tests {
             norito::decode_from_bytes::<crate::vrf::VrfVerifyBatchRequest>(&alternate).is_ok(),
             "ordinary Norito must accept its advertised alternate layout"
         );
-
         let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before =
@@ -5998,7 +5688,6 @@ mod tests {
             ambient_before
         );
     }
-
     #[test]
     fn vm_dispatched_vrf_batch_rejects_forged_vector_length_before_backend_or_output() {
         const FORGED_LENGTH: u64 = 1 << 40;
@@ -6022,7 +5711,6 @@ mod tests {
                 norito::core::default_encode_flags(),
             )
             .expect("frame forged VRF batch with a valid checksum");
-
         let (vm, host, quote) = run_vm_dispatched_vrf_batch(&forged);
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 2);
@@ -6040,7 +5728,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn vm_dispatched_vrf_batch_refunds_unexamined_items() {
         let valid = valid_vrf_request(test_network_id(0x71), b"valid");
@@ -6056,7 +5743,6 @@ mod tests {
         })
         .expect("encode VRF batch with second-item failure");
         let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
-
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 3);
         assert_eq!(vm.register(12), 1);
@@ -6073,7 +5759,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn vm_dispatched_vrf_batch_success_refunds_reserved_tail() {
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
@@ -6081,7 +5766,6 @@ mod tests {
         })
         .expect("encode successful VRF batch");
         let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
-
         assert_eq!(vm.register(11), 0);
         assert_eq!(vm.register(12), u64::MAX);
         let output = vm.validate_tlv(vm.register(10)).expect("VRF output");
@@ -6105,7 +5789,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn vrf_prepare_rejects_wrong_type_and_oversized_payload_without_decode() {
         let mut vm = IVM::new(u64::MAX);
@@ -6118,7 +5801,6 @@ mod tests {
             host.prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm),
             Err(VMError::NoritoInvalid)
         );
-
         let oversized = vec![0_u8; crate::vrf::MAX_VRF_VERIFY_PAYLOAD_BYTES_V1 + 1];
         let envelope = test_tlv(PointerType::NoritoBytes, &oversized);
         let pointer = vm
@@ -6136,7 +5818,6 @@ mod tests {
             VrfExecutionCounters::default()
         );
     }
-
     #[test]
     fn unaffordable_vrf_batch_stops_before_decode_or_backend_work() {
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
@@ -6163,7 +5844,6 @@ mod tests {
             .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
             .expect("quote VRF batch");
         vm.set_gas_limit(quote);
-
         assert_eq!(vm.run_with_host(&mut host), Err(VMError::OutOfGas));
         assert_eq!(vm.register(10), pointer);
         assert_eq!(vm.register(11), 0xfeed);
@@ -6173,7 +5853,6 @@ mod tests {
             VrfExecutionCounters::default()
         );
     }
-
     #[test]
     fn vrf_batch_allocation_failure_reports_metered_work_without_publication() {
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
@@ -6199,7 +5878,6 @@ mod tests {
         vm.set_register(12, 0xbeef);
         let mut host = DefaultHost::new().with_network_id(test_network_id(0x71));
         let actual = DefaultHost::vrf_verify_gas(1, payload.len());
-
         let error = host
             .syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &mut vm)
             .expect_err("response allocation must fail");
@@ -6216,13 +5894,11 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn default_host_zk_verify_status_paths_charge_payload_bytes() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
-
         let malformed = [0xff, 0x00, 0x01];
         let ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &malformed))
@@ -6234,7 +5910,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ERR_DECODE);
-
         let canonical = norito::to_bytes(&dummy_zk_batch_envelope())
             .expect("encode canonical data-model envelope");
         let canonical_ptr = vm
@@ -6249,7 +5924,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ERR_BACKEND);
-
         let batch_payload = b"batch-envelope";
         let batch_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, batch_payload))
@@ -6272,7 +5946,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn zk_batch_prepare_quotes_every_declared_proof_including_rejected_count() {
         crate::set_banner_enabled(false);
@@ -6288,12 +5961,10 @@ mod tests {
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &payload))
             .expect("allocate bounded ZK batch");
         vm.set_register(10, pointer);
-
         assert_eq!(
             host.prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm),
             Ok(gas::zk_verify_batch_gas(3, payload.len()))
         );
-
         let oversized = norito::to_bytes(
             &std::iter::repeat_with(dummy_zk_batch_envelope)
                 .take(gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS + 1)
@@ -6312,7 +5983,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn vm_dispatched_zk_batch_malformed_header_paths_are_metered_before_decode() {
         let canonical =
@@ -6346,14 +6016,12 @@ mod tests {
             decode_canonical_zk_batch(&alternate_layout, 16),
             Err(ERR_DECODE)
         ));
-
         let mut wrong_schema = canonical.clone();
         wrong_schema[6] ^= 1; // schema starts after magic + major + minor
         let mut wrong_flags = canonical.clone();
         wrong_flags[norito::core::Header::SIZE - 1] = 0x80;
         let mut wrong_checksum = canonical;
         wrong_checksum[31] ^= 1; // CRC64 follows the encoded payload length
-
         for (label, payload) in [
             ("schema", wrong_schema),
             ("flags", wrong_flags),
@@ -6382,7 +6050,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn vm_dispatched_zk_batch_count_boundaries_have_stable_status_and_work() {
         for count in [0_usize, 17] {
@@ -6415,7 +6082,6 @@ mod tests {
                 }
             );
         }
-
         for count in [1_usize, 16] {
             let payload = norito::to_bytes(
                 &(0..count)
@@ -6452,7 +6118,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn zk_batch_allocation_failure_does_not_count_a_guest_visible_response() {
         crate::set_banner_enabled(false);
@@ -6473,7 +6138,6 @@ mod tests {
             .set_heap_limit(0)
             .expect("disable heap spill allocation");
         vm.set_register(10, pointer);
-
         let mut host = DefaultHost::new();
         assert_eq!(
             host.syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
@@ -6488,7 +6152,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn unaffordable_zk_batch_stops_before_decode_or_backend_work() {
         crate::set_banner_enabled(false);
@@ -6516,14 +6179,12 @@ mod tests {
             .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm)
             .expect("quote bounded ZK batch");
         vm.set_gas_limit(quote);
-
         assert_eq!(vm.run_with_host(&mut host), Err(VMError::OutOfGas));
         assert_eq!(vm.register(10), pointer);
         assert_eq!(vm.register(11), 0xfeed);
         assert_eq!(vm.register(12), 0xbeef);
         assert_eq!(host.zk_execution_counters(), ZkExecutionCounters::default());
     }
-
     #[test]
     fn forged_batch_count_cannot_buy_more_backend_work_than_was_quoted() {
         crate::set_banner_enabled(false);
@@ -6538,7 +6199,6 @@ mod tests {
             view.as_bytes().as_ptr() as usize - payload.as_ptr() as usize
         };
         payload[count_offset..count_offset + 8].copy_from_slice(&1_u64.to_le_bytes());
-
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
         code.extend_from_slice(
@@ -6560,7 +6220,6 @@ mod tests {
             .expect("quote declared count without decoding");
         assert_eq!(quote, gas::zk_verify_batch_gas(1, payload.len()));
         vm.set_gas_limit(quote.saturating_add(16));
-
         vm.run_with_host(&mut host)
             .expect("invalid Norito checksum is a metered decode status");
         assert_eq!(vm.register(10), 0);
@@ -6574,13 +6233,11 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn default_host_zk_read_helpers_charge_request_and_response_bytes() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
-
         let roots_req = crate::zk_verify::RootsGetRequest {
             asset_id: "rose#garden".to_string(),
             max: 8,
@@ -6605,7 +6262,6 @@ mod tests {
                 roots_payload.len().saturating_add(roots_out.payload.len())
             )
         );
-
         let tally_req = crate::zk_verify::VoteGetTallyRequest {
             election_id: "election".to_string(),
         };
@@ -6630,7 +6286,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn default_host_vote_tally_rejects_noncanonical_selector_without_response() {
         crate::set_banner_enabled(false);
@@ -6644,7 +6299,6 @@ mod tests {
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &payload))
             .expect("allocate tally request");
         vm.set_register(10, request_ptr);
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
             Err(VMError::NoritoInvalid)
@@ -6655,7 +6309,6 @@ mod tests {
             "failed tally queries must not publish a response pointer"
         );
     }
-
     #[test]
     fn default_host_state_has_len_and_keys_roundtrip() {
         fn tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -6672,7 +6325,6 @@ mod tests {
             out.extend_from_slice(&hash);
             out
         }
-
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
@@ -6689,25 +6341,21 @@ mod tests {
         let value_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::NoritoBytes, b"value"))
             .expect("alloc value");
-
         vm.set_register(10, key_ptr);
         vm.set_register(11, value_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_STATE_SET, &mut vm),
             Ok(state_value_gas(key_payload.len(), b"value".len()))
         );
-
         vm.set_register(10, key_ptr);
         host.syscall(syscalls::SYSCALL_STATE_HAS, &mut vm)
             .expect("STATE_HAS");
         assert_eq!(vm.register(10), 1);
-
         vm.set_register(10, key_ptr);
         host.syscall(syscalls::SYSCALL_STATE_LEN, &mut vm)
             .expect("STATE_LEN");
         assert_eq!(vm.register(10), 5);
         assert_eq!(vm.register(11), 1);
-
         vm.set_register(10, prefix_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_STATE_COUNT, &mut vm),
@@ -6716,7 +6364,6 @@ mod tests {
                 + u64::try_from(1 + key.as_ref().len()).expect("scan length fits"))
         );
         assert_eq!(vm.register(10), 1);
-
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS);
@@ -6728,7 +6375,6 @@ mod tests {
         let keys: Vec<StatePath> =
             norito::decode_from_bytes(keys_tlv.payload).expect("decode keys");
         assert_eq!(keys, vec![key.clone()]);
-
         vm.set_register(10, key_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_STATE_DEL, &mut vm),
@@ -6739,7 +6385,6 @@ mod tests {
             .expect("STATE_HAS absent");
         assert_eq!(vm.register(10), 0);
     }
-
     #[test]
     fn state_path_from_name_is_explicit_and_state_rejects_name_carrier() {
         let mut vm = IVM::new(u64::MAX);
@@ -6749,7 +6394,6 @@ mod tests {
         let name_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::Name, &name_payload))
             .expect("allocate Name");
-
         vm.set_register(10, name_ptr);
         let gas = host
             .syscall(syscalls::SYSCALL_STATE_PATH_FROM_NAME, &mut vm)
@@ -6764,7 +6408,6 @@ mod tests {
             gas,
             DefaultHost::path_gas(name_payload.len(), output.payload.len())
         );
-
         vm.set_register(10, name_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_STATE_HAS, &mut vm),
@@ -6773,7 +6416,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), name_ptr);
     }
-
     #[test]
     fn host_state_dependent_prepare_reserves_without_observing_state() {
         let mut vm = IVM::new(4_000_000);
@@ -6794,7 +6436,6 @@ mod tests {
             test_tlv(PointerType::Blob, &[0u8; 128]),
         );
         populated.fastpq_batch_active = true;
-
         let available = vm.remaining_gas();
         for syscall in [
             syscalls::SYSCALL_STATE_KEYS,
@@ -6810,7 +6451,6 @@ mod tests {
             assert_eq!(empty.prepare_syscall(syscall, &vm), Ok(available));
             assert_eq!(populated.prepare_syscall(syscall, &vm), Ok(available));
         }
-
         let path_len = quote_state_path_payload_len_at(&vm, path).expect("quote state path");
         assert_eq!(
             empty.prepare_syscall(syscalls::SYSCALL_STATE_GET, &vm),
@@ -6828,13 +6468,11 @@ mod tests {
             populated.prepare_syscall(syscalls::SYSCALL_STATE_LEN, &vm),
             Ok(state_path_gas(path_len))
         );
-
         assert_eq!(
             reserve_available_syscall_gas(&IVM::new(0)),
             Err(VMError::OutOfGas)
         );
     }
-
     #[test]
     fn default_host_pointer_helpers_roundtrip_and_charge_gas() {
         fn tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -6851,7 +6489,6 @@ mod tests {
             out.extend_from_slice(&hash);
             out
         }
-
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
@@ -6860,7 +6497,6 @@ mod tests {
             .alloc_input_tlv(&tlv(PointerType::Blob, payload))
             .expect("alloc blob");
         let envelope_len = 2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH;
-
         vm.set_register(10, ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm),
@@ -6870,7 +6506,6 @@ mod tests {
         let wrapped = vm.validate_tlv(wrapped_ptr).expect("wrapped tlv");
         assert_eq!(wrapped.type_id, PointerType::NoritoBytes);
         assert_eq!(wrapped.payload.len(), envelope_len);
-
         vm.set_register(10, wrapped_ptr);
         vm.set_register(11, PointerType::Blob as u64);
         assert_eq!(
@@ -6880,7 +6515,6 @@ mod tests {
         let roundtrip = vm.validate_tlv(vm.register(10)).expect("roundtrip tlv");
         assert_eq!(roundtrip.type_id, PointerType::Blob);
         assert_eq!(roundtrip.payload, payload);
-
         let blob_carrier = tlv(PointerType::Blob, &tlv(PointerType::Blob, payload));
         let blob_carrier_ptr = vm
             .alloc_input_tlv(&blob_carrier)
@@ -6893,7 +6527,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), blob_carrier_ptr);
     }
-
     #[test]
     fn common_helper_quotes_are_exact_at_length_boundaries() {
         crate::set_banner_enabled(false);
@@ -6925,7 +6558,6 @@ mod tests {
                 quote
             );
         }
-
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
         let left = vm
@@ -6941,7 +6573,6 @@ mod tests {
             VMError::NoritoInvalid | VMError::MemoryAccessViolation { .. }
         ));
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
-
         vm.set_register(10, Memory::OUTPUT_START);
         vm.set_register(11, Memory::OUTPUT_START);
         assert!(
@@ -6949,7 +6580,6 @@ mod tests {
             "equal raw addresses must not bypass pointer-ABI validation"
         );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
-
         vm.set_register(10, 0);
         vm.set_register(11, Memory::OUTPUT_START);
         assert!(
@@ -6958,7 +6588,6 @@ mod tests {
         );
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
     }
-
     #[test]
     fn crypto_quotes_use_processed_lengths_and_saturate() {
         crate::set_banner_enabled(false);
@@ -6989,7 +6618,6 @@ mod tests {
             .syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &mut vm)
             .expect("unsupported scheme still reports processed gas");
         assert!(actual <= quote);
-
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new().with_sm_enabled(true);
         for (register, payload) in [
@@ -7012,7 +6640,6 @@ mod tests {
                 .expect("invalid key is a metered verification result"),
             quote
         );
-
         assert_eq!(DefaultHost::sm4_gas(usize::MAX, usize::MAX), u64::MAX);
         assert_eq!(
             DefaultHost::signature_verify_gas(usize::MAX, usize::MAX, usize::MAX),
@@ -7020,7 +6647,6 @@ mod tests {
         );
         assert_eq!(DefaultHost::tlv_eq_gas(usize::MAX, usize::MAX), u64::MAX);
     }
-
     #[test]
     fn signature_and_sm2_verification_reject_retired_message_carriers() {
         crate::set_banner_enabled(false);
@@ -7039,7 +6665,6 @@ mod tests {
             vm.set_register(11, signature);
             vm.set_register(12, public_key);
             vm.set_register(13, u64::MAX);
-
             let mut host = DefaultHost::new();
             assert_eq!(
                 host.prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm),
@@ -7050,7 +6675,6 @@ mod tests {
                 Err(VMError::NoritoInvalid)
             );
             assert_eq!(vm.register(10), message);
-
             let mut sm_host = DefaultHost::new().with_sm_enabled(true);
             assert_eq!(
                 sm_host.syscall(syscalls::SYSCALL_SM2_VERIFY, &mut vm),
@@ -7059,7 +6683,6 @@ mod tests {
             assert_eq!(vm.register(10), message);
         }
     }
-
     #[test]
     fn unaffordable_signature_syscall_preserves_inputs_before_dispatch() {
         crate::set_banner_enabled(false);
@@ -7091,17 +6714,14 @@ mod tests {
             .prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm)
             .expect("quote signature verification");
         vm.set_gas_limit(quote.saturating_add(4));
-
         let error = vm
             .run_with_host(&mut host)
             .expect_err("the quote is one gas beyond the post-SCALL budget");
-
         assert_eq!(error, VMError::OutOfGas);
         assert_eq!(vm.register(10), message);
         assert_eq!(vm.register(11), signature);
         assert_eq!(vm.register(12), public_key);
     }
-
     #[test]
     fn execution_proof_and_merkle_quotes_match_actual_costs() {
         crate::set_banner_enabled(false);
@@ -7115,7 +6735,6 @@ mod tests {
                 .expect("produce proof"),
             proof_quote
         );
-
         for depth_cap in [0, 1, 8, 32, u64::MAX] {
             let mut vm = IVM::new(u64::MAX);
             let mut host = DefaultHost::new();
@@ -7135,7 +6754,6 @@ mod tests {
                 quote
             );
         }
-
         let mut vm = IVM::new(u64::MAX);
         let stack_top = vm.memory.stack_top();
         vm.set_register(10, stack_top);
@@ -7149,7 +6767,6 @@ mod tests {
             Err(VMError::RegisterOutOfBounds)
         );
     }
-
     #[test]
     fn disabled_and_unknown_syscall_quotes_fail_closed_without_over_reserving() {
         let vm = IVM::new(u64::MAX);
@@ -7164,7 +6781,6 @@ mod tests {
             Err(VMError::UnknownSyscall(0xffff_fffe))
         );
     }
-
     #[test]
     fn default_host_sm4_gcm_charges_aad_and_data_bytes() {
         fn tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -7181,7 +6797,6 @@ mod tests {
             out.extend_from_slice(&hash);
             out
         }
-
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new().with_sm_enabled(true);
@@ -7201,7 +6816,6 @@ mod tests {
         let plaintext_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Blob, plaintext))
             .expect("alloc plaintext");
-
         vm.set_register(10, key_ptr);
         vm.set_register(11, nonce_ptr);
         vm.set_register(12, aad_ptr);
@@ -7217,7 +6831,6 @@ mod tests {
             assert_eq!(sealed.payload.len(), plaintext.len() + 16);
             sealed.payload.len()
         };
-
         vm.set_register(10, key_ptr);
         vm.set_register(11, nonce_ptr);
         vm.set_register(12, aad_ptr);
@@ -7230,7 +6843,6 @@ mod tests {
         assert_eq!(opened.type_id, PointerType::Blob);
         assert_eq!(opened.payload, plaintext);
     }
-
     #[test]
     fn default_host_tlv_eq_charges_payload_bytes() {
         fn tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -7247,7 +6859,6 @@ mod tests {
             out.extend_from_slice(&hash);
             out
         }
-
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
@@ -7257,7 +6868,6 @@ mod tests {
         let right = vm
             .alloc_input_tlv(&tlv(PointerType::Blob, b"same"))
             .expect("alloc right");
-
         vm.set_register(10, left);
         vm.set_register(11, right);
         assert_eq!(
@@ -7266,7 +6876,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), 1);
     }
-
     #[test]
     fn default_host_tlv_len_charges_payload_bytes() {
         fn tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -7283,14 +6892,12 @@ mod tests {
             out.extend_from_slice(&hash);
             out
         }
-
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
         let ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Blob, b"length"))
             .expect("alloc tlv");
-
         vm.set_register(10, ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_TLV_LEN, &mut vm),
@@ -7298,7 +6905,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), 6);
     }
-
     #[test]
     fn input_publish_accepts_owned_public_heap_tlv_without_copying() {
         let mut host = DefaultHost::new();
@@ -7310,7 +6916,6 @@ mod tests {
         vm.store_bytes(pointer, &envelope)
             .expect("store public heap TLV");
         vm.set_register(10, pointer);
-
         assert_eq!(
             host.prepare_syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, &vm),
             Ok(DefaultHost::input_publish_gas(envelope.len()))
@@ -7321,12 +6926,10 @@ mod tests {
         );
         assert_eq!(vm.register(10), pointer);
     }
-
     #[test]
     fn input_publish_rejects_malformed_and_unowned_heap_tlvs() {
         let mut host = DefaultHost::new();
         let mut vm = IVM::new(u64::MAX);
-
         let mut malformed = test_tlv(PointerType::Blob, b"bad hash");
         *malformed.last_mut().expect("hash byte") ^= 1;
         let malformed_pointer = vm
@@ -7339,7 +6942,6 @@ mod tests {
             host.syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, &mut vm),
             Err(VMError::NoritoInvalid)
         ));
-
         let unowned = test_tlv(PointerType::Blob, b"unowned");
         let unowned_pointer = Memory::HEAP_START + 0x10_000;
         vm.store_bytes(unowned_pointer, &unowned)
@@ -7351,11 +6953,9 @@ mod tests {
         ));
         assert_eq!(vm.register(10), unowned_pointer);
     }
-
     #[test]
     fn default_host_runtime_helpers_charge_declared_gas() {
         crate::set_banner_enabled(false);
-
         let record =
             crate::private_input::int_record(42_u64.into()).expect("encode typed private input");
         let mut host =
@@ -7374,7 +6974,6 @@ mod tests {
             Err(VMError::PrivacyViolation),
             "the host must mark the complete private-input envelope as private memory"
         );
-
         vm.memory
             .set_heap_limit(0x10_000)
             .expect("shrink heap limit for grow test");
@@ -7383,12 +6982,10 @@ mod tests {
             host.syscall(syscalls::SYSCALL_GROW_HEAP, &mut vm),
             Ok(DefaultHost::grow_heap_gas(4097))
         );
-
         assert_eq!(
             host.syscall(syscalls::SYSCALL_COMMIT_OUTPUT, &mut vm),
             Ok(COMMIT_OUTPUT_GAS)
         );
-
         let tlv = test_tlv(PointerType::Blob, b"publish");
         let publish_ptr = vm.alloc_input_tlv(&tlv).expect("alloc publish tlv");
         vm.set_register(10, publish_ptr);
@@ -7396,7 +6993,6 @@ mod tests {
             host.syscall(syscalls::SYSCALL_INPUT_PUBLISH_TLV, &mut vm),
             Ok(DefaultHost::input_publish_gas(tlv.len()))
         );
-
         let account_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::AccountId, b""))
             .expect("alloc account");
@@ -7414,7 +7010,6 @@ mod tests {
             host.syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL, &mut vm),
             Ok(DefaultHost::mutation_gas(json_payload.len()))
         );
-
         let msg = test_tlv(PointerType::Blob, b"m");
         let sig = test_tlv(PointerType::Blob, b"sig");
         let pk = test_tlv(PointerType::Blob, b"pk");
@@ -7430,7 +7025,6 @@ mod tests {
             Ok(DefaultHost::signature_verify_gas(1, 3, 2))
         );
         assert_eq!(vm.register(10), 0);
-
         let addr = crate::Memory::HEAP_START;
         vm.memory.store_u32(addr, 0xABCD).expect("store heap");
         vm.memory.commit();
@@ -7447,7 +7041,6 @@ mod tests {
             u64::try_from(path_len).expect("path len fits")
         );
     }
-
     #[test]
     fn commit_output_charges_and_copies_only_the_written_prefix() {
         let full = usize::try_from(Memory::OUTPUT_SIZE).expect("output size fits usize");
@@ -7462,7 +7055,6 @@ mod tests {
             let expected = gas::commit_output_gas(
                 u64::try_from(size).expect("output fixture length fits u64"),
             );
-
             for _ in 0..3 {
                 let quote = host
                     .prepare_syscall(syscalls::SYSCALL_COMMIT_OUTPUT, &vm)
@@ -7476,6 +7068,5 @@ mod tests {
             }
         }
     }
-
     mod quantity_pointer_tests;
 }

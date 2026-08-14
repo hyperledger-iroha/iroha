@@ -4,23 +4,6 @@
 //! accepts an exact finalized native task, verifies the current native lease
 //! before any storage I/O, and durably enqueues one deterministic native
 //! terminal action. It never mutates the process-local repair scheduler.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
-
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    isi::sorafs::{
-        ApplySorafsRepairTaskAction, SorafsRepairCompleteV1, SorafsRepairFailV1,
-        SorafsRepairTaskActionV1,
-    },
-    sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairFinalizedTaskV1},
-};
-use thiserror::Error;
-
 use crate::{
     NodeHandle, RepairChunkPayload, RepairOrchestrator, RepairOrchestratorError,
     native_repair_singleflight::NativeRepairSingleflightErrorV1,
@@ -31,17 +14,28 @@ use crate::{
     },
     store::{ChunkFileRecord, StorageBackend, StoredManifest},
 };
-
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    isi::sorafs::{
+        ApplySorafsRepairTaskAction, SorafsRepairCompleteV1, SorafsRepairFailV1,
+        SorafsRepairTaskActionV1,
+    },
+    sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairFinalizedTaskV1},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+use thiserror::Error;
 /// Maximum chunks inspected for one native repair execution.
 pub const NATIVE_REPAIR_MAX_CHUNKS_V1: usize = 65_536;
 /// Maximum source chunk records inspected for one native repair execution.
 pub const NATIVE_REPAIR_MAX_SOURCE_CHUNKS_V1: usize = 1_000_000;
 /// Maximum aggregate target bytes admitted for one native repair execution.
 pub const NATIVE_REPAIR_MAX_TARGET_BYTES_V1: u64 = 1_073_741_824;
-
 const TERMINAL_IDEMPOTENCY_PREFIX_V1: &str = "native-repair-terminal-v1";
 const TERMINAL_EVIDENCE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.native-repair.terminal-evidence.v1\0";
-
 /// Exact immutable context exposed to a runtime repair orchestrator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeRepairExecutionContextV1 {
@@ -64,7 +58,6 @@ pub struct NativeRepairExecutionContextV1 {
     /// Exact finalized lease generation.
     pub lease_generation: u64,
 }
-
 /// Native terminal action selected after storage verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeRepairTerminalKindV1 {
@@ -79,7 +72,6 @@ pub enum NativeRepairTerminalKindV1 {
         failure_digest: [u8; 32],
     },
 }
-
 /// Result of one finalized native repair execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeRepairExecutionOutcomeV1 {
@@ -96,7 +88,6 @@ pub struct NativeRepairExecutionOutcomeV1 {
     /// Invalid chunks remaining after final verification.
     pub invalid_chunks_after: usize,
 }
-
 /// Failure before a deterministic native terminal action can be enqueued.
 #[derive(Debug, Error)]
 pub enum NativeRepairExecutionErrorV1 {
@@ -155,13 +146,11 @@ pub enum NativeRepairExecutionErrorV1 {
     #[error("native repair orchestrator rehydration failed")]
     Orchestrator(#[from] RepairOrchestratorError),
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeRepairFailureCodeV1 {
     ManifestMissing = 1,
     InvalidChunksRemain = 2,
 }
-
 #[derive(Debug)]
 struct NativeRepairStorageOutcomeV1 {
     failure: Option<NativeRepairFailureCodeV1>,
@@ -170,7 +159,6 @@ struct NativeRepairStorageOutcomeV1 {
     rehydrated: usize,
     invalid_after: Vec<ChunkFileRecord>,
 }
-
 impl NodeHandle {
     /// Execute storage repair only under one exact finalized native lease.
     ///
@@ -231,7 +219,6 @@ impl NodeHandle {
         storage
             .ensure_durability_healthy()
             .map_err(|_| NativeRepairExecutionErrorV1::StorageDurabilityUnavailable)?;
-
         let execution_context = NativeRepairExecutionContextV1 {
             network_id: transaction_context.network_id,
             finalized_cursor: transaction_context.finalized_cursor,
@@ -265,7 +252,6 @@ impl NodeHandle {
                 execute_storage_repair(storage, orchestrator.as_deref(), &execution_context)
             })
             .map_err(|_| NativeRepairExecutionErrorV1::SchedulerSaturated)??;
-
         let idempotency_key = format!(
             "{TERMINAL_IDEMPOTENCY_PREFIX_V1}:{}:{}:{}",
             hex::encode(task.task_id),
@@ -329,7 +315,6 @@ impl NodeHandle {
         })
     }
 }
-
 fn execute_storage_repair(
     storage: &StorageBackend,
     orchestrator: Option<&dyn RepairOrchestrator>,
@@ -350,7 +335,6 @@ fn execute_storage_repair(
     };
     outcome
 }
-
 fn execute_storage_repair_for_manifest(
     storage: &StorageBackend,
     orchestrator: Option<&dyn RepairOrchestrator>,
@@ -369,7 +353,6 @@ fn execute_storage_repair_for_manifest(
             invalid_after: Vec::new(),
         });
     }
-
     let mut rehydrated = restore_from_local_replicas(storage, manifest, &invalid)?;
     invalid = invalid_chunks(&chunks);
     if !invalid.is_empty() {
@@ -392,7 +375,6 @@ fn execute_storage_repair_for_manifest(
         invalid_after,
     })
 }
-
 fn manifest_chunks_bounded(
     manifest: &StoredManifest,
 ) -> Result<Vec<ChunkFileRecord>, NativeRepairExecutionErrorV1> {
@@ -418,7 +400,6 @@ fn manifest_chunks_bounded(
     }
     Ok(chunks)
 }
-
 fn invalid_chunks(chunks: &[ChunkFileRecord]) -> Vec<ChunkFileRecord> {
     chunks
         .iter()
@@ -426,11 +407,9 @@ fn invalid_chunks(chunks: &[ChunkFileRecord]) -> Vec<ChunkFileRecord> {
         .cloned()
         .collect()
 }
-
 fn read_valid_chunk(chunk: &ChunkFileRecord) -> Option<Vec<u8>> {
     crate::store::read_verified_chunk_file(chunk).ok()
 }
-
 fn restore_from_local_replicas(
     storage: &StorageBackend,
     target_manifest: &StoredManifest,
@@ -465,7 +444,6 @@ fn restore_from_local_replicas(
             Err(error) => return Err(error.into()),
         }
     }
-
     let mut restored = 0_usize;
     for target in invalid {
         if read_valid_chunk(target).is_some() {
@@ -484,7 +462,6 @@ fn restore_from_local_replicas(
     }
     Ok(restored)
 }
-
 fn collect_local_repair_sources(
     storage: &StorageBackend,
     manifest: &StoredManifest,
@@ -513,7 +490,6 @@ fn collect_local_repair_sources(
     }
     Ok(())
 }
-
 fn restore_from_orchestrator(
     storage: &StorageBackend,
     orchestrator: Option<&dyn RepairOrchestrator>,
@@ -561,7 +537,6 @@ fn restore_from_orchestrator(
     }
     Ok(restored)
 }
-
 fn validate_orchestrator_payload_budget(
     payloads: &[RepairChunkPayload],
     maximum_bytes: u64,
@@ -578,14 +553,12 @@ fn validate_orchestrator_payload_budget(
     }
     Ok(())
 }
-
 fn stable_local_path_key(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
 }
-
 fn terminal_evidence_digest(
     context: &NativeRepairExecutionContextV1,
     failure: Option<NativeRepairFailureCodeV1>,
@@ -620,7 +593,6 @@ fn terminal_evidence_digest(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn missing_manifest_failure_digest(
     context: &NativeRepairExecutionContextV1,
 ) -> Result<[u8; 32], NativeRepairExecutionErrorV1> {
@@ -628,7 +600,6 @@ fn missing_manifest_failure_digest(
     hasher.update(&[1, NativeRepairFailureCodeV1::ManifestMissing as u8]);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn terminal_evidence_hasher(
     context: &NativeRepairExecutionContextV1,
 ) -> Result<blake3::Hasher, NativeRepairExecutionErrorV1> {
@@ -646,7 +617,6 @@ fn terminal_evidence_hasher(
     hash_u64(&mut hasher, context.lease_generation);
     Ok(hasher)
 }
-
 fn hash_bytes(
     hasher: &mut blake3::Hasher,
     bytes: &[u8],
@@ -659,18 +629,14 @@ fn hash_bytes(
     hasher.update(bytes);
     Ok(())
 }
-
 fn hash_u64(hasher: &mut blake3::Hasher, value: u64) {
     hasher.update(&value.to_le_bytes());
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[cfg(unix)]
     use std::{fs, os::unix::fs::symlink};
-
-    use super::*;
-
     fn evidence_context(network_seed: u8) -> NativeRepairExecutionContextV1 {
         let genesis_hash =
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -691,24 +657,20 @@ mod tests {
             lease_generation: 9,
         }
     }
-
     #[test]
     fn terminal_evidence_domain_binding_matches_fixed_vector() {
         let context = evidence_context(0xA1);
         let digest = terminal_evidence_hasher(&context)
             .expect("hash fixed terminal evidence context")
             .finalize();
-
         assert_eq!(
             hex::encode(digest.as_bytes()),
             "9868c77c8c987798fa4b20a7783687cf8838a1a4403c3f3da4c246de4dc36750"
         );
-
         let foreign_network = terminal_evidence_hasher(&evidence_context(0xA2))
             .expect("hash foreign network context")
             .finalize();
         assert_ne!(foreign_network, digest);
-
         let mut different_task = context.clone();
         different_task.task_id[0] ^= 1;
         assert_ne!(
@@ -717,7 +679,6 @@ mod tests {
                 .finalize(),
             digest
         );
-
         let mut different_block_hash = context.clone();
         different_block_hash.finalized_cursor.block_hash[0] ^= 1;
         assert_ne!(
@@ -726,7 +687,6 @@ mod tests {
                 .finalize(),
             digest
         );
-
         let mut different_height = context;
         different_height.finalized_cursor.height += 1;
         assert_ne!(
@@ -736,7 +696,6 @@ mod tests {
             digest
         );
     }
-
     #[test]
     fn orchestrator_payload_budget_counts_every_returned_byte() {
         let payloads = vec![
@@ -751,7 +710,6 @@ mod tests {
                 source: None,
             },
         ];
-
         assert!(matches!(
             validate_orchestrator_payload_budget(&payloads, 3),
             Err(NativeRepairExecutionErrorV1::ResourceLimitExceeded)
@@ -759,7 +717,6 @@ mod tests {
         validate_orchestrator_payload_budget(&payloads, 4)
             .expect("exact aggregate payload limit is accepted");
     }
-
     #[cfg(unix)]
     fn chunk_record(path: &Path, bytes: &[u8]) -> ChunkFileRecord {
         ChunkFileRecord {
@@ -771,7 +728,6 @@ mod tests {
             group_id: None,
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn native_repair_chunk_validation_rejects_symlink() {
@@ -781,10 +737,8 @@ mod tests {
         let linked = temp.path().join("linked.chunk");
         fs::write(&target, bytes).expect("write target");
         symlink(&target, &linked).expect("create symlink");
-
         assert!(read_valid_chunk(&chunk_record(&linked, bytes)).is_none());
     }
-
     #[cfg(unix)]
     #[test]
     fn native_repair_chunk_validation_rejects_hardlink() {
@@ -794,7 +748,6 @@ mod tests {
         let alias = temp.path().join("alias.bin");
         fs::write(&chunk, bytes).expect("write chunk");
         fs::hard_link(&chunk, &alias).expect("create hard link");
-
         assert!(read_valid_chunk(&chunk_record(&chunk, bytes)).is_none());
     }
 }

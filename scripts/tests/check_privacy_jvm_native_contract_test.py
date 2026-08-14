@@ -9,12 +9,47 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+RUST_BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
+RUST_BRIDGE_PLATFORM_JNI = "crates/connect_norito_bridge/src/platform_jni.rs"
+RUST_BRIDGE_PLATFORM_JNI_PARTS = (
+    "crates/connect_norito_bridge/src/platform_jni/part_1.rs",
+    "crates/connect_norito_bridge/src/platform_jni/part_2.rs",
+    "crates/connect_norito_bridge/src/platform_jni/part_3.rs",
+)
+RUST_BRIDGE_PLATFORM_JNI_INCLUDES = (
+    "platform_jni/part_1.rs",
+    "platform_jni/part_2.rs",
+    "platform_jni/part_3.rs",
+)
 
 
 def read(relative: str) -> str:
     """Read one UTF-8 repository file."""
 
     return (REPO_ROOT / relative).read_text(encoding="utf-8")
+
+
+def read_rust_bridge_source() -> str:
+    """Read the authenticated split JNI source closure."""
+
+    paths = (RUST_BRIDGE, RUST_BRIDGE_PLATFORM_JNI, *RUST_BRIDGE_PLATFORM_JNI_PARTS)
+    for relative in paths:
+        path = REPO_ROOT / relative
+        if path.is_symlink() or not path.is_file():
+            raise AssertionError(f"required Rust bridge source is unavailable: {relative}")
+    bridge = read(RUST_BRIDGE)
+    if len(re.findall(r"^mod platform_jni;$", bridge, flags=re.MULTILINE)) != 1:
+        raise AssertionError("Rust bridge must own exactly one platform_jni module")
+    platform_jni = read(RUST_BRIDGE_PLATFORM_JNI)
+    observed_includes = tuple(
+        re.findall(r'^include!\("([^"]+)"\);$', platform_jni, flags=re.MULTILINE)
+    )
+    if observed_includes != RUST_BRIDGE_PLATFORM_JNI_INCLUDES:
+        raise AssertionError(
+            "Rust bridge platform_jni include closure differs from the exact "
+            f"three-part inventory: found {observed_includes}"
+        )
+    return "\n".join(read(relative) for relative in paths)
 
 
 def workflow_job(source: str, name: str) -> str:
@@ -105,7 +140,7 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
     def test_rust_bridge_exports_both_privacy_jni_namespaces(self) -> None:
-        source = read("crates/connect_norito_bridge/src/lib.rs")
+        source = read_rust_bridge_source()
         for namespace in ("sdk", "android"):
             prefix = (
                 "Java_org_hyperledger_iroha_"

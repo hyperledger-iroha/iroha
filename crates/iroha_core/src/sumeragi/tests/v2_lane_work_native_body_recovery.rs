@@ -6,7 +6,6 @@ struct NativeBodyRecoveryPayload {
     source_id: [u8; Hash::LENGTH],
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
-
 struct NativeBodyRecoveryFixture {
     adapter: V2LaneWorkAdapter,
     carrier: SignedBlock,
@@ -16,13 +15,11 @@ struct NativeBodyRecoveryFixture {
     source_id: [u8; Hash::LENGTH],
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
-
 fn native_body_recovery_adapter() -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
     native_body_recovery_adapter_with_kura(locked_lane_work_test_kura(
         NonZeroUsize::new(1).expect("retain one carrier body"),
     ))
 }
-
 fn native_body_recovery_adapter_with_kura(
     kura: Arc<Kura>,
 ) -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
@@ -87,7 +84,6 @@ fn native_body_recovery_adapter_with_kura(
         .expect("install participant lane incarnation marker");
     (adapter, keys, participant_lane, participant_dataspace)
 }
-
 struct GroupedNativeCandidateFixture {
     service: crate::sumeragi::v2_apply::V2ApplyService,
     context: wire::HeightContext,
@@ -99,14 +95,12 @@ struct GroupedNativeCandidateFixture {
     participant_incarnation: Hash,
     participant_height: u64,
 }
-
 #[allow(clippy::too_many_lines)]
 fn grouped_native_candidate_fixture(
     pending_control_validation_bytes: Option<NonZeroUsize>,
 ) -> GroupedNativeCandidateFixture {
-    let mut kura = locked_lane_work_test_kura(
-        iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-    );
+    let mut kura =
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY);
     if let Some(aggregate_bytes) = pending_control_validation_bytes {
         Arc::get_mut(&mut kura)
             .expect("fresh grouped Native fixture Kura has one owner")
@@ -114,7 +108,6 @@ fn grouped_native_candidate_fixture(
     }
     let (adapter, keys, participant_lane, participant_dataspace) =
         native_body_recovery_adapter_with_kura(kura);
-
     let transaction_key =
         KeyPair::try_from_seed(vec![0xD8; 32], Algorithm::Ed25519).expect("transaction key");
     let authority = AccountId::new(transaction_key.public_key().clone());
@@ -130,7 +123,6 @@ fn grouped_native_candidate_fixture(
         AccountValue::new(AccountDetails::default()),
     );
     world.commit();
-
     let transaction_time = TimeSource::new_fixed(Duration::from_secs(4));
     let mut transactions = [
         ("budgetuniversalone", "budgetindependentone"),
@@ -158,7 +150,6 @@ fn grouped_native_candidate_fixture(
     })
     .collect::<Vec<_>>();
     transactions.sort_by_key(|transaction| transaction.hash());
-
     let source_ids = transactions
         .iter()
         .map(|transaction| {
@@ -175,7 +166,6 @@ fn grouped_native_candidate_fixture(
         .iter()
         .map(|transaction| transaction.hash_as_entrypoint())
         .collect::<Vec<_>>();
-
     let parent_height = NonZeroUsize::new(
         usize::try_from(
             adapter
@@ -207,7 +197,6 @@ fn grouped_native_candidate_fixture(
     }
     let creation_time_ms =
         u64::try_from(creation_time.as_millis()).expect("grouped Native block time fits u64");
-
     let routing_plans = {
         let state_view = adapter.state.view();
         transactions
@@ -242,7 +231,6 @@ fn grouped_native_candidate_fixture(
         routing_plan.legs()[1].route,
         RoutingDecision::new(participant_lane, participant_dataspace)
     );
-
     let coordinator_routes = routing_plans
         .iter()
         .map(RoutingPlan::coordinator_route)
@@ -276,7 +264,6 @@ fn grouped_native_candidate_fixture(
         candidate_hashes
     );
     let coordinator_proposal = lane_plan.proposals[0].clone();
-
     let participant_incarnation = adapter
         .state
         .lane_incarnation_at_height(participant_lane, adapter.context.height)
@@ -309,7 +296,6 @@ fn grouped_native_candidate_fixture(
     participant_proposal.payload_block_hint = None;
     crate::lane_consensus::validate_lane_block_proposal(&participant_proposal)
         .expect("grouped participant proposal is structurally valid");
-
     let bind_request = |source_id: [u8; Hash::LENGTH],
                         entrypoint_hash: HashOf<TransactionEntrypoint>| {
         let coordinator_descriptor = &coordinator_proposal.descriptor;
@@ -325,7 +311,6 @@ fn grouped_native_candidate_fixture(
         request.plan_legs = routing_plan.legs();
         request.coordinator_proposal = coordinator_proposal.clone();
         request.participant_proposal = participant_proposal.clone();
-
         let body = &mut request.body;
         body.source_id = source_id;
         body.tx_entrypoint_hash = entrypoint_hash;
@@ -401,7 +386,6 @@ fn grouped_native_candidate_fixture(
         receipts[0].legs[0].participant_settlement,
         receipts[1].legs[0].participant_settlement
     );
-
     let external = entrypoint_hashes
         .iter()
         .copied()
@@ -451,7 +435,6 @@ fn grouped_native_candidate_fixture(
         .canonical_resultless_proposal();
     assert!(body.is_resultless_proposal());
     assert_eq!(body.external_entrypoint_count(), 2);
-
     let state = Arc::clone(&adapter.state);
     let kura = Arc::clone(&adapter.kura);
     let context = adapter.context.clone();
@@ -490,7 +473,6 @@ fn grouped_native_candidate_fixture(
         participant_height: participant_proposal.descriptor.lane_block_height,
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation() {
@@ -507,7 +489,6 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
         positive_state_hash,
         "positive pre-vote validation must discard its WSV overlay"
     );
-
     let negative = grouped_native_candidate_fixture(Some(
         NonZeroUsize::new(1).expect("non-zero undersized evidence budget"),
     ));
@@ -559,7 +540,6 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
             )
             .is_none()
     );
-
     let error = negative
         .service
         .validate_candidate(&negative.context, &negative.body)
@@ -622,7 +602,6 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
             .is_none()
     );
 }
-
 fn native_body_recovery_payload(
     adapter: &V2LaneWorkAdapter,
     keys: &[KeyPair],
@@ -703,7 +682,6 @@ fn native_body_recovery_payload(
         entrypoint_hash,
     }
 }
-
 fn native_body_recovery_carrier(
     adapter: &V2LaneWorkAdapter,
     keys: &[KeyPair],
@@ -767,7 +745,6 @@ fn native_body_recovery_carrier(
         .expect("replace Native carrier signature");
     carrier
 }
-
 fn native_body_recovery_finality(
     adapter: &V2LaneWorkAdapter,
     keys: &[KeyPair],
@@ -839,7 +816,6 @@ fn native_body_recovery_finality(
         .expect("cryptographically valid non-local finality quorum");
     (manifest, finality)
 }
-
 fn persist_and_evict_native_body(
     adapter: &V2LaneWorkAdapter,
     keys: &[KeyPair],
@@ -924,7 +900,6 @@ fn persist_and_evict_native_body(
     assert!(adapter.kura.get_block(height).is_none());
     marker
 }
-
 fn native_body_recovery_fixture() -> NativeBodyRecoveryFixture {
     let (adapter, keys, participant_lane, participant_dataspace) = native_body_recovery_adapter();
     let payload =
@@ -946,7 +921,6 @@ fn native_body_recovery_fixture() -> NativeBodyRecoveryFixture {
         entrypoint_hash: payload.entrypoint_hash,
     }
 }
-
 #[test]
 fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_receipt() {
     let fixture = native_body_recovery_fixture();
@@ -970,7 +944,6 @@ fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_r
         needs[0].executed_block_wire_hash,
         fixture.manifest.executed_block_wire_hash()
     );
-
     kura.cache_block_body(&fixture.carrier)
         .expect("simulate authenticated generic chunk assembly");
     let planning =
@@ -1004,7 +977,6 @@ fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_r
     );
     assert_eq!(receipt.source_ids, vec![fixture.source_id]);
     assert_eq!(receipt.entrypoint_hashes, vec![fixture.entrypoint_hash]);
-
     assert_eq!(
         kura.repair_native_amx_participant_application_evidence_for_markers(
             &fixture.carrier,
@@ -1041,14 +1013,12 @@ fn native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_r
         "failed marker preflight must leave the repaired receipt unchanged"
     );
 }
-
 struct MergeNativeProjectionFixture {
     block: SignedBlock,
     entry: iroha_data_model::merge::MergeLedgerEntry,
     source_ids: Vec<[u8; Hash::LENGTH]>,
     routes: Vec<(LaneId, DataSpaceId)>,
 }
-
 fn merge_native_projection_lane_qc(
     proposal: &LaneBlockProposalV1,
     phase: CertPhase,
@@ -1064,7 +1034,6 @@ fn merge_native_projection_lane_qc(
         payload_availability_qc: None,
     }
 }
-
 fn merge_native_projection_execution(
     entrypoints: Vec<TransactionEntrypoint>,
     results: Vec<iroha_data_model::transaction::signed::TransactionResult>,
@@ -1126,7 +1095,6 @@ fn merge_native_projection_execution(
         settlement_hash,
     }
 }
-
 fn merge_native_projection_batch(
     execution: iroha_data_model::merge::MergeLaneExecution,
     application_block_header: &BlockHeader,
@@ -1164,7 +1132,6 @@ fn merge_native_projection_batch(
     batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
     batch
 }
-
 fn merge_native_projection_entry_and_carrier(
     batch: iroha_data_model::merge::MergeExecutionBatch,
     application_block_header: BlockHeader,
@@ -1218,7 +1185,6 @@ fn merge_native_projection_entry_and_carrier(
     ));
     (block, entry)
 }
-
 fn merge_native_projection_fixture(
     mutate_receipts: impl FnOnce(&mut [NativeAmxReceipt]),
 ) -> MergeNativeProjectionFixture {
@@ -1276,7 +1242,6 @@ fn merge_native_projection_fixture(
         routes,
     }
 }
-
 fn merge_native_projection_rebind_single_source_participant(
     leg: &mut NativeAmxLegRecordV2,
     entrypoint_index: u64,
@@ -1296,7 +1261,6 @@ fn merge_native_projection_rebind_single_source_participant(
     descriptor.accepted_transaction_hashes = vec![Hash::from(entrypoint_hash)];
     descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
     leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
-
     leg.participant_settlement.block_height = participant_height;
     leg.participant_settlement
         .receipts
@@ -1306,7 +1270,6 @@ fn merge_native_projection_rebind_single_source_participant(
     leg.participant_settlement_hash =
         iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
             .expect("hash single-source merge projection settlement");
-
     let descriptor = &leg.participant_proposal.descriptor;
     let participant_lane_id = descriptor.lane_id;
     let participant_dataspace_id = descriptor.dataspace_id;
@@ -1328,7 +1291,6 @@ fn merge_native_projection_rebind_single_source_participant(
         body.participant_settlement_commitment = settlement_commitment;
     }
 }
-
 fn merge_native_projection_split_participant_heights(
     receipts: &mut [NativeAmxReceipt],
     second_height_delta: u64,
@@ -1352,7 +1314,6 @@ fn merge_native_projection_split_participant_heights(
     let second_height = first_height
         .checked_add(second_height_delta)
         .expect("participant height fits u64");
-
     for receipt in receipts.iter_mut() {
         let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
         receipt.legs.retain(|leg| {
@@ -1360,7 +1321,6 @@ fn merge_native_projection_split_participant_heights(
             leg_route == route || leg_route == coordinator_route
         });
     }
-
     let (first, second) = receipts.split_at_mut(1);
     let first_receipt = &mut first[0];
     let first_source_id = first_receipt.source_id;
@@ -1377,7 +1337,6 @@ fn merge_native_projection_split_participant_heights(
         first_predecessor_hash,
     );
     let first_descriptor_hash = first_leg.participant_proposal.descriptor.descriptor_hash;
-
     let second_receipt = &mut second[0];
     let second_source_id = second_receipt.source_id;
     let second_leg = second_receipt
@@ -1393,7 +1352,6 @@ fn merge_native_projection_split_participant_heights(
         Some(first_descriptor_hash),
     );
 }
-
 #[test]
 fn native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order() {
     let fixture = merge_native_projection_fixture(|_| {});
@@ -1441,7 +1399,6 @@ fn native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order() 
             "lane/entrypoint order must be retained while identical routes are grouped"
         );
     }
-
     let markers = crate::state::State::native_amx_participant_frontier_markers_and_merge_entry(
         &fixture.block,
         Some(&fixture.entry),
@@ -1462,7 +1419,6 @@ fn native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order() 
         );
     }
 }
-
 #[test]
 fn native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier() {
     for second_height_delta in [1_u64, 2_u64] {
@@ -1480,7 +1436,6 @@ fn native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carri
         );
     }
 }
-
 #[test]
 fn native_amx_merge_projection_rejects_same_height_participant_identity_conflict() {
     let fixture = merge_native_projection_fixture(|receipts| {
@@ -1500,7 +1455,6 @@ fn native_amx_merge_projection_rejects_same_height_participant_identity_conflict
             .participant_proposal
             .descriptor
             .lane_block_height;
-
         {
             let leg = receipts[1]
                 .legs
@@ -1555,7 +1509,6 @@ fn native_amx_merge_projection_rejects_same_height_participant_identity_conflict
         "{error}"
     );
 }
-
 #[test]
 fn native_amx_merge_projection_excludes_coordinator_only_receipts() {
     let fixture = merge_native_projection_fixture(|receipts| {
@@ -1582,7 +1535,6 @@ fn native_amx_merge_projection_excludes_coordinator_only_receipts() {
         .is_empty()
     );
 }
-
 #[test]
 fn native_amx_merge_projection_rejects_same_route_identity_conflict() {
     let fixture = merge_native_projection_fixture(|receipts| {
@@ -1623,7 +1575,6 @@ fn native_amx_merge_projection_rejects_same_route_identity_conflict() {
         "{error}"
     );
 }
-
 #[test]
 fn native_amx_merge_projection_rejects_duplicate_group_source() {
     let fixture = merge_native_projection_fixture(|receipts| {
@@ -1641,7 +1592,6 @@ fn native_amx_merge_projection_rejects_duplicate_group_source() {
     .expect_err("duplicate participant source must fail closed");
     assert!(error.contains("repeats a source transaction"), "{error}");
 }
-
 #[test]
 fn native_amx_merge_projection_matches_decoded_replay_entry() {
     let fixture = merge_native_projection_fixture(|_| {});

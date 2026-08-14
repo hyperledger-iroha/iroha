@@ -15,8 +15,13 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 
 1. Enable storage and stream-token issuance with bounded defaults:
    ```toml
-   [torii]
-   api_tokens = ["<runtime-provisioned-stream-token-issuer-credential>"]
+   [torii.operator_signatures]
+   enabled = true
+   allow_node_key = false
+   allowed_public_keys = ["<canonical-operator-public-key>"]
+   max_clock_skew_secs = 30
+   nonce_ttl_secs = 120
+   replay_cache_capacity = 4096
 
    [sorafs.storage]
    enabled = true
@@ -36,9 +41,13 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    default_rate_limit_bytes = 104857600
    default_requests_per_minute = 60
    ```
-   At least one Torii API token is mandatory for this issuance route.
-   `require_api_token = true` remains the recommended listener-wide posture,
-   but this route validates its credential independently.
+   Keep the allow-list limited to the exact runtime operator keys. The issuance
+   route accepts no API-token or session fallback.
+   For Soracloud remote hydration, list every consuming daemon's configured
+   `common.key_pair` public key in each provider's `allowed_public_keys`.
+   `allow_node_key` covers only the provider daemon's own node key, not peer
+   consumers. Provider and consumer must also share the exact genesis-derived
+   `NetworkId`; an equal operator-selected chain label is insufficient.
 2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
    `sorafs.storage.native_transaction_signers`, and inject all four matching
    live providers. Storage startup requires them even when the corresponding
@@ -67,10 +76,10 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 ### Token Issuance
 
 - Use the authenticated `POST /v1/sorafs/storage/token` route with
-  exactly one configured `X-API-Token`, `X-SoraFS-Client`, a unique
+  fresh `X-Iroha-Operator-*` signature headers, `X-SoraFS-Client`, a unique
   `X-SoraFS-Nonce`, and the manifest/provider JSON body described in
-  `sorafs_gateway_chunk_range.md`. The API credential, not the client label,
-  owns the issuance budget.
+  `sorafs_gateway_chunk_range.md`. The authenticated operator key, not the
+  client label, owns the issuance budget.
 - Store only token ID, key version, and expiry in the operator dashboard. Keep
   the encoded bearer token in a secret manager and redact it from logs.
 - Rotate tokens proactively before TTL when running 24/7 workloads.
@@ -114,27 +123,23 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 
 ### 6.1 Stream-token refresh automation
 
-This repository does not ship a token-rotation script. Use the deployment's
-authenticated secret-delivery job to call the canonical Torii endpoint and put
-the result directly into the consumer secret store. A minimal single-manifest
-probe looks like:
+Use an `iroha` client profile with the exact deployment NetworkId and an
+allow-listed operator key. Put the result directly into the consumer secret
+store; do not hand-assemble signature headers in shell:
 
 ```bash
 umask 077
-curl --fail --silent --show-error \
-  -X POST https://gateway.example.com/v1/sorafs/storage/token \
-  -H "Content-Type: application/json" \
-  -H "X-API-Token: ${TORII_API_TOKEN}" \
-  -H "X-SoraFS-Client: ${CLIENT_ID}" \
-  -H "X-SoraFS-Nonce: ${UNIQUE_NONCE}" \
-  --data-binary "{\"manifest_id_hex\":\"${MANIFEST_ID}\",\"provider_id_hex\":\"${PROVIDER_ID}\"}" \
+iroha --config "${RUNTIME_ONLY_CLIENT_CONFIG}" app sorafs storage token issue \
+  --manifest-id "${MANIFEST_ID}" \
+  --provider-id "${PROVIDER_ID}" \
+  --client-id "${CLIENT_ID}" \
   > "${RUNTIME_SECRET_DIR}/stream-token.json"
 ```
 
 Required automation behaviour:
 
-- Supply one `torii.api_tokens` credential. The issuance handler validates it
-  even when the listener-wide `torii.require_api_token` setting is false;
+- Supply an allow-listed operator signing key through the runtime-only client
+  profile. The issuance handler rejects API-token and operator-session fallback;
   client ID and nonce headers are never credentials.
 - Compare `X-SoraFS-Verifying-Key` with the independently approved gateway key,
   verify the domain-separated token signature, provider/manifest/profile

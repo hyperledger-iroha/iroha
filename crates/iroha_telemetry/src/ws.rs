@@ -1,5 +1,6 @@
 //! Telemetry sent to a server
-
+use crate::integrity::ChainState;
+use crate::retry_period::RetryPeriod;
 use chrono::Utc;
 use eyre::{Result, eyre};
 use futures::{Sink, SinkExt, StreamExt, stream::SplitSink};
@@ -17,14 +18,8 @@ use tokio_tungstenite::{
     tungstenite::{Error, Message},
 };
 use url::Url;
-
-use crate::integrity::ChainState;
-use crate::retry_period::RetryPeriod;
-
 type WebSocketSplitSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-
 const INTERNAL_CHANNEL_CAPACITY: usize = 10;
-
 /// Starts telemetry sending data to a server
 /// # Errors
 /// Fails if unable to connect to the server
@@ -54,10 +49,8 @@ pub async fn start(
     let handle = tokio::task::spawn(async move {
         client.run(telemetry, internal_receiver).await;
     });
-
     Ok(handle)
 }
-
 struct Client<S, F> {
     name: String,
     sink_factory: F,
@@ -67,7 +60,6 @@ struct Client<S, F> {
     init_payload: Option<Map>,
     integrity: ChainState,
 }
-
 impl<S, F> Client<S, F>
 where
     S: SinkExt<Message> + Sink<Message, Error = Error> + Send + Unpin,
@@ -91,7 +83,6 @@ where
             integrity,
         }
     }
-
     pub async fn run(
         mut self,
         receiver: broadcast::Receiver<Telemetry>,
@@ -123,7 +114,6 @@ where
             }
         }
     }
-
     async fn on_telemetry(&mut self, telemetry: Telemetry) {
         match prepare_message(&self.name, telemetry, &mut self.integrity) {
             Ok((msg, msg_kind, init_payload)) => {
@@ -137,7 +127,6 @@ where
             }
         }
     }
-
     async fn on_reconnect(&mut self) {
         if let Ok(sink) = self.sink_factory.create().await {
             if let Some(payload) = self.init_payload.clone() {
@@ -161,7 +150,6 @@ where
             self.schedule_reconnect();
         }
     }
-
     async fn send_message(&mut self, msg: Message) {
         if let Some(sink) = self.sink.as_mut() {
             match sink.send(msg).await {
@@ -177,7 +165,6 @@ where
             }
         }
     }
-
     fn schedule_reconnect(&mut self) {
         self.retry_period.increase_exponent();
         let period = self.retry_period.period();
@@ -194,12 +181,10 @@ where
         });
     }
 }
-
 #[derive(Debug)]
 enum InternalMessage {
     Reconnect,
 }
-
 fn prepare_message(
     name: &str,
     telemetry: Telemetry,
@@ -214,12 +199,10 @@ fn prepare_message(
     };
     Ok((msg, msg_kind, init_payload))
 }
-
 fn build_payload(name: &str, telemetry: Telemetry) -> Result<(Map, Option<MessageKind>)> {
     let mut msg_kind: Option<MessageKind> = None;
     let mut msg_field_present = false;
     let mut payload = Map::new();
-
     for (field, value) in telemetry.fields.0 {
         if field == "msg" {
             msg_field_present = true;
@@ -232,7 +215,6 @@ fn build_payload(name: &str, telemetry: Telemetry) -> Result<(Map, Option<Messag
                 _ => None,
             };
         }
-
         let processed = match field {
             "genesis_hash" | "best" | "finalized_hash" => {
                 let hash = value
@@ -245,14 +227,11 @@ fn build_payload(name: &str, telemetry: Telemetry) -> Result<(Map, Option<Messag
             }
             _ => value,
         };
-
         payload.insert(field.to_owned(), processed);
     }
-
     if !msg_field_present {
         return Err(eyre!("Failed to read 'msg'"));
     }
-
     if matches!(msg_kind, Some(MessageKind::Initialization)) {
         let now = Utc::now();
         payload.insert("name".into(), name.into());
@@ -276,10 +255,8 @@ fn build_payload(name: &str, telemetry: Telemetry) -> Result<(Map, Option<Messag
         );
         payload.insert("network_id".into(), "".into());
     }
-
     Ok((payload, msg_kind))
 }
-
 fn build_message(payload: &Map, integrity: &mut ChainState) -> Result<Message> {
     let now = Utc::now();
     let mut map = Map::new();
@@ -290,43 +267,44 @@ fn build_message(payload: &Map, integrity: &mut ChainState) -> Result<Message> {
     let msg = Message::Binary(norito::json::to_vec(&map)?.into());
     Ok(msg)
 }
-
 #[derive(Debug, Clone, Copy)]
 enum MessageKind {
     Initialization,
 }
-
 #[async_trait::async_trait]
 trait SinkFactory {
     type Sink: SinkExt<Message> + Sink<Message, Error = Error> + Send + Unpin;
-
     async fn create(&mut self) -> Result<Self::Sink>;
 }
-
 struct WebsocketSinkFactory {
     url: Url,
 }
-
 impl WebsocketSinkFactory {
     #[inline]
     pub const fn new(url: Url) -> Self {
         Self { url }
     }
 }
-
 #[async_trait::async_trait]
 impl SinkFactory for WebsocketSinkFactory {
     type Sink = WebSocketSplitSink;
-
     async fn create(&mut self) -> Result<Self::Sink> {
         let (ws, _) = tokio_tungstenite::connect_async(self.url.as_str()).await?;
         let (write, _) = ws.split();
         Ok(write)
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use crate::{
+        integrity::ChainState,
+        ws::{Client, RetryPeriod, SinkFactory},
+    };
+    use eyre::{Result, eyre};
+    use futures::{Sink, StreamExt};
+    use iroha_config::parameters::actual::TelemetryIntegrity;
+    use iroha_logger::telemetry::{Event, Fields};
+    use norito::json::{Map, Value};
     use std::{
         pin::Pin,
         sync::{
@@ -336,20 +314,8 @@ mod tests {
         task::{Context, Poll},
         time::Duration,
     };
-
-    use eyre::{Result, eyre};
-    use futures::{Sink, StreamExt};
-    use iroha_config::parameters::actual::TelemetryIntegrity;
-    use iroha_logger::telemetry::{Event, Fields};
-    use norito::json::{Map, Value};
     use tokio::task::JoinHandle;
     use tokio_tungstenite::tungstenite::{Error, Message};
-
-    use crate::{
-        integrity::ChainState,
-        ws::{Client, RetryPeriod, SinkFactory},
-    };
-
     #[test]
     fn prepare_message_fails_on_invalid_hash_fields() {
         for field in ["genesis_hash", "best", "finalized_hash"] {
@@ -375,13 +341,11 @@ mod tests {
             );
         }
     }
-
     #[derive(Clone)]
     pub struct FallibleSender<T, F> {
         sender: futures::channel::mpsc::Sender<T>,
         before_send: F,
     }
-
     impl<T, F> FallibleSender<T, F> {
         pub fn new(sender: futures::channel::mpsc::Sender<T>, before_send: F) -> Self {
             Self {
@@ -390,13 +354,11 @@ mod tests {
             }
         }
     }
-
     impl<T, E, F> Sink<T> for FallibleSender<T, F>
     where
         F: FnMut() -> Result<(), E> + Unpin,
     {
         type Error = E;
-
         fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let this = Pin::into_inner(self);
             match this.sender.poll_ready(cx) {
@@ -407,7 +369,6 @@ mod tests {
                 Poll::Pending => Poll::Pending,
             }
         }
-
         fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
             let this = Pin::into_inner(self);
             // In this harness we surface failures via `before_send` to produce `E`.
@@ -417,7 +378,6 @@ mod tests {
                 .expect("unexpected inner sink error in start_send during telemetry test harness");
             Ok(())
         }
-
         fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let this = Pin::into_inner(self);
             match Pin::new(&mut this.sender).poll_flush(cx) {
@@ -428,7 +388,6 @@ mod tests {
                 Poll::Pending => Poll::Pending,
             }
         }
-
         fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let this = Pin::into_inner(self);
             match Pin::new(&mut this.sender).poll_close(cx) {
@@ -440,19 +399,16 @@ mod tests {
             }
         }
     }
-
     struct MockSinkFactory<F> {
         fail: Arc<AtomicBool>,
         sender: FallibleSender<Message, F>,
     }
-
     #[async_trait::async_trait]
     impl<F> SinkFactory for MockSinkFactory<F>
     where
         F: FnMut() -> Result<(), Error> + Clone + Send + Unpin,
     {
         type Sink = FallibleSender<Message, F>;
-
         async fn create(&mut self) -> Result<Self::Sink> {
             if self.fail.load(Ordering::SeqCst) {
                 Err(eyre!("failed to create"))
@@ -461,19 +417,16 @@ mod tests {
             }
         }
     }
-
     struct Suite {
         fail_send: Arc<AtomicBool>,
         fail_factory_create: Arc<AtomicBool>,
         telemetry_sender: tokio::sync::broadcast::Sender<Event>,
         message_receiver: futures::channel::mpsc::Receiver<Message>,
     }
-
     impl Suite {
         pub fn new() -> (Self, JoinHandle<()>) {
             Self::new_with_capacity(100)
         }
-
         pub fn new_with_capacity(channel_capacity: usize) -> (Self, JoinHandle<()>) {
             assert!(channel_capacity > 0, "channel capacity must be positive");
             let (telemetry_sender, telemetry_receiver) =
@@ -525,7 +478,6 @@ mod tests {
             (me, run_handle)
         }
     }
-
     fn system_connected_telemetry() -> Event {
         Event {
             target: "telemetry::test",
@@ -538,7 +490,6 @@ mod tests {
             ]),
         }
     }
-
     fn system_interval_telemetry(peers: u64) -> Event {
         Event {
             target: "telemetry::test",
@@ -548,14 +499,12 @@ mod tests {
             ]),
         }
     }
-
     async fn send_succeeds_with_suite(suite: Suite) {
         let Suite {
             telemetry_sender,
             mut message_receiver,
             ..
         } = suite;
-
         // The first message is `initialization`
         telemetry_sender.send(system_connected_telemetry()).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -598,7 +547,6 @@ mod tests {
             assert!(payload.contains_key("network_id"));
             first_hash
         };
-
         // The second message is `update`
         telemetry_sender.send(system_interval_telemetry(2)).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -625,7 +573,6 @@ mod tests {
             assert_eq!(payload.get("peers"), Some(&Value::Number(2_u64.into())));
         }
     }
-
     async fn reconnect_fails_with_suite(suite: Suite) {
         let Suite {
             fail_send,
@@ -633,28 +580,23 @@ mod tests {
             telemetry_sender,
             mut message_receiver,
         } = suite;
-
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
         telemetry_sender.send(system_connected_telemetry()).unwrap();
         message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
-
         // The second message is not sent because the sink is reset
         fail_send.store(false, Ordering::SeqCst);
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
-
         // Fail the reconnection
         fail_factory_create.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
-
         // The third message is not sent because the sink is not created yet
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         message_receiver.try_recv().unwrap_err();
     }
-
     async fn send_after_reconnect_fails_with_suite(suite: Suite) {
         let Suite {
             fail_send,
@@ -662,54 +604,45 @@ mod tests {
             mut message_receiver,
             ..
         } = suite;
-
         // Fail sending the first message
         fail_send.store(true, Ordering::SeqCst);
         telemetry_sender.send(system_connected_telemetry()).unwrap();
         message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
-
         // The second message is not sent because the sink is reset
         fail_send.store(false, Ordering::SeqCst);
         telemetry_sender.send(system_interval_telemetry(1)).unwrap();
         message_receiver.try_recv().unwrap_err();
         tokio::time::sleep(Duration::from_millis(100)).await;
-
         // Fail sending the first message after reconnect
         fail_send.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
         message_receiver.try_recv().unwrap_err();
-
         // The message is sent
         fail_send.store(false, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(1)).await;
         message_receiver.try_recv().unwrap();
     }
-
     async fn broadcast_lag_does_not_stop_client_with_suite(suite: Suite) {
         let Suite {
             telemetry_sender,
             mut message_receiver,
             ..
         } = suite;
-
         telemetry_sender.send(system_connected_telemetry()).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         // Drain the initialization message so subsequent assertions focus on interval telemetry.
         let _ = message_receiver.next().await.unwrap();
-
         // Flood the channel faster than the client can drain it to trigger lag handling.
         for peers in 0..200_u64 {
             telemetry_sender
                 .send(system_interval_telemetry(peers))
                 .unwrap();
         }
-
         tokio::time::sleep(Duration::from_millis(100)).await;
         telemetry_sender
             .send(system_interval_telemetry(777))
             .unwrap();
-
         // Ensure the latest update still arrives even after the lag burst.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let mut received_latest = false;
@@ -731,13 +664,11 @@ mod tests {
                 Ok(None) | Err(_) => break,
             }
         }
-
         assert!(
             received_latest,
             "expected telemetry to continue after broadcast lag"
         );
     }
-
     macro_rules! test_with_suite {
         ($ident:ident, $future:ident) => {
             #[tokio::test]
@@ -748,14 +679,12 @@ mod tests {
             }
         };
     }
-
     test_with_suite!(send_succeeds, send_succeeds_with_suite);
     test_with_suite!(reconnect_fails, reconnect_fails_with_suite);
     test_with_suite!(
         send_after_reconnect_fails,
         send_after_reconnect_fails_with_suite
     );
-
     #[tokio::test]
     async fn broadcast_lag_does_not_stop_client() {
         let (suite, run_handle) = Suite::new_with_capacity(1);

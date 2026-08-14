@@ -1,8 +1,6 @@
 //! Kotodama function calls and calling convention tests (nested calls, multi-returns).
-
 use ivm::{IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn nested_function_calls_work() {
     // Without saving/restoring RA, nested calls would clobber return addresses.
@@ -22,7 +20,6 @@ fn nested_function_calls_work() {
     vm.run().expect("execute nested calls");
     assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
-
 #[test]
 fn multi_return_call_and_tuple_use() {
     // Pair returns two values; caller uses them via tuple members

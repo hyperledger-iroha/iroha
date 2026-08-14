@@ -1,7 +1,6 @@
 //! Benchmarks for vector slice helpers (scalar vs auto-accelerated).
 use criterion::Criterion;
 use ivm::{simd_lanes, vadd32_auto, vadd64_auto, vand_auto, vor_auto, vrot32_auto, vxor_auto};
-
 fn make_inputs(len: usize) -> (Vec<u32>, Vec<u32>) {
     let mut a = Vec::with_capacity(len);
     let mut b = Vec::with_capacity(len);
@@ -12,7 +11,6 @@ fn make_inputs(len: usize) -> (Vec<u32>, Vec<u32>) {
     }
     (a, b)
 }
-
 fn bench_op(
     c: &mut Criterion,
     name_scalar: &str,
@@ -25,7 +23,6 @@ fn bench_op(
     let len = lanes * blocks;
     let (a, b) = make_inputs(len);
     let mut out = vec![0u32; len];
-
     c.bench_function(name_scalar, |bch| {
         bch.iter(|| {
             scalar(
@@ -36,7 +33,6 @@ fn bench_op(
             std::hint::black_box(&out);
         })
     });
-
     c.bench_function(name_auto, |bch| {
         bch.iter(|| {
             auto(
@@ -48,13 +44,11 @@ fn bench_op(
         })
     });
 }
-
 fn scalar_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
     for i in 0..a.len() {
         out[i] = a[i].wrapping_add(b[i]);
     }
 }
-
 fn auto_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
     let lanes = simd_lanes();
     for (i, (aa, bb)) in a.chunks(lanes).zip(b.chunks(lanes)).enumerate() {
@@ -62,13 +56,11 @@ fn auto_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i * lanes..i * lanes + lanes].copy_from_slice(&r);
     }
 }
-
 fn scalar_and(a: &[u32], b: &[u32], out: &mut [u32]) {
     for i in 0..a.len() {
         out[i] = a[i] & b[i];
     }
 }
-
 fn auto_and(a: &[u32], b: &[u32], out: &mut [u32]) {
     let lanes = simd_lanes();
     for (i, (aa, bb)) in a.chunks(lanes).zip(b.chunks(lanes)).enumerate() {
@@ -76,13 +68,11 @@ fn auto_and(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i * lanes..i * lanes + lanes].copy_from_slice(&r);
     }
 }
-
 fn scalar_xor(a: &[u32], b: &[u32], out: &mut [u32]) {
     for i in 0..a.len() {
         out[i] = a[i] ^ b[i];
     }
 }
-
 fn auto_xor(a: &[u32], b: &[u32], out: &mut [u32]) {
     let lanes = simd_lanes();
     for (i, (aa, bb)) in a.chunks(lanes).zip(b.chunks(lanes)).enumerate() {
@@ -90,13 +80,11 @@ fn auto_xor(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i * lanes..i * lanes + lanes].copy_from_slice(&r);
     }
 }
-
 fn scalar_or(a: &[u32], b: &[u32], out: &mut [u32]) {
     for i in 0..a.len() {
         out[i] = a[i] | b[i];
     }
 }
-
 fn auto_or(a: &[u32], b: &[u32], out: &mut [u32]) {
     let lanes = simd_lanes();
     for (i, (aa, bb)) in a.chunks(lanes).zip(b.chunks(lanes)).enumerate() {
@@ -104,7 +92,6 @@ fn auto_or(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i * lanes..i * lanes + lanes].copy_from_slice(&r);
     }
 }
-
 fn scalar_add64(a: &[u32], b: &[u32], out: &mut [u32]) {
     for i in (0..a.len()).step_by(2) {
         let a0 = (a[i] as u64) | ((a[i + 1] as u64) << 32);
@@ -114,7 +101,6 @@ fn scalar_add64(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i + 1] = (r >> 32) as u32;
     }
 }
-
 fn auto_add64(a: &[u32], b: &[u32], out: &mut [u32]) {
     let lanes = simd_lanes();
     for (i, (aa, bb)) in a.chunks(lanes).zip(b.chunks(lanes)).enumerate() {
@@ -122,13 +108,11 @@ fn auto_add64(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i * lanes..i * lanes + lanes].copy_from_slice(&r);
     }
 }
-
 fn scalar_rot32(a: &[u32], k: u32, out: &mut [u32]) {
     for (o, &x) in out.iter_mut().zip(a) {
         *o = x.rotate_left(k);
     }
 }
-
 fn auto_rot32(a: &[u32], k: u32, out: &mut [u32]) {
     let lanes = simd_lanes();
     for (i, chunk) in a.chunks(lanes).enumerate() {
@@ -136,7 +120,6 @@ fn auto_rot32(a: &[u32], k: u32, out: &mut [u32]) {
         out[i * lanes..i * lanes + lanes].copy_from_slice(&r);
     }
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_op(
@@ -160,7 +143,6 @@ fn main() {
     bench_rot32(&mut c);
     c.final_summary();
 }
-
 fn bench_rot32(c: &mut Criterion) {
     let lanes = simd_lanes();
     let blocks = 8192usize;
@@ -168,14 +150,12 @@ fn bench_rot32(c: &mut Criterion) {
     let (a, _b) = make_inputs(len); // reuse generator; ignore b
     let mut out = vec![0u32; len];
     let k = 13u32;
-
     c.bench_function("vrot32_scalar", |bch| {
         bch.iter(|| {
             scalar_rot32(&a, k, &mut out);
             std::hint::black_box(&out);
         })
     });
-
     c.bench_function("vrot32_auto", |bch| {
         bch.iter(|| {
             auto_rot32(&a, k, &mut out);

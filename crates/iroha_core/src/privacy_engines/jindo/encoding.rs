@@ -4,14 +4,12 @@
 //! application-ring coefficients. For slot `i`, coefficients at
 //! `i + 128*j` are the eight base-3611623616 digits. Evaluation at
 //! `X^128 = 3611623616` recovers the slot modulo `p = 3611623616^8 + 1`.
-
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
     JINDO_RING_DEGREE_V1,
     field::JindoFieldElementV1,
     ring::{JINDO_INNER_MODULI_V1, JindoRnsPolynomialV1},
 };
-
 /// Deterministically encode at most 128 coefficient-field values.
 pub(crate) fn encode_coefficient_slots_v1(
     values: &[JindoFieldElementV1],
@@ -19,7 +17,6 @@ pub(crate) fn encode_coefficient_slots_v1(
     if values.len() > JINDO_ENCODING_SLOTS_V1 {
         return None;
     }
-
     let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
     for (slot, value) in values.iter().copied().enumerate() {
         let mut limbs = value.to_canonical_limbs();
@@ -37,7 +34,6 @@ pub(crate) fn encode_coefficient_slots_v1(
         JINDO_INNER_MODULI_V1,
     ))
 }
-
 /// Decode all 128 slots through the Jindo ring homomorphism.
 pub(crate) fn decode_coefficient_slots_v1(
     polynomial: &JindoRnsPolynomialV1,
@@ -57,7 +53,6 @@ pub(crate) fn decode_coefficient_slots_v1(
     }
     values
 }
-
 /// Decode an exact balanced integer polynomial without first reducing it
 /// modulo the inner commitment modulus.
 ///
@@ -82,7 +77,6 @@ pub(crate) fn decode_exact_coefficient_slots_v1(
     }
     values
 }
-
 fn div_rem_small(limbs: &mut [u64; 4], divisor: u64) -> u64 {
     let mut remainder = 0_u128;
     for limb in limbs.iter_mut().rev() {
@@ -92,11 +86,9 @@ fn div_rem_small(limbs: &mut [u64; 4], divisor: u64) -> u64 {
     }
     remainder as u64
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn base_division_reconstructs_full_width_values() {
         let original = [
@@ -114,7 +106,6 @@ mod tests {
         assert_eq!(quotient[1..], [0; 3]);
         digits[JINDO_ENCODING_EXPONENT_V1 - 1] = quotient[0];
         assert!(digits[JINDO_ENCODING_EXPONENT_V1 - 1] <= JINDO_ENCODING_BASE_V1);
-
         let mut reconstructed = JindoFieldElementV1::ZERO;
         let base = JindoFieldElementV1::from_u64(JINDO_ENCODING_BASE_V1);
         for digit in digits.into_iter().rev() {
@@ -132,7 +123,6 @@ mod tests {
             .expect("canonical boundary")
         );
     }
-
     #[test]
     fn deterministic_encoding_roundtrips_every_slot_and_boundary_value() {
         let values: [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1] =
@@ -140,7 +130,6 @@ mod tests {
         let encoded = encode_coefficient_slots_v1(&values).expect("128 values");
         assert_eq!(decode_coefficient_slots_v1(&encoded), values);
     }
-
     #[test]
     fn encoder_rejects_more_than_profile_slots() {
         assert!(
@@ -148,7 +137,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn decoding_is_additively_homomorphic() {
         let left_values: [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1] =
@@ -165,7 +153,6 @@ mod tests {
             core::array::from_fn(|index| left_values[index] + right_values[index]);
         assert_eq!(decode_coefficient_slots_v1(&sum), expected);
     }
-
     #[test]
     fn exact_integer_decoder_matches_rns_when_no_reduction_occurs() {
         let coefficients: [i128; JINDO_RING_DEGREE_V1] =

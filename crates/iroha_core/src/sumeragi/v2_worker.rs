@@ -6,22 +6,6 @@
 //! completions. Control messages use the bounded committee topology: proposal
 //! manifests and phase votes reach the full committee, first-send body chunks
 //! reach Set A, and timeout/QC recovery remains committee-wide.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
-        mpsc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
-
 use super::v2_core::{
     CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
@@ -37,48 +21,7 @@ use super::v2_core::{
     Generation, production_reliable_flush_trace_refines_outbound_ownership_kernel,
 };
 #[cfg(test)]
-use super::v2_runtime::{LocalProposalEffectOwnership, RuntimeQueueSnapshot};
-use iroha_config::parameters::{
-    actual::{
-        KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN,
-        sumeragi_v2_exact_output_shared_ownership_capacity,
-        validate_sumeragi_v2_exact_output_geometry,
-    },
-    defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT,
-};
-use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::{
-    block::{
-        BlockHeader, CertifiedMergeLedgerReference,
-        consensus::{
-            LaneBlockCertificateV1, LaneBlockProposalPayloadHintV1, NativeAmxAttestationBodyV2,
-            NativeAmxPhase,
-        },
-        consensus_v2 as wire, decode_framed_signed_block,
-    },
-    merge::MergeCommitteeSignature,
-    nexus::LaneId,
-    peer::PeerId,
-};
-#[cfg(test)]
-use iroha_p2p::network::{
-    NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
-    NetworkReplyRouteTestFixture,
-};
-use iroha_p2p::{
-    Post, Priority,
-    network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionRejection, NetworkActorAdmissionTicket,
-        NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
-        NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
-        NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesStrictMergeReceipt,
-        NetworkReplySourceKey, ReliableProgressClass,
-        message::{ClassifyTopic as _, ProgressReconstruction},
-        reliable_progress_class,
-    },
-};
-use norito::codec::{Decode, DecodeAll, Encode};
-
+use super::v2_runtime::RuntimeQueueSnapshot;
 use super::{
     FairV2Ingress, FairV2IngressOwnershipEvidence,
     message::{
@@ -146,7 +89,60 @@ use crate::{
     },
     native_amx::NativeAmxMessage,
 };
-
+use iroha_config::parameters::{
+    actual::{
+        KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN,
+        sumeragi_v2_exact_output_shared_ownership_capacity,
+        validate_sumeragi_v2_exact_output_geometry,
+    },
+    defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT,
+};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::{
+    block::{
+        BlockHeader, CertifiedMergeLedgerReference,
+        consensus::{
+            LaneBlockCertificateV1, LaneBlockProposalPayloadHintV1, NativeAmxAttestationBodyV2,
+            NativeAmxPhase,
+        },
+        consensus_v2 as wire, decode_framed_signed_block,
+    },
+    merge::MergeCommitteeSignature,
+    nexus::LaneId,
+    peer::PeerId,
+};
+#[cfg(test)]
+use iroha_p2p::network::{
+    NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
+    NetworkReplyRouteTestFixture,
+};
+use iroha_p2p::{
+    Post, Priority,
+    network::{
+        NetworkActorAdmissionError, NetworkActorAdmissionRejection, NetworkActorAdmissionTicket,
+        NetworkReplyFlushAck, NetworkReplyFlushAckStatus, NetworkReplyRoute,
+        NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
+        NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesStrictMergeReceipt,
+        NetworkReplySourceKey, ReliableProgressClass,
+        message::{ClassifyTopic as _, ProgressReconstruction},
+        reliable_progress_class,
+    },
+};
+use norito::codec::{Decode, DecodeAll, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs::{self, File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 fn reliable_flush_typed_identity<T>(
     domain: u8,
     kind: u8,
@@ -154,15 +150,12 @@ fn reliable_flush_typed_identity<T>(
 ) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
-
 fn reliable_flush_hash_identity(domain: u8, kind: u8, hash: Hash) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
-
 fn reliable_flush_peer_identity(peer: &PeerId) -> CanonicalIdentityProjection {
     reliable_flush_typed_identity(IDENTITY_DOMAIN_PEER, IDENTITY_KIND_PEER, HashOf::new(peer))
 }
-
 fn reliable_flush_ordinal_halves(ordinal: u128) -> (u64, u64) {
     let high = u64::try_from(ordinal >> u64::BITS)
         .expect("high half of a u128 actor ordinal is representable as u64");
@@ -170,7 +163,6 @@ fn reliable_flush_ordinal_halves(ordinal: u128) -> (u64, u64) {
         .expect("low half of a u128 actor ordinal is representable as u64");
     (high, low)
 }
-
 fn reliable_flush_usize(value: usize) -> Result<u64, MergeSidecarError> {
     u64::try_from(value).map_err(|_| {
         MergeSidecarError::FlushIdentityMismatch(
@@ -178,7 +170,6 @@ fn reliable_flush_usize(value: usize) -> Result<u64, MergeSidecarError> {
         )
     })
 }
-
 pub(crate) fn reliable_flush_trace_projection(
     admission: &CertifiedMergeSidecarChunkAdmission,
     status: NetworkReplyFlushAckStatus,
@@ -204,7 +195,6 @@ pub(crate) fn reliable_flush_trace_projection(
         } else {
             (message_cursor_before, chunk_cursor_before)
         };
-
     Ok(ProductionReliableFlushTraceProjection {
         status: match status {
             NetworkReplyFlushAckStatus::Pending => 1,
@@ -297,7 +287,6 @@ pub(crate) fn reliable_flush_trace_projection(
         capacity: reliable_flush_usize(capacity)?,
     })
 }
-
 /// Move-only exact Sign command projected from one closed recovered carrier.
 ///
 /// Construction consumes a registry-minted identity and rehashes the complete
@@ -312,7 +301,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {
     request: super::v2::SignRequest,
     prepared_candidate: Option<PreparedCandidateBody>,
 }
-
 impl RecoveredLifecycleSignTaskV1 {
     /// Seal exact carrier-derived material under its registry identity.
     pub(in crate::sumeragi) fn from_registry_projection(
@@ -338,12 +326,10 @@ impl RecoveredLifecycleSignTaskV1 {
             prepared_candidate,
         })
     }
-
     /// Return the dedicated class-sensitive queue key.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
         self.identity.key()
     }
-
     #[cfg(test)]
     fn for_test(
         ordinal: u128,
@@ -358,7 +344,6 @@ impl RecoveredLifecycleSignTaskV1 {
             .expect("registry fixture identity revalidates its exact Sign material")
     }
 }
-
 /// Move-only carrier-derived authority for one recovered Decision Fetch request.
 ///
 /// Construction requires the registry-minted identity still sealed in the
@@ -374,7 +359,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestAuthorityV1 {
     sources: Vec<PeerId>,
     certificate: wire::QuorumCertificate,
 }
-
 impl RecoveredDecisionFetchRequestAuthorityV1 {
     /// Seal exact carrier material under its registry-minted identity.
     pub(in crate::sumeragi) fn from_registry_projection(
@@ -397,7 +381,6 @@ impl RecoveredDecisionFetchRequestAuthorityV1 {
             })
     }
 }
-
 /// Dedicated executor owner for one lifecycle-recovered certified request.
 ///
 /// No public or crate-visible constructor exists: only the fixed production
@@ -410,7 +393,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestOwnerV1 {
     authenticated: AuthenticatedCertifiedBodyRequest,
     response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
 }
-
 impl RecoveredDecisionFetchRequestOwnerV1 {
     /// Build one exact dedicated owner from an already authenticated request.
     #[cfg(test)]
@@ -428,19 +410,16 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
             response_claim: None,
         }
     }
-
     /// Return the exact lifecycle request/response key.
     pub(in crate::sumeragi) const fn dispatch_key(
         &self,
     ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
         self.key
     }
-
     /// Hash of the exact signed request family.
     pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.authenticated.request_hash()
     }
-
     /// Compare the private transport logical request identity.
     pub(in crate::sumeragi) fn has_same_logical_identity(
         &self,
@@ -451,7 +430,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
             && owned.subject == request.subject
             && owned.requester == request.requester
     }
-
     /// Ask the ordinary tracker whether it already owns this private request identity.
     pub(in crate::sumeragi) fn conflicts_with_ordinary_tracker(
         &self,
@@ -459,7 +437,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
     ) -> bool {
         tracker.contains_authenticated_identity(&self.authenticated)
     }
-
     /// Compare body coordinates without exposing the retained signed request.
     pub(in crate::sumeragi) fn matches_body_coordinates(
         &self,
@@ -469,7 +446,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
         self.authenticated.request().round == round
             && self.authenticated.request().subject == subject
     }
-
     /// Recheck the exact dedicated executor height and requester.
     pub(in crate::sumeragi) fn validates_exact_executor_context(
         &self,
@@ -490,7 +466,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
                     .map(|entry| entry.validator.clone())
                     .collect::<Vec<_>>()
     }
-
     /// Authenticate one response against this exact request without exposing it.
     pub(in crate::sumeragi) fn authenticate_response(
         &self,
@@ -501,7 +476,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
         self.authenticated
             .authenticate_response(context, response, authenticated_responder)
     }
-
     /// Project only the immutable candidate coordinates needed by the selector.
     pub(in crate::sumeragi) const fn candidate_projection(
         &self,
@@ -513,7 +487,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
             response_claim: self.response_claim,
         }
     }
-
     /// Recheck the exact claimed response before post-publication owner retirement.
     pub(in crate::sumeragi) fn matches_settlement(
         &self,
@@ -522,7 +495,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
     ) -> bool {
         self.key == key && self.response_claim == Some(response_hash)
     }
-
     /// Recheck the request-scoped response claim observed by a sealed selector candidate.
     pub(in crate::sumeragi) fn matches_response_claim_preflight(
         &self,
@@ -542,7 +514,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
             ) => false,
         }
     }
-
     /// Install or coalesce only the exact response hash which was revalidated
     /// immediately before the dedicated queue publication tail.
     pub(in crate::sumeragi) fn commit_exact_response_claim(
@@ -558,7 +529,6 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
         }
     }
 }
-
 /// Minimal immutable selector projection of a dedicated recovered request owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchOwnerCandidateProjectionV1 {
@@ -567,7 +537,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchOwnerCandidateProjectionV1 
     pub(in crate::sumeragi) subject: wire::BlockSubject,
     pub(in crate::sumeragi) response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
 }
-
 /// Closed signed output retained for the eventual restart-closed successor transaction.
 ///
 /// The complete task remains inside this result, so the exact tag/request is
@@ -580,7 +549,6 @@ struct RecoveredLifecycleSignWorkerResultV1 {
     signature: Vec<u8>,
     outbound_payload: Option<EncodedV2Payload>,
 }
-
 /// Move-only worker proof consumed only by the recovered-Sign adapter preview.
 ///
 /// The constructor stays private to this module and the material can be
@@ -596,7 +564,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignAdapterCompletionAuthorityV
     signature: Vec<u8>,
     outbound_payload: Option<EncodedV2Payload>,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
     /// Consume the worker proof through the adapter's private projection seam.
@@ -618,7 +585,6 @@ impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
             self.outbound_payload,
         )
     }
-
     /// Build exact guarded Sign material for adapter-preview behavior tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test(
@@ -639,12 +605,10 @@ impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
         }
     }
 }
-
 impl RecoveredLifecycleSignWorkerResultV1 {
     const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
         self.task.dispatch_key()
     }
-
     fn is_exact(&self) -> bool {
         let expected_prepared = match &self.task.request {
             super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
@@ -679,7 +643,6 @@ impl RecoveredLifecycleSignWorkerResultV1 {
             }
     }
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum V2IoCommand {
     Sign {
@@ -706,13 +669,11 @@ enum V2IoCommand {
     Retire(V2RetireCommand),
     Shutdown,
 }
-
 struct V2RetireCommand {
     receipt: KuraV2CommitReceipt,
     cleanup: V2CleanupSubmission,
     chunk_root: PathBuf,
 }
-
 const LOCAL_IO_CONTROL_RESERVE: usize = 1;
 const CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
 const CERTIFIED_SERVE_STATE_FILE: &str = "certified-serve-state.norito";
@@ -723,7 +684,6 @@ const CERTIFIED_SERVE_STATE_HEADER_BYTES: usize =
     CERTIFIED_SERVE_STATE_MAGIC.len() + 2 + 8 + CERTIFIED_SERVE_STATE_HASH_BYTES;
 const CERTIFIED_SERVE_STATE_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
 const CERTIFIED_SERVE_TOMBSTONE_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
-
 /// Immutable height-local owner of one exact certified-body Serve lifecycle.
 ///
 /// The ordinal is minted once as part of hidden fair-ingress acceptance and is
@@ -736,7 +696,6 @@ pub(crate) struct CertifiedServeLifecycleId {
     admission_ordinal: u128,
     request_hash: HashOf<wire::CertifiedBodyRequest>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 enum CertifiedServeOwnerKey {
     /// Frozen validators retain their semantic identity across relays.
@@ -744,13 +703,11 @@ enum CertifiedServeOwnerKey {
     /// Observer churn is charged to its already-bounded authenticated source.
     AuthenticatedSource(PeerId),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CertifiedServeFamilyKey {
     requester: PeerId,
     phase: wire::GlobalPhase,
 }
-
 /// Body-independent durable representation of one completed Serve response.
 ///
 /// The canonical body already lives in [`V2BodyStore`]. Keeping only its
@@ -767,7 +724,6 @@ struct PersistedCertifiedServeTombstone {
     response_responder: wire::ValidatorIndex,
     response_signature: Vec<u8>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeLifecycle {
@@ -775,7 +731,6 @@ struct PersistedCertifiedServeLifecycle {
     owner: CertifiedServeOwnerKey,
     request: wire::CertifiedBodyRequest,
 }
-
 /// Bounded deterministic negative outcome for an exact Serve lifecycle.
 ///
 /// Free-form validation text is deliberately excluded from durable state.
@@ -791,7 +746,6 @@ pub(crate) enum CertifiedServeNegativeOutcome {
     /// A replayed durable Core Decision names another exact subject.
     SupersededByDurableDecision(wire::BlockSubject),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeNegativeTombstone {
@@ -800,7 +754,6 @@ struct PersistedCertifiedServeNegativeTombstone {
     request: wire::CertifiedBodyRequest,
     outcome: CertifiedServeNegativeOutcome,
 }
-
 /// Durable pre-selector owner of one authenticated exact Serve request.
 ///
 /// While the process is live, an unserved logical lifecycle must be backed by
@@ -821,7 +774,6 @@ struct PersistedCertifiedServeIngressWaiter {
     owner: CertifiedServeOwnerKey,
     request: wire::CertifiedBodyRequest,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeState {
@@ -835,7 +787,6 @@ struct PersistedCertifiedServeState {
     negative_tombstones: Vec<PersistedCertifiedServeNegativeTombstone>,
     terminal_tombstones: Vec<PersistedCertifiedServeTombstone>,
 }
-
 impl PersistedCertifiedServeState {
     fn empty(context: &wire::HeightContext) -> Self {
         Self {
@@ -851,7 +802,6 @@ impl PersistedCertifiedServeState {
         }
     }
 }
-
 #[derive(Debug)]
 struct CertifiedServeStateStore {
     path: PathBuf,
@@ -860,7 +810,6 @@ struct CertifiedServeStateStore {
     max_tombstones: usize,
     max_frame_bytes: u64,
 }
-
 impl CertifiedServeStateStore {
     fn open(
         root: &Path,
@@ -907,7 +856,6 @@ impl CertifiedServeStateStore {
         let state = store.load(context)?;
         Ok((store, state))
     }
-
     fn load(&self, context: &wire::HeightContext) -> Result<PersistedCertifiedServeState, String> {
         let metadata = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
@@ -998,7 +946,6 @@ impl CertifiedServeStateStore {
         }
         Ok(state)
     }
-
     fn persist(&self, state: &PersistedCertifiedServeState) -> Result<(), String> {
         if state.format_version != CERTIFIED_SERVE_STATE_VERSION
             || state.context_id != self.context_id
@@ -1066,7 +1013,6 @@ impl CertifiedServeStateStore {
         Ok(())
     }
 }
-
 fn encode_certified_serve_state_frame(
     state: &PersistedCertifiedServeState,
     max_frame_bytes: u64,
@@ -1094,7 +1040,6 @@ fn encode_certified_serve_state_frame(
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
-
 fn decode_certified_serve_state_frame(
     bytes: &[u8],
     max_frame_bytes: u64,
@@ -1150,14 +1095,12 @@ fn decode_certified_serve_state_frame(
     }
     Ok(state)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CertifiedServeAdmissionKind {
     New,
     Existing,
     Stale,
 }
-
 /// Prepared ownership transfer from fair ingress into the ordered I/O FIFO.
 ///
 /// A `New` admission already owns a reserved placeholder in the FIFO. The
@@ -1172,7 +1115,6 @@ pub(crate) struct CertifiedServeAdmission {
     request: wire::CertifiedBodyRequest,
     ingress_reservation_id: Option<CertifiedServeIngressReservationId>,
 }
-
 /// Result of preflighting one authenticated current-height Serve owner.
 #[derive(Debug)]
 pub(crate) enum CertifiedServePrepareError {
@@ -1183,7 +1125,6 @@ pub(crate) enum CertifiedServePrepareError {
     /// The bounded local service actor cannot continue safely.
     Service(String),
 }
-
 fn combine_certified_serve_abort_error(primary: String, abort: Result<(), String>) -> String {
     match abort {
         Ok(()) => primary,
@@ -1194,10 +1135,8 @@ fn combine_certified_serve_abort_error(primary: String, abort: Result<(), String
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CertifiedServeIngressReservationId(u128);
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CertifiedServeIngressProjection {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -1207,7 +1146,6 @@ struct CertifiedServeIngressProjection {
     phase: wire::GlobalPhase,
     owner: CertifiedServeOwnerKey,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CertifiedServeIngressReservationState {
     Provisional,
@@ -1221,7 +1159,6 @@ enum CertifiedServeIngressReservationState {
     /// prepared logical lifecycle.
     PhysicallyDrainedPrepared(CertifiedServeLifecycleId),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CertifiedServeRuntimeEpisodeState {
     Ready,
@@ -1234,7 +1171,6 @@ enum CertifiedServeRuntimeEpisodeState {
     },
     Complete,
 }
-
 #[derive(Debug)]
 struct V2IoCertifiedServeIngressReservation {
     id: CertifiedServeIngressReservationId,
@@ -1260,7 +1196,6 @@ struct V2IoCertifiedServeIngressReservation {
     /// target. A completed turn can reopen only for a strictly newer witness.
     last_predecessor_episode_witness: Option<ExactServePredecessorEpisodeWitness>,
 }
-
 impl V2IoCertifiedServeIngressReservation {
     fn barrier(&self) -> Result<CertifiedServeBarrier, String> {
         if self.handed_off.is_none() {
@@ -1279,7 +1214,6 @@ impl V2IoCertifiedServeIngressReservation {
             carrier_ordinal,
         })
     }
-
     fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
         self.id.0 == barrier.scheduler_ordinal
             && self.lifecycle_id == barrier.lifecycle_id
@@ -1288,7 +1222,6 @@ impl V2IoCertifiedServeIngressReservation {
             && self.handed_off.is_some()
     }
 }
-
 /// Exact runner barrier selected by the certified Serve ingress gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CertifiedServeBarrier {
@@ -1297,30 +1230,25 @@ pub(crate) struct CertifiedServeBarrier {
     lifecycle_id: CertifiedServeLifecycleId,
     carrier_ordinal: u64,
 }
-
 impl CertifiedServeBarrier {
     /// Exact request selected for the dedicated ingress turn.
     pub(crate) const fn request_hash(self) -> HashOf<wire::CertifiedBodyRequest> {
         self.request_hash
     }
-
     /// Actor-global scheduler ordinal of this physical ingress ticket.
     pub(crate) const fn scheduler_ordinal(self) -> u128 {
         self.scheduler_ordinal
     }
-
     /// Exact lifecycle selected for the dedicated ingress turn.
     #[cfg(test)]
     pub(crate) const fn lifecycle_id(self) -> CertifiedServeLifecycleId {
         self.lifecycle_id
     }
-
     /// Fresh process-local position of the currently attached fair carrier.
     pub(crate) const fn carrier_ordinal(self) -> u64 {
         self.carrier_ordinal
     }
 }
-
 /// One finite runner episode in which already-selected local producers may
 /// acquire I/O ownership.
 ///
@@ -1333,7 +1261,6 @@ pub(crate) struct CertifiedServeProducerEpisode {
     queue: Arc<V2IoCommandQueue>,
     active: bool,
 }
-
 impl Drop for CertifiedServeProducerEpisode {
     fn drop(&mut self) {
         if !self.active {
@@ -1349,7 +1276,6 @@ impl Drop for CertifiedServeProducerEpisode {
         self.active = false;
     }
 }
-
 /// Internal per-height admission gate shared with fair ingress.
 ///
 /// The gate owns no wire identity. It installs one logical future-slot ticket
@@ -1358,7 +1284,6 @@ impl Drop for CertifiedServeProducerEpisode {
 pub(crate) struct CertifiedServeIngressGate {
     queue: Arc<V2IoCommandQueue>,
 }
-
 impl std::fmt::Debug for CertifiedServeIngressGate {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1366,7 +1291,6 @@ impl std::fmt::Debug for CertifiedServeIngressGate {
             .finish_non_exhaustive()
     }
 }
-
 /// RAII owner of one fair-ingress certified-body occurrence.
 ///
 /// Dropping an undrained ticket rolls its live carrier back. A successful
@@ -1381,18 +1305,15 @@ pub(crate) struct CertifiedServeIngressReservation {
     lifecycle_id: CertifiedServeLifecycleId,
     handed_off: Arc<AtomicBool>,
 }
-
 impl CertifiedServeIngressReservation {
     /// Actor-global scheduler ordinal retained by this exact Serve occurrence.
     pub(crate) const fn scheduler_ordinal(&self) -> u128 {
         self.id.0
     }
-
     /// Return whether this volatile fair owner is the selected barrier ticket.
     pub(crate) fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
         self.id.0 == barrier.scheduler_ordinal && self.lifecycle_id == barrier.lifecycle_id
     }
-
     /// Publish physical dequeue before fair ingress removes this carrier.
     ///
     /// On failure the caller must retain the ingress entry. On success Drop is
@@ -1408,7 +1329,6 @@ impl CertifiedServeIngressReservation {
         Ok(())
     }
 }
-
 impl Drop for CertifiedServeIngressReservation {
     fn drop(&mut self) {
         if self.handed_off.load(AtomicOrdering::Acquire) {
@@ -1417,7 +1337,6 @@ impl Drop for CertifiedServeIngressReservation {
         self.gate.queue.cancel_serve_ingress_reservation(self.id);
     }
 }
-
 /// Retryable result of reserving the exact fair-ingress Serve corridor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CertifiedServeIngressReserveError {
@@ -1428,28 +1347,23 @@ pub(crate) enum CertifiedServeIngressReserveError {
     /// The per-height I/O owner is closed or its local ordinal is exhausted.
     Closed,
 }
-
 impl CertifiedServeIngressGate {
     /// Return whether two bindings name the same per-height I/O queue.
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.queue, &other.queue)
     }
-
     /// Return whether this gate shares the supplied actor-global ordinal source.
     pub(crate) fn shares_lifecycle_ordinals(&self, source: &RuntimeLifecycleOrdinalSource) -> bool {
         self.queue.lifecycle_ordinals.ptr_eq(source)
     }
-
     /// Mint one ordinary fair-ingress lifecycle from the shared actor source.
     pub(crate) fn reserve_ordinary_lifecycle_ordinal(&self) -> Result<u128, String> {
         self.queue.lifecycle_ordinals.reserve_one()
     }
-
     /// Return the exact live carrier currently selected by this gate.
     pub(crate) fn selected_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
     }
-
     /// Return the least durable owner ordinal whose physical carrier is absent.
     ///
     /// Production startup discharges restored owners before exposing this
@@ -1521,7 +1435,6 @@ impl CertifiedServeIngressGate {
         }
         Ok(dormant)
     }
-
     /// Reserve one internal future-slot ticket for a raw exact occurrence.
     ///
     /// # Errors
@@ -1568,8 +1481,8 @@ impl CertifiedServeIngressGate {
             )
             .map(Some)
     }
-
     /// Return whether this request belongs to the gate's active height.
+    #[cfg(debug_assertions)]
     pub(crate) fn requires_reservation(&self, request: &wire::CertifiedBodyRequest) -> bool {
         self.queue
             .serve_context
@@ -1577,14 +1490,12 @@ impl CertifiedServeIngressGate {
             .is_none_or(|context| request.round.height == context.height)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoAdmissionClass {
     Auxiliary,
     Consensus,
     Control,
 }
-
 impl V2IoCommand {
     const fn admission_class(&self) -> V2IoAdmissionClass {
         match self {
@@ -1604,7 +1515,6 @@ impl V2IoCommand {
             }
         }
     }
-
     const fn work_id(&self) -> Option<EffectWorkId> {
         match self {
             Self::Sign { task, .. } => Some(task.id()),
@@ -1623,7 +1533,6 @@ impl V2IoCommand {
             Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
-
     /// Runtime lifecycle retained by a completion-producing consensus command.
     const fn runtime_lifecycle_ordinal(&self) -> Option<u128> {
         match self {
@@ -1645,7 +1554,6 @@ impl V2IoCommand {
             | Self::Shutdown => None,
         }
     }
-
     const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
         match self {
             Self::Serve { lifecycle_id, .. } => Some(*lifecycle_id),
@@ -1664,7 +1572,6 @@ impl V2IoCommand {
             Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
-
     const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
         match self {
             Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
@@ -1683,7 +1590,6 @@ impl V2IoCommand {
             Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
-
     fn work_descriptor(&self) -> Option<(EffectWorkId, V2IoWorkDescriptor)> {
         match self {
             Self::Sign {
@@ -1739,7 +1645,6 @@ impl V2IoCommand {
             Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
-
     const fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
         match self {
             Self::RecoveredDecisionApply(task) => Some(task.dispatch_key()),
@@ -1758,7 +1663,6 @@ impl V2IoCommand {
             | Self::Shutdown => None,
         }
     }
-
     const fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
         match self {
             Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key()),
@@ -1777,7 +1681,6 @@ impl V2IoCommand {
             Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
-
     const fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
         match self {
             Self::PersistRecoveredDecisionFetchBody(task) => Some(task.dispatch_key()),
@@ -1797,7 +1700,6 @@ impl V2IoCommand {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum V2IoWorkDescriptor {
     Sign {
@@ -1825,14 +1727,12 @@ enum V2IoWorkDescriptor {
         validated_receipt: ValidatedBodyReceipt,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoCancellableKind {
     Sign,
     Store,
     Validate,
 }
-
 impl V2IoWorkDescriptor {
     const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
         match self {
@@ -1843,7 +1743,6 @@ impl V2IoWorkDescriptor {
         }
     }
 }
-
 /// Hierarchical admission for the single ordered I/O FIFO.
 ///
 /// Admission is based on the total number of queued commands. Remote body
@@ -1860,7 +1759,6 @@ struct V2IoAdmission {
     completion_capacity: usize,
     completion_state: Mutex<V2IoCompletionQueueState>,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct V2IoCompletionOwnership {
     retained_at: Instant,
@@ -1871,12 +1769,10 @@ struct V2IoCompletionOwnership {
     recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
     recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 }
-
 #[derive(Debug, Default)]
 struct V2IoCompletionQueueState {
     owned: VecDeque<V2IoCompletionOwnership>,
 }
-
 impl V2IoAdmission {
     fn new(auxiliary_capacity: usize, consensus_capacity: usize) -> Result<Self, String> {
         let consensus_limit = auxiliary_capacity
@@ -1901,7 +1797,6 @@ impl V2IoAdmission {
             completion_state: Mutex::new(V2IoCompletionQueueState::default()),
         })
     }
-
     #[cfg(test)]
     fn unbounded_for_tests() -> Arc<Self> {
         Arc::new(Self {
@@ -1915,11 +1810,9 @@ impl V2IoAdmission {
             completion_state: Mutex::new(V2IoCompletionQueueState::default()),
         })
     }
-
     const fn capacity(&self) -> usize {
         self.capacity
     }
-
     const fn limit(&self, class: V2IoAdmissionClass) -> usize {
         match class {
             V2IoAdmissionClass::Auxiliary => self.auxiliary_limit,
@@ -1927,11 +1820,9 @@ impl V2IoAdmission {
             V2IoAdmissionClass::Control => self.capacity,
         }
     }
-
     fn has_capacity(&self, class: V2IoAdmissionClass) -> bool {
         self.queued.load(AtomicOrdering::Acquire) < self.limit(class)
     }
-
     /// Return the exact physical admission count while the queue state is locked.
     fn queued(&self) -> usize {
         self.queued.load(AtomicOrdering::Acquire)
@@ -1945,7 +1836,6 @@ impl V2IoAdmission {
             })
             .is_ok()
     }
-
     fn release(&self) {
         let previous = self.queued.fetch_sub(1, AtomicOrdering::AcqRel);
         assert!(
@@ -1965,17 +1855,14 @@ impl V2IoAdmission {
                 .store(true, AtomicOrdering::Release);
         }
     }
-
     fn lifecycle_capacity_generation(&self) -> u64 {
         self.lifecycle_capacity_generation
             .load(AtomicOrdering::Acquire)
     }
-
     fn lifecycle_capacity_generation_exhausted(&self) -> bool {
         self.lifecycle_capacity_generation_exhausted
             .load(AtomicOrdering::Acquire)
     }
-
     fn retain_completion(
         &self,
         retained_at: Instant,
@@ -2003,7 +1890,6 @@ impl V2IoAdmission {
             recovered_decision_fetch,
         });
     }
-
     fn abandon_latest_completion(&self) {
         let mut state = self
             .completion_state
@@ -2014,7 +1900,6 @@ impl V2IoAdmission {
             .pop_back()
             .expect("failed completion send must retain its ownership record");
     }
-
     fn acknowledge_completion_at(&self, position: usize) {
         let mut state = self
             .completion_state
@@ -2024,7 +1909,6 @@ impl V2IoAdmission {
         // sends always retain an ownership record before publication.
         let _ = state.owned.remove(position);
     }
-
     fn recovered_decision_apply_completion_is_exact(
         &self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -2040,7 +1924,6 @@ impl V2IoAdmission {
         });
         matches.next().is_some() && matches.next().is_none()
     }
-
     fn transfer_recovered_lifecycle_sign_completion_at(
         &self,
         key: RecoveredLifecycleSignDispatchKeyV1,
@@ -2067,7 +1950,6 @@ impl V2IoAdmission {
         }
         state.owned.remove(position).is_some()
     }
-
     fn transfer_recovered_decision_fetch_completion_at(
         &self,
         key: RecoveredDecisionFetchDispatchKeyV1,
@@ -2094,7 +1976,6 @@ impl V2IoAdmission {
         }
         state.owned.remove(position).is_some()
     }
-
     fn transfer_recovered_decision_apply_completion(
         &self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -2121,7 +2002,6 @@ impl V2IoAdmission {
         }
         state.owned.remove(position).is_some()
     }
-
     fn acknowledge_recovered_decision_apply_completion(
         &self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -2131,7 +2011,6 @@ impl V2IoAdmission {
             "settled recovered Apply must retain one exact completion owner"
         );
     }
-
     fn completion_requires_runtime_capacity_at(&self, position: usize) -> Option<bool> {
         self.completion_state
             .lock()
@@ -2140,7 +2019,6 @@ impl V2IoAdmission {
             .get(position)
             .map(|owned| owned.requires_runtime_capacity)
     }
-
     fn completion_ownership_at(&self, position: usize) -> Option<V2IoCompletionOwnership> {
         self.completion_state
             .lock()
@@ -2149,7 +2027,6 @@ impl V2IoAdmission {
             .get(position)
             .copied()
     }
-
     fn record_completion_service_debt(&self) -> bool {
         let mut state = self
             .completion_state
@@ -2161,7 +2038,6 @@ impl V2IoAdmission {
         oldest.service_debt = oldest.service_debt.saturating_add(1);
         true
     }
-
     fn completion_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot {
         let state = self
             .completion_state
@@ -2176,78 +2052,63 @@ impl V2IoAdmission {
         }
     }
 }
-
 impl super::status::V2IoCompletionQueueObserver for V2IoAdmission {
     fn completion_queue_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot {
         self.completion_snapshot(now)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoWorkState {
     Queued,
     Active,
     CompletionPending,
 }
-
 #[derive(Debug)]
 struct V2IoTrackedWork {
     descriptor: V2IoWorkDescriptor,
     state: V2IoWorkState,
 }
-
 #[derive(Debug)]
 struct V2IoTrackedRecoveredDecisionApplyV1 {
     state: V2IoWorkState,
 }
-
 #[derive(Debug)]
 struct V2IoTrackedRecoveredLifecycleSignV1 {
     state: V2IoWorkState,
 }
-
 #[derive(Debug)]
 struct V2IoTrackedRecoveredDecisionFetchBodyV1 {
     id: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceIdV1,
     response_hash: HashOf<wire::CertifiedBodyResponse>,
     state: V2IoWorkState,
 }
-
 enum RecoveredDecisionApplyRetryQueueErrorV1<T> {
     Unavailable(T),
     InvalidOwner(T),
 }
-
 trait RecoveredDecisionApplyRetryTaskV1 {
     fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1;
-
     fn into_command(self) -> V2IoCommand;
 }
-
 impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyTaskV1 {
     fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
         RecoveredDecisionApplyTaskV1::dispatch_key(self)
     }
-
     fn into_command(self) -> V2IoCommand {
         V2IoCommand::RecoveredDecisionApply(self)
     }
 }
-
 #[cfg(test)]
 struct RecoveredDecisionApplyRetryTaskFixtureV1(RecoveredDecisionApplyDispatchKeyV1);
-
 #[cfg(test)]
 impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyRetryTaskFixtureV1 {
     fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
         self.0
     }
-
     fn into_command(self) -> V2IoCommand {
         V2IoCommand::RecoveredDecisionApplyFixture(self.0)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoServeState {
     /// Durable unsealed lifecycle admitted before selector visibility or
@@ -2276,12 +2137,10 @@ enum V2IoServeState {
     /// fail-stopped; this state is never eligible for transport resurrection.
     Failed,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum V2IoServeTerminal {
     Response(wire::CertifiedBodyResponse),
 }
-
 #[derive(Debug)]
 struct V2IoTrackedServe {
     owner: CertifiedServeOwnerKey,
@@ -2295,7 +2154,6 @@ struct V2IoTrackedServe {
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
     terminal: Option<V2IoServeTerminal>,
 }
-
 struct V2IoCommandQueueState {
     commands: VecDeque<V2IoCommand>,
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
@@ -2366,7 +2224,6 @@ struct V2IoCommandQueueState {
     sender_open: bool,
     receiver_open: bool,
 }
-
 /// Bounded cancellable FIFO shared by the serialized reducer and I/O worker.
 ///
 /// Work ownership outlives physical queue admission: it remains indexed while
@@ -2386,15 +2243,12 @@ struct V2IoCommandQueue {
     state: Mutex<V2IoCommandQueueState>,
     ready: Condvar,
 }
-
 struct V2IoCommandSender {
     queue: Arc<V2IoCommandQueue>,
 }
-
 struct V2IoCommandReceiver {
     queue: Arc<V2IoCommandQueue>,
 }
-
 /// Service-owned release-generation observation for one unavailable lifecycle
 /// target. It exposes neither queue depth nor an admission limit; retry is
 /// meaningful only after the same queue reports that a real release advanced
@@ -2406,7 +2260,6 @@ pub(crate) struct LifecycleIoCapacityWait {
     target: LifecycleIngressIoTargetSeal,
     observed_generation: u64,
 }
-
 /// Sealed liveness classification for one retained lifecycle capacity wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LifecycleIoCapacityWaitStatus {
@@ -2419,7 +2272,6 @@ pub(crate) enum LifecycleIoCapacityWaitStatus {
     /// The retained authority no longer names a live matching service.
     ForeignOrDisconnected,
 }
-
 impl LifecycleIoCapacityWait {
     /// Classify retry liveness against the exact service which minted the wait.
     pub(crate) fn status(&self, services: &ProductionV2Services) -> LifecycleIoCapacityWaitStatus {
@@ -2463,7 +2315,6 @@ impl LifecycleIoCapacityWait {
         }
     }
 }
-
 /// Borrow-bound exact target reservation in the one physical I/O FIFO.
 ///
 /// The queue-state guard and hierarchical admission slot are acquired in one
@@ -2481,7 +2332,6 @@ pub(crate) struct LifecycleIoCapacityReservation<'a> {
     target: Option<LifecycleIngressIoTargetSeal>,
     predecessor_debt: u64,
 }
-
 impl LifecycleIoCapacityReservation<'_> {
     /// Return the exact frozen predecessor debt only to the sealed scheduler
     /// factory capability. There is no raw production getter.
@@ -2491,7 +2341,6 @@ impl LifecycleIoCapacityReservation<'_> {
     ) -> u64 {
         self.predecessor_debt
     }
-
     /// Reject a repeated selected Fetch while its exact work id is still
     /// queued, active, or awaiting completion acknowledgement.
     pub(crate) fn preflight_selected_target_work_absent(&self) -> bool {
@@ -2509,10 +2358,9 @@ impl LifecycleIoCapacityReservation<'_> {
             .copied()
             .any(|work_id| target.matches_certified_fetch_work_id(work_id))
     }
-
     /// Verify that one prepared persistence command can consume this exact
     /// target slot without any fallible queue mutation after planning.
-    pub(crate) fn preflight_certified_fetch_body_persistence(
+    pub(in crate::sumeragi) fn preflight_certified_fetch_body_persistence(
         &self,
         task: &CertifiedFetchBodyPersistenceTask,
     ) -> bool {
@@ -2533,7 +2381,6 @@ impl LifecycleIoCapacityReservation<'_> {
             .expect("live reservation retains the queue guard");
         self.preflight_selected_target_work_absent() && state.work.get(&work_id).is_none()
     }
-
     /// Verify that one recovered body persistence task owns this exact target
     /// and has no queued, active, or completion-pending dedicated predecessor.
     pub(in crate::sumeragi) fn preflight_recovered_decision_fetch_body_persistence(
@@ -2555,7 +2402,6 @@ impl LifecycleIoCapacityReservation<'_> {
                 .recovered_decision_fetch_bodies
                 .contains_key(&task.dispatch_key())
     }
-
     /// Reject an exact recovered target already represented anywhere in its
     /// dedicated queued/active/completion-pending index before consuming the selector.
     pub(in crate::sumeragi) fn preflight_recovered_decision_fetch_target_absent(&self) -> bool {
@@ -2574,7 +2420,6 @@ impl LifecycleIoCapacityReservation<'_> {
                 .copied()
                 .any(|key| target.matches_recovered_decision_fetch_key(key))
     }
-
     /// Abort before planning and restore the one-shot target into its exact
     /// selector while releasing capacity under the retained queue lock.
     pub(crate) fn abort_into_prepared(
@@ -2601,10 +2446,9 @@ impl LifecycleIoCapacityReservation<'_> {
             .complete();
         prepared
     }
-
     /// Consume the locked reservation into the preflighted exact persistence
     /// command and publish the FIFO only after its ownership index is installed.
-    pub(crate) fn commit_certified_fetch_body_persistence(
+    pub(in crate::sumeragi) fn commit_certified_fetch_body_persistence(
         mut self,
         task: CertifiedFetchBodyPersistenceTask,
     ) {
@@ -2639,7 +2483,6 @@ impl LifecycleIoCapacityReservation<'_> {
             .expect("committed reservation retains its fail-stop operation")
             .complete();
     }
-
     /// Publish one exact recovered persistence command under its dedicated
     /// lifecycle key. Preflight plus the retained queue mutex makes this tail
     /// assertion-only after the executor response claim is installed.
@@ -2678,7 +2521,6 @@ impl LifecycleIoCapacityReservation<'_> {
             .expect("committed recovered persistence retains its fail-stop operation")
             .complete();
     }
-
     #[cfg(test)]
     fn cancel_before_plan_for_test(mut self) {
         let state = self
@@ -2694,7 +2536,6 @@ impl LifecycleIoCapacityReservation<'_> {
             .complete();
     }
 }
-
 /// Locked Consensus-lane capacity for one exact recovered Decision Apply key.
 ///
 /// The queue cut and output operation stay armed until the registry's prepared
@@ -2709,7 +2550,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyCapacityReservationV1<'a> {
     predecessor_debt: u64,
     predecessor_ordinal: Option<u128>,
 }
-
 impl RecoveredDecisionApplyCapacityReservationV1<'_> {
     /// Return the exact frozen predecessor debt only to scheduler authority.
     pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
@@ -2718,7 +2558,6 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
     ) -> u64 {
         self.predecessor_debt
     }
-
     /// Recheck that the claimed registry projection names this exact reservation.
     pub(in crate::sumeragi) fn preflight(
         &self,
@@ -2731,7 +2570,6 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
         prepared.dispatch_key() == self.key
             && !state.recovered_decision_applies.contains_key(&self.key)
     }
-
     /// Atomically arm the registry dispatch and publish its dedicated worker command.
     pub(in crate::sumeragi) fn commit(
         mut self,
@@ -2775,7 +2613,6 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
         operation.complete();
     }
 }
-
 impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
     fn drop(&mut self) {
         drop(self.operation.take());
@@ -2802,7 +2639,6 @@ impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
         }
     }
 }
-
 /// Typed capacity result for the recovered Decision Apply Consensus lane.
 #[must_use = "the recovered Decision Apply capacity result must be consumed"]
 pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureV1<'a> {
@@ -2811,7 +2647,6 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureV1<'a> {
     /// No Consensus position was available at the current release generation.
     Unavailable,
 }
-
 /// Closed failure before recovered Decision Apply capacity can be retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
@@ -2826,7 +2661,6 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
     /// The same closed carrier already owns queued, active, or pending work.
     AlreadyDispatched,
 }
-
 /// Locked Consensus capacity for one exact lifecycle-owned recovered Sign.
 #[must_use = "the recovered Sign reservation must commit its prepared dispatch"]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignCapacityReservationV1<'a> {
@@ -2837,7 +2671,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignCapacityReservationV1<'a> {
     predecessor_debt: u64,
     predecessor_ordinal: Option<u128>,
 }
-
 impl RecoveredLifecycleSignCapacityReservationV1<'_> {
     /// Return frozen worker predecessor debt only to scheduler authority.
     pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
@@ -2846,7 +2679,6 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
     ) -> u64 {
         self.predecessor_debt
     }
-
     /// Recheck that the claimed registry projection names this reservation.
     pub(in crate::sumeragi) fn preflight(
         &self,
@@ -2859,7 +2691,6 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
         prepared.dispatch_key() == self.key
             && !state.recovered_lifecycle_signs.contains_key(&self.key)
     }
-
     /// Release an uncommitted queue cut after the caller proved no claim remains.
     pub(in crate::sumeragi) fn cancel_uncommitted(mut self) {
         self.operation
@@ -2867,7 +2698,6 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
             .expect("cancelled recovered Sign reservation retains its operation")
             .complete();
     }
-
     /// Atomically arm the closed carrier and publish its dedicated command.
     pub(in crate::sumeragi) fn commit(self, prepared: PreparedRecoveredLifecycleSignDispatch<'_>) {
         assert!(
@@ -2877,13 +2707,11 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
         let task = prepared.commit_for_worker();
         self.publish_task(task);
     }
-
     /// Publish one exact test task through the production reservation state machine.
     #[cfg(test)]
     fn commit_for_test(self, task: RecoveredLifecycleSignTaskV1) {
         self.publish_task(task);
     }
-
     fn publish_task(mut self, task: RecoveredLifecycleSignTaskV1) {
         assert_eq!(
             task.dispatch_key(),
@@ -2917,7 +2745,6 @@ impl RecoveredLifecycleSignCapacityReservationV1<'_> {
         operation.complete();
     }
 }
-
 impl Drop for RecoveredLifecycleSignCapacityReservationV1<'_> {
     fn drop(&mut self) {
         drop(self.operation.take());
@@ -2944,7 +2771,6 @@ impl Drop for RecoveredLifecycleSignCapacityReservationV1<'_> {
         }
     }
 }
-
 /// Typed capacity result for the dedicated recovered Sign queue.
 #[must_use = "the recovered Sign capacity result must be consumed"]
 pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureV1<'a> {
@@ -2953,7 +2779,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureV1<'a> {
     /// No Consensus position was available; no logical row was claimed.
     Unavailable,
 }
-
 /// Failure before recovered Sign worker capacity can be retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureErrorV1 {
@@ -2968,7 +2793,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureErrorV1 {
     /// The same carrier already owns queued, active, or pending work.
     AlreadyDispatched,
 }
-
 /// One registry-authenticated recovered Completion row whose physical corridor
 /// must participate in the same scheduler snapshot as every peer row.
 #[must_use = "every recovered Completion probe must enter one composite census"]
@@ -3267,12 +3091,10 @@ impl Drop for LifecycleIoCapacityReservation<'_> {
         }
     }
 }
-
 enum V2IoLifecycleCapacityCapture<'a> {
     Reserved(LifecycleIoCapacityReservation<'a>),
     Unavailable(LifecycleIoCapacityWait),
 }
-
 /// Failure before the I/O service can issue a target-capacity result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LifecycleIoCapacityCaptureFailure {
@@ -3289,7 +3111,6 @@ pub(crate) enum LifecycleIoCapacityCaptureFailure {
     /// The service-owned release generation reached its terminal value.
     GenerationExhausted,
 }
-
 /// Opaque atomic result retaining both the selector and its service authority.
 ///
 /// Neither the reservation nor an unavailable wait can be separated from the
@@ -3298,7 +3119,6 @@ pub(crate) enum LifecycleIoCapacityCaptureFailure {
 pub(crate) struct LifecycleIoCapacityCapture<'a> {
     outcome: LifecycleIoCapacityOutcome<'a>,
 }
-
 enum LifecycleIoCapacityOutcome<'a> {
     Reserved {
         reservation: LifecycleIoCapacityReservation<'a>,
@@ -3309,7 +3129,6 @@ enum LifecycleIoCapacityOutcome<'a> {
         prepared: PreparedLifecycleIngressSelector,
     },
 }
-
 /// Capacity authority opened only by the sealed scheduler factory permit.
 pub(crate) enum AuthenticatedLifecycleIoCapacity<'a> {
     /// A live locked slot retains the complete selected carrier.
@@ -3327,7 +3146,6 @@ pub(crate) enum AuthenticatedLifecycleIoCapacity<'a> {
         prepared: PreparedLifecycleIngressSelector,
     },
 }
-
 impl<'a> LifecycleIoCapacityCapture<'a> {
     /// Open this transaction only for the non-clone sealed scheduler factory.
     pub(crate) fn into_authenticated(
@@ -3348,26 +3166,26 @@ impl<'a> LifecycleIoCapacityCapture<'a> {
         }
     }
 }
-
 /// Ownership-preserving failure before any capacity authority was acquired.
 #[must_use = "the complete selector remains available for a corrected attempt"]
 pub(crate) struct LifecycleIoCapacityCaptureError {
     failure: LifecycleIoCapacityCaptureFailure,
     prepared: PreparedLifecycleIngressSelector,
 }
-
 impl LifecycleIoCapacityCaptureError {
     /// Return the closed service failure classification.
     pub(crate) const fn failure(&self) -> LifecycleIoCapacityCaptureFailure {
         self.failure
     }
-
     /// Recover the complete selector with its one-shot target restored.
     pub(crate) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
         self.prepared
     }
 }
-
+#[allow(
+    dead_code,
+    reason = "non-full failures retain the rejected command for ownership symmetry and diagnostics"
+)]
 enum V2IoTrySendError {
     Full(V2IoCommand),
     Disconnected(V2IoCommand),
@@ -3380,7 +3198,6 @@ enum V2IoTrySendError {
         command: V2IoCommand,
     },
 }
-
 enum CertifiedServeCommit {
     Queued,
     Coalesced,
@@ -3392,7 +3209,6 @@ enum CertifiedServeCommit {
     },
     Ignored,
 }
-
 impl std::fmt::Debug for V2IoTrySendError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -3409,7 +3225,6 @@ impl std::fmt::Debug for V2IoTrySendError {
         }
     }
 }
-
 #[cfg(test)]
 fn v2_io_command_channel(
     capacity: usize,
@@ -3438,7 +3253,6 @@ fn v2_io_command_channel(
         lifecycle_ordinals,
     )
 }
-
 enum CertifiedServeRestartDischarge<'a> {
     Production {
         key_pair: &'a KeyPair,
@@ -3447,7 +3261,6 @@ enum CertifiedServeRestartDischarge<'a> {
     #[cfg(test)]
     PreserveFixtureState,
 }
-
 fn fully_authenticate_persisted_certified_serve_request(
     context: &wire::HeightContext,
     request: wire::CertifiedBodyRequest,
@@ -3462,7 +3275,6 @@ fn fully_authenticate_persisted_certified_serve_request(
     )
     .map_err(|error| error.to_string())
 }
-
 fn validate_persisted_certified_serve_terminal_outcomes(
     persisted: &PersistedCertifiedServeState,
     context: &wire::HeightContext,
@@ -3537,7 +3349,6 @@ fn validate_persisted_certified_serve_terminal_outcomes(
     }
     Ok(())
 }
-
 fn discharge_restored_certified_serve_lifecycles(
     store: &CertifiedServeStateStore,
     persisted: &mut PersistedCertifiedServeState,
@@ -3614,7 +3425,6 @@ fn discharge_restored_certified_serve_lifecycles(
         durable_decided_subject,
         validator_set_pops,
     )?;
-
     // Order the union by the immutable physical ingress ordinal where one
     // survives. Drained unsealed owners and superseded terminal records have
     // no physical predecessor and follow the bounded waiter prefix in logical
@@ -3643,7 +3453,6 @@ fn discharge_restored_certified_serve_lifecycles(
     let mut discharge_order = discharge_by_lifecycle.into_iter().collect::<Vec<_>>();
     discharge_order
         .sort_by_key(|(lifecycle_id, scheduler_ordinal)| (*scheduler_ordinal, *lifecycle_id));
-
     for (lifecycle_id, _) in discharge_order {
         let Some(lifecycle) = persisted
             .unsealed_lifecycles
@@ -3742,7 +3551,6 @@ fn discharge_restored_certified_serve_lifecycles(
             *persisted = next;
             continue;
         };
-
         let authenticated = fully_authenticate_persisted_certified_serve_request(
             context,
             lifecycle.request.clone(),
@@ -3773,7 +3581,6 @@ fn discharge_restored_certified_serve_lifecycles(
             }
             Ok(_) => None,
         };
-
         let mut next = persisted.clone();
         next.ingress_waiters
             .retain(|waiter| waiter.lifecycle_id != lifecycle.lifecycle_id);
@@ -3801,7 +3608,6 @@ fn discharge_restored_certified_serve_lifecycles(
                 phase: tombstone.request.certificate.phase,
             } != family
         });
-
         if let Some(outcome) = negative {
             next.negative_tombstones
                 .push(PersistedCertifiedServeNegativeTombstone {
@@ -3845,14 +3651,12 @@ fn discharge_restored_certified_serve_lifecycles(
             next.terminal_tombstones
                 .sort_by_key(|tombstone| tombstone.lifecycle_id);
         }
-
         // No queue or producer is exposed until the entire bounded batch is
         // complete. Each individual terminal transition is durable before the
         // next scheduler-ordered record is considered.
         store.persist(&next)?;
         *persisted = next;
     }
-
     if !persisted.unsealed_lifecycles.is_empty() || !persisted.ingress_waiters.is_empty() {
         return Err(
             "Sumeragi v2 startup discharge left requester-dependent Serve ownership".to_owned(),
@@ -3867,7 +3671,6 @@ fn discharge_restored_certified_serve_lifecycles(
     )?;
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn persistent_v2_io_command_channel(
     capacity: usize,
@@ -3948,7 +3751,6 @@ fn persistent_v2_io_command_channel(
         lifecycle_ordinals,
     ))
 }
-
 pub(super) fn certified_serve_family_capacity(
     roster_serve_capacity: usize,
     observer_source_capacity: usize,
@@ -3970,7 +3772,6 @@ pub(super) fn certified_serve_family_capacity(
         .and_then(|owners| owners.checked_mul(CERTIFIED_SERVE_PHASE_FAMILIES))
         .ok_or_else(|| "bounded Serve phase-family capacity must not overflow".to_owned())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_v2_io_command_channel(
     capacity: usize,
@@ -4045,7 +3846,6 @@ fn build_v2_io_command_channel(
         V2IoCommandReceiver { queue },
     )
 }
-
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn restore_certified_serve_tombstones(
     context: &wire::HeightContext,
@@ -4091,7 +3891,6 @@ fn restore_certified_serve_tombstones(
             "Sumeragi v2 durable Serve state crossed its immutable height geometry".to_owned(),
         );
     }
-
     let mut serves = BTreeMap::new();
     let mut serve_by_request = BTreeMap::new();
     let mut serve_by_family = BTreeMap::new();
@@ -4103,7 +3902,6 @@ fn restore_certified_serve_tombstones(
     let mut all_request_hashes = BTreeSet::new();
     let mut all_families = BTreeSet::new();
     let mut prior_lifecycle_id = None;
-
     for unsealed in &persisted.unsealed_lifecycles {
         validate_persisted_serve_identity(
             context,
@@ -4163,7 +3961,6 @@ fn restore_certified_serve_tombstones(
             return Err("Sumeragi v2 durable unsealed lifecycle is duplicated".to_owned());
         }
     }
-
     prior_lifecycle_id = None;
     for tombstone in &persisted.negative_tombstones {
         validate_persisted_serve_identity(
@@ -4225,7 +4022,6 @@ fn restore_certified_serve_tombstones(
             return Err("Sumeragi v2 durable negative Serve lifecycle is duplicated".to_owned());
         }
     }
-
     prior_lifecycle_id = None;
     for tombstone in &persisted.terminal_tombstones {
         validate_persisted_serve_identity(
@@ -4253,7 +4049,6 @@ fn restore_certified_serve_tombstones(
         {
             return Err("Sumeragi v2 durable Serve terminal identity is duplicated".to_owned());
         }
-
         let request = &tombstone.request;
         let Some(responder) = local_validator else {
             return Err(
@@ -4314,7 +4109,6 @@ fn restore_certified_serve_tombstones(
             .map_err(|error| {
                 format!("invalid durable certified-body response signature: {error}")
             })?;
-
         let family = CertifiedServeFamilyKey {
             requester: request.requester.clone(),
             phase: request.certificate.phase,
@@ -4372,7 +4166,6 @@ fn restore_certified_serve_tombstones(
             }
         }
     }
-
     let mut serve_ingress_waiters = BTreeMap::new();
     let mut waiter_by_family = BTreeMap::new();
     let mut waiter_lifecycle_ids = BTreeSet::new();
@@ -4461,7 +4254,6 @@ fn restore_certified_serve_tombstones(
             return Err("Sumeragi v2 durable Serve waiter ordinal is duplicated".to_owned());
         }
     }
-
     Ok((
         serves,
         serve_by_request,
@@ -4470,7 +4262,6 @@ fn restore_certified_serve_tombstones(
         serve_ingress_waiters,
     ))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn validate_persisted_serve_identity(
     context: &wire::HeightContext,
@@ -4507,7 +4298,6 @@ fn validate_persisted_serve_identity(
         observer_requesters_by_source,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn validate_persisted_serve_request_owner(
     context: &wire::HeightContext,
@@ -4558,14 +4348,12 @@ fn validate_persisted_serve_request_owner(
     }
     Ok(())
 }
-
 impl V2IoCommandQueue {
     fn lock(&self) -> std::sync::MutexGuard<'_, V2IoCommandQueueState> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-
     fn capture_lifecycle_capacity<'a>(
         self: &'a Arc<Self>,
         operation: ConsensusFailStopOperation<'a>,
@@ -4629,7 +4417,6 @@ impl V2IoCommandQueue {
             },
         ))
     }
-
     fn capture_recovered_decision_apply_capacity<'a>(
         self: &'a Arc<Self>,
         operation: ConsensusFailStopOperation<'a>,
@@ -4728,7 +4515,6 @@ impl V2IoCommandQueue {
             },
         ))
     }
-
     fn capture_recovered_lifecycle_sign_capacity<'a>(
         self: &'a Arc<Self>,
         operation: ConsensusFailStopOperation<'a>,
@@ -4827,7 +4613,6 @@ impl V2IoCommandQueue {
             },
         ))
     }
-
     /// Project one recovered worker candidate without changing the queue cut.
     ///
     /// The returned availability accounts for transferring a materialized
@@ -4902,7 +4687,6 @@ impl V2IoCommandQueue {
         state.decision_reconciliation_pending = true;
         Ok(())
     }
-
     fn finish_decision_serve_reconciliation(
         &self,
         decided_subject: Option<wire::BlockSubject>,
@@ -4925,7 +4709,6 @@ impl V2IoCommandQueue {
             }
             (Some(_), Some(_)) | (None, Some(_)) | (None, None) => {}
         }
-
         let mut converted = Vec::new();
         if let Some(observed) = decided_subject {
             let carrier_owned = state
@@ -5007,7 +4790,6 @@ impl V2IoCommandQueue {
         self.ready.notify_all();
         Ok(())
     }
-
     fn convert_exact_terminal_retry_after_decision(
         &self,
         state: &mut V2IoCommandQueueState,
@@ -5049,7 +4831,6 @@ impl V2IoCommandQueue {
             // this later retry is still rejected before any new ordinal.
             return Ok(false);
         }
-
         let (previous_state, previous_terminal, previous_routes, previous_ownership) = {
             let tracked = state
                 .serves
@@ -5091,7 +4872,6 @@ impl V2IoCommandQueue {
         let _ = state.serve_replacements.remove(&lifecycle_id);
         Ok(true)
     }
-
     fn persist_serve_state(
         &self,
         state: &V2IoCommandQueueState,
@@ -5421,7 +5201,6 @@ impl V2IoCommandQueue {
             terminal_tombstones: terminal_tombstones.into_values().collect(),
         })
     }
-
     fn ingress_reservation_family(
         reservation: &V2IoCertifiedServeIngressReservation,
     ) -> CertifiedServeFamilyKey {
@@ -5430,7 +5209,6 @@ impl V2IoCommandQueue {
             phase: reservation.projection.phase,
         }
     }
-
     fn promote_next_serve_ingress_waiter(state: &mut V2IoCommandQueueState) -> bool {
         if state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some() {
             return false;
@@ -5468,7 +5246,6 @@ impl V2IoCommandQueue {
         state.serve_ingress_reservation = Some(reservation);
         true
     }
-
     fn insert_serve_ingress_waiter(
         state: &mut V2IoCommandQueueState,
         reservation: V2IoCertifiedServeIngressReservation,
@@ -5490,7 +5267,6 @@ impl V2IoCommandQueue {
         );
         let _ = Self::promote_next_serve_ingress_waiter(state);
     }
-
     fn awaiting_retry_lifecycles_are_backed_once(state: &V2IoCommandQueueState) -> bool {
         let mut reservations_by_lifecycle = BTreeMap::new();
         for reservation in state
@@ -5508,7 +5284,6 @@ impl V2IoCommandQueue {
                 || reservations_by_lifecycle.get(lifecycle_id) == Some(&1)
         })
     }
-
     fn serve_lifecycle_has_live_ingress_carrier(
         state: &V2IoCommandQueueState,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -5527,7 +5302,6 @@ impl V2IoCommandQueue {
                     )
             })
     }
-
     fn detach_selected_serve_ingress_carrier(
         state: &mut V2IoCommandQueueState,
         reservation_id: CertifiedServeIngressReservationId,
@@ -5563,7 +5337,6 @@ impl V2IoCommandQueue {
         );
         Self::promote_next_serve_ingress_waiter(state)
     }
-
     /// Retire one physically drained ingress occurrence while retaining its
     /// logical Serve lifecycle/tombstone in `serves`.
     ///
@@ -5598,7 +5371,6 @@ impl V2IoCommandQueue {
         }
         promoted
     }
-
     fn serve_union_accepts(
         &self,
         state: &V2IoCommandQueueState,
@@ -5624,7 +5396,6 @@ impl V2IoCommandQueue {
         if families.len() > self.serve_family_capacity {
             return false;
         }
-
         let mut roster_requesters = BTreeSet::new();
         let mut observer_sources = BTreeSet::new();
         let mut observer_requesters_by_source = BTreeMap::<PeerId, BTreeSet<PeerId>>::new();
@@ -5672,7 +5443,6 @@ impl V2IoCommandQueue {
                 .values()
                 .all(|requesters| requesters.len() <= self.observer_per_source_capacity)
     }
-
     fn reserve_serve_ingress(
         self: &Arc<Self>,
         request: &wire::CertifiedBodyRequest,
@@ -5711,7 +5481,6 @@ impl V2IoCommandQueue {
             requester: request.requester.clone(),
             phase: request.certificate.phase,
         };
-
         let mut state = self.lock();
         if !state.sender_open || !state.receiver_open {
             return Err(CertifiedServeIngressReserveError::Closed);
@@ -5759,7 +5528,6 @@ impl V2IoCommandQueue {
             // and starve an already-due proposal producer.
             return Err(CertifiedServeIngressReserveError::Busy);
         }
-
         let retained_waiter_id = state
             .serve_ingress_reservation
             .as_ref()
@@ -5831,7 +5599,6 @@ impl V2IoCommandQueue {
             // contention, not fail-stop evidence.
             return Err(CertifiedServeIngressReserveError::Busy);
         }
-
         if state.serve_ingress_waiters.values().any(|reservation| {
             reservation.handed_off.is_none() || reservation.carrier_ordinal.is_none()
         }) {
@@ -5839,7 +5606,6 @@ impl V2IoCommandQueue {
             // dormant debt. The runner restarts into local startup discharge.
             return Err(CertifiedServeIngressReserveError::Closed);
         }
-
         let inherited_owner = state
             .serve_ingress_reservation
             .iter()
@@ -5860,7 +5626,6 @@ impl V2IoCommandQueue {
         {
             return Err(CertifiedServeIngressReserveError::Rejected);
         }
-
         let replacement_id = if let Some(existing_id) = state.serve_by_family.get(&family).copied()
         {
             let Some(existing) = state.serves.get(&existing_id) else {
@@ -6064,7 +5829,6 @@ impl V2IoCommandQueue {
             handed_off,
         })
     }
-
     fn try_begin_producer_episode(
         self: &Arc<Self>,
     ) -> Result<Option<CertifiedServeProducerEpisode>, String> {
@@ -6111,7 +5875,6 @@ impl V2IoCommandQueue {
             active: true,
         }))
     }
-
     fn cancel_serve_ingress_reservation(&self, reservation_id: CertifiedServeIngressReservationId) {
         let mut state = self.lock();
         if state
@@ -6193,7 +5956,6 @@ impl V2IoCommandQueue {
             self.ready.notify_all();
         }
     }
-
     fn stage_selected_serve_rejection(
         &self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -6259,7 +6021,6 @@ impl V2IoCommandQueue {
             .state = CertifiedServeIngressReservationState::DeterministicallyRejected(outcome);
         Ok(())
     }
-
     fn publish_serve_ingress_physical_drain(
         &self,
         reservation_id: CertifiedServeIngressReservationId,
@@ -6290,7 +6051,6 @@ impl V2IoCommandQueue {
                     .to_owned(),
             );
         }
-
         let mut uncommitted_barrier = None;
         let rejected_lifecycle = match reservation_state {
             CertifiedServeIngressReservationState::DeterministicallyRejected(outcome) => {
@@ -6489,7 +6249,6 @@ impl V2IoCommandQueue {
         let terminalized_lifecycle = rejected_lifecycle
             .as_ref()
             .map(|(lifecycle_id, previous_state, ..)| (*lifecycle_id, *previous_state));
-
         // This write is the physical-dequeue transaction. It runs while both
         // fair ingress and the Serve queue still retain the exact carrier, so
         // an I/O failure leaves the ingress entry selectable for a later
@@ -6562,7 +6321,6 @@ impl V2IoCommandQueue {
             // high-watermark.
             let _ = state.serve_replacements.remove(&lifecycle_id);
         }
-
         let promoted = match reservation_state {
             CertifiedServeIngressReservationState::DeterministicallyRejected(_) => {
                 Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id)
@@ -6589,7 +6347,6 @@ impl V2IoCommandQueue {
         }
         Ok(())
     }
-
     fn frozen_serve_predecessors(
         state: &V2IoCommandQueueState,
     ) -> BTreeSet<CertifiedServeLifecycleId> {
@@ -6608,7 +6365,6 @@ impl V2IoCommandQueue {
             })
             .collect()
     }
-
     /// Materialize the least admitted future-slot owner after one predecessor
     /// releases capacity. Callers hold the queue lock, so no later producer
     /// can interpose between the release and this FIFO append.
@@ -6640,7 +6396,6 @@ impl V2IoCommandQueue {
         });
         true
     }
-
     /// Transfer an uncommitted Serve placeholder's physical unit to one
     /// strictly older causal producer.
     ///
@@ -6700,7 +6455,6 @@ impl V2IoCommandQueue {
         self.admission.release();
         true
     }
-
     /// Retire the sole uncommitted future-slot transaction.
     ///
     /// Shutdown cannot enqueue behind a `Reserved` Serve placeholder because
@@ -6763,7 +6517,6 @@ impl V2IoCommandQueue {
                 unreachable!("uncommitted Serve state was validated above");
             }
         }
-
         // Raw fair-ingress admission already committed both this lifecycle and
         // its replacement tombstone before the carrier became visible. It must
         // roll back only to retry-only ownership. The cfg-test/internal
@@ -6785,7 +6538,6 @@ impl V2IoCommandQueue {
             restore_displaced,
             None,
         )?;
-
         let placeholder = placeholder_index.map(|index| {
             state
                 .commands
@@ -6839,7 +6591,6 @@ impl V2IoCommandQueue {
         }
         Ok(true)
     }
-
     fn rollback_serve_barrier_for_shutdown(&self) -> Result<(), String> {
         let mut state = self.lock();
         let rolled_back = self.rollback_serve_barrier(&mut state)?;
@@ -6866,7 +6617,6 @@ impl V2IoCommandQueue {
         }
         Ok(())
     }
-
     fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         let state = self.lock();
         let ingress = state.serve_ingress_reservation.as_ref();
@@ -6912,7 +6662,6 @@ impl V2IoCommandQueue {
         }
         Ok(Some(barrier))
     }
-
     fn serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
@@ -6954,7 +6703,6 @@ impl V2IoCommandQueue {
         }
         Ok(Some(lifecycle_id.request_hash))
     }
-
     fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
         let mut state = self.lock();
         let materialized_request_hash = state.serve_barrier.map(|lifecycle| lifecycle.request_hash);
@@ -6963,7 +6711,7 @@ impl V2IoCommandQueue {
         })?;
         if !reservation.matches_barrier(barrier)
             || materialized_request_hash
-                .is_some_and(|request_hash| request_hash != barrier.request_hash)
+                .is_some_and(|request_hash| request_hash != barrier.request_hash())
         {
             return Err("Sumeragi v2 Serve runtime episode changed barrier identity".to_owned());
         }
@@ -6978,7 +6726,6 @@ impl V2IoCommandQueue {
             | CertifiedServeRuntimeEpisodeState::Complete => Ok(false),
         }
     }
-
     /// Record one runtime-issued predecessor episode and reopen a sealed
     /// target turn only when the witness is strictly newer.
     fn observe_serve_predecessor_episode_witness(
@@ -7040,7 +6787,6 @@ impl V2IoCommandQueue {
         }
         Ok(false)
     }
-
     /// Return whether one claimed exact-Serve turn can dispatch an older
     /// completion-producing causal effect without losing its target position.
     fn serve_runtime_predecessor_capacity_available(
@@ -7077,7 +6823,6 @@ impl V2IoCommandQueue {
             || (state.commands.len() < self.capacity
                 && self.admission.has_capacity(V2IoAdmissionClass::Consensus)))
     }
-
     fn finish_serve_runtime_episode_turn(
         &self,
         barrier: CertifiedServeBarrier,
@@ -7107,7 +6852,6 @@ impl V2IoCommandQueue {
         };
         Ok(())
     }
-
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         let state = self.lock();
         let Some(lifecycle_id) = state.serve_barrier else {
@@ -7131,7 +6875,6 @@ impl V2IoCommandQueue {
             }
         }
     }
-
     #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         let state = self.lock();
@@ -7143,7 +6886,6 @@ impl V2IoCommandQueue {
             && state.commands.len() < self.capacity
             && self.admission.has_capacity(class)
     }
-
     fn prepare_serve(
         &self,
         expected_lifecycle_id: Option<CertifiedServeLifecycleId>,
@@ -7511,7 +7253,6 @@ impl V2IoCommandQueue {
             Err(CertifiedServePrepareError::Backpressure)
         }
     }
-
     fn prepare_reserved_serve(
         &self,
         proposed_owner: CertifiedServeOwnerKey,
@@ -7582,7 +7323,6 @@ impl V2IoCommandQueue {
             phase: request_value.certificate.phase,
             owner: retained_owner.clone(),
         };
-
         let mut prepared = self.prepare_serve(Some(expected_lifecycle_id), retained_owner, request);
         let mut state = self.lock();
         let backpressure_lifecycle =
@@ -7635,7 +7375,6 @@ impl V2IoCommandQueue {
         }
         prepared
     }
-
     fn commit_serve(
         &self,
         admission: &CertifiedServeAdmission,
@@ -7716,7 +7455,6 @@ impl V2IoCommandQueue {
             }
             _ => {}
         }
-
         let (merged_reply_routes, merged_ingress_ownership) = if let (
             Some(retained_routes),
             Some(retained_ownership),
@@ -7742,7 +7480,6 @@ impl V2IoCommandQueue {
         } else {
             return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
         };
-
         let committed = match tracked.state {
             V2IoServeState::AwaitingRetry => {
                 return Err(
@@ -7809,7 +7546,6 @@ impl V2IoCommandQueue {
         }
         Ok(committed)
     }
-
     fn abort_serve(&self, admission: CertifiedServeAdmission) -> Result<(), String> {
         let mut state = self.lock();
         if let Some(reservation_id) = admission.ingress_reservation_id {
@@ -7870,7 +7606,6 @@ impl V2IoCommandQueue {
         self.ready.notify_all();
         Ok(())
     }
-
     fn serve_completion_delivery_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -7963,7 +7698,6 @@ impl V2IoCommandQueue {
             ingress_ownership,
         )))
     }
-
     #[cfg(test)]
     fn serve_completion_ownership(
         &self,
@@ -7975,7 +7709,6 @@ impl V2IoCommandQueue {
                 "durable Decision superseded the certified-body response before delivery".to_owned()
             })
     }
-
     fn complete_serve_response(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -8060,7 +7793,6 @@ impl V2IoCommandQueue {
         let _ = state.serve_replacements.remove(&lifecycle_id);
         Ok(true)
     }
-
     fn fail_serve(&self, lifecycle_id: CertifiedServeLifecycleId) {
         let mut state = self.lock();
         let tracked = state
@@ -8071,7 +7803,6 @@ impl V2IoCommandQueue {
         tracked.state = V2IoServeState::Failed;
         self.admission.release();
     }
-
     fn acknowledge_serve_completion(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -8145,7 +7876,6 @@ impl V2IoCommandQueue {
         }
         Ok(())
     }
-
     fn try_send_as(
         &self,
         class: V2IoAdmissionClass,
@@ -8258,7 +7988,6 @@ impl V2IoCommandQueue {
         self.ready.notify_one();
         Ok(())
     }
-
     fn cancel(
         &self,
         work_id: EffectWorkId,
@@ -8306,7 +8035,6 @@ impl V2IoCommandQueue {
         }
         Ok(true)
     }
-
     fn recv(&self) -> Result<V2IoCommand, ()> {
         let mut state = self.lock();
         loop {
@@ -8381,7 +8109,6 @@ impl V2IoCommandQueue {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
-
     #[cfg(test)]
     fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
         let mut state = self.lock();
@@ -8449,7 +8176,6 @@ impl V2IoCommandQueue {
         }
         Ok(command)
     }
-
     fn complete_work(&self, work_id: EffectWorkId) {
         let mut state = self.lock();
         let tracked = state
@@ -8459,7 +8185,6 @@ impl V2IoCommandQueue {
         assert_eq!(tracked.state, V2IoWorkState::Active);
         tracked.state = V2IoWorkState::CompletionPending;
     }
-
     fn complete_recovered_decision_apply(
         &self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -8480,7 +8205,6 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
-
     fn complete_recovered_lifecycle_sign(
         &self,
         key: RecoveredLifecycleSignDispatchKeyV1,
@@ -8500,7 +8224,6 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
-
     fn complete_recovered_decision_fetch_body(
         &self,
         key: RecoveredDecisionFetchDispatchKeyV1,
@@ -8526,7 +8249,6 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
-
     fn retry_recovered_decision_apply<T: RecoveredDecisionApplyRetryTaskV1>(
         &self,
         task: T,
@@ -8628,7 +8350,6 @@ impl V2IoCommandQueue {
         self.ready.notify_all();
         Ok(())
     }
-
     fn acknowledge_completion(&self, work_id: EffectWorkId) {
         let mut state = self.lock();
         let tracked = state
@@ -8637,7 +8358,6 @@ impl V2IoCommandQueue {
             .expect("delivered Sumeragi v2 completion must have an ownership record");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
     }
-
     fn prepare_recovered_decision_apply_ack(
         self: &Arc<Self>,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -8669,7 +8389,6 @@ impl V2IoCommandQueue {
             armed: true,
         })
     }
-
     fn transfer_recovered_lifecycle_sign_completion(
         self: &Arc<Self>,
         key: RecoveredLifecycleSignDispatchKeyV1,
@@ -8686,7 +8405,6 @@ impl V2IoCommandQueue {
         self.admission
             .transfer_recovered_lifecycle_sign_completion_at(key, ownership_position)
     }
-
     fn acknowledge_recovered_decision_apply(&self, key: RecoveredDecisionApplyDispatchKeyV1) {
         let mut state = self.lock();
         let tracked = state
@@ -8695,7 +8413,6 @@ impl V2IoCommandQueue {
             .expect("settled recovered Decision Apply must retain its exact command owner");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
     }
-
     fn acknowledge_recovered_lifecycle_sign(&self, key: RecoveredLifecycleSignDispatchKeyV1) {
         let mut state = self.lock();
         let tracked = state
@@ -8704,7 +8421,6 @@ impl V2IoCommandQueue {
             .expect("settled recovered Sign must retain its exact command owner");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
     }
-
     fn acknowledge_recovered_decision_fetch_body(
         &self,
         key: RecoveredDecisionFetchDispatchKeyV1,
@@ -8720,7 +8436,6 @@ impl V2IoCommandQueue {
         assert_eq!(tracked.id, id);
         assert_eq!(tracked.response_hash, response_hash);
     }
-
     fn prepare_certified_fetch_body_persistence_ack(
         self: &Arc<Self>,
         completion: &CertifiedFetchBodyPersistenceCompletion,
@@ -8753,7 +8468,6 @@ impl V2IoCommandQueue {
             armed: true,
         })
     }
-
     fn acknowledge_exact_lifecycle_completion(
         &self,
         work_id: EffectWorkId,
@@ -8771,14 +8485,12 @@ impl V2IoCommandQueue {
             .remove(&work_id)
             .expect("preflighted lifecycle completion work remains indexed");
     }
-
     fn close_sender(&self) {
         let mut state = self.lock();
         state.sender_open = false;
         drop(state);
         self.ready.notify_all();
     }
-
     fn close_receiver(&self) {
         let mut state = self.lock();
         if !state.receiver_open {
@@ -8859,12 +8571,10 @@ impl V2IoCommandQueue {
         self.ready.notify_all();
     }
 }
-
 impl V2IoCommandSender {
     fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
         self.queue.begin_decision_serve_reconciliation()
     }
-
     fn finish_decision_serve_reconciliation(
         &self,
         decided_subject: Option<wire::BlockSubject>,
@@ -8872,12 +8582,10 @@ impl V2IoCommandSender {
         self.queue
             .finish_decision_serve_reconciliation(decided_subject)
     }
-
     #[cfg(test)]
     fn try_send(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
         self.queue.try_send_as(command.admission_class(), command)
     }
-
     fn try_send_as(
         &self,
         class: V2IoAdmissionClass,
@@ -8885,7 +8593,6 @@ impl V2IoCommandSender {
     ) -> Result<(), V2IoTrySendError> {
         self.queue.try_send_as(class, command)
     }
-
     #[cfg(test)]
     fn prepare_serve(
         &self,
@@ -8894,7 +8601,6 @@ impl V2IoCommandSender {
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         self.queue.prepare_serve(None, owner, request)
     }
-
     fn prepare_reserved_serve(
         &self,
         owner: CertifiedServeOwnerKey,
@@ -8902,7 +8608,6 @@ impl V2IoCommandSender {
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         self.queue.prepare_reserved_serve(owner, request)
     }
-
     fn stage_selected_serve_rejection(
         &self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -8911,25 +8616,20 @@ impl V2IoCommandSender {
         self.queue
             .stage_selected_serve_rejection(request_hash, outcome)
     }
-
     fn try_begin_producer_episode(&self) -> Result<Option<CertifiedServeProducerEpisode>, String> {
         self.queue.try_begin_producer_episode()
     }
-
     fn serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
         self.queue.serve_barrier_request_hash()
     }
-
     fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
     }
-
     fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
         self.queue.claim_serve_runtime_episode(barrier)
     }
-
     fn observe_serve_predecessor_episode_witness(
         &self,
         barrier: CertifiedServeBarrier,
@@ -8938,7 +8638,6 @@ impl V2IoCommandSender {
         self.queue
             .observe_serve_predecessor_episode_witness(barrier, witness)
     }
-
     fn serve_runtime_predecessor_capacity_available(
         &self,
         barrier: CertifiedServeBarrier,
@@ -8946,7 +8645,6 @@ impl V2IoCommandSender {
         self.queue
             .serve_runtime_predecessor_capacity_available(barrier)
     }
-
     fn finish_serve_runtime_episode_turn(
         &self,
         barrier: CertifiedServeBarrier,
@@ -8955,11 +8653,9 @@ impl V2IoCommandSender {
         self.queue
             .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
     }
-
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         self.queue.serve_barrier_waits_for_predecessor_completion()
     }
-
     fn commit_serve(
         &self,
         admission: &CertifiedServeAdmission,
@@ -8969,15 +8665,12 @@ impl V2IoCommandSender {
         self.queue
             .commit_serve(admission, reply_routes, ingress_ownership)
     }
-
     fn abort_serve(&self, admission: CertifiedServeAdmission) -> Result<(), String> {
         self.queue.abort_serve(admission)
     }
-
     fn rollback_serve_barrier_for_shutdown(&self) -> Result<(), String> {
         self.queue.rollback_serve_barrier_for_shutdown()
     }
-
     #[cfg(test)]
     fn serve_completion_ownership(
         &self,
@@ -8987,7 +8680,6 @@ impl V2IoCommandSender {
         self.queue
             .serve_completion_ownership(lifecycle_id, response_request_hash)
     }
-
     fn serve_completion_delivery_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -8996,7 +8688,6 @@ impl V2IoCommandSender {
         self.queue
             .serve_completion_delivery_ownership(lifecycle_id, response_request_hash)
     }
-
     fn cancel(
         &self,
         work_id: EffectWorkId,
@@ -9004,11 +8695,9 @@ impl V2IoCommandSender {
     ) -> Result<bool, String> {
         self.queue.cancel(work_id, expected_kind)
     }
-
     fn acknowledge_completion(&self, work_id: EffectWorkId) {
         self.queue.acknowledge_completion(work_id);
     }
-
     fn acknowledge_serve_completion(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -9018,32 +8707,26 @@ impl V2IoCommandSender {
             .acknowledge_serve_completion(lifecycle_id, terminal)
     }
 }
-
 impl Drop for V2IoCommandSender {
     fn drop(&mut self) {
         self.queue.close_sender();
     }
 }
-
 impl V2IoCommandReceiver {
     fn recv(&self) -> Result<V2IoCommand, ()> {
         self.queue.recv()
     }
-
     #[cfg(test)]
     fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
         self.queue.try_recv()
     }
-
     #[cfg(test)]
     fn try_iter(&self) -> V2IoCommandTryIter<'_> {
         V2IoCommandTryIter { receiver: self }
     }
-
     fn complete_work(&self, work_id: EffectWorkId) {
         self.queue.complete_work(work_id);
     }
-
     fn complete_recovered_decision_apply(
         &self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -9051,7 +8734,6 @@ impl V2IoCommandReceiver {
     ) -> Result<(), String> {
         self.queue.complete_recovered_decision_apply(key, result)
     }
-
     fn complete_recovered_lifecycle_sign(
         &self,
         key: RecoveredLifecycleSignDispatchKeyV1,
@@ -9059,7 +8741,6 @@ impl V2IoCommandReceiver {
     ) -> Result<(), String> {
         self.queue.complete_recovered_lifecycle_sign(key, result)
     }
-
     fn complete_recovered_decision_fetch_body(
         &self,
         key: RecoveredDecisionFetchDispatchKeyV1,
@@ -9068,7 +8749,6 @@ impl V2IoCommandReceiver {
         self.queue
             .complete_recovered_decision_fetch_body(key, completion)
     }
-
     fn complete_serve_response(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -9076,32 +8756,26 @@ impl V2IoCommandReceiver {
     ) -> Result<bool, String> {
         self.queue.complete_serve_response(lifecycle_id, response)
     }
-
     fn fail_serve(&self, lifecycle_id: CertifiedServeLifecycleId) {
         self.queue.fail_serve(lifecycle_id);
     }
 }
-
 impl Drop for V2IoCommandReceiver {
     fn drop(&mut self) {
         self.queue.close_receiver();
     }
 }
-
 #[cfg(test)]
 struct V2IoCommandTryIter<'a> {
     receiver: &'a V2IoCommandReceiver,
 }
-
 #[cfg(test)]
 impl Iterator for V2IoCommandTryIter<'_> {
     type Item = V2IoCommand;
-
     fn next(&mut self) -> Option<Self::Item> {
         self.receiver.try_recv().ok()
     }
 }
-
 /// Persisted certified-Fetch completion guarded until its exact work-index
 /// acknowledgement has been prepared.
 ///
@@ -9114,7 +8788,6 @@ struct CertifiedFetchBodyPersistenceDropGuard {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
 }
-
 impl CertifiedFetchBodyPersistenceDropGuard {
     fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
@@ -9122,12 +8795,10 @@ impl CertifiedFetchBodyPersistenceDropGuard {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for CertifiedFetchBodyPersistenceDropGuard {
     fn drop(&mut self) {
         if self.armed {
@@ -9135,17 +8806,14 @@ impl Drop for CertifiedFetchBodyPersistenceDropGuard {
         }
     }
 }
-
 struct GuardedCertifiedFetchBodyPersistenceCompletion {
     completion: Option<CertifiedFetchBodyPersistenceCompletion>,
     drop_guard: CertifiedFetchBodyPersistenceDropGuard,
 }
-
 struct RecoveredDecisionFetchBodyCompletionDropGuardV1 {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
 }
-
 impl RecoveredDecisionFetchBodyCompletionDropGuardV1 {
     fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
@@ -9153,12 +8821,10 @@ impl RecoveredDecisionFetchBodyCompletionDropGuardV1 {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for RecoveredDecisionFetchBodyCompletionDropGuardV1 {
     fn drop(&mut self) {
         if self.armed {
@@ -9166,12 +8832,10 @@ impl Drop for RecoveredDecisionFetchBodyCompletionDropGuardV1 {
         }
     }
 }
-
 struct GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
     completion: Option<RecoveredDecisionFetchBodyPersistenceCompletionV1>,
     drop_guard: RecoveredDecisionFetchBodyCompletionDropGuardV1,
 }
-
 impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
     fn new(
         completion: RecoveredDecisionFetchBodyPersistenceCompletionV1,
@@ -9182,13 +8846,11 @@ impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
             drop_guard: RecoveredDecisionFetchBodyCompletionDropGuardV1::new(output_guard),
         }
     }
-
     fn completion(&self) -> &RecoveredDecisionFetchBodyPersistenceCompletionV1 {
         self.completion
             .as_ref()
             .expect("armed recovered Decision Fetch completion retains its payload")
     }
-
     fn acknowledge_after_publication(mut self) {
         let _completion = self
             .completion
@@ -9197,7 +8859,6 @@ impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
         self.drop_guard.disarm();
     }
 }
-
 impl GuardedCertifiedFetchBodyPersistenceCompletion {
     fn new(
         completion: CertifiedFetchBodyPersistenceCompletion,
@@ -9208,13 +8869,11 @@ impl GuardedCertifiedFetchBodyPersistenceCompletion {
             drop_guard: CertifiedFetchBodyPersistenceDropGuard::new(output_guard),
         }
     }
-
     fn completion(&self) -> &CertifiedFetchBodyPersistenceCompletion {
         self.completion
             .as_ref()
             .expect("armed certified-Fetch completion retains its payload")
     }
-
     fn into_completion(mut self) -> CertifiedFetchBodyPersistenceCompletion {
         let completion = self
             .completion
@@ -9224,12 +8883,10 @@ impl GuardedCertifiedFetchBodyPersistenceCompletion {
         completion
     }
 }
-
 struct RecoveredDecisionApplyCompletionDropGuardV1 {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
 }
-
 impl RecoveredDecisionApplyCompletionDropGuardV1 {
     fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
@@ -9237,12 +8894,10 @@ impl RecoveredDecisionApplyCompletionDropGuardV1 {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for RecoveredDecisionApplyCompletionDropGuardV1 {
     fn drop(&mut self) {
         if self.armed {
@@ -9250,17 +8905,14 @@ impl Drop for RecoveredDecisionApplyCompletionDropGuardV1 {
         }
     }
 }
-
 struct GuardedRecoveredDecisionApplyWorkerResultV1 {
     result: Option<RecoveredDecisionApplyWorkerResultV1>,
     drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
 }
-
 struct RecoveredLifecycleSignCompletionDropGuardV1 {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
 }
-
 impl RecoveredLifecycleSignCompletionDropGuardV1 {
     fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
@@ -9268,12 +8920,10 @@ impl RecoveredLifecycleSignCompletionDropGuardV1 {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for RecoveredLifecycleSignCompletionDropGuardV1 {
     fn drop(&mut self) {
         if self.armed {
@@ -9281,12 +8931,10 @@ impl Drop for RecoveredLifecycleSignCompletionDropGuardV1 {
         }
     }
 }
-
 struct GuardedRecoveredLifecycleSignWorkerResultV1 {
     result: RecoveredLifecycleSignWorkerResultV1,
     drop_guard: RecoveredLifecycleSignCompletionDropGuardV1,
 }
-
 impl GuardedRecoveredLifecycleSignWorkerResultV1 {
     fn new(
         result: RecoveredLifecycleSignWorkerResultV1,
@@ -9297,16 +8945,13 @@ impl GuardedRecoveredLifecycleSignWorkerResultV1 {
             drop_guard: RecoveredLifecycleSignCompletionDropGuardV1::new(output_guard),
         }
     }
-
     const fn result(&self) -> &RecoveredLifecycleSignWorkerResultV1 {
         &self.result
     }
-
     fn acknowledge_after_publication(mut self) {
         self.drop_guard.disarm();
     }
 }
-
 impl GuardedRecoveredDecisionApplyWorkerResultV1 {
     fn new(
         result: RecoveredDecisionApplyWorkerResultV1,
@@ -9317,13 +8962,11 @@ impl GuardedRecoveredDecisionApplyWorkerResultV1 {
             drop_guard: RecoveredDecisionApplyCompletionDropGuardV1::new(output_guard),
         }
     }
-
     fn result(&self) -> &RecoveredDecisionApplyWorkerResultV1 {
         self.result
             .as_ref()
             .expect("armed recovered Decision Apply completion retains its result")
     }
-
     fn into_result(mut self) -> RecoveredDecisionApplyWorkerResultV1 {
         let result = self
             .result
@@ -9332,7 +8975,6 @@ impl GuardedRecoveredDecisionApplyWorkerResultV1 {
         self.drop_guard.disarm();
         result
     }
-
     fn into_retry_parts(
         self,
     ) -> (
@@ -9345,7 +8987,6 @@ impl GuardedRecoveredDecisionApplyWorkerResultV1 {
             drop_guard,
         )
     }
-
     fn from_retry_parts(
         result: RecoveredDecisionApplyWorkerResultV1,
         drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
@@ -9356,7 +8997,6 @@ impl GuardedRecoveredDecisionApplyWorkerResultV1 {
         }
     }
 }
-
 /// Move-only acknowledgement for one exact recovered Decision Apply command.
 ///
 /// The lifecycle owner must durably settle the borrowed worker result before
@@ -9369,7 +9009,6 @@ struct RecoveredDecisionApplyWorkAckV1 {
     key: RecoveredDecisionApplyDispatchKeyV1,
     armed: bool,
 }
-
 impl RecoveredDecisionApplyWorkAckV1 {
     fn acknowledge(mut self) {
         self.queue.acknowledge_recovered_decision_apply(self.key);
@@ -9378,12 +9017,10 @@ impl RecoveredDecisionApplyWorkAckV1 {
             .acknowledge_recovered_decision_apply_completion(self.key);
         self.armed = false;
     }
-
     fn acknowledge_retry_publication(mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for RecoveredDecisionApplyWorkAckV1 {
     fn drop(&mut self) {
         if self.armed {
@@ -9391,14 +9028,12 @@ impl Drop for RecoveredDecisionApplyWorkAckV1 {
         }
     }
 }
-
 /// Guarded worker result which can be consumed only after lifecycle settlement.
 #[must_use = "the recovered Decision Apply result still requires owner settlement"]
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
     guarded: Box<GuardedRecoveredDecisionApplyWorkerResultV1>,
     work_ack: RecoveredDecisionApplyWorkAckV1,
 }
-
 /// Guarded lifecycle-owned recovered Sign completion parked for fixed settlement.
 ///
 /// This token deliberately has no raw result, signature, payload, request,
@@ -9413,14 +9048,12 @@ pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {
     guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
     queue: Arc<V2IoCommandQueue>,
 }
-
 /// Guarded durable recovered-Fetch body parked for restart-closed Store settlement.
 #[must_use = "recovered Decision Fetch persistence remains guarded and indexed"]
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {
     guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
     queue: Arc<V2IoCommandQueue>,
 }
-
 impl PreparedRecoveredDecisionFetchBodyCompletionV1 {
     fn new(
         guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
@@ -9445,14 +9078,12 @@ impl PreparedRecoveredDecisionFetchBodyCompletionV1 {
                 .transfer_recovered_decision_fetch_completion_at(key, ownership_position))
         .then_some(Self { guarded, queue })
     }
-
     /// Borrow the opaque durable completion for fixed settlement projections.
     pub(in crate::sumeragi) fn completion(
         &self,
     ) -> &RecoveredDecisionFetchBodyPersistenceCompletionV1 {
         self.guarded.completion()
     }
-
     /// Retire the exact command index and disarm restart closure after LedgerV1 publication.
     pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
         let key = self.guarded.completion().dispatch_key();
@@ -9463,7 +9094,6 @@ impl PreparedRecoveredDecisionFetchBodyCompletionV1 {
         self.guarded.acknowledge_after_publication();
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedRecoveredLifecycleSignCompletionV1 {
     fn new(
@@ -9478,7 +9108,6 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
             )
             .then_some(Self { guarded, queue })
     }
-
     /// Revalidate and clone the still-guarded worker result for adapter preview.
     ///
     /// The returned value exposes no fields and cannot be unpacked without the
@@ -9499,7 +9128,6 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
             outbound_payload: result.outbound_payload.clone(),
         })
     }
-
     /// Retire the exact dedicated command owner and disarm restart closure.
     ///
     /// The lifecycle owner may call this only after LedgerV1 has durably
@@ -9511,7 +9139,6 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
         self.guarded.acknowledge_after_publication();
     }
 }
-
 /// Result of atomically returning one guarded missing-sidecar Apply to the worker FIFO.
 #[must_use = "an unavailable recovered Apply retry still owns its guarded completion"]
 pub(in crate::sumeragi) enum RecoveredDecisionApplyDeferredRetryV1 {
@@ -9522,7 +9149,6 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyDeferredRetryV1 {
     /// The dedicated queue index no longer matched the retained completion.
     RestartRequired,
 }
-
 impl PreparedRecoveredDecisionApplyCompletionV1 {
     /// Match the exact service queue, output guard, and lane recovery owner.
     ///
@@ -9538,12 +9164,10 @@ impl PreparedRecoveredDecisionApplyCompletionV1 {
             && Arc::ptr_eq(&services.output_guard, &self.work_ack.output_guard)
             && services.matches_lifecycle_lane_work(lane_work)
     }
-
     /// Borrow the exact Applied/Deferred result while the command remains indexed.
     pub(in crate::sumeragi) fn result(&self) -> &RecoveredDecisionApplyWorkerResultV1 {
         self.guarded.result()
     }
-
     /// Release the dedicated queue index after the owner durably settled this result.
     ///
     /// This is intentionally not a generic worker acknowledgement: its only
@@ -9555,7 +9179,6 @@ impl PreparedRecoveredDecisionApplyCompletionV1 {
         work_ack.acknowledge();
         (*guarded).into_result()
     }
-
     /// Atomically republish an unchanged missing-sidecar task under its existing owner.
     ///
     /// The dedicated command index must still be `CompletionPending`. Capacity
@@ -9596,7 +9219,6 @@ impl PreparedRecoveredDecisionApplyCompletionV1 {
         }
     }
 }
-
 enum V2IoCompletion {
     Signature {
         work_id: EffectWorkId,
@@ -9641,7 +9263,6 @@ enum V2IoCompletion {
     RecoveryRequired(String),
     Failed(String),
 }
-
 impl V2IoCompletion {
     fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
         match self {
@@ -9649,14 +9270,12 @@ impl V2IoCompletion {
             _ => None,
         }
     }
-
     fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
         match self {
             Self::RecoveredLifecycleSign(guarded) => Some(guarded.result().dispatch_key()),
             _ => None,
         }
     }
-
     fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
         match self {
             Self::RecoveredDecisionFetchBodyPersisted(guarded) => {
@@ -9665,7 +9284,6 @@ impl V2IoCompletion {
             _ => None,
         }
     }
-
     // `false` variants never enqueue a reducer completion. They operate only
     // on non-reducer effect, network, or service state (or report a terminal
     // failure), so they may be serviced behind one retained runtime result
@@ -9681,7 +9299,6 @@ impl V2IoCompletion {
                 | Self::RecoveredLifecycleSign(_)
         )
     }
-
     fn acknowledgement(&self) -> V2IoCompletionAcknowledgement {
         match self {
             Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
@@ -9726,7 +9343,6 @@ impl V2IoCompletion {
         }
     }
 }
-
 enum V2IoCompletionAcknowledgement {
     Work(EffectWorkId),
     Serve(Box<V2IoServeCompletionAcknowledgement>),
@@ -9736,7 +9352,6 @@ enum V2IoCompletionAcknowledgement {
     RecoveredDecisionFetchRetained,
     Untracked,
 }
-
 /// Move-only acknowledgement owner for one exact indexed persistence command.
 ///
 /// Extraction removes only completion-channel position ownership. This token
@@ -9750,7 +9365,6 @@ pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceWorkAck {
     descriptor: V2IoWorkDescriptor,
     armed: bool,
 }
-
 impl CertifiedFetchBodyPersistenceWorkAck {
     /// Release the exact command index only in the post-dequeue infallible tail.
     pub(in crate::sumeragi) fn commit(mut self) {
@@ -9759,7 +9373,6 @@ impl CertifiedFetchBodyPersistenceWorkAck {
         self.armed = false;
     }
 }
-
 impl Drop for CertifiedFetchBodyPersistenceWorkAck {
     fn drop(&mut self) {
         if self.armed {
@@ -9767,20 +9380,17 @@ impl Drop for CertifiedFetchBodyPersistenceWorkAck {
         }
     }
 }
-
 /// Persisted body plus its still-indexed exact command owner.
 #[must_use = "the persisted response and duplicate fence require Phase-B consumption"]
 pub(crate) struct PreparedCertifiedFetchBodyPersistenceCompletion {
     completion: CertifiedFetchBodyPersistenceCompletion,
     work_ack: CertifiedFetchBodyPersistenceWorkAck,
 }
-
 impl PreparedCertifiedFetchBodyPersistenceCompletion {
     /// Return the still-indexed existing executor work identity for diagnostics.
     pub(in crate::sumeragi) const fn work_id(&self) -> EffectWorkId {
         self.completion.work_id()
     }
-
     /// Split two opaque move-only authorities for the sealed composite transaction.
     pub(in crate::sumeragi) fn into_parts(
         self,
@@ -9790,7 +9400,6 @@ impl PreparedCertifiedFetchBodyPersistenceCompletion {
     ) {
         (self.completion, self.work_ack)
     }
-
     /// Rejoin an unchanged pre-dequeue completion after a retryable failure.
     pub(in crate::sumeragi) fn from_parts(
         completion: CertifiedFetchBodyPersistenceCompletion,
@@ -9802,7 +9411,6 @@ impl PreparedCertifiedFetchBodyPersistenceCompletion {
         }
     }
 }
-
 /// Typed outcome of the ordinary bounded completion drain.
 ///
 /// A persisted certified-Fetch body is returned directly to the serialized
@@ -9812,7 +9420,6 @@ pub(crate) struct V2CompletionDrainOutcome {
     serviced: usize,
     certified_fetch_body: Option<PreparedCertifiedFetchBodyPersistenceCompletion>,
 }
-
 impl V2CompletionDrainOutcome {
     /// Split the count from the move-only lifecycle completion.
     pub(crate) fn into_parts(
@@ -9824,19 +9431,16 @@ impl V2CompletionDrainOutcome {
         (self.serviced, self.certified_fetch_body)
     }
 }
-
 /// Owner-only result of draining at most one recovered Decision Apply completion.
 #[must_use = "a returned recovered Decision Apply completion must be settled by its owner"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionDrainV1 {
     completion: Option<PreparedRecoveredDecisionApplyCompletionV1>,
 }
-
 /// Owner-only drain of at most one guarded recovered Sign completion.
 #[must_use = "a recovered Sign drain remains parked under its lifecycle owner"]
 pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
     completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
 }
-
 /// Owner-only drain of at most one guarded recovered Fetch body completion.
 #[must_use = "a recovered Fetch completion must remain parked under its lifecycle owner"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
@@ -9872,7 +9476,6 @@ impl RecoveredDecisionFetchBodyCompletionDrainV1 {
         self.completion
     }
 }
-
 impl RecoveredLifecycleSignCompletionDrainV1 {
     /// Consume the drain into its optional opaque guarded completion.
     pub(in crate::sumeragi) fn into_completion(
@@ -9881,7 +9484,6 @@ impl RecoveredLifecycleSignCompletionDrainV1 {
         self.completion
     }
 }
-
 impl RecoveredDecisionApplyCompletionDrainV1 {
     /// Consume the drain result into its optional exact owner completion.
     pub(in crate::sumeragi) fn into_completion(
@@ -9890,12 +9492,10 @@ impl RecoveredDecisionApplyCompletionDrainV1 {
         self.completion
     }
 }
-
 struct V2IoServeCompletionAcknowledgement {
     lifecycle_id: CertifiedServeLifecycleId,
     terminal: V2IoServeTerminal,
 }
-
 struct V2IoHandle {
     command_tx: V2IoCommandSender,
     completion_rx: mpsc::Receiver<V2IoCompletion>,
@@ -9903,13 +9503,11 @@ struct V2IoHandle {
     allow_finalized_disconnect: Arc<AtomicBool>,
     admission: Arc<V2IoAdmission>,
 }
-
 struct V2IoWorkerFailureGuard {
     output_guard: Arc<ConsensusOutputGuard>,
     allow_finalized_disconnect: Arc<AtomicBool>,
     armed: bool,
 }
-
 impl V2IoWorkerFailureGuard {
     fn new(
         output_guard: Arc<ConsensusOutputGuard>,
@@ -9921,12 +9519,10 @@ impl V2IoWorkerFailureGuard {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for V2IoWorkerFailureGuard {
     fn drop(&mut self) {
         if !self.armed {
@@ -9942,14 +9538,12 @@ impl Drop for V2IoWorkerFailureGuard {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct CleanupWorkerIdentity {
     height: u64,
     context_id: wire::HeightContextId,
     block_hash: HashOf<iroha_data_model::block::BlockHeader>,
 }
-
 impl CleanupWorkerIdentity {
     fn from_receipt(receipt: &KuraV2CommitReceipt) -> Self {
         Self {
@@ -9959,20 +9553,16 @@ impl CleanupWorkerIdentity {
         }
     }
 }
-
 struct PostFinalityCleanupJob {
     identity: CleanupWorkerIdentity,
     bodies: V2BodyRetirementJob,
     chunk_root: PathBuf,
 }
-
 const POST_FINALITY_CLEANUP_QUEUE_CAPACITY: usize = 4;
-
 #[derive(Clone)]
 struct V2CleanupSubmission {
     sender: mpsc::SyncSender<PostFinalityCleanupJob>,
 }
-
 impl V2CleanupSubmission {
     fn try_submit(&self, job: PostFinalityCleanupJob) -> Result<(), String> {
         let identity = job.identity;
@@ -10001,7 +9591,6 @@ impl V2CleanupSubmission {
         }
     }
 }
-
 /// Runner-owned single janitor for all potentially blocking finalized cleanup.
 ///
 /// The consensus thread only performs a non-blocking bounded enqueue. One
@@ -10013,7 +9602,6 @@ pub(crate) struct V2CleanupSupervisor {
     submission: Option<V2CleanupSubmission>,
     join: Option<thread::JoinHandle<()>>,
 }
-
 impl Default for V2CleanupSupervisor {
     fn default() -> Self {
         Self::with_capacity(
@@ -10022,7 +9610,6 @@ impl Default for V2CleanupSupervisor {
         )
     }
 }
-
 impl V2CleanupSupervisor {
     fn with_capacity(capacity: NonZeroUsize) -> Self {
         let (sender, receiver) = mpsc::sync_channel(capacity.get());
@@ -10047,14 +9634,12 @@ impl V2CleanupSupervisor {
             join,
         }
     }
-
     fn submission(&self) -> V2CleanupSubmission {
         self.submission
             .as_ref()
             .expect("cleanup submission exists until supervisor drop")
             .clone()
     }
-
     /// Reap a terminated janitor without ever joining a running thread.
     pub(crate) fn reap_finished(&mut self) {
         if self
@@ -10073,7 +9658,6 @@ impl V2CleanupSupervisor {
         }
     }
 }
-
 impl Drop for V2CleanupSupervisor {
     fn drop(&mut self) {
         self.submission.take();
@@ -10087,7 +9671,6 @@ impl Drop for V2CleanupSupervisor {
         }
     }
 }
-
 fn execute_post_finality_cleanup(job: PostFinalityCleanupJob) {
     if let Err(error) = job.bodies.execute() {
         report_post_finality_cleanup_warning(
@@ -10109,7 +9692,6 @@ fn execute_post_finality_cleanup(job: PostFinalityCleanupJob) {
         ),
     }
 }
-
 fn report_post_finality_cleanup_warning(
     identity: CleanupWorkerIdentity,
     target: PostFinalityCleanupTarget,
@@ -10124,7 +9706,6 @@ fn report_post_finality_cleanup_warning(
         "Sumeragi v2 finalized with retained local cleanup state"
     );
 }
-
 impl V2IoHandle {
     fn spawn(
         body_store: V2BodyStore,
@@ -10541,7 +10122,6 @@ impl V2IoHandle {
             admission,
         })
     }
-
     fn enqueue(&self, command: V2IoCommand) -> Result<(), String> {
         self.try_enqueue(command).map_err(|error| match error {
             V2IoTrySendError::Full(_) => "Sumeragi v2 I/O queue is full".to_owned(),
@@ -10557,11 +10137,9 @@ impl V2IoHandle {
             }
         })
     }
-
     fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
         self.command_tx.begin_decision_serve_reconciliation()
     }
-
     fn finish_decision_serve_reconciliation(
         &self,
         decided_subject: Option<wire::BlockSubject>,
@@ -10569,12 +10147,10 @@ impl V2IoHandle {
         self.command_tx
             .finish_decision_serve_reconciliation(decided_subject)
     }
-
     fn try_enqueue(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
         let class = command.admission_class();
         self.try_enqueue_as(class, command)
     }
-
     fn try_enqueue_as(
         &self,
         class: V2IoAdmissionClass,
@@ -10582,12 +10158,10 @@ impl V2IoHandle {
     ) -> Result<(), V2IoTrySendError> {
         self.command_tx.try_send_as(class, command)
     }
-
     #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         self.command_tx.queue.can_enqueue_as(class)
     }
-
     fn prepare_reserved_serve(
         &self,
         owner: CertifiedServeOwnerKey,
@@ -10595,7 +10169,6 @@ impl V2IoHandle {
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         self.command_tx.prepare_reserved_serve(owner, request)
     }
-
     fn stage_selected_serve_rejection(
         &self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -10604,36 +10177,29 @@ impl V2IoHandle {
         self.command_tx
             .stage_selected_serve_rejection(request_hash, outcome)
     }
-
     fn try_begin_producer_episode(&self) -> Result<Option<CertifiedServeProducerEpisode>, String> {
         self.command_tx.try_begin_producer_episode()
     }
-
     fn certified_serve_ingress_gate(&self) -> CertifiedServeIngressGate {
         CertifiedServeIngressGate {
             queue: Arc::clone(&self.command_tx.queue),
         }
     }
-
     fn dormant_serve_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
         self.certified_serve_ingress_gate()
             .dormant_ingress_scheduler_ordinal()
     }
-
     fn serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
         self.command_tx.serve_barrier_request_hash()
     }
-
     fn serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.command_tx.serve_barrier()
     }
-
     fn claim_serve_runtime_episode(&self, barrier: CertifiedServeBarrier) -> Result<bool, String> {
         self.command_tx.claim_serve_runtime_episode(barrier)
     }
-
     fn observe_serve_predecessor_episode_witness(
         &self,
         barrier: CertifiedServeBarrier,
@@ -10642,7 +10208,6 @@ impl V2IoHandle {
         self.command_tx
             .observe_serve_predecessor_episode_witness(barrier, witness)
     }
-
     fn serve_runtime_predecessor_capacity_available(
         &self,
         barrier: CertifiedServeBarrier,
@@ -10650,7 +10215,6 @@ impl V2IoHandle {
         self.command_tx
             .serve_runtime_predecessor_capacity_available(barrier)
     }
-
     fn finish_serve_runtime_episode_turn(
         &self,
         barrier: CertifiedServeBarrier,
@@ -10659,12 +10223,10 @@ impl V2IoHandle {
         self.command_tx
             .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
     }
-
     fn serve_barrier_waits_for_predecessor_completion(&self) -> Result<bool, String> {
         self.command_tx
             .serve_barrier_waits_for_predecessor_completion()
     }
-
     fn commit_serve(
         &self,
         admission: &CertifiedServeAdmission,
@@ -10674,11 +10236,9 @@ impl V2IoHandle {
         self.command_tx
             .commit_serve(admission, reply_routes, ingress_ownership)
     }
-
     fn abort_serve(&self, admission: CertifiedServeAdmission) -> Result<(), String> {
         self.command_tx.abort_serve(admission)
     }
-
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -10687,7 +10247,6 @@ impl V2IoHandle {
         self.command_tx
             .serve_completion_delivery_ownership(lifecycle_id, response_request_hash)
     }
-
     fn cancel(
         &self,
         work_id: EffectWorkId,
@@ -10695,7 +10254,6 @@ impl V2IoHandle {
     ) -> Result<bool, String> {
         self.command_tx.cancel(work_id, expected_kind)
     }
-
     fn acknowledge_completion_at(
         &self,
         acknowledgement: V2IoCompletionAcknowledgement,
@@ -10725,7 +10283,6 @@ impl V2IoHandle {
         self.admission.acknowledge_completion_at(ownership_position);
         Ok(())
     }
-
     fn prepare_certified_fetch_body_persistence_ack(
         &self,
         completion: &CertifiedFetchBodyPersistenceCompletion,
@@ -10735,7 +10292,6 @@ impl V2IoHandle {
             .queue
             .prepare_certified_fetch_body_persistence_ack(completion, output_guard)
     }
-
     fn prepare_recovered_decision_apply_ack(
         &self,
         key: RecoveredDecisionApplyDispatchKeyV1,
@@ -10745,7 +10301,6 @@ impl V2IoHandle {
             .queue
             .prepare_recovered_decision_apply_ack(key, output_guard)
     }
-
     fn prepare_recovered_lifecycle_sign_completion(
         &self,
         guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
@@ -10757,7 +10312,6 @@ impl V2IoHandle {
             ownership_position,
         )
     }
-
     fn prepare_recovered_decision_fetch_body_completion(
         &self,
         guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
@@ -10769,32 +10323,25 @@ impl V2IoHandle {
             ownership_position,
         )
     }
-
     fn acknowledge_completion(&self, completion: &V2IoCompletion) -> Result<(), String> {
         self.acknowledge_completion_at(completion.acknowledgement(), 0)
     }
-
     fn record_completion_service_attempt(&self, remaining_runtime_capacity: usize) -> bool {
         remaining_runtime_capacity == 0 && self.admission.record_completion_service_debt()
     }
-
     fn completion_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot {
         self.admission.completion_snapshot(now)
     }
-
     fn completion_requires_runtime_capacity_at(&self, position: usize) -> Option<bool> {
         self.admission
             .completion_requires_runtime_capacity_at(position)
     }
-
     fn completion_ownership_at(&self, position: usize) -> Option<V2IoCompletionOwnership> {
         self.admission.completion_ownership_at(position)
     }
-
     fn try_recv_completion_unacknowledged(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
         self.completion_rx.try_recv()
     }
-
     #[cfg(test)]
     fn try_recv_completion(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
         let completion = self.completion_rx.try_recv()?;
@@ -10804,7 +10351,6 @@ impl V2IoHandle {
         }
         Ok(completion)
     }
-
     fn recv_completion(&self) -> Result<V2IoCompletion, mpsc::RecvError> {
         let completion = self.completion_rx.recv()?;
         if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. }) {
@@ -10813,7 +10359,6 @@ impl V2IoHandle {
         }
         Ok(completion)
     }
-
     fn recv_completion_timeout(
         &self,
         timeout: Duration,
@@ -10825,7 +10370,6 @@ impl V2IoHandle {
         }
         Ok(completion)
     }
-
     fn shutdown(mut self) -> Result<(), String> {
         self.command_tx.rollback_serve_barrier_for_shutdown()?;
         let mut command = V2IoCommand::Shutdown;
@@ -10857,7 +10401,6 @@ impl V2IoHandle {
         Ok(())
     }
 }
-
 fn send_completion(
     sender: &mpsc::SyncSender<V2IoCompletion>,
     admission: &V2IoAdmission,
@@ -10865,7 +10408,6 @@ fn send_completion(
 ) {
     send_completion_with_lifecycle_ordinal(sender, admission, completion, None);
 }
-
 fn send_completion_with_lifecycle_ordinal(
     sender: &mpsc::SyncSender<V2IoCompletion>,
     admission: &V2IoAdmission,
@@ -10880,7 +10422,6 @@ fn send_completion_with_lifecycle_ordinal(
         runtime_lifecycle_ordinal,
     );
 }
-
 fn send_tracked_completion(
     sender: &mpsc::SyncSender<V2IoCompletion>,
     admission: &V2IoAdmission,
@@ -10888,7 +10429,6 @@ fn send_tracked_completion(
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
     send_tracked_completion_with_lifecycle_ordinal(sender, admission, completion, None)
 }
-
 fn send_tracked_completion_with_lifecycle_ordinal(
     sender: &mpsc::SyncSender<V2IoCompletion>,
     admission: &V2IoAdmission,
@@ -10910,7 +10450,6 @@ fn send_tracked_completion_with_lifecycle_ordinal(
         admission.abandon_latest_completion();
     })
 }
-
 fn try_send_tracked_completion(
     sender: &mpsc::SyncSender<V2IoCompletion>,
     admission: &V2IoAdmission,
@@ -10918,7 +10457,6 @@ fn try_send_tracked_completion(
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
     try_send_tracked_completion_with_lifecycle_ordinal(sender, admission, completion, None)
 }
-
 fn try_send_tracked_completion_with_lifecycle_ordinal(
     sender: &mpsc::SyncSender<V2IoCompletion>,
     admission: &V2IoAdmission,
@@ -10940,7 +10478,6 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
         admission.abandon_latest_completion();
     })
 }
-
 fn execute_fail_stop_io_command(
     output_guard: &ConsensusOutputGuard,
     execute: impl FnOnce() -> Result<V2IoCompletion, String>,
@@ -10964,7 +10501,6 @@ fn execute_fail_stop_io_command(
         }
     }
 }
-
 fn execute_retire_io_command(
     output_guard: &ConsensusOutputGuard,
     retire: impl FnOnce() -> Result<(), String>,
@@ -10985,13 +10521,11 @@ fn execute_retire_io_command(
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CleanupCompletionWaitError {
     DeadlineElapsed,
     Disconnected,
 }
-
 fn recv_cleanup_completion(
     io: &V2IoHandle,
     deadline: Instant,
@@ -11006,7 +10540,6 @@ fn recv_cleanup_completion(
             mpsc::RecvTimeoutError::Disconnected => CleanupCompletionWaitError::Disconnected,
         })
 }
-
 fn sign_consensus_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
@@ -11032,7 +10565,6 @@ fn sign_consensus_task(
         })
         .map_err(|error| error.to_string())
 }
-
 fn sign_recovered_lifecycle_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
@@ -11057,7 +10589,6 @@ fn sign_recovered_lifecycle_task(
         })
         .map_err(|error| error.to_string())
 }
-
 fn recover_outbound_proposal_payload(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
@@ -11082,7 +10613,6 @@ fn recover_outbound_proposal_payload(
     }
     Ok(payload)
 }
-
 fn serve_certified_body(
     body_store: &V2BodyStore,
     key_pair: &KeyPair,
@@ -11132,7 +10662,6 @@ fn serve_certified_body(
         response,
     })
 }
-
 fn load_candidate_body(
     body_store: &V2BodyStore,
     acquisition_id: LockedCandidateAcquisitionId,
@@ -11165,32 +10694,27 @@ fn load_candidate_body(
         canonical_wire,
     }))
 }
-
 #[derive(Debug)]
 struct FetchSession {
     task: BodyFetchTask,
     chunks: Option<V2ChunkSession>,
 }
-
 #[derive(Clone, Debug)]
 struct BufferedPayloadChunk {
     sender: PeerId,
     chunk: wire::PayloadChunk,
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
-
 // A lifecycle classification revalidates the complete fair-ingress carrier and
 // scans the executor's exact body stages. Limit that adversarially expensive
 // work to one orphan per service turn; the persistent cursor below still gives
 // every retained orphan deterministic round-robin progress.
 const MAX_ORPHAN_LIFECYCLE_VISITS_PER_REPLAY: usize = 1;
-
 #[derive(Clone, Copy, Debug)]
 struct OrphanPayloadLifecycleSweepCursor {
     manifest_hash: HashOf<wire::PayloadManifest>,
     chunk_offset: usize,
 }
-
 /// Result of routing one payload chunk through the bounded reorder buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PayloadChunkDisposition {
@@ -11204,7 +10728,6 @@ pub(crate) enum PayloadChunkDisposition {
     /// authentication check and was discarded without affecting consensus.
     Rejected,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OrphanPayloadChunkBufferResult {
     Disposition(PayloadChunkDisposition),
@@ -11213,7 +10736,6 @@ enum OrphanPayloadChunkBufferResult {
     /// dropping or terminalizing it would suppress the canonical retry.
     ProductiveRetentionConflict,
 }
-
 impl OrphanPayloadChunkBufferResult {
     #[cfg(test)]
     const fn public_disposition(self) -> PayloadChunkDisposition {
@@ -11223,7 +10745,6 @@ impl OrphanPayloadChunkBufferResult {
         }
     }
 }
-
 #[derive(Clone)]
 enum LocalCompletion {
     Reconstructed {
@@ -11232,7 +10753,6 @@ enum LocalCompletion {
         body: Arc<[u8]>,
     },
 }
-
 impl LocalCompletion {
     const fn runtime_lifecycle_ordinal(&self) -> u128 {
         match self {
@@ -11240,14 +10760,12 @@ impl LocalCompletion {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BodyFetchServiceOwner {
     None,
     Live,
     Reconstructed(usize),
 }
-
 /// Exact service-owner removal frozen before a guarded certified response
 /// handoff.
 ///
@@ -11261,7 +10779,6 @@ pub(in crate::sumeragi) struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
     task: BodyFetchTask,
     owner: BodyFetchServiceOwner,
 }
-
 impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
     pub(in crate::sumeragi) fn commit(
         self,
@@ -11276,13 +10793,11 @@ impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
         CertifiedBodyFetchCompletionDisposition::Completed
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CompletionSource {
     Io,
     Local,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CompletionDrainPolicy {
     Fair,
@@ -11290,7 +10805,6 @@ enum CompletionDrainPolicy {
     ExactServePredecessor { serve_lifecycle_ordinal: u128 },
     TimeoutRecoveryPrefix { inclusive_lifecycle_cut: u128 },
 }
-
 enum PendingServiceCompletion {
     Io {
         completion: V2IoCompletion,
@@ -11298,12 +10812,10 @@ enum PendingServiceCompletion {
     },
     Local(LocalCompletion),
 }
-
 struct IoCompletionTake {
     completion: Option<PendingServiceCompletion>,
     retained_runtime: bool,
 }
-
 impl IoCompletionTake {
     fn ready(completion: PendingServiceCompletion) -> Self {
         Self {
@@ -11311,14 +10823,12 @@ impl IoCompletionTake {
             retained_runtime: false,
         }
     }
-
     const fn retained_runtime() -> Self {
         Self {
             completion: None,
             retained_runtime: true,
         }
     }
-
     const fn unavailable() -> Self {
         Self {
             completion: None,
@@ -11326,9 +10836,7 @@ impl IoCompletionTake {
         }
     }
 }
-
 const MAX_COMPLETION_DRAIN_BATCH: usize = 256;
-
 /// Exact durable bytes loaded for a locked-subject re-proposal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LoadedCandidateBody {
@@ -11337,7 +10845,6 @@ pub(crate) struct LoadedCandidateBody {
     subject: wire::BlockSubject,
     canonical_wire: Vec<u8>,
 }
-
 /// Physical result of one immutable locked-subject disk acquisition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LockedCandidateLoad {
@@ -11345,10 +10852,8 @@ struct LockedCandidateLoad {
     subject: wire::BlockSubject,
     canonical_wire: Vec<u8>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct LockedCandidateAcquisitionId(u64);
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum LockedCandidateAcquisitionState {
     Loading {
@@ -11365,7 +10870,6 @@ enum LockedCandidateAcquisitionState {
         subject: wire::BlockSubject,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LockedCandidateRebind {
     Unchanged,
@@ -11373,7 +10877,6 @@ enum LockedCandidateRebind {
     ReplacementDeferred,
     ReplacementRequired,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LockedCandidateCompletion {
     Ready(EventTag),
@@ -11381,14 +10884,12 @@ enum LockedCandidateCompletion {
     Waiting,
     ReplacementRequired,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LockedCandidatePhysicalOwner {
     Desired(LockedCandidateAcquisitionId),
     Stale,
     Superseded,
 }
-
 /// Height-scoped owner of the one exact body protected by the durable lock.
 ///
 /// Disk acquisition identity is the immutable subject. Certified view changes
@@ -11403,7 +10904,6 @@ struct LockedCandidateAcquisition {
     consumer: EventTag,
     state: LockedCandidateAcquisitionState,
 }
-
 impl LockedCandidateAcquisition {
     const fn loading(
         acquisition_id: LockedCandidateAcquisitionId,
@@ -11421,7 +10921,6 @@ impl LockedCandidateAcquisition {
             },
         }
     }
-
     fn rebind_consumer(
         &mut self,
         round: wire::ConsensusRound,
@@ -11474,14 +10973,12 @@ impl LockedCandidateAcquisition {
             }
         })
     }
-
     fn start_replacement(&mut self, acquisition_id: LockedCandidateAcquisitionId) {
         self.state = LockedCandidateAcquisitionState::Loading {
             acquisition_id,
             subject: self.subject,
         };
     }
-
     fn physical_owner(
         &self,
         acquisition_id: LockedCandidateAcquisitionId,
@@ -11522,7 +11019,6 @@ impl LockedCandidateAcquisition {
         }
         Ok(LockedCandidatePhysicalOwner::Desired(owned_id))
     }
-
     fn complete(
         &mut self,
         loaded: LockedCandidateLoad,
@@ -11543,7 +11039,6 @@ impl LockedCandidateAcquisition {
         };
         Ok(LockedCandidateCompletion::Ready(self.consumer))
     }
-
     fn unavailable(
         &mut self,
         acquisition_id: LockedCandidateAcquisitionId,
@@ -11563,7 +11058,6 @@ impl LockedCandidateAcquisition {
             }
         }
     }
-
     fn failed(
         &self,
         acquisition_id: LockedCandidateAcquisitionId,
@@ -11579,7 +11073,6 @@ impl LockedCandidateAcquisition {
             }
         }
     }
-
     fn pending_count(&self) -> usize {
         match &self.state {
             LockedCandidateAcquisitionState::Loading { .. }
@@ -11589,7 +11082,6 @@ impl LockedCandidateAcquisition {
             }
         }
     }
-
     fn take_ready(&mut self) -> Option<LoadedCandidateBody> {
         let LockedCandidateAcquisitionState::Ready {
             canonical_wire,
@@ -11611,7 +11103,6 @@ impl LockedCandidateAcquisition {
         })
     }
 }
-
 /// Deterministic body rejection surfaced to local candidate scheduling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RejectedCandidateBody {
@@ -11619,7 +11110,6 @@ pub(crate) struct RejectedCandidateBody {
     subject: wire::BlockSubject,
     reason: String,
 }
-
 /// Exact body/reference tuple retained when validation or decided application
 /// reports that only its certified merge sidecar is unavailable.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11629,29 +11119,24 @@ pub(crate) struct DeferredMergeSidecarWork {
     subject: wire::BlockSubject,
     reference: CertifiedMergeLedgerReference,
 }
-
 impl DeferredMergeSidecarWork {
     /// Exact executor work identifier owning this deferral.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
         self.work_id
     }
-
     /// Wire proposal round retaining the exact durable work item.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
         self.round
     }
-
     /// Exact certified subject waiting for recovery.
     pub(crate) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Complete compact reference recovered from the durable body.
     pub(crate) const fn reference(&self) -> &CertifiedMergeLedgerReference {
         &self.reference
     }
 }
-
 /// Exact body for which the reducer durably persisted local Prepare intent and
 /// released the corresponding signing effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11659,58 +11144,48 @@ pub(crate) struct PreparedCandidateBody {
     tag: EventTag,
     subject: wire::BlockSubject,
 }
-
 impl PreparedCandidateBody {
     /// Reducer incarnation which persisted Prepare intent.
     pub(crate) const fn tag(self) -> EventTag {
         self.tag
     }
-
     /// Exact subject covered by Prepare intent.
     pub(crate) const fn subject(self) -> wire::BlockSubject {
         self.subject
     }
 }
-
 impl RejectedCandidateBody {
     /// Round whose exact durable body failed validation.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
         self.round
     }
-
     /// Rejected exact subject.
     pub(crate) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Deterministic validator diagnostic.
     pub(crate) fn reason(&self) -> &str {
         &self.reason
     }
 }
-
 impl LoadedCandidateBody {
     /// Reducer incarnation which requested the load.
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
-
     /// Exact durable Prepare round which owns this delivery.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
         self.round
     }
-
     /// Locked subject whose exact body was loaded.
     pub(crate) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Consume the completion into exact canonical bytes.
     pub(crate) fn into_canonical_wire(self) -> Vec<u8> {
         self.canonical_wire
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RetainedOutboundPayload {
     owner: EventTag,
@@ -11718,7 +11193,6 @@ struct RetainedOutboundPayload {
     subject: wire::BlockSubject,
     messages: Vec<wire::ConsensusMessageV2>,
 }
-
 /// One compact semantic fanout which remains owned until network-actor admission.
 ///
 /// Messages and peers are retained once each. Every peer owns one bounded retry
@@ -11733,18 +11207,15 @@ enum ExactTargetRoute {
     /// Return a response through the exact authenticated request tenure.
     Reply(NetworkReplyRoute),
 }
-
 type ExactOutputClass = ReliableProgressClass;
 type ExactOutputClassMask = u8;
 type ExactFanoutFifoId = u64;
-
 const EXACT_OUTPUT_CLASSES: [ExactOutputClass; V2_EXACT_OUTPUT_CLASS_COUNT] = [
     ExactOutputClass::Safety,
     ExactOutputClass::Lane,
     ExactOutputClass::Bulk,
 ];
 const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;
-
 const fn exact_output_class_bit(class: ExactOutputClass) -> ExactOutputClassMask {
     match class {
         ExactOutputClass::Safety => 1 << 0,
@@ -11752,7 +11223,6 @@ const fn exact_output_class_bit(class: ExactOutputClass) -> ExactOutputClassMask
         ExactOutputClass::Bulk => 1 << 2,
     }
 }
-
 const fn exact_output_class_priority(class: ExactOutputClass) -> u8 {
     match class {
         ExactOutputClass::Safety => 3,
@@ -11760,13 +11230,11 @@ const fn exact_output_class_priority(class: ExactOutputClass) -> u8 {
         ExactOutputClass::Bulk => 1,
     }
 }
-
 fn exact_output_classes(mask: ExactOutputClassMask) -> impl Iterator<Item = ExactOutputClass> {
     EXACT_OUTPUT_CLASSES
         .into_iter()
         .filter(move |class| mask & exact_output_class_bit(*class) != 0)
 }
-
 fn validate_shared_ownership_geometry(
     shared_ownership_unit_capacity: usize,
     max_reply_sources_per_request: usize,
@@ -11777,26 +11245,22 @@ fn validate_shared_ownership_geometry(
     )
     .map_err(|error| error.to_string())
 }
-
 fn exact_output_class(message: &NetworkMessage) -> Result<ExactOutputClass, String> {
     let topic = message.topic();
     reliable_progress_class(topic, message.subscriber_route()).ok_or_else(|| {
         format!("Sumeragi v2 exact output has no reliable progress class: {topic:?}")
     })
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ExactTargetAuthority {
     Topology(PeerId),
     Reply(NetworkReplySourceKey),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactTargetSource {
     authority: ExactTargetAuthority,
     class: ExactOutputClass,
 }
-
 /// One bounded semantic ownership unit for a target, reliable class, and owner kind.
 ///
 /// FIFO and backpressure follow the authenticated transport source, but
@@ -11815,14 +11279,12 @@ enum ExactTargetReservationKind {
     SidecarTopologyProgress,
     SidecarReplyControl,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactTargetReservation {
     semantic_target: PeerId,
     class: ExactOutputClass,
     kind: ExactTargetReservationKind,
 }
-
 impl ExactTargetRoute {
     fn source(&self, semantic_peer: &PeerId, class: ExactOutputClass) -> ExactTargetSource {
         let authority = match self {
@@ -11832,7 +11294,6 @@ impl ExactTargetRoute {
         ExactTargetSource { authority, class }
     }
 }
-
 #[derive(Debug)]
 struct PendingExactReplyFlush {
     flush_ack: NetworkReplyFlushAck,
@@ -11845,7 +11306,6 @@ struct PendingExactReplyFlush {
     /// empty, but both kinds keep the same target cursor until writer flush.
     sidecar_admission: Option<CertifiedMergeSidecarChunkAdmission>,
 }
-
 #[derive(Debug, Default)]
 struct PendingExactTarget {
     route: ExactTargetRoute,
@@ -11865,7 +11325,6 @@ struct PendingExactTarget {
     /// new live writer.
     parked: bool,
 }
-
 impl PendingExactTarget {
     /// Commit one already-preflighted authenticated-source update.
     fn apply_reply_route_update(
@@ -11894,19 +11353,16 @@ impl PendingExactTarget {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExactOutputCreationScope {
     context_id: wire::HeightContextId,
     height: wire::Height,
 }
-
 impl ExactOutputCreationScope {
     fn covers(self, artifact: &wire::finality::V2FinalityArtifact) -> bool {
         self.context_id == artifact.context_id() && self.height == artifact.height
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CertifiedSidecarTransferIdentity {
     service_generation: crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1,
@@ -11920,7 +11376,6 @@ struct CertifiedSidecarTransferIdentity {
     requester: PeerId,
     responder: PeerId,
 }
-
 impl CertifiedSidecarTransferIdentity {
     fn from_request(request: &CertifiedMergeSidecarRequestV1) -> Self {
         Self {
@@ -11936,7 +11391,6 @@ impl CertifiedSidecarTransferIdentity {
             responder: request.responder.clone(),
         }
     }
-
     fn from_chunk(chunk: &CertifiedMergeSidecarChunkV1) -> Self {
         Self {
             service_generation: chunk.service_generation,
@@ -11952,9 +11406,7 @@ impl CertifiedSidecarTransferIdentity {
         }
     }
 }
-
 include!("v2_worker/exact_output_rollover_claim.rs");
-
 #[derive(Debug)]
 struct PendingExactFanout {
     messages: Vec<NetworkMessage>,
@@ -11980,7 +11432,6 @@ struct PendingExactFanout {
     fifo_id: Option<ExactFanoutFifoId>,
     rollover_claim: ExactOutputRolloverClaim,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplyTargetMerge {
     Park {
@@ -11995,25 +11446,21 @@ enum ReplyTargetMerge {
         candidate_index: usize,
     },
 }
-
 #[derive(Debug)]
 struct ReplyTargetMergePlan {
     targets: Vec<ReplyTargetMerge>,
     reply_routes: NetworkReplyRoutes,
     ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
 }
-
 enum ReplyRouteMergeReceipt {
     Strict(NetworkReplyRoutesStrictMergeReceipt),
     Superseded(NetworkReplyRoutesObservedMergeReceipt),
 }
-
 #[derive(Debug)]
 struct ReplyTargetMergePreview {
     current_source_targets: BTreeMap<ExactTargetSource, BTreeSet<usize>>,
     outstanding_sources: BTreeSet<ExactTargetSource>,
 }
-
 #[derive(Debug)]
 struct ResponderControlReplacementPlan {
     retained_index: usize,
@@ -12025,7 +11472,6 @@ struct ResponderControlReplacementPlan {
     ownership_units: usize,
     shared_ownership_units: usize,
 }
-
 impl PendingExactFanout {
     fn semantic_peers(&self) -> Vec<PeerId> {
         let mut seen = BTreeSet::new();
@@ -12035,13 +11481,11 @@ impl PendingExactFanout {
             .cloned()
             .collect()
     }
-
     #[cfg(test)]
     fn new(messages: Vec<NetworkMessage>, peers: Vec<PeerId>) -> Option<Self> {
         let routes = vec![ExactTargetRoute::Topology; peers.len()];
         Self::new_with_routes(messages, peers, routes)
     }
-
     #[cfg(test)]
     fn new_with_routes(
         messages: Vec<NetworkMessage>,
@@ -12052,7 +11496,6 @@ impl PendingExactFanout {
             .ok()
             .flatten()
     }
-
     #[cfg(test)]
     fn new_with_reply_routes(
         messages: Vec<NetworkMessage>,
@@ -12063,7 +11506,6 @@ impl PendingExactFanout {
             .ok()
             .flatten()
     }
-
     fn synthesized_reply_routes(routes: &[ExactTargetRoute]) -> Option<NetworkReplyRoutes> {
         let mut history: Option<NetworkReplyRoutes> = None;
         for route in routes {
@@ -12079,7 +11521,6 @@ impl PendingExactFanout {
         }
         history
     }
-
     fn classified_with_routes(
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
@@ -12088,7 +11529,6 @@ impl PendingExactFanout {
         let reply_routes = Self::synthesized_reply_routes(&routes);
         Self::classified_with_route_history(messages, peers, routes, reply_routes)
     }
-
     fn classified_with_reply_routes(
         messages: Vec<NetworkMessage>,
         peer: PeerId,
@@ -12107,7 +11547,6 @@ impl PendingExactFanout {
         let peers = vec![peer; routes.len()];
         Self::classified_with_route_history(messages, peers, routes, Some(reply_routes))
     }
-
     fn classified_with_route_history(
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
@@ -12162,7 +11601,6 @@ impl PendingExactFanout {
         fanout.rebuild_current_source_targets()?;
         Ok(Some(fanout))
     }
-
     fn claimed(
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
@@ -12171,7 +11609,6 @@ impl PendingExactFanout {
         let routes = vec![ExactTargetRoute::Topology; peers.len()];
         Self::claimed_with_routes(messages, peers, routes, rollover_claim)
     }
-
     fn claimed_with_routes(
         messages: Vec<NetworkMessage>,
         peers: Vec<PeerId>,
@@ -12185,7 +11622,6 @@ impl PendingExactFanout {
         fanout.rollover_claim = rollover_claim;
         Ok(Some(fanout))
     }
-
     fn claimed_with_reply_routes(
         messages: Vec<NetworkMessage>,
         peer: PeerId,
@@ -12200,7 +11636,6 @@ impl PendingExactFanout {
         fanout.rollover_claim = rollover_claim;
         Ok(Some(fanout))
     }
-
     fn claimed_with_reply_routes_and_ingress_ownership(
         messages: Vec<NetworkMessage>,
         peer: PeerId,
@@ -12224,7 +11659,6 @@ impl PendingExactFanout {
         }
         Ok(Some(fanout))
     }
-
     fn take_attempt(
         &mut self,
         target_index: usize,
@@ -12259,13 +11693,11 @@ impl PendingExactFanout {
             target.reply_writer_timeout_attempt,
         ))
     }
-
     fn expected_current_source_targets(
         &self,
     ) -> Result<BTreeMap<ExactTargetSource, BTreeSet<usize>>, String> {
         self.expected_current_source_targets_excluding(None)
     }
-
     fn expected_current_source_targets_excluding(
         &self,
         excluded_target: Option<usize>,
@@ -12282,12 +11714,10 @@ impl PendingExactFanout {
         }
         Ok(expected)
     }
-
     fn rebuild_current_source_targets(&mut self) -> Result<(), String> {
         self.current_source_targets = self.expected_current_source_targets()?;
         Ok(())
     }
-
     /// Prune retired routes while transferring an already-owned lane-work effect.
     ///
     /// This is deliberately separate from candidate admission: a newly
@@ -12370,7 +11800,6 @@ impl PendingExactFanout {
         self.rebuild_current_source_targets()?;
         Ok(self.targets.len())
     }
-
     fn mark_admitted(&mut self, target_index: usize) -> Result<(), String> {
         if self
             .targets
@@ -12464,7 +11893,6 @@ impl PendingExactFanout {
         }
         Ok(())
     }
-
     fn retain_returned(
         &mut self,
         target_index: usize,
@@ -12496,13 +11924,11 @@ impl PendingExactFanout {
         target.ticket = ticket;
         Ok(())
     }
-
     fn target_is_complete(&self, target_index: usize) -> bool {
         self.targets
             .get(target_index)
             .is_some_and(|target| target.message_index == self.messages.len())
     }
-
     fn target_source_at(
         &self,
         target_index: usize,
@@ -12522,7 +11948,6 @@ impl PendingExactFanout {
             .ok_or_else(|| "Sumeragi v2 exact-output target lost its current message".to_owned())?;
         Ok(target.route.source(peer, *class))
     }
-
     fn current_target_source(&self, target_index: usize) -> Result<ExactTargetSource, String> {
         let message_index = self
             .targets
@@ -12531,11 +11956,9 @@ impl PendingExactFanout {
             .message_index;
         self.target_source_at(target_index, message_index)
     }
-
     fn outstanding_sources(&self) -> Result<BTreeSet<ExactTargetSource>, String> {
         self.outstanding_sources_excluding(None)
     }
-
     fn outstanding_sources_excluding(
         &self,
         excluded_target: Option<usize>,
@@ -12561,7 +11984,6 @@ impl PendingExactFanout {
         }
         Ok(sources)
     }
-
     fn target_reservation(
         &self,
         semantic_target: &PeerId,
@@ -12582,7 +12004,6 @@ impl PendingExactFanout {
             kind,
         }
     }
-
     fn outstanding_reservation_counts(
         &self,
     ) -> Result<BTreeMap<ExactTargetReservation, usize>, String> {
@@ -12616,7 +12037,6 @@ impl PendingExactFanout {
         }
         Ok(reservations)
     }
-
     /// Reservation demand visible to read-only admission checks.
     fn admission_reservation_counts(
         &self,
@@ -12647,11 +12067,9 @@ impl PendingExactFanout {
         }
         Ok(reservations)
     }
-
     fn reply_target_merge_plan(&self, candidate: &Self) -> Result<ReplyTargetMergePlan, String> {
         self.reply_target_merge_plan_with_hooks(candidate, |_| {}, || {})
     }
-
     #[cfg(test)]
     fn reply_target_merge_plan_after_candidate_prune<AfterCandidatePrune>(
         &self,
@@ -12663,7 +12081,6 @@ impl PendingExactFanout {
     {
         self.reply_target_merge_plan_with_hooks(candidate, after_candidate_prune, || {})
     }
-
     #[cfg(test)]
     fn reply_target_merge_plan_after_route_merge<AfterRouteMerge>(
         &self,
@@ -12675,7 +12092,6 @@ impl PendingExactFanout {
     {
         self.reply_target_merge_plan_with_hooks(candidate, |_| {}, after_route_merge)
     }
-
     fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(
         &self,
         candidate: &Self,
@@ -12695,7 +12111,6 @@ impl PendingExactFanout {
         }) else {
             return Err("Sumeragi v2 reply fanout lost its authenticated authority".to_owned());
         };
-
         // Preserve and consult the actor-owned bounded route history as one
         // atomic capability operation. Pruning records tombstones before the
         // candidate is merged, so a retired target cannot hide a forged
@@ -12720,7 +12135,6 @@ impl PendingExactFanout {
             }
             let live_before_merge = candidate_routes.len();
             after_candidate_prune(merge_attempt);
-
             let mut merged_routes = retained_routes.clone();
             match merged_routes.merge_with_receipt(&candidate_routes) {
                 Ok(receipt) => break ReplyRouteMergeReceipt::Strict(receipt),
@@ -12775,7 +12189,6 @@ impl PendingExactFanout {
                 }
             }
         };
-
         // Route history is the sole authoritative liveness snapshot for the
         // remainder of this plan. Ownership projects its semantic counts and
         // cursors onto that already-reconciled snapshot, and target membership
@@ -12824,7 +12237,6 @@ impl PendingExactFanout {
                     );
                 }
             };
-
         let mut retained_sources = BTreeSet::new();
         for target in &self.targets {
             let ExactTargetRoute::Reply(route) = &target.route else {
@@ -12837,7 +12249,6 @@ impl PendingExactFanout {
                 return Err("Sumeragi v2 retained two attempts for one reply source".to_owned());
             }
         }
-
         let mut plan = Vec::with_capacity(
             self.targets
                 .len()
@@ -12942,7 +12353,6 @@ impl PendingExactFanout {
             ingress_ownership,
         })
     }
-
     fn coalesce_reservation_additions_for_plan(
         &self,
         candidate: &Self,
@@ -12989,7 +12399,6 @@ impl PendingExactFanout {
         }
         Ok(additions)
     }
-
     fn preview_coalesce_plan(
         &self,
         candidate: &Self,
@@ -13104,7 +12513,6 @@ impl PendingExactFanout {
             outstanding_sources,
         })
     }
-
     fn commit_coalesce_plan(
         &mut self,
         candidate: &Self,
@@ -13151,7 +12559,6 @@ impl PendingExactFanout {
         self.ingress_ownership = plan.ingress_ownership.clone();
         self.current_source_targets = current_source_targets;
     }
-
     #[cfg(test)]
     fn coalesce_retry(&mut self, candidate: &Self) -> Result<bool, String> {
         if !self.can_coalesce_retry(candidate) {
@@ -13162,7 +12569,6 @@ impl PendingExactFanout {
         self.commit_coalesce_plan(candidate, &plan, preview.current_source_targets);
         Ok(true)
     }
-
     fn can_coalesce_retry(&self, candidate: &Self) -> bool {
         self.message_hashes == candidate.message_hashes
             && self.semantic_peers() == candidate.semantic_peers()
@@ -13173,7 +12579,6 @@ impl PendingExactFanout {
                 .chain(&candidate.targets)
                 .all(|target| matches!(&target.route, ExactTargetRoute::Reply(_)))
     }
-
     fn is_certified_sidecar_chunk_fanout(&self) -> bool {
         matches!(
             self.messages.as_slice(),
@@ -13184,7 +12589,6 @@ impl PendingExactFanout {
             ExactOutputRolloverClaim::CertifiedSidecarChunk { .. }
         )
     }
-
     /// Return the frozen-target reservation identity for topology-routed sidecar progress.
     ///
     /// Requester-owned Request/Close output needs one topology delivery
@@ -13220,7 +12624,6 @@ impl PendingExactFanout {
             .all(|peer| peer == target)
             .then_some(target)
     }
-
     /// Return the target when this fanout is a statelessly reproducible responder control.
     ///
     /// A stale request or close deterministically regenerates these controls.
@@ -13255,7 +12658,6 @@ impl PendingExactFanout {
             && self.peers.iter().all(|peer| peer == target))
         .then_some(target)
     }
-
     /// Return whether one incomplete exact-reply target still has a writer.
     fn has_writable_reply_target(&self) -> bool {
         self.targets.iter().enumerate().any(|(index, target)| {
@@ -13266,7 +12668,6 @@ impl PendingExactFanout {
                 )
         })
     }
-
     /// Return whether a reproducible responder control has lost every writer.
     ///
     /// A pending writer-flush witness is deliberately not replaceable: the old
@@ -13284,13 +12685,11 @@ impl PendingExactFanout {
                 .iter()
                 .all(|target| target.pending_flush.is_none())
     }
-
     #[cfg(test)]
     fn is_retryable_certified_sidecar_responder_control_fanout(&self) -> bool {
         self.retryable_certified_sidecar_responder_control_target()
             .is_some()
     }
-
     fn owns_source(&self, source: &ExactTargetSource) -> Result<bool, String> {
         for (target_index, target) in self.targets.iter().enumerate() {
             let peer = self
@@ -13311,7 +12710,6 @@ impl PendingExactFanout {
         }
         Ok(false)
     }
-
     fn target_is_local_head(&self, target_index: usize) -> Result<bool, String> {
         let source = self.current_target_source(target_index)?;
         let local_head = self
@@ -13321,24 +12719,20 @@ impl PendingExactFanout {
             .ok_or_else(|| "Sumeragi v2 local output FIFO lost its current source".to_owned())?;
         Ok(*local_head == target_index)
     }
-
     fn advance_target_cursor(&mut self, target_index: usize) {
         self.next_target_index = (target_index + 1) % self.targets.len();
     }
-
     fn is_complete(&self) -> bool {
         self.targets
             .iter()
             .all(|target| target.message_index == self.messages.len())
     }
-
     fn has_dispatchable_target(&self) -> bool {
         self.targets.iter().enumerate().any(|(index, target)| {
             !target.parked && target.pending_flush.is_none() && !self.target_is_complete(index)
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExactFanoutOwnership {
     /// Every post was admitted or the exact unadmitted suffix entered the corridor.
@@ -13346,7 +12740,6 @@ pub(crate) enum ExactFanoutOwnership {
     /// The bounded corridor was full; the semantic producer must retain its source.
     SourceRetained,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExactOutputDriveOutcome {
     Drained,
@@ -13358,7 +12751,6 @@ enum ExactOutputDriveOutcome {
         closest_backpressure_rank: Option<usize>,
     },
 }
-
 enum ExactOutputAttemptOutcome {
     Admitted,
     ReplyFlush(NetworkReplyFlushAck),
@@ -13368,7 +12760,6 @@ enum ExactOutputAttemptOutcome {
     Unavailable,
     Retired,
 }
-
 /// Process-local owner shared by one exact-output corridor and its lane transport.
 ///
 /// The allocation identity is deliberately absent from every wire and durable
@@ -13378,13 +12769,10 @@ enum ExactOutputAttemptOutcome {
 struct DurableExactOutputOwnerNonce {
     sealed: AtomicBool,
 }
-
 /// Exact-output endpoint retained by one [`ProductionV2Services`] instance.
 pub(crate) struct DurableExactOutputServiceOwner(Arc<DurableExactOutputOwnerNonce>);
-
 /// Paired endpoint retained beside one exact [`crate::merge_sidecar::MergeSidecarTransport`].
 pub(crate) struct DurableExactOutputTransportOwner(Arc<DurableExactOutputOwnerNonce>);
-
 /// Mint the unique service/transport owner pair for one height-local stack.
 pub(crate) fn durable_exact_output_handoff_owner_pair() -> (
     DurableExactOutputServiceOwner,
@@ -13398,7 +12786,6 @@ pub(crate) fn durable_exact_output_handoff_owner_pair() -> (
         DurableExactOutputTransportOwner(owner),
     )
 }
-
 impl DurableExactOutputServiceOwner {
     /// Return whether this service endpoint was minted with one transport endpoint.
     pub(in crate::sumeragi) fn is_bound_to_transport_owner(
@@ -13407,11 +12794,9 @@ impl DurableExactOutputServiceOwner {
     ) -> bool {
         Arc::ptr_eq(&self.0, &owner.0)
     }
-
     fn is_sealed(&self) -> bool {
         self.0.sealed.load(AtomicOrdering::Acquire)
     }
-
     fn seal(&self) -> Result<(), String> {
         self.0
             .sealed
@@ -13420,7 +12805,6 @@ impl DurableExactOutputServiceOwner {
             .map_err(|_| "Sumeragi v2 durable exact-output handoff was already sealed".to_owned())
     }
 }
-
 #[cfg(test)]
 impl DurableExactOutputTransportOwner {
     /// Reconstruct the paired test endpoint without exposing the owner nonce.
@@ -13428,7 +12812,6 @@ impl DurableExactOutputTransportOwner {
         DurableExactOutputServiceOwner(Arc::clone(&self.0))
     }
 }
-
 /// Move-only proof that one exact service corridor was durably superseded.
 ///
 /// The constructor is private to the final seal operation. In addition to the
@@ -13445,7 +12828,6 @@ pub(crate) struct DurableExactOutputHandoffReceipt {
     finality_artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
     finality_commit_qc: wire::QuorumCertificate,
 }
-
 impl DurableExactOutputHandoffReceipt {
     /// Return whether this receipt names the transport endpoint paired with its service.
     pub(crate) fn is_bound_to_transport_owner(
@@ -13454,7 +12836,6 @@ impl DurableExactOutputHandoffReceipt {
     ) -> bool {
         Arc::ptr_eq(&self.owner, &owner.0)
     }
-
     /// Match the receipt's full canonical predecessor context identity.
     pub(crate) fn matches_predecessor_context(&self, context: &wire::HeightContext) -> bool {
         self.predecessor_context_hash == HashOf::new(context)
@@ -13462,7 +12843,6 @@ impl DurableExactOutputHandoffReceipt {
             && self.predecessor_height == context.height
             && self.predecessor_network_id == context.network_id
     }
-
     /// Match the exact durable finality artifact that authorized the seal.
     pub(crate) fn matches_finality_artifact(
         &self,
@@ -13475,7 +12855,6 @@ impl DurableExactOutputHandoffReceipt {
             && self.predecessor_network_id == artifact.height_context.network_id
             && self.finality_commit_qc == artifact.commit_qc
     }
-
     /// Verify the exact parent QC and height relation for one immediate successor.
     pub(crate) fn authorizes_immediate_successor(&self, successor: &wire::HeightContext) -> bool {
         self.predecessor_height.checked_add(1) == Some(successor.height)
@@ -13485,7 +12864,6 @@ impl DurableExactOutputHandoffReceipt {
             && self.finality_commit_qc.round.height == self.predecessor_height
     }
 }
-
 fn certified_sidecar_prefix_covers_occurrence(
     prefix: &CertifiedMergeSidecarClosedPrefix,
     requester: &PeerId,
@@ -13500,7 +12878,6 @@ fn certified_sidecar_prefix_covers_occurrence(
                     || (stream_epoch == prefix.stream_epoch
                         && semantic_sequence.get() <= prefix.closed_through))))
 }
-
 /// Bounded per-target FIFO owner for semantic network output awaiting actor admission.
 #[derive(Debug)]
 struct PendingExactOutput {
@@ -13540,7 +12917,6 @@ struct PendingExactOutput {
     max_messages_per_fanout: usize,
     max_peers_per_fanout: usize,
 }
-
 /// Fully precomputed mutation for one inseparable topology-fanout batch.
 ///
 /// The owning mutex remains held from construction through commit. Every
@@ -13556,7 +12932,6 @@ struct PendingExactOutputBatchPlan {
     shared_ownership_units: usize,
     next_fanout_fifo_id: ExactFanoutFifoId,
 }
-
 impl PendingExactOutput {
     fn new(
         shared_ownership_unit_capacity: usize,
@@ -13630,7 +13005,6 @@ impl PendingExactOutput {
             max_peers_per_fanout,
         })
     }
-
     /// Preflight an all-or-nothing batch of fresh topology fanouts.
     ///
     /// Reply coalescence and sidecar replacement have their own stateful
@@ -13678,7 +13052,6 @@ impl PendingExactOutput {
         }
         let (reservation_owner_counts, ownership_units, shared_ownership_units) =
             self.ownership_state_after_additions(&additions)?;
-
         let project_ids = |first: ExactFanoutFifoId| {
             let mut cursor = first;
             let mut ids = Vec::with_capacity(fanouts.len());
@@ -13717,7 +13090,6 @@ impl PendingExactOutput {
                 .ok_or_else(|| "Sumeragi v2 atomic Proposal FIFO sequence exhausted".to_owned())?;
             (Some(existing_ids), ids, next, rebuilt)
         };
-
         if fanout_fifo_ids.iter().any(|fifo_id| {
             source_fifo_owners
                 .values()
@@ -13734,7 +13106,6 @@ impl PendingExactOutput {
             }
             fanout.fifo_id = Some(fifo_id);
         }
-
         Ok(Some(PendingExactOutputBatchPlan {
             existing_fanout_count,
             rebased_existing_fifo_ids,
@@ -13746,7 +13117,6 @@ impl PendingExactOutput {
             next_fanout_fifo_id,
         }))
     }
-
     /// Commit a batch prepared while this exact mutex guard remained held.
     fn commit_atomic_fanout_batch(&mut self, plan: PendingExactOutputBatchPlan) {
         let PendingExactOutputBatchPlan {
@@ -13777,7 +13147,6 @@ impl PendingExactOutput {
         self.shared_ownership_units = shared_ownership_units;
         self.next_fanout_fifo_id = next_fanout_fifo_id;
     }
-
     fn is_pending(&self) -> bool {
         self.fanouts.iter().any(|fanout| {
             fanout.has_dispatchable_target()
@@ -13787,7 +13156,6 @@ impl PendingExactOutput {
                     .any(|target| target.pending_flush.is_some())
         }) || !self.admitted_sidecar_chunks.is_empty()
     }
-
     fn pending_kura_replica_advert_heights(&self) -> Result<BTreeSet<u64>, String> {
         let mut heights = BTreeSet::new();
         for fanout in &self.fanouts {
@@ -13809,7 +13177,6 @@ impl PendingExactOutput {
         }
         Ok(heights)
     }
-
     fn close_certified_sidecar_prefix(
         &mut self,
         prefix: &CertifiedMergeSidecarClosedPrefix,
@@ -13890,7 +13257,6 @@ impl PendingExactOutput {
                 "Sumeragi v2 sidecar close found inconsistent exact-output ownership".to_owned(),
             );
         }
-
         let mut retained_units = 0usize;
         let mut retained_shared_units = 0usize;
         for (reservation, count) in &retained_reservations {
@@ -13904,7 +13270,6 @@ impl PendingExactOutput {
                 })?)
                 .ok_or_else(|| "Sumeragi v2 retained shared units overflowed".to_owned())?;
         }
-
         self.fanouts.retain(|fanout| !covered(fanout));
         self.admitted_sidecar_chunks.retain(|admission| {
             let projection = admission.projection();
@@ -13928,7 +13293,6 @@ impl PendingExactOutput {
         debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
         Ok(removed)
     }
-
     fn pending_sidecar_flushes(&self) -> usize {
         self.fanouts
             .iter()
@@ -13941,12 +13305,10 @@ impl PendingExactOutput {
             })
             .count()
     }
-
     fn sidecar_control_units(&self) -> usize {
         self.pending_sidecar_flushes()
             .saturating_add(self.admitted_sidecar_chunks.len())
     }
-
     fn restore_pending_flush(
         &mut self,
         fanout_index: usize,
@@ -13965,7 +13327,6 @@ impl PendingExactOutput {
         }
         Ok(())
     }
-
     fn poll_reply_flushes(&mut self) -> Result<(), String> {
         loop {
             let mut terminal = None;
@@ -13984,7 +13345,6 @@ impl PendingExactOutput {
             let Some((fanout_index, target_index, status)) = terminal else {
                 return Ok(());
             };
-
             let (
                 canonical_post,
                 attempted_source,
@@ -14112,7 +13472,6 @@ impl PendingExactOutput {
                 .and_then(|fanout| fanout.targets.get_mut(target_index))
                 .and_then(|target| target.pending_flush.take())
                 .ok_or_else(|| "Sumeragi v2 terminal reply flush lost ownership".to_owned())?;
-
             if let Some(admission) = pending_flush.sidecar_admission.as_mut() {
                 let flush_trace = checked_flush_trace.ok_or_else(|| {
                     MergeSidecarError::FlushIdentityMismatch(
@@ -14128,7 +13487,6 @@ impl PendingExactOutput {
                     return Err(error);
                 }
             }
-
             match status {
                 NetworkReplyFlushAckStatus::Pending => {
                     unreachable!("terminal scan excludes pending")
@@ -14216,7 +13574,6 @@ impl PendingExactOutput {
             debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
         }
     }
-
     fn rebase_source_fifo(&mut self) -> Result<(), String> {
         let mut rebuilt = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
         let mut rebased_ids = Vec::with_capacity(self.fanouts.len());
@@ -14240,7 +13597,6 @@ impl PendingExactOutput {
         self.source_fifo_owners = rebuilt;
         Ok(())
     }
-
     fn allocate_fanout_fifo_id(&mut self) -> Result<ExactFanoutFifoId, String> {
         if self.next_fanout_fifo_id == ExactFanoutFifoId::MAX {
             self.rebase_source_fifo()?;
@@ -14258,7 +13614,6 @@ impl PendingExactOutput {
             .ok_or_else(|| "Sumeragi v2 outbound FIFO sequence exhausted".to_owned())?;
         Ok(fifo_id)
     }
-
     fn unregister_source_fifo_owner(
         &mut self,
         fifo_id: ExactFanoutFifoId,
@@ -14279,7 +13634,6 @@ impl PendingExactOutput {
         }
         Ok(())
     }
-
     fn source_fifo_owners_after_fanout_replacement(
         &self,
         fifo_id: ExactFanoutFifoId,
@@ -14319,7 +13673,6 @@ impl PendingExactOutput {
         }
         Ok(next)
     }
-
     fn ownership_addition_load(
         &self,
         additions: &BTreeMap<ExactTargetReservation, usize>,
@@ -14350,7 +13703,6 @@ impl PendingExactOutput {
         }
         Ok((added_units, added_shared_units))
     }
-
     fn ownership_capacity_available(
         &self,
         additions: &BTreeMap<ExactTargetReservation, usize>,
@@ -14365,7 +13717,6 @@ impl PendingExactOutput {
                 .checked_add(added_shared_units)
                 .is_some_and(|units| units <= self.shared_ownership_unit_capacity))
     }
-
     fn ownership_state_after_additions(
         &self,
         additions: &BTreeMap<ExactTargetReservation, usize>,
@@ -14400,7 +13751,6 @@ impl PendingExactOutput {
             next_shared_ownership_units,
         ))
     }
-
     fn ownership_state_after_removals(
         &self,
         removals: &BTreeMap<ExactTargetReservation, usize>,
@@ -14451,7 +13801,6 @@ impl PendingExactOutput {
             next_shared_ownership_units,
         ))
     }
-
     fn ownership_state_after_replacement(
         &self,
         removals: &BTreeMap<ExactTargetReservation, usize>,
@@ -14480,7 +13829,6 @@ impl PendingExactOutput {
                 "Sumeragi v2 responder-control replacement found inconsistent ownership".to_owned(),
             );
         }
-
         let mut next_reservation_owner_counts = self.reservation_owner_counts.clone();
         for (reservation, removed) in removals {
             if *removed == 0 {
@@ -14512,7 +13860,6 @@ impl PendingExactOutput {
                 "Sumeragi v2 responder-control replacement multiplicity overflowed".to_owned()
             })?;
         }
-
         let mut next_ownership_units = 0usize;
         let mut next_shared_ownership_units = 0usize;
         for (reservation, count) in &next_reservation_owner_counts {
@@ -14540,7 +13887,6 @@ impl PendingExactOutput {
             next_shared_ownership_units,
         )))
     }
-
     fn remove_ownership_units(
         &mut self,
         removals: &BTreeMap<ExactTargetReservation, usize>,
@@ -14551,7 +13897,6 @@ impl PendingExactOutput {
         self.shared_ownership_units = shared_units;
         Ok(())
     }
-
     fn validate_fanout_bounds(&self, fanout: &PendingExactFanout) -> Result<(), String> {
         if fanout.fifo_id.is_some() {
             return Err("Sumeragi v2 outbound fanout already owns a FIFO identity".to_owned());
@@ -14682,7 +14027,6 @@ impl PendingExactOutput {
         let _ = fanout.outstanding_sources()?;
         Ok(())
     }
-
     fn capacity_available_for(&self, fanout: &PendingExactFanout) -> Result<bool, String> {
         if let Some(pending) = self
             .fanouts
@@ -14699,7 +14043,6 @@ impl PendingExactOutput {
         }
         self.ownership_capacity_available(&fanout.admission_reservation_counts()?)
     }
-
     fn coalesced_target_geometry_available(
         &self,
         pending: &PendingExactFanout,
@@ -14718,7 +14061,6 @@ impl PendingExactOutput {
         Ok(target_count <= self.max_peers_per_fanout
             && target_count <= plan.reply_routes.source_capacity())
     }
-
     fn retains_retryable_sidecar_responder_control_for(
         &self,
         candidate: &PendingExactFanout,
@@ -14732,7 +14074,6 @@ impl PendingExactOutput {
                 })
             })
     }
-
     fn stranded_responder_control_replacement_index(
         &self,
         candidate: &PendingExactFanout,
@@ -14747,7 +14088,6 @@ impl PendingExactOutput {
                 && retained.is_stranded_retryable_certified_sidecar_responder_control()
         })
     }
-
     fn responder_control_replacement_ownership(
         &self,
         retained_index: usize,
@@ -14778,7 +14118,6 @@ impl PendingExactOutput {
             &candidate.outstanding_reservation_counts()?,
         )
     }
-
     fn responder_control_replacement_available(
         &self,
         candidate: &PendingExactFanout,
@@ -14791,7 +14130,6 @@ impl PendingExactOutput {
             .responder_control_replacement_ownership(retained_index, candidate)?
             .is_some())
     }
-
     fn responder_control_replacement_plan(
         &self,
         retained_index: usize,
@@ -14846,7 +14184,6 @@ impl PendingExactOutput {
         } else {
             self.next_fanout_index
         };
-
         let retained_sources = retained.outstanding_sources()?;
         let replacement_sources = candidate.outstanding_sources()?;
         let mut source_fifo_owners = self.source_fifo_owners.clone();
@@ -14890,7 +14227,6 @@ impl PendingExactOutput {
             shared_ownership_units,
         }))
     }
-
     fn commit_stranded_responder_control_replacement(
         &mut self,
         mut candidate: PendingExactFanout,
@@ -14940,7 +14276,6 @@ impl PendingExactOutput {
         self.shared_ownership_units = plan.shared_ownership_units;
         Ok(Some(retired))
     }
-
     fn replace_stranded_responder_control(
         &mut self,
         candidate: PendingExactFanout,
@@ -14953,7 +14288,6 @@ impl PendingExactOutput {
         drop(retired);
         Ok(true)
     }
-
     fn can_enqueue(&self, fanout: &PendingExactFanout) -> Result<bool, String> {
         self.validate_fanout_bounds(fanout)?;
         if self
@@ -14978,7 +14312,6 @@ impl PendingExactOutput {
         }
         self.capacity_available_for(fanout)
     }
-
     fn validate_owned_reply_transfer(
         &self,
         fanout: &mut PendingExactFanout,
@@ -15002,7 +14335,6 @@ impl PendingExactOutput {
             }
         }
     }
-
     fn can_enqueue_owned_reply_transfer(
         &self,
         mut fanout: PendingExactFanout,
@@ -15029,12 +14361,10 @@ impl PendingExactOutput {
         }
         self.capacity_available_for(&fanout)
     }
-
     fn enqueue(&mut self, fanout: PendingExactFanout) -> Result<ExactFanoutOwnership, String> {
         self.validate_fanout_bounds(&fanout)?;
         self.enqueue_validated(fanout)
     }
-
     fn enqueue_owned_reply_transfer(
         &mut self,
         mut fanout: PendingExactFanout,
@@ -15045,7 +14375,6 @@ impl PendingExactOutput {
         self.project_sidecar_receipt_completions(&mut fanout)?;
         self.enqueue_validated(fanout)
     }
-
     /// Coalesce a reply redelivery after a sidecar writer flush was observed.
     ///
     /// Pending writer ownership remains on the ordinary fanout target, so its
@@ -15065,7 +14394,6 @@ impl PendingExactOutput {
         let CertifiedMergeSidecarMessage::Chunk(_) = message.as_ref() else {
             return Ok(());
         };
-
         let completed_cursor = fanout.messages.len();
         let completed_message_cursor = u64::try_from(completed_cursor)
             .map_err(|_| "Sumeragi v2 sidecar replay cursor exceeded u64".to_owned())?;
@@ -15109,7 +14437,6 @@ impl PendingExactOutput {
         }
         Ok(())
     }
-
     fn enqueue_validated(
         &mut self,
         mut fanout: PendingExactFanout,
@@ -15229,7 +14556,6 @@ impl PendingExactOutput {
         self.fanouts.push_back(fanout);
         Ok(ExactFanoutOwnership::Owned)
     }
-
     fn handoff_applied_height_to_durable_reconstruction(
         &mut self,
         artifact: &wire::finality::V2FinalityArtifact,
@@ -15439,7 +14765,6 @@ impl PendingExactOutput {
         self.shared_ownership_units = 0;
         Ok(remaining_posts)
     }
-
     fn target_is_global_head(
         &self,
         fanout_index: usize,
@@ -15468,7 +14793,6 @@ impl PendingExactOutput {
             .expect("non-empty exact-output source owner set has a first entry");
         Ok(*oldest_owner == fifo_id)
     }
-
     fn next_schedulable_target(
         &self,
         blocked_sources: &BTreeSet<ExactTargetSource>,
@@ -15501,7 +14825,6 @@ impl PendingExactOutput {
         }
         Ok(None)
     }
-
     /// Return whether a FIFO head is waiting for an external reply-route event.
     ///
     /// A later fanout for the same source remains locally dispatchable while
@@ -15523,7 +14846,6 @@ impl PendingExactOutput {
         }
         Ok(false)
     }
-
     fn next_inactive_reply_target(&self) -> Option<(usize, usize)> {
         let fanout_count = self.fanouts.len();
         for fanout_offset in 0..fanout_count {
@@ -15548,7 +14870,6 @@ impl PendingExactOutput {
         }
         None
     }
-
     fn advance_after_attempt(
         &mut self,
         fanout_index: usize,
@@ -15640,7 +14961,6 @@ impl PendingExactOutput {
         }
         Ok(())
     }
-
     fn park_unwritable_reply_target(
         &mut self,
         fanout_index: usize,
@@ -15680,7 +15000,6 @@ impl PendingExactOutput {
             let _ = fanout.outstanding_sources()?;
             let _ = fanout.outstanding_reservation_counts()?;
         }
-
         let fanout = self
             .fanouts
             .get_mut(fanout_index)
@@ -15699,7 +15018,6 @@ impl PendingExactOutput {
         self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
         Ok(())
     }
-
     fn retire_inactive_reply_target(
         &mut self,
         fanout_index: usize,
@@ -15747,7 +15065,6 @@ impl PendingExactOutput {
             let _ = fanout.outstanding_sources()?;
             let _ = fanout.outstanding_reservation_counts()?;
         }
-
         let fanout = self
             .fanouts
             .get_mut(fanout_index)
@@ -15780,7 +15097,6 @@ impl PendingExactOutput {
         self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
         Ok(())
     }
-
     /// Drive exact output fairly until drained, blocked, or the deterministic budget is spent.
     fn drive_with_budget_ack<Attempt>(
         &mut self,
@@ -16117,7 +15433,6 @@ impl PendingExactOutput {
         }
         Ok(ExactOutputDriveOutcome::Drained)
     }
-
     #[cfg(test)]
     fn drive_with_budget<Attempt>(
         &mut self,
@@ -16138,7 +15453,6 @@ impl PendingExactOutput {
             })
         })
     }
-
     fn drive_bounded_with_ack<Attempt>(
         &mut self,
         attempt: Attempt,
@@ -16156,7 +15470,6 @@ impl PendingExactOutput {
     {
         self.drive_with_budget_ack(self.drive_attempt_budget, attempt)
     }
-
     #[cfg(test)]
     fn drive_with<Attempt>(&mut self, attempt: Attempt) -> Result<Option<usize>, String>
     where
@@ -16178,7 +15491,6 @@ impl PendingExactOutput {
         }
     }
 }
-
 fn durable_history_source_covers(
     messages: &[NetworkMessage],
     rollover_claim: &ExactOutputRolloverClaim,
@@ -16195,7 +15507,6 @@ fn durable_history_source_covers(
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return Err("Sumeragi v2 durable response is not block traffic".to_owned());
     };
-
     match (rollover_claim, envelope.as_message()) {
         (
             ExactOutputRolloverClaim::DurableCommitCertificateResponse {
@@ -16292,7 +15603,6 @@ fn durable_history_source_covers(
                     &response.signature_preimage(),
                 )
                 .map_err(|error| error.to_string())?;
-
             let block_height = usize::try_from(source_round.height)
                 .ok()
                 .and_then(NonZeroUsize::new)
@@ -16630,7 +15940,6 @@ fn durable_history_source_covers(
         _ => Err("Sumeragi v2 durable response claim changed output kind".to_owned()),
     }
 }
-
 fn autonomous_new_view_body_matches_durable_payload(
     body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
@@ -16652,7 +15961,6 @@ fn autonomous_new_view_body_matches_durable_payload(
     )
     .is_ok_and(|expected| expected == *body)
 }
-
 fn autonomous_lane_output_has_durable_reconstruction_source(
     messages: &[NetworkMessage],
     artifact: &wire::finality::V2FinalityArtifact,
@@ -16917,7 +16225,6 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
     }
     Ok(())
 }
-
 fn payload_chunk_output_has_applied_height_authority(
     messages: &[NetworkMessage],
     manifest: &wire::PayloadManifest,
@@ -16976,7 +16283,6 @@ fn payload_chunk_output_has_applied_height_authority(
     }
     Ok(())
 }
-
 fn applied_height_reconstruction_covers(
     messages: &[NetworkMessage],
     peers: &[PeerId],
@@ -17223,7 +16529,6 @@ fn applied_height_reconstruction_covers(
     }
     Ok(())
 }
-
 #[cfg(test)]
 pub(in crate::sumeragi) enum ExactOutputTestAdmission {
     /// Simulate a completed non-sidecar actor transfer.
@@ -17233,7 +16538,6 @@ pub(in crate::sumeragi) enum ExactOutputTestAdmission {
     /// Simulate the tenure-cancellation race with no actor ownership.
     Retired,
 }
-
 /// Test-only RAII hold for one auxiliary physical I/O admission unit.
 ///
 /// The hold changes only the shared admission counter. Dropping it releases
@@ -17260,9 +16564,7 @@ type ExactOutputAdmissionHook = Box<
             -> Result<ExactOutputTestAdmission, NetworkActorAdmissionError<Post<NetworkMessage>>>
         + Send,
 >;
-
 include!("v2_worker/kura_replica_advert_refresh.rs");
-
 /// Concrete effect services used by the live v2 height runner.
 pub(crate) struct ProductionV2Services {
     context: wire::HeightContext,
@@ -17313,7 +16615,6 @@ pub(crate) struct ProductionV2Services {
     leader_wire_recovery_authority: super::serviced_candidate_store::LeaderWireRecoveryAuthority,
     clean_teardown: bool,
 }
-
 /// Service-private permit for unpacking one durable signed Broadcast.
 ///
 /// The constructor is private to this module. The WAL/registry projection
@@ -17322,13 +16623,10 @@ pub(crate) struct ProductionV2Services {
 pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputPermitV1 {
     _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
 }
-
 struct RecoveredLifecycleSignBroadcastOutputPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleSignBroadcastOutputPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleSignBroadcastOutputPermitV1 {
     fn new() -> Self {
         Self {
@@ -17336,7 +16634,6 @@ impl RecoveredLifecycleSignBroadcastOutputPermitV1 {
         }
     }
 }
-
 /// Service-private one-shot permit for resolving a next-Vote body lookup.
 ///
 /// The exact executor mint requires this capability, so no sibling can bypass
@@ -17349,13 +16646,10 @@ pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
     output_guard: Arc<ConsensusOutputGuard>,
     body_store_identity: V2BodyStoreInstanceIdentity,
 }
-
 struct RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
     fn new(
         context: wire::HeightContext,
@@ -17371,7 +16665,6 @@ impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
             body_store_identity,
         }
     }
-
     /// Consume only against the same executor/store owner joined by the service.
     pub(in crate::sumeragi) fn consume_for_executor(
         self,
@@ -17387,7 +16680,6 @@ impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
         .then_some(self.body_store_identity)
     }
 }
-
 /// Service-private permit for consuming one adapter-sealed Proposal payload.
 ///
 /// The adapter authority releases its signed control message and canonical
@@ -17396,13 +16688,10 @@ impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
 pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputPermitV1 {
     _linearity: RecoveredLifecycleProposalExactOutputPermitLinearityV1,
 }
-
 struct RecoveredLifecycleProposalExactOutputPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleProposalExactOutputPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleProposalExactOutputPermitV1 {
     fn new() -> Self {
         Self {
@@ -17410,7 +16699,6 @@ impl RecoveredLifecycleProposalExactOutputPermitV1 {
         }
     }
 }
-
 /// Result of reserving exact output for a recovered signed Broadcast.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(in crate::sumeragi) enum RecoveredLifecycleSignBroadcastOutputCaptureV1<'service> {
@@ -17419,7 +16707,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignBroadcastOutputCaptureV1<'ser
     /// The exact corridor mutex and fail-stop operation remain retained.
     Reserved(RecoveredLifecycleSignBroadcastOutputReservationV1<'service>),
 }
-
 /// Borrow-bound exact-output reservation for one durable recovered Broadcast.
 ///
 /// Dropping the armed reservation fail-stops. The caller must first park the
@@ -17430,13 +16717,11 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputReservationV
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     output: Option<RecoveredLifecycleSignBroadcastPreparedOutputV1>,
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum RecoveredLifecycleSignBroadcastPreparedOutputV1 {
     Single(Option<PendingExactFanout>),
     Proposal(PendingExactOutputBatchPlan),
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignBroadcastOutputReservationV1<'_> {
     /// Publish the preflighted fanout in the assertion-only post-fsync tail.
@@ -17471,7 +16756,6 @@ impl RecoveredLifecycleSignBroadcastOutputReservationV1<'_> {
         operation.complete();
     }
 }
-
 /// Result of atomically reserving Proposal control and payload fanouts.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(in crate::sumeragi) enum RecoveredLifecycleProposalExactOutputCaptureV1<'service> {
@@ -17481,7 +16765,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleProposalExactOutputCaptureV1<'ser
     /// Both fanouts remain behind one mutex and fail-stop operation.
     Reserved(RecoveredLifecycleProposalExactOutputReservationV1<'service>),
 }
-
 /// Borrow-bound atomic Proposal output reservation.
 ///
 /// Dropping while armed fail-stops output. Every recoverable prepublication
@@ -17535,7 +16818,6 @@ impl RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_> {
         self.seal.attempted = true;
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
     /// Borrow the sole initial-Proposal WAL permit while this batch is armed.
@@ -17570,7 +16852,6 @@ impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
             .take()
             .expect("armed recovered Proposal output retains its retry authority")
     }
-
     /// Install both preflighted fanouts in one assertion-only publication tail.
     pub(in crate::sumeragi) fn commit_after_publication(mut self) {
         let mut pending = self
@@ -17597,7 +16878,6 @@ impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
         operation.complete();
     }
 }
-
 /// Result of reserving exact output for one recovered Decision Fetch request.
 pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service> {
     /// The bounded corridor cannot own this fanout yet; nothing was claimed.
@@ -17605,7 +16885,6 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service
     /// The same corridor mutex and fail-stop permit remain retained through claim.
     Reserved(RecoveredDecisionFetchExactOutputReservationV1<'service>),
 }
-
 /// Borrow-bound exact-output reservation retained before coordinator claim.
 ///
 /// Preencoding, topology construction, rollover validation, and `can_enqueue`
@@ -17618,13 +16897,11 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'s
     fanout: Option<PendingExactFanout>,
     predecessor_debt: u64,
 }
-
 impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
     /// Exact retained output-prefix debt used by the authenticated scheduler row.
     pub(in crate::sumeragi) const fn predecessor_debt(&self) -> u64 {
         self.predecessor_debt
     }
-
     /// Release an unchanged pre-claim reservation without fail-stopping output.
     pub(in crate::sumeragi) fn abort_before_claim(mut self) {
         drop(self.pending.take());
@@ -17633,7 +16910,6 @@ impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
             .expect("armed recovered Fetch output retains its fail-stop operation")
             .complete();
     }
-
     /// Publish the preflighted fanout in the assertion-only post-arming tail.
     pub(in crate::sumeragi) fn commit(mut self) {
         let mut pending = self
@@ -17657,13 +16933,11 @@ impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
         operation.complete();
     }
 }
-
 fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
     u64::from(layout.max_chunk_count)
         .saturating_mul(u64::from(layout.chunk_size_bytes))
         .min(wire::MAX_DA_ENCODED_PAYLOAD_BYTES)
 }
-
 impl ProductionV2Services {
     /// Reserve exact output from one still-live durable recovered Broadcast.
     ///
@@ -17690,7 +16964,6 @@ impl ProductionV2Services {
             self.capture_recovered_lifecycle_signed_broadcast_message(message)
         }
     }
-
     fn capture_recovered_lifecycle_signed_broadcast_message(
         &self,
         message: wire::ConsensusMessageV2,
@@ -17749,7 +17022,6 @@ impl ProductionV2Services {
             },
         ))
     }
-
     #[allow(clippy::too_many_lines)]
     fn capture_recovered_lifecycle_cold_proposal_message(
         &self,
@@ -17860,7 +17132,6 @@ impl ProductionV2Services {
             },
         ))
     }
-
     /// Atomically reserve a signed recovered Proposal and all canonical chunks.
     ///
     /// Both topology fanouts are built and their aggregate target/class debt is
@@ -17967,7 +17238,6 @@ impl ProductionV2Services {
             },
         )?;
         let fanouts = control.into_iter().chain(chunks).collect::<Vec<_>>();
-
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
@@ -18005,7 +17275,6 @@ impl ProductionV2Services {
             },
         ))
     }
-
     /// Consume one carrier-derived recovered Fetch through this exact service key.
     pub(in crate::sumeragi) fn authenticate_recovered_decision_fetch_request(
         &self,
@@ -18071,7 +17340,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(owner)
     }
-
     /// Reserve exact output for an already fixed-signature recovered request.
     pub(in crate::sumeragi) fn capture_recovered_decision_fetch_exact_output(
         &self,
@@ -18111,7 +17379,6 @@ impl ProductionV2Services {
             },
         ))
     }
-
     fn recovered_decision_fetch_fanout(
         &self,
         owner: &RecoveredDecisionFetchRequestOwnerV1,
@@ -18315,7 +17582,6 @@ impl ProductionV2Services {
     ) -> bool {
         executor.matches_lifecycle_output_guard(&self.output_guard)
     }
-
     /// Return whether one lane adapter shares this exact height and storage owner.
     pub(in crate::sumeragi) fn matches_lifecycle_lane_work(
         &self,
@@ -18330,13 +17596,11 @@ impl ProductionV2Services {
             &self.exact_output_handoff_owner,
         )
     }
-
     fn owns_recovered_decision_apply_queue(&self, queue: &Arc<V2IoCommandQueue>) -> bool {
         self.io
             .as_ref()
             .is_some_and(|io| Arc::ptr_eq(&io.command_tx.queue, queue))
     }
-
     /// Return whether the live worker owns the exact body-store instance
     /// transferred by the lifecycle owner.
     pub(crate) fn matches_lifecycle_body_store(
@@ -18448,7 +17712,6 @@ impl ProductionV2Services {
             body_store_identity.clone(),
         ))
     }
-
     /// Preview one recovered Sign and authenticate its next body in one borrow.
     ///
     /// The service joins the exact worker/store owner before the executor
@@ -18472,7 +17735,6 @@ impl ProductionV2Services {
             .prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)
             .map_err(|error| error.to_string())
     }
-
     /// Publish the live completion owner only from final runner activation.
     ///
     /// The move-only permit is minted and retained by the opaque lifecycle
@@ -18502,7 +17764,6 @@ impl ProductionV2Services {
         activation.complete();
         Ok(())
     }
-
     /// Atomically reserve the selected lifecycle carrier's exact I/O target.
     ///
     /// The selector's one-shot target seal is consumed only after this service
@@ -18575,7 +17836,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     /// Reserve the Consensus I/O lane for one exact recovered Decision Apply key.
     ///
     /// Capacity is captured before the coordinator claims the carrier. The
@@ -18603,7 +17863,6 @@ impl ProductionV2Services {
             .queue
             .capture_recovered_decision_apply_capacity(operation, key)
     }
-
     /// Reserve the Consensus lane for one exact lifecycle-owned recovered Sign.
     ///
     /// This happens before coordinator claim. The locked reservation accepts
@@ -18631,7 +17890,6 @@ impl ProductionV2Services {
             .queue
             .capture_recovered_lifecycle_sign_capacity(operation, key)
     }
-
     /// Restore the actor-global lifecycle source before constructing runtime
     /// owners for this height.
     ///
@@ -18669,7 +17927,6 @@ impl ProductionV2Services {
             persisted.next_ingress_reservation_ordinal,
         ))
     }
-
     /// Start the ordered I/O adapter for one immutable height context.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
@@ -18743,7 +18000,6 @@ impl ProductionV2Services {
             exact_output_handoff_owner,
         )
     }
-
     /// Start with the exact application service used for recovered marker replay.
     ///
     /// Identity validation runs before the shared constructor creates the
@@ -18811,7 +18067,6 @@ impl ProductionV2Services {
             exact_output_handoff_owner,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn start_inner(
         context: wire::HeightContext,
@@ -18970,7 +18225,6 @@ impl ProductionV2Services {
         service.clean_teardown = false;
         Ok(service)
     }
-
     /// Sign and retain all canonical chunks for proposal and retransmission.
     pub(crate) fn register_outbound_payload(
         &mut self,
@@ -19046,7 +18300,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(manifest)
     }
-
     fn restore_outbound_payload_after_signature(
         &mut self,
         disposition: CompletionDisposition,
@@ -19065,7 +18318,6 @@ impl ProductionV2Services {
             ),
         }
     }
-
     /// Work identifier waiting for a chunk from one manifest.
     pub(crate) fn fetch_work_for_manifest(
         &self,
@@ -19073,7 +18325,6 @@ impl ProductionV2Services {
     ) -> Option<EffectWorkId> {
         self.fetch_by_manifest.get(&manifest_hash).copied()
     }
-
     fn body_fetch_service_owner(
         &self,
         work_id: EffectWorkId,
@@ -19106,7 +18357,6 @@ impl ProductionV2Services {
             .iter()
             .filter_map(|(manifest, owner)| (*owner == work_id).then_some(*manifest))
             .collect::<Vec<_>>();
-
         if let Some(fetch) = live {
             match (fetch.task.manifest(), fetch.chunks.as_ref()) {
                 (Some(manifest), Some(session)) => {
@@ -19132,7 +18382,6 @@ impl ProductionV2Services {
             }
             return Ok(BodyFetchServiceOwner::Live);
         }
-
         if let Some(index) = queued_index {
             let LocalCompletion::Reconstructed { task, manifest, .. } = self
                 .local_completions
@@ -19149,7 +18398,6 @@ impl ProductionV2Services {
             }
             return Ok(BodyFetchServiceOwner::Reconstructed(index));
         }
-
         if !indexed_manifests.is_empty() {
             return Err(format!(
                 "Sumeragi v2 body-fetch work {} has an orphaned manifest owner",
@@ -19158,7 +18406,6 @@ impl ProductionV2Services {
         }
         Ok(BodyFetchServiceOwner::None)
     }
-
     fn plan_exact_body_fetch_owner_removal(
         &self,
         task: &BodyFetchTask,
@@ -19200,7 +18447,6 @@ impl ProductionV2Services {
         }
         Ok(owner)
     }
-
     pub(in crate::sumeragi) fn prepare_certified_body_fetch_owner_removal(
         &mut self,
         task: &BodyFetchTask,
@@ -19218,13 +18464,11 @@ impl ProductionV2Services {
             owner,
         })
     }
-
     /// Clone the process output guard before an exact service-removal token
     /// exclusively borrows this service owner.
     pub(in crate::sumeragi) fn lifecycle_output_guard(&self) -> Arc<ConsensusOutputGuard> {
         Arc::clone(&self.output_guard)
     }
-
     fn commit_exact_body_fetch_owner_removal(
         &mut self,
         task: &BodyFetchTask,
@@ -19250,13 +18494,11 @@ impl ProductionV2Services {
             }
         }
     }
-
     fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
         let owner = self.plan_exact_body_fetch_owner_removal(task)?;
         self.commit_exact_body_fetch_owner_removal(task, owner);
         Ok(())
     }
-
     /// Reserve an immutable Serve lifecycle before fair ingress releases it.
     ///
     /// A new request atomically installs a durable non-runnable lifecycle and
@@ -19270,12 +18512,10 @@ impl ProductionV2Services {
             .as_ref()
             .map_or(Ok(None), |io| io.serve_barrier_request_hash())
     }
-
     /// Return the exact selected Serve request and its logical and physical ordinals.
     pub(crate) fn certified_serve_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.io.as_ref().map_or(Ok(None), V2IoHandle::serve_barrier)
     }
-
     /// Claim one bounded older-runtime turn for this exact ticket.
     ///
     /// A claimed turn must be settled after the executor re-evaluates the
@@ -19293,7 +18533,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .claim_serve_runtime_episode(barrier)
     }
-
     /// Project one completed strict predecessor without consuming it.
     ///
     /// This mirrors the exact-Serve completion selector at its current held or
@@ -19321,7 +18560,6 @@ impl ProductionV2Services {
             return Err("Sumeragi v2 I/O completion retained a zero lifecycle ordinal".to_owned());
         }
         let io_ordinal = io_ordinal.filter(|ordinal| *ordinal < serve_lifecycle_ordinal);
-
         let mut local_ordinal = None;
         if runtime_capacity_available {
             for completion in &self.local_completions {
@@ -19350,7 +18588,6 @@ impl ProductionV2Services {
             })
             .transpose()
     }
-
     /// Consume one runtime-issued predecessor witness for this exact target.
     ///
     /// The first observation records the continuous episode. A sealed target
@@ -19366,7 +18603,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .observe_serve_predecessor_episode_witness(barrier, witness)
     }
-
     /// Return whether this claimed turn can dispatch one strictly older causal
     /// owner into the completion-producing I/O corridor.
     ///
@@ -19383,7 +18619,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .serve_runtime_predecessor_capacity_available(barrier)
     }
-
     /// Reopen the next bounded turn while an older owner remains, otherwise seal it.
     pub(crate) fn finish_certified_serve_runtime_episode_turn(
         &self,
@@ -19395,7 +18630,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)
     }
-
     /// Clone the internal gate which reserves Serve order at fair admission.
     pub(crate) fn certified_serve_ingress_gate(&self) -> Result<CertifiedServeIngressGate, String> {
         self.io
@@ -19403,7 +18637,6 @@ impl ProductionV2Services {
             .map(V2IoHandle::certified_serve_ingress_gate)
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())
     }
-
     /// Return the least admitted Serve owner waiting for an exact physical retry.
     pub(crate) fn dormant_certified_serve_ingress_scheduler_ordinal(
         &self,
@@ -19413,7 +18646,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .dormant_serve_ingress_scheduler_ordinal()
     }
-
     /// Latch process restart when a carrierless live Serve lifecycle appears.
     ///
     /// Production startup locally discharges every restored lifecycle before
@@ -19435,7 +18667,6 @@ impl ProductionV2Services {
         );
         reason
     }
-
     /// Start one finite local-producer episode if no exact ingress ticket owns
     /// the next runner turn.
     pub(crate) fn try_begin_certified_serve_producer_episode(
@@ -19446,7 +18677,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .try_begin_producer_episode()
     }
-
     pub(crate) fn prepare_certified_request(
         &self,
         authenticated_via: &PeerId,
@@ -19500,7 +18730,6 @@ impl ProductionV2Services {
         };
         io.prepare_reserved_serve(owner, request)
     }
-
     /// Stage a deterministic negative outcome while the exact fair carrier is
     /// still selected. The following checked physical drain persists the
     /// tombstone and scheduler-ticket retirement atomically.
@@ -19514,7 +18743,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
             .stage_selected_serve_rejection(request_hash, outcome)
     }
-
     /// Queue an authenticated certified-body request with every independent return route.
     pub(crate) fn serve_certified_request_on_routes(
         &mut self,
@@ -19583,7 +18811,6 @@ impl ProductionV2Services {
             CertifiedServeCommit::Ignored => Ok(()),
         }
     }
-
     /// Load the exact durable body required by a lock-constrained proposal.
     ///
     /// The physical acquisition is keyed by the immutable subject. A later
@@ -19660,7 +18887,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     fn allocate_locked_candidate_acquisition_id(
         &mut self,
     ) -> Result<LockedCandidateAcquisitionId, String> {
@@ -19672,7 +18898,6 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 locked-body acquisition ID overflow".to_owned())?;
         Ok(acquisition_id)
     }
-
     fn enqueue_locked_candidate_load(
         &self,
         acquisition_id: LockedCandidateAcquisitionId,
@@ -19683,7 +18908,6 @@ impl ProductionV2Services {
             subject,
         })
     }
-
     fn complete_locked_candidate_load(
         &mut self,
         loaded: LockedCandidateLoad,
@@ -19697,7 +18921,6 @@ impl ProductionV2Services {
             .complete(loaded)?;
         self.finish_locked_candidate_completion(completion)
     }
-
     fn locked_candidate_load_unavailable(
         &mut self,
         acquisition_id: LockedCandidateAcquisitionId,
@@ -19712,7 +18935,6 @@ impl ProductionV2Services {
             .unavailable(acquisition_id, subject)?;
         self.finish_locked_candidate_completion(completion)
     }
-
     fn locked_candidate_load_failed(
         &mut self,
         acquisition_id: LockedCandidateAcquisitionId,
@@ -19727,7 +18949,6 @@ impl ProductionV2Services {
             .map_err(|classification| format!("{classification}: {reason}"))?;
         self.finish_locked_candidate_completion(completion)
     }
-
     fn finish_locked_candidate_completion(
         &mut self,
         completion: LockedCandidateCompletion,
@@ -19751,7 +18972,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     fn retry_locked_candidate_after_store(
         &mut self,
         subject: wire::BlockSubject,
@@ -19777,7 +18997,6 @@ impl ProductionV2Services {
             .start_replacement(acquisition_id);
         Ok(())
     }
-
     /// Take the next locked-subject body loaded by the ordered I/O worker.
     pub(crate) fn take_loaded_candidate(&mut self) -> Option<LoadedCandidateBody> {
         if self.output_guard.restart_required() {
@@ -19787,7 +19006,6 @@ impl ProductionV2Services {
             .as_mut()
             .and_then(LockedCandidateAcquisition::take_ready)
     }
-
     /// Take the next deterministic body rejection observed by the worker.
     pub(crate) fn take_validation_rejection(&mut self) -> Option<RejectedCandidateBody> {
         if self.output_guard.restart_required() {
@@ -19795,7 +19013,6 @@ impl ProductionV2Services {
         }
         self.validation_rejections.pop_front()
     }
-
     /// Take the next exact validation deferral for bounded sidecar recovery.
     pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
         if self.output_guard.restart_required() {
@@ -19803,7 +19020,6 @@ impl ProductionV2Services {
         }
         self.merge_sidecar_deferrals.pop_front()
     }
-
     /// Put back a transiently capacity-blocked deferral without losing its
     /// exact durable validation intent.
     pub(crate) fn requeue_merge_sidecar_deferral(
@@ -19844,7 +19060,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     /// Take the next reducer-authorized local Prepare intent.
     pub(crate) fn take_prepared_candidate(&mut self) -> Option<PreparedCandidateBody> {
         if self.output_guard.restart_required() {
@@ -19852,7 +19067,6 @@ impl ProductionV2Services {
         }
         self.prepared_candidates.pop_front()
     }
-
     /// Route a possibly reordered payload chunk. Chunks received before their
     /// Proposal are retained under one explicit body-sized bound and undergo
     /// full signature/hash authentication only after the proposal manifest
@@ -19877,12 +19091,10 @@ impl ProductionV2Services {
         if let Some(work_id) = self.fetch_work_for_manifest(manifest_hash) {
             return self.deliver_payload_chunk(executor, work_id, sender, chunk, ingress_ownership);
         }
-
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-
         if let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() {
             if self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {
                 self.leader_wire_ingress
@@ -19906,7 +19118,6 @@ impl ProductionV2Services {
                 PayloadChunkLifecycleDisposition::Retain => {}
             }
         }
-
         let terminal_ownership = ingress_ownership.clone();
         match self.buffer_orphan_payload_chunk_owned_checked(sender, chunk, ingress_ownership) {
             OrphanPayloadChunkBufferResult::Disposition(disposition) => {
@@ -19923,7 +19134,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     fn has_exact_reconstructed_completion(
         &self,
         manifest_hash: HashOf<wire::PayloadManifest>,
@@ -19953,7 +19163,6 @@ impl ProductionV2Services {
         }
         Ok(false)
     }
-
     fn buffer_orphan_payload_chunk_owned_checked(
         &mut self,
         sender: PeerId,
@@ -19962,7 +19171,6 @@ impl ProductionV2Services {
     ) -> OrphanPayloadChunkBufferResult {
         self.buffer_orphan_payload_chunk_inner(sender, chunk, Some(ingress_ownership))
     }
-
     #[cfg(test)]
     fn buffer_orphan_payload_chunk_owned(
         &mut self,
@@ -19973,7 +19181,6 @@ impl ProductionV2Services {
         self.buffer_orphan_payload_chunk_owned_checked(sender, chunk, ingress_ownership)
             .public_disposition()
     }
-
     #[cfg(test)]
     fn buffer_orphan_payload_chunk(
         &mut self,
@@ -19983,7 +19190,6 @@ impl ProductionV2Services {
         self.buffer_orphan_payload_chunk_inner(sender, chunk, None)
             .public_disposition()
     }
-
     fn buffer_orphan_payload_chunk_inner(
         &mut self,
         sender: PeerId,
@@ -20114,7 +19320,6 @@ impl ProductionV2Services {
         self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_add(chunk_len);
         OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Buffered)
     }
-
     fn evict_one_proofless_orphan_chunk(&mut self) -> bool {
         let selected = self
             .orphan_chunks
@@ -20150,7 +19355,6 @@ impl ProductionV2Services {
         self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(removed_bytes);
         true
     }
-
     fn next_orphan_payload_lifecycle_sweep_position(
         &self,
     ) -> Option<OrphanPayloadLifecycleSweepCursor> {
@@ -20185,7 +19389,6 @@ impl ProductionV2Services {
             })
             .or_else(first)
     }
-
     fn terminalize_buffered_payload_chunk_if_complete<R: EffectRuntime>(
         &self,
         executor: &V2EffectExecutor<R>,
@@ -20217,7 +19420,6 @@ impl ProductionV2Services {
         }
         Ok(true)
     }
-
     fn sweep_buffered_payload_chunk_lifecycles<R: EffectRuntime>(
         &mut self,
         executor: &V2EffectExecutor<R>,
@@ -20284,7 +19486,6 @@ impl ProductionV2Services {
         }
         first_error.map_or(Ok(retired), Err)
     }
-
     /// Replay all chunks whose proposal manifests have now opened sessions.
     pub(crate) fn replay_buffered_chunks<R: EffectRuntime>(
         &mut self,
@@ -20359,7 +19560,6 @@ impl ProductionV2Services {
         }
         Ok(delivered)
     }
-
     fn retire_buffered_payload_chunk_tail(
         &mut self,
         mut chunks: VecDeque<BufferedPayloadChunk>,
@@ -20386,7 +19586,6 @@ impl ProductionV2Services {
         }
         first_error.map_or(Ok(()), Err)
     }
-
     fn take_io_completion(&mut self, runtime_capacity_available: bool) -> IoCompletionTake {
         if self.held_io_completion.as_ref().is_some_and(|completion| {
             matches!(
@@ -20404,7 +19603,6 @@ impl ProductionV2Services {
                 ownership_position: 0,
             });
         }
-
         let ownership_position =
             usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
         let Some(io) = self.io.as_ref() else {
@@ -20465,7 +19663,6 @@ impl ProductionV2Services {
             ownership_position,
         })
     }
-
     fn take_recovered_decision_apply_completion(&mut self) -> IoCompletionTake {
         if let Some(completion) = self.held_io_completion.take() {
             if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
@@ -20493,7 +19690,6 @@ impl ProductionV2Services {
             IoCompletionTake::unavailable()
         }
     }
-
     fn take_recovered_lifecycle_sign_completion(&mut self) -> IoCompletionTake {
         if let Some(completion) = self.held_io_completion.take() {
             if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
@@ -20521,7 +19717,6 @@ impl ProductionV2Services {
             IoCompletionTake::unavailable()
         }
     }
-
     fn take_recovered_decision_fetch_body_completion(&mut self) -> IoCompletionTake {
         if let Some(completion) = self.held_io_completion.take() {
             if matches!(
@@ -20555,7 +19750,6 @@ impl ProductionV2Services {
             IoCompletionTake::unavailable()
         }
     }
-
     fn take_next_completion(&mut self, runtime_capacity_available: bool) -> IoCompletionTake {
         let completion = if runtime_capacity_available && self.held_io_completion.is_some() {
             // Once capacity returns, the exact runtime result which first
@@ -20596,7 +19790,6 @@ impl ProductionV2Services {
         }
         completion
     }
-
     fn take_exact_serve_predecessor_completion(
         &mut self,
         runtime_capacity_available: bool,
@@ -20608,7 +19801,6 @@ impl ProductionV2Services {
             false,
         )
     }
-
     fn take_timeout_recovery_prefix_completion(
         &mut self,
         runtime_capacity_available: bool,
@@ -20620,7 +19812,6 @@ impl ProductionV2Services {
             true,
         )
     }
-
     fn take_lifecycle_prefix_completion(
         &mut self,
         runtime_capacity_available: bool,
@@ -20693,7 +19884,6 @@ impl ProductionV2Services {
         }
         completion
     }
-
     fn retire_held_io_completion(&mut self) {
         let Some(completion) = self.held_io_completion.take() else {
             return;
@@ -20711,7 +19901,6 @@ impl ProductionV2Services {
                 .expect("non-Serve completion acknowledgement is infallible");
         }
     }
-
     /// Drain tagged I/O and reconstruction completions into the reducer owner.
     ///
     /// The service alternates between I/O and local reconstruction while the
@@ -20727,7 +19916,6 @@ impl ProductionV2Services {
         let outcome = self.drain_completions_with_lifecycle(executor)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-
     /// Drain the oldest completion only when it belongs to recovered Decision Apply.
     ///
     /// This path does not accept an effect executor and cannot call the
@@ -20890,7 +20078,6 @@ impl ProductionV2Services {
             completion: Some(completion),
         })
     }
-
     /// Drain only the oldest lifecycle-owned recovered Fetch body completion.
     /// Generic completion service retains this family at the physical head.
     pub(in crate::sumeragi) fn drain_recovered_decision_fetch_body_completion(
@@ -20920,7 +20107,6 @@ impl ProductionV2Services {
             completion: Some(completion),
         })
     }
-
     /// Drain the ordinary bounded completion source while returning a
     /// persisted certified-Fetch body directly to its serialized owner.
     ///
@@ -20939,7 +20125,6 @@ impl ProductionV2Services {
             CompletionDrainPolicy::Fair,
         )
     }
-
     /// Admit at most one completed causal owner strictly older than an exact Serve ticket.
     ///
     /// The task's immutable actor-global ordinal is inspected before the
@@ -20964,7 +20149,6 @@ impl ProductionV2Services {
         )?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-
     /// Admit at most one completed causal owner from the inclusive timeout
     /// recovery prefix.
     ///
@@ -20985,7 +20169,6 @@ impl ProductionV2Services {
         )?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
-
     /// Service at most one I/O result from the producer prefix frozen before an
     /// off-queue exact Serve target.
     ///
@@ -21008,7 +20191,6 @@ impl ProductionV2Services {
             Err(reason) => Err(executor.external_service_failed(reason, self)),
         }
     }
-
     fn drain_completions_inner<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -21208,8 +20390,7 @@ impl ProductionV2Services {
                             // The completion linearized before the runtime WAL
                             // fence, but delivery linearized after its durable
                             // Decision. Queue ownership has already crossed to
-                            // the typed negative tombstone; publish no stale
-                            // response.
+                            // the typed negative tombstone; publish no stale response.
                             return Ok(());
                         };
                         let message = wire::ConsensusMessageV2::new(
@@ -21461,7 +20642,6 @@ impl ProductionV2Services {
             certified_fetch_body,
         })
     }
-
     fn require_no_unowned_lifecycle_completion<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -21476,7 +20656,6 @@ impl ProductionV2Services {
         }
         Ok(serviced)
     }
-
     /// Hand all height-local body and chunk cleanup to the bounded janitor.
     ///
     /// The caller invokes this only after the adapter verified Kura's typed
@@ -21622,19 +20801,16 @@ impl ProductionV2Services {
         }
         outcome
     }
-
     fn io(&self) -> Result<&V2IoHandle, String> {
         self.io
             .as_ref()
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())
     }
-
     fn output_permit(&self) -> Result<ConsensusOutputPermit<'_>, String> {
         self.output_guard
             .acquire()
             .ok_or_else(|| "Sumeragi v2 canonical persistence requires restart recovery".to_owned())
     }
-
     fn lock_pending_exact_output(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, PendingExactOutput>, String> {
@@ -21642,7 +20818,6 @@ impl ProductionV2Services {
             .lock()
             .map_err(|_| "Sumeragi v2 outbound corridor lock was poisoned".to_owned())
     }
-
     /// Replace actor admission with a deterministic recoverable test boundary.
     #[cfg(test)]
     pub(in crate::sumeragi) fn set_exact_output_admission_hook(
@@ -21658,7 +20833,6 @@ impl ProductionV2Services {
             hook(post, ticket).map(|()| ExactOutputTestAdmission::Admitted)
         })));
     }
-
     /// Replace reply admission with a controllable writer-flush test boundary.
     #[cfg(test)]
     pub(in crate::sumeragi) fn set_exact_output_flush_admission_hook(
@@ -21674,7 +20848,6 @@ impl ProductionV2Services {
     ) {
         self.exact_output_admission_hook = Some(Mutex::new(Box::new(hook)));
     }
-
     /// Replace an empty exact-output corridor with a small production-shaped test geometry.
     #[cfg(test)]
     pub(in crate::sumeragi) fn set_exact_output_shared_unit_capacity_for_test(
@@ -21710,7 +20883,6 @@ impl ProductionV2Services {
         *pending = replacement;
         Ok(())
     }
-
     /// Test whether the exact-output corridor retained a particular opaque
     /// reply tenure after a production service handoff.
     #[cfg(test)]
@@ -21729,13 +20901,11 @@ impl ProductionV2Services {
             })
         })
     }
-
     #[cfg(test)]
     /// Return whether fail-stop output handling requires a process restart.
     pub(in crate::sumeragi) fn exact_output_restart_required_for_test(&self) -> bool {
         self.output_guard.restart_required()
     }
-
     /// Hold one auxiliary I/O unit without fabricating a queue command.
     #[cfg(test)]
     pub(in crate::sumeragi) fn hold_auxiliary_io_admission_for_test(
@@ -21803,7 +20973,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
         pending.poll_reply_flushes()?;
         let outcome = {
@@ -21873,7 +21042,6 @@ impl ProductionV2Services {
         }
         Ok(pending.is_pending())
     }
-
     fn enqueue_exact_fanout_while_guarded(
         &self,
         messages: Vec<NetworkMessage>,
@@ -21896,7 +21064,6 @@ impl ProductionV2Services {
         }
         Ok(ownership)
     }
-
     /// Transfer an inseparable set of fresh topology fanouts into one corridor cut.
     ///
     /// Every fallible bound, aggregate-capacity, and FIFO check runs while the
@@ -21920,7 +21087,6 @@ impl ProductionV2Services {
         let _ = self.drive_pending_exact_output(&mut pending)?;
         Ok(ExactFanoutOwnership::Owned)
     }
-
     fn enqueue_owned_exact_reply_routes_while_guarded(
         &self,
         message: NetworkMessage,
@@ -21957,14 +21123,12 @@ impl ProductionV2Services {
         }
         Ok(ownership)
     }
-
     fn exact_output_scope(&self) -> ExactOutputCreationScope {
         ExactOutputCreationScope {
             context_id: self.context.id(),
             height: self.context.height,
         }
     }
-
     /// Advance the shared process-lifetime advert refresher by one bounded
     /// turn.  A retained refresh token is independent of `PendingExactOutput`;
     /// only an accepted enqueue gains an exact rollover claim.
@@ -21997,7 +21161,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(outcome)
     }
-
     /// Retry every currently schedulable exact semantic-output target.
     ///
     /// Returns `true` while an exact actor-backpressured target remains owned.
@@ -22018,7 +21181,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(pending_remains)
     }
-
     /// Transfer remaining height-local output to durable reconstruction.
     ///
     /// This boundary is valid only after Kura has returned the exact applied
@@ -22072,7 +21234,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(retired)
     }
-
     /// Seal the empty exact-output corridor and mint its unique rollover receipt.
     ///
     /// The repeatable handoff above may run multiple times while lane-local
@@ -22080,8 +21241,7 @@ impl ProductionV2Services {
     /// only after the runner has observed no remaining lane handoff. It
     /// validates the exact Kura/finality authority again, performs one final
     /// atomic corridor handoff, rejects a non-empty final pass, and seals all
-    /// later exact-output enqueue operations before returning the move-only
-    /// owner-bound receipt.
+    /// later exact-output enqueue operations before returning the move-only owner-bound receipt.
     pub(crate) fn seal_applied_height_output_handoff(
         &self,
         receipt: &KuraV2CommitReceipt,
@@ -22126,7 +21286,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(handoff)
     }
-
     fn validate_applied_height_output_handoff_authority(
         &self,
         receipt: &KuraV2CommitReceipt,
@@ -22148,7 +21307,6 @@ impl ProductionV2Services {
         }
         Ok(())
     }
-
     /// Return whether the bounded corridor has dispatchable fanout work, a
     /// pending writer-flush witness, or an admitted sidecar receipt awaiting
     /// delivery to the lane. Parked retained payload is intentionally
@@ -22164,7 +21322,6 @@ impl ProductionV2Services {
             }
         })
     }
-
     /// Drain process-local sidecar receipts after the exact peer writer flushes
     /// their response chunks.
     pub(crate) fn drain_certified_merge_sidecar_chunk_admissions(
@@ -22180,7 +21337,6 @@ impl ProductionV2Services {
         let count = limit.min(pending.admitted_sidecar_chunks.len());
         Ok(pending.admitted_sidecar_chunks.drain(..count).collect())
     }
-
     /// Cancel every queued or writer-pending response occurrence covered by an
     /// authenticated cumulative close for the exact durable stream incarnation
     /// before any newer output is dispatched.
@@ -22195,7 +21351,6 @@ impl ProductionV2Services {
         }
         pending.close_certified_sidecar_prefix(prefix)
     }
-
     fn exact_target_geometry(
         peer: &PeerId,
         reply_routes: Option<&NetworkReplyRoutes>,
@@ -22224,7 +21379,6 @@ impl ProductionV2Services {
             Some(reply_routes.clone()),
         ))
     }
-
     /// Check the exact target/class/kind reservation for the next lane-work effect.
     pub(crate) fn can_retain_lane_work_effect(
         &self,
@@ -22509,7 +21663,6 @@ impl ProductionV2Services {
             pending.can_enqueue(&fanout)
         }
     }
-
     fn remote_voters(&self) -> Vec<PeerId> {
         self.context
             .roster
@@ -22518,7 +21671,6 @@ impl ProductionV2Services {
             .map(|entry| entry.validator.clone())
             .collect()
     }
-
     /// Publish one exact signed body-keeper advert from durable Kura state.
     ///
     /// The advert is rebuilt only after canonical application completes, then
@@ -22561,7 +21713,6 @@ impl ProductionV2Services {
             permit,
         )
     }
-
     fn committee_for_round(&self, round: wire::ConsensusRound) -> Result<Committee, String> {
         if round.context_id != self.context.id() || round.height != self.context.height {
             return Err("Sumeragi v2 committee routing received a foreign round".to_owned());
@@ -22574,7 +21725,6 @@ impl ProductionV2Services {
         )
         .map_err(|error| error.to_string())
     }
-
     fn remote_voters_for_indices(
         &self,
         indices: &[wire::ValidatorIndex],
@@ -22596,7 +21746,6 @@ impl ProductionV2Services {
         }
         Ok(peers)
     }
-
     fn enqueue_fail_stop_io(&self, command: V2IoCommand) -> Result<(), String> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -22606,12 +21755,10 @@ impl ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     /// Mark an operator-requested shutdown as non-fatal before dropping services.
     pub(crate) fn allow_clean_shutdown(&mut self) {
         self.clean_teardown = true;
     }
-
     fn deliver_payload_chunk<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
@@ -22640,7 +21787,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     /// Send one response through every retained authenticated source route.
     pub(crate) fn post_to_peer_on_reply_routes(
         &self,
@@ -22683,7 +21829,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     /// Send one response whose exact payload can be rebuilt from immutable Kura history.
     #[cfg(test)]
     pub(crate) fn post_durable_history_response_with_permit(
@@ -22694,7 +21839,6 @@ impl ProductionV2Services {
     ) -> Result<(), String> {
         self.post_durable_history_response_with_routes(peer, None, None, message, permit)
     }
-
     /// Send a durable historical response through all authenticated source routes.
     pub(crate) fn post_durable_history_response_on_reply_routes_with_permit(
         &self,
@@ -22712,7 +21856,6 @@ impl ProductionV2Services {
             permit,
         )
     }
-
     fn post_durable_history_response_with_routes(
         &self,
         peer: PeerId,
@@ -22809,7 +21952,6 @@ impl ProductionV2Services {
         }
         Ok(())
     }
-
     /// Send one retained canonical lane-local message to an authenticated peer.
     ///
     /// The shared [`BlockMessage::is_lane_local`] predicate is authoritative:
@@ -22837,7 +21979,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     /// Send one exact lane certificate reconstructed from its certified Kura artifact.
     #[cfg(test)]
     pub(crate) fn post_durable_lane_certificate(
@@ -22847,7 +21988,6 @@ impl ProductionV2Services {
     ) -> Result<(), String> {
         self.post_durable_lane_certificate_with_routes(peer, None, None, certificate)
     }
-
     /// Send a Kura-backed lane certificate through every retained source route.
     pub(crate) fn post_durable_lane_certificate_on_reply_routes(
         &self,
@@ -22863,7 +22003,6 @@ impl ProductionV2Services {
             certificate,
         )
     }
-
     fn post_durable_lane_certificate_with_routes(
         &self,
         peer: PeerId,
@@ -22945,7 +22084,6 @@ impl ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     /// Send one bounded certified merge-sidecar request or response through
     /// the dedicated authenticated network envelope.
     #[cfg(test)]
@@ -22956,7 +22094,6 @@ impl ProductionV2Services {
     ) {
         let _ = self.post_certified_merge_sidecar_with_reply_routes(peer, None, Arc::new(message));
     }
-
     /// Send a sidecar request normally or a response on its exact request route.
     pub(crate) fn post_certified_merge_sidecar_with_reply_routes(
         &self,
@@ -23080,13 +22217,11 @@ impl ProductionV2Services {
         operation.complete();
         Ok(ownership)
     }
-
     /// Send one context-bound Native AMX v2 message to a participant peer.
     #[cfg(test)]
     pub(crate) fn post_native_amx(&self, peer: PeerId, message: NativeAmxMessage) {
         self.post_native_amx_with_reply_routes(peer, None, message);
     }
-
     /// Send a Native AMX request normally or a request-induced vote on its exact route.
     pub(crate) fn post_native_amx_with_reply_routes(
         &self,
@@ -23156,7 +22291,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     /// Send one exact durably authorized lane-drain vote to a selected peer.
     pub(crate) fn post_lane_drain_vote(&self, peer: PeerId, vote: LaneDrainVoteV1) {
         let output_guard = Arc::clone(&self.output_guard);
@@ -23189,7 +22323,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     /// Broadcast one merge signature share to every other frozen voter.
     pub(crate) fn broadcast_merge_to_voters(&self, signature: MergeCommitteeSignature) {
         let output_guard = Arc::clone(&self.output_guard);
@@ -23217,7 +22350,6 @@ impl ProductionV2Services {
             }
         }
     }
-
     fn post_block_message_while_guarded(
         &self,
         peer: PeerId,
@@ -23253,7 +22385,6 @@ impl ProductionV2Services {
         let data = NetworkMessage::SumeragiBlock(Arc::new(wire));
         self.enqueue_exact_fanout_while_guarded(vec![data], vec![peer], rollover_claim, _permit)
     }
-
     fn post_block_message_on_reply_routes_while_guarded(
         &self,
         peer: PeerId,
@@ -23287,7 +22418,6 @@ impl ProductionV2Services {
             permit,
         )
     }
-
     fn preencode_v2_network_message(
         message: wire::ConsensusMessageV2,
     ) -> Result<NetworkMessage, String> {
@@ -23295,7 +22425,6 @@ impl ProductionV2Services {
             .map_err(|error| format!("failed to encode guarded Sumeragi v2 message: {error}"))?;
         Ok(NetworkMessage::SumeragiBlock(Arc::new(wire)))
     }
-
     fn broadcast_preencoded_to_voters_while_guarded(
         &self,
         data: &NetworkMessage,
@@ -23308,7 +22437,6 @@ impl ProductionV2Services {
             _permit,
         )
     }
-
     /// Broadcast under a caller-owned output permit without reacquiring it.
     pub(crate) fn broadcast_to_voters_while_guarded(
         &self,
@@ -23324,9 +22452,7 @@ impl ProductionV2Services {
         Ok(())
     }
 }
-
 include!("v2_worker/current_lane_output_rollover_claim.rs");
-
 impl Drop for ProductionV2Services {
     fn drop(&mut self) {
         let restart_required = !self.clean_teardown;
@@ -23344,14 +22470,11 @@ impl Drop for ProductionV2Services {
         }
     }
 }
-
 impl V2EffectServices for ProductionV2Services {
     type Error = String;
-
     fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
         self.io()?.begin_decision_serve_reconciliation()
     }
-
     fn finish_decision_serve_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
@@ -23365,7 +22488,6 @@ impl V2EffectServices for ProductionV2Services {
         self.io()?
             .finish_decision_serve_reconciliation(decided_subject)
     }
-
     fn complete_leader_wire_runtime_terminal(
         &mut self,
         terminal: LeaderWireRuntimeTerminal,
@@ -23379,7 +22501,6 @@ impl V2EffectServices for ProductionV2Services {
                 .mark_leader_wire_producer_terminal(&runtime, terminal),
         }
     }
-
     fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -23414,12 +22535,10 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     fn cancel_consensus_sign(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
         self.io()?.cancel(work_id, V2IoCancellableKind::Sign)?;
         Ok(())
     }
-
     fn retire_outbound_payload_for_subject(
         &mut self,
         subject: wire::BlockSubject,
@@ -23428,12 +22547,10 @@ impl V2EffectServices for ProductionV2Services {
             .retain(|_, retained| retained.subject != subject);
         Ok(())
     }
-
     fn retire_all_outbound_payloads(&mut self) -> Result<(), Self::Error> {
         self.outbound_chunks.clear();
         Ok(())
     }
-
     fn retire_candidate_work_after_decision(
         &mut self,
         decision_round: wire::ConsensusRound,
@@ -23448,7 +22565,6 @@ impl V2EffectServices for ProductionV2Services {
         });
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn broadcast_consensus(
         &mut self,
@@ -23469,7 +22585,6 @@ impl V2EffectServices for ProductionV2Services {
         message
             .validate_version()
             .map_err(|error| error.to_string())?;
-
         let control_targets = match &message.payload {
             wire::ConsensusMessageV2Payload::Proposal(_)
             | wire::ConsensusMessageV2Payload::Vote(_)
@@ -23541,7 +22656,6 @@ impl V2EffectServices for ProductionV2Services {
                 ConsensusBroadcastDisposition::ExactServiceAccepted
             });
         }
-
         let control = vec![Self::preencode_v2_network_message(message)?];
         let source_retained = self.enqueue_exact_fanout_while_guarded(
             control,
@@ -23559,7 +22673,6 @@ impl V2EffectServices for ProductionV2Services {
             ConsensusBroadcastDisposition::ExactServiceAccepted
         })
     }
-
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -23571,7 +22684,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(signature)
     }
-
     fn enqueue_body_fetch(&mut self, task: BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
@@ -23676,7 +22788,6 @@ impl V2EffectServices for ProductionV2Services {
             }
             BodyFetchServiceOwner::None => {}
         }
-
         if task.manifest().is_none() && task.certified_request().is_none() {
             return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
         }
@@ -23728,7 +22839,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     fn rebind_body_fetch(
         &mut self,
         previous: &BodyFetchTask,
@@ -23781,7 +22891,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -23791,7 +22900,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     fn complete_body_reconstruction_fetch(
         &mut self,
         task: &BodyFetchTask,
@@ -23804,7 +22912,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
-
     fn complete_certified_body_fetch(
         &mut self,
         task: &BodyFetchTask,
@@ -23821,7 +22928,6 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(disposition)
     }
-
     fn accept_authenticated_chunk(
         &mut self,
         task: &BodyFetchTask,
@@ -23907,24 +23013,19 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(AuthenticatedChunkDisposition::Accepted)
     }
-
     fn enqueue_body_store(&mut self, task: BodyStoreTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Store(task))
     }
-
     fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<bool, Self::Error> {
         self.io()?.cancel(work_id, V2IoCancellableKind::Store)
     }
-
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Validate(task))
     }
-
     fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
         self.io()?.cancel(work_id, V2IoCancellableKind::Validate)?;
         Ok(())
     }
-
     fn work_deferred_for_merge_sidecar(
         &mut self,
         work_id: EffectWorkId,
@@ -23939,11 +23040,9 @@ impl V2EffectServices for ProductionV2Services {
             reference: reference.clone(),
         })
     }
-
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Apply(task))
     }
-
     fn entered_view(
         &mut self,
         tag: EventTag,
@@ -23984,7 +23083,6 @@ impl V2EffectServices for ProductionV2Services {
         );
         Ok(())
     }
-
     fn report_equivocation(
         &mut self,
         evidence: wire::SumeragiV2Equivocation,
@@ -24010,7 +23108,6 @@ impl V2EffectServices for ProductionV2Services {
         }
         Ok(())
     }
-
     fn report_invalid_certified_body(
         &mut self,
         subject: wire::BlockSubject,
@@ -24024,7 +23121,6 @@ impl V2EffectServices for ProductionV2Services {
         );
         Ok(())
     }
-
     fn validation_rejected(
         &mut self,
         round: wire::ConsensusRound,
@@ -24049,7 +23145,6 @@ impl V2EffectServices for ProductionV2Services {
             "Sumeragi v2 proposal validation rejected"
         );
     }
-
     fn publish_effect_status(&mut self, status: &EffectExecutorStatus) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
@@ -24110,9536 +23205,23 @@ impl V2EffectServices for ProductionV2Services {
         super::status::set_v2_effect_status(status);
         Ok(())
     }
-
     fn fail_closed(&mut self, reason: &str) {
         self.output_guard.activate_restart_required();
         self.fatal_reason = Some(reason.to_owned());
         iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");
     }
 }
-
 /// Unit tests and production-service fixtures shared with the runner tests.
 #[cfg(test)]
 pub(super) mod tests {
-    use std::{
-        num::NonZeroU64,
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-    };
-
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
-    use iroha_data_model::{
-        DataSpaceId, LaneId,
-        block::{
-            BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
-            consensus::{
-                CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
-                LaneBlockVoteBodyV1,
-            },
-        },
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        merge::{
-            LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
-        },
-    };
-    use mv::storage::StorageReadOnly;
-    use tempfile::TempDir;
-
-    use super::*;
-    use crate::sumeragi::{
-        FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressClass,
-        FairV2IngressPushDisposition, FairV2IngressPushError, FairV2IngressSource,
-        FairV2IngressWireKey, InboundBlockMessage, fair_v2_ingress_admit_with_roster_for_test,
-        fair_v2_ingress_is_certified_body_request, fair_v2_ingress_required_capacity,
-        v2::AdapterEffect,
-        v2_block_sync::tests::durable_history_fixture,
-        v2_body_store::DurableBodyReceipt,
-        v2_chunks::encode_payload,
-        v2_core::MAX_EFFECTS_PER_STEP,
-        v2_effects::EffectQueueConfig,
-        v2_lane_work::tests::durable_lane_history_fixture,
-        v2_runtime::{
-            BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
-            RetiredBodyPipelineCompletions, RuntimeEffectOwnership, RuntimeLifecycleOwner,
-            RuntimeStep, bind_adapter_effect_batch_ownership,
-        },
-        v2_transport::{authenticate_certified_body_request, authenticate_payload_chunk},
-    };
-    #[cfg(feature = "bls")]
-    use crate::sumeragi::{
-        v2::{
-            AdapterFingerprints, DeferredAdmissionOrdinalSource, SignRequest, SumeragiV2Adapter,
-            VerifiedHeightContext,
-        },
-        v2_body_store::BlockSignaturePolicy,
-        v2_effects::EffectExecutorStep,
-        v2_runtime::{RuntimeQueueConfig, SerializedV2Runtime},
-    };
-    use crate::{
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-
-    #[test]
-    fn recovered_decision_apply_completion_drop_is_fail_stop() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        drop(RecoveredDecisionApplyCompletionDropGuardV1::new(
-            Arc::clone(&output_guard),
-        ));
-        assert!(output_guard.restart_required());
-    }
-
-    #[test]
-    fn settled_recovered_decision_apply_completion_disarms_drop_guard() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let mut guard = RecoveredDecisionApplyCompletionDropGuardV1::new(Arc::clone(&output_guard));
-        guard.disarm();
-        drop(guard);
-        assert!(!output_guard.restart_required());
-    }
-
-    #[test]
-    fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
-        let (mut service, keys) = fixture();
-        let context = service.context.clone();
-        let output_guard = Arc::clone(&service.output_guard);
-        let body_root = TempDir::new().expect("mixed Completion body root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open mixed body store");
-        let identity = body_store.instance_identity();
-        let planner = install_lifecycle_planner_io_for_test(
-            &mut service,
-            context.clone(),
-            Arc::clone(&output_guard),
-            body_store,
-            identity,
-            2,
-        );
-        let apply =
-            RecoveredDecisionApplyDispatchKeyV1::for_height_context_test(&context, 10, 0x41);
-        let sign = RecoveredLifecycleSignDispatchKeyV1::for_height_context_test(
-            &context,
-            11,
-            0x42,
-            super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1::PhaseVote,
-        );
-        let census = service
-            .capture_recovered_completion_capacity_census(vec![
-                RecoveredCompletionCapacityProbeV1::Apply {
-                    ordinal: 10,
-                    key: apply,
-                },
-                RecoveredCompletionCapacityProbeV1::Sign {
-                    ordinal: 11,
-                    key: sign,
-                },
-            ])
-            .expect("freeze one mixed worker/output census");
-        assert_eq!(census.capacity_for_test(10), Some((true, 0)));
-        assert_eq!(census.capacity_for_test(11), Some((true, 0)));
-        let reservation = match census.select_sign(11) {
-            Ok(reservation) => reservation,
-            Err(_) => panic!("the frozen Sign row must transfer its exact reservation"),
-        };
-        reservation.cancel_uncommitted();
-        assert!(!output_guard.restart_required());
-        assert!(planner.command_rx.queue.lock().commands.is_empty());
-
-        let fetch_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let fetch_subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"mixed Completion Fetch block")),
-            payload_hash: Hash::new(b"mixed Completion Fetch payload"),
-        };
-        let (authenticated, _) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[0],
-            fetch_round,
-            fetch_subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let fetch_key =
-            RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(&context, 13, 0x44);
-        let fetch_owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
-            fetch_key,
-            service.active_tag,
-            context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect(),
-            authenticated,
-        );
-        let fetch_census = service
-            .capture_recovered_completion_capacity_census(vec![
-                RecoveredCompletionCapacityProbeV1::Fetch {
-                    ordinal: 13,
-                    owner: fetch_owner,
-                    executor_available: true,
-                },
-            ])
-            .expect("freeze one exact recovered Fetch capacity owner");
-        assert_eq!(fetch_census.capacity_for_test(13), Some((true, 0)));
-        let (returned_owner, output) = match fetch_census.select_fetch(13) {
-            Ok(selected) => selected,
-            Err(_) => panic!("the exact Fetch row must transfer request and output ownership"),
-        };
-        assert_eq!(returned_owner.dispatch_key(), fetch_key);
-        output.abort_before_claim();
-        assert!(!output_guard.restart_required());
-
-        planner.saturate_consensus_prefix(&service);
-        let saturated = service
-            .capture_recovered_completion_capacity_census(vec![
-                RecoveredCompletionCapacityProbeV1::Apply {
-                    ordinal: 10,
-                    key: apply,
-                },
-                RecoveredCompletionCapacityProbeV1::Sign {
-                    ordinal: 11,
-                    key: sign,
-                },
-            ])
-            .expect("a saturated cut remains an authenticated census");
-        assert_eq!(saturated.capacity_for_test(10), Some((false, 4)));
-        assert_eq!(saturated.capacity_for_test(11), Some((false, 4)));
-        saturated.complete_without_selection();
-        assert!(!output_guard.restart_required());
-        planner.detach(&mut service);
-
-        let (mut dropped_service, _keys) = fixture();
-        let dropped_context = dropped_service.context.clone();
-        let dropped_guard = Arc::clone(&dropped_service.output_guard);
-        let dropped_root = TempDir::new().expect("dropped mixed Completion body root");
-        let dropped_store = V2BodyStore::open(dropped_root.path(), dropped_context.clone())
-            .expect("open dropped mixed body store");
-        let dropped_identity = dropped_store.instance_identity();
-        let dropped_planner = install_lifecycle_planner_io_for_test(
-            &mut dropped_service,
-            dropped_context.clone(),
-            Arc::clone(&dropped_guard),
-            dropped_store,
-            dropped_identity,
-            1,
-        );
-        let dropped_key = RecoveredDecisionApplyDispatchKeyV1::for_height_context_test(
-            &dropped_context,
-            12,
-            0x43,
-        );
-        drop(
-            dropped_service
-                .capture_recovered_completion_capacity_census(vec![
-                    RecoveredCompletionCapacityProbeV1::Apply {
-                        ordinal: 12,
-                        key: dropped_key,
-                    },
-                ])
-                .expect("arm one census before abandoning it"),
-        );
-        assert!(dropped_guard.restart_required());
-        dropped_planner.detach(&mut dropped_service);
-    }
-
-    #[test]
-    fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
-        let apply_source = include_str!("v2_apply.rs");
-        let task_source = apply_source
-            .split_once("pub(in crate::sumeragi) struct RecoveredDecisionApplyTaskV1")
-            .expect("recovered Apply task remains declared")
-            .1
-            .split_once("pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionV1")
-            .expect("recovered Apply completion follows its task")
-            .0;
-        for forbidden in [
-            "EffectWorkId",
-            "RuntimeEffectOwnership",
-            "PendingApply",
-            "DurableApplyCompletion",
-        ] {
-            assert!(
-                !task_source.contains(forbidden),
-                "recovered Apply task reintroduced generic owner {forbidden}"
-            );
-        }
-        let recovered_execute = apply_source
-            .split_once("fn execute_recovered_decision_apply(")
-            .expect("dedicated recovered Apply executor remains present")
-            .1
-            .split_once("fn execute_exact_apply(")
-            .expect("dedicated recovered Apply executor precedes the shared core")
-            .0;
-        assert!(
-            recovered_execute
-                .find("matches_height_context(context)")
-                .is_some_and(|oracle| {
-                    recovered_execute
-                        .find("self.execute_exact_apply(")
-                        .is_some_and(|execute| oracle < execute)
-                }),
-            "recovered Apply must authenticate its exact context before storage execution"
-        );
-        let carrier_source = include_str!("v2.rs");
-        assert_eq!(
-            carrier_source
-                .matches("RecoveredDecisionApplyTaskV1::from_registry_projection")
-                .count(),
-            1,
-            "only the fixed recovered carrier projection may mint the worker task"
-        );
-    }
-
-    #[test]
-    fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
-        let source = include_str!("v2_worker.rs");
-        let generic_enqueue = source
-            .split_once("fn try_send_as(")
-            .expect("generic queue enqueue remains present")
-            .1
-            .split_once("fn cancel(")
-            .expect("generic queue enqueue precedes cancellation")
-            .0;
-        assert!(generic_enqueue.contains("UnreservedRecoveredDecisionApply"));
-
-        let reservation = source
-            .split_once("impl RecoveredDecisionApplyCapacityReservationV1<'_>")
-            .expect("dedicated recovered Apply reservation remains present")
-            .1
-            .split_once("impl Drop for RecoveredDecisionApplyCapacityReservationV1")
-            .expect("reservation implementation precedes its fail-stop drop")
-            .0;
-        assert!(reservation.contains("authenticated_predecessor_debt"));
-        assert!(reservation.contains("prepared.commit_for_worker()"));
-        assert!(reservation.contains("V2IoCommand::RecoveredDecisionApply(task)"));
-
-        let completion = source
-            .split_once("struct RecoveredDecisionApplyWorkAckV1")
-            .expect("dedicated recovered Apply acknowledgement remains present")
-            .1
-            .split_once("enum V2IoCompletion")
-            .expect("dedicated acknowledgement precedes the completion enum")
-            .0;
-        assert!(completion.contains("acknowledge_recovered_decision_apply"));
-        assert!(completion.contains("fn acknowledge_retry_publication"));
-        assert!(completion.contains("fn retry_deferred("));
-        assert!(completion.contains("retry_recovered_decision_apply(task)"));
-        assert!(completion.contains("acknowledge_recovered_decision_apply_completion(self.key)"));
-
-        let retry = source
-            .split_once("fn retry_recovered_decision_apply<")
-            .expect("dedicated recovered Apply retry remains present")
-            .1
-            .split_once("fn acknowledge_completion(")
-            .expect("retry precedes ordinary acknowledgement")
-            .0;
-        let pending = retry.find("V2IoWorkState::CompletionPending").unwrap();
-        let barrier = retry.find("exact_target_active").unwrap();
-        let reserve = retry
-            .find("try_reserve(V2IoAdmissionClass::Consensus)")
-            .unwrap();
-        let transfer = retry
-            .find("transfer_recovered_decision_apply_completion(key)")
-            .unwrap();
-        let queued = retry.find("V2IoWorkState::Queued").unwrap();
-        let publish = retry.find("task.into_command()").unwrap();
-        assert!(
-            pending < barrier
-                && barrier < reserve
-                && reserve < transfer
-                && transfer < queued
-                && queued < publish,
-            "deferred retry must rejoin the Serve barrier and transfer completion ownership before publication"
-        );
-
-        let generic_take = source
-            .split_once("fn take_io_completion(")
-            .expect("ordinary completion take remains present")
-            .1
-            .split_once("fn take_recovered_decision_apply_completion(")
-            .expect("owner-only completion take follows ordinary take")
-            .0;
-        assert!(generic_take.contains("V2IoCompletion::RecoveredDecisionApply(_)"));
-        assert!(generic_take.contains("IoCompletionTake::retained_runtime()"));
-        let runtime_capacity = source
-            .split_once("const fn requires_runtime_capacity(&self) -> bool")
-            .expect("completion runtime-capacity classifier remains present")
-            .1
-            .split_once("fn acknowledgement(&self)")
-            .expect("completion acknowledgement follows capacity classification")
-            .0;
-        assert!(runtime_capacity.contains("Self::RecoveredDecisionApply(_)"));
-        assert!(source.contains("fn drain_recovered_decision_apply_completion("));
-        assert!(source.contains("fn authorizes_sidecar_owner("));
-        assert!(!source.contains("_services: &'services mut ProductionV2Services"));
-        assert!(!source.contains("complete_application(*guarded"));
-    }
-
-    #[test]
-    fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
-        let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
-        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
-        let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-        admission.retain_completion(Instant::now(), false, None, None, None, None);
-        admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
-        admission.retain_completion(Instant::now(), false, Some(8), None, None, None);
-
-        assert!(admission.recovered_decision_apply_completion_is_exact(key));
-        assert!(
-            !admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign),
-            "an ordinal alone cannot authorize lifecycle completion ownership"
-        );
-        assert!(admission.transfer_recovered_decision_apply_completion(key));
-        assert!(!admission.recovered_decision_apply_completion_is_exact(key));
-        assert_eq!(
-            admission
-                .completion_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .owned
-                .len(),
-            2,
-            "keyed transfer must preserve unrelated completion positions"
-        );
-    }
-
-    #[test]
-    fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_completions() {
-        let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded retry admission"));
-        let (command_tx, _command_rx) =
-            v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
-        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
-        let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-        admission.retain_completion(Instant::now(), false, None, None, None, None);
-        admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
-        admission.retain_completion(
-            Instant::now(),
-            true,
-            Some(7),
-            Some(same_ordinal_foreign),
-            None,
-            None,
-        );
-        command_tx.queue.lock().recovered_decision_applies.insert(
-            key,
-            V2IoTrackedRecoveredDecisionApplyV1 {
-                state: V2IoWorkState::CompletionPending,
-            },
-        );
-        let unrelated_before = admission
-            .completion_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .owned
-            .iter()
-            .filter(|owner| owner.recovered_decision_apply != Some(key))
-            .map(|owner| {
-                (
-                    owner.retained_at,
-                    owner.service_debt,
-                    owner.requires_runtime_capacity,
-                    owner.runtime_lifecycle_ordinal,
-                    owner.recovered_decision_apply,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        assert!(
-            command_tx
-                .queue
-                .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key))
-                .is_ok(),
-            "the exact retained completion must re-enter its dedicated queue"
-        );
-
-        let state = command_tx.queue.lock();
-        assert_eq!(
-            state
-                .recovered_decision_applies
-                .get(&key)
-                .map(|work| work.state),
-            Some(V2IoWorkState::Queued)
-        );
-        assert_eq!(state.commands.len(), 1);
-        assert!(matches!(
-            state.commands.front(),
-            Some(V2IoCommand::RecoveredDecisionApplyFixture(queued)) if *queued == key
-        ));
-        drop(state);
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        assert!(!admission.recovered_decision_apply_completion_is_exact(key));
-        assert!(admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign));
-        let unrelated_after = admission
-            .completion_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .owned
-            .iter()
-            .map(|owner| {
-                (
-                    owner.retained_at,
-                    owner.service_debt,
-                    owner.requires_runtime_capacity,
-                    owner.runtime_lifecycle_ordinal,
-                    owner.recovered_decision_apply,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(unrelated_after, unrelated_before);
-    }
-
-    #[test]
-    fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrier() {
-        {
-            let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded retry admission"));
-            let (command_tx, _command_rx) =
-                v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
-            command_tx
-                .try_send(V2IoCommand::Shutdown)
-                .expect("fill the sole physical queue position");
-            let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
-            admission.retain_completion(Instant::now(), true, Some(11), Some(key), None, None);
-            command_tx.queue.lock().recovered_decision_applies.insert(
-                key,
-                V2IoTrackedRecoveredDecisionApplyV1 {
-                    state: V2IoWorkState::CompletionPending,
-                },
-            );
-            let completion_before = admission
-                .completion_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .owned
-                .iter()
-                .map(|owner| {
-                    (
-                        owner.retained_at,
-                        owner.service_debt,
-                        owner.requires_runtime_capacity,
-                        owner.runtime_lifecycle_ordinal,
-                        owner.recovered_decision_apply,
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            assert!(matches!(
-                command_tx
-                    .queue
-                    .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key)),
-                Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(
-                    RecoveredDecisionApplyRetryTaskFixtureV1(returned)
-                )) if returned == key
-            ));
-
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state
-                    .recovered_decision_applies
-                    .get(&key)
-                    .map(|work| work.state),
-                Some(V2IoWorkState::CompletionPending)
-            );
-            assert_eq!(state.commands.len(), 1);
-            assert!(matches!(
-                state.commands.front(),
-                Some(V2IoCommand::Shutdown)
-            ));
-            drop(state);
-            assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-            assert_eq!(
-                admission
-                    .completion_state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .owned
-                    .iter()
-                    .map(|owner| {
-                        (
-                            owner.retained_at,
-                            owner.service_debt,
-                            owner.requires_runtime_capacity,
-                            owner.runtime_lifecycle_ordinal,
-                            owner.recovered_decision_apply,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                completion_before
-            );
-        }
-
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
-        let barrier = command_tx
-            .prepare_serve(CertifiedServeOwnerKey::Roster(requester), request)
-            .expect("reserve an unclaimed Serve placeholder")
-            .lifecycle_id;
-        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(13, 4);
-        admission.retain_completion(Instant::now(), true, Some(13), Some(key), None, None);
-        command_tx.queue.lock().recovered_decision_applies.insert(
-            key,
-            V2IoTrackedRecoveredDecisionApplyV1 {
-                state: V2IoWorkState::CompletionPending,
-            },
-        );
-        let completion_before = admission
-            .completion_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .owned
-            .iter()
-            .map(|owner| {
-                (
-                    owner.retained_at,
-                    owner.service_debt,
-                    owner.requires_runtime_capacity,
-                    owner.runtime_lifecycle_ordinal,
-                    owner.recovered_decision_apply,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        assert!(matches!(
-            command_tx
-                .queue
-                .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key)),
-            Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(
-                RecoveredDecisionApplyRetryTaskFixtureV1(returned)
-            )) if returned == key
-        ));
-
-        let state = command_tx.queue.lock();
-        assert_eq!(
-            state
-                .recovered_decision_applies
-                .get(&key)
-                .map(|work| work.state),
-            Some(V2IoWorkState::CompletionPending)
-        );
-        assert_eq!(state.serve_barrier, Some(barrier));
-        assert_eq!(
-            state.serves.get(&barrier).map(|serve| serve.state),
-            Some(V2IoServeState::Reserved)
-        );
-        assert!(!state.pending_serve_requests.contains_key(&barrier));
-        assert_eq!(state.commands.len(), 1);
-        assert!(matches!(
-            state.commands.front(),
-            Some(V2IoCommand::Serve { lifecycle_id, .. }) if *lifecycle_id == barrier
-        ));
-        drop(state);
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        assert_eq!(
-            admission
-                .completion_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .owned
-                .iter()
-                .map(|owner| {
-                    (
-                        owner.retained_at,
-                        owner.service_debt,
-                        owner.requires_runtime_capacity,
-                        owner.runtime_lifecycle_ordinal,
-                        owner.recovered_decision_apply,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            completion_before
-        );
-    }
-
-    #[test]
-    fn orphan_chunk_budget_obeys_encoded_payload_ceiling() {
-        let maximum = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
-            data_shards: 4,
-            parity_shards: 2,
-            max_payload_size_bytes: wire::MAX_DA_PAYLOAD_SIZE_BYTES,
-            max_chunk_count: wire::MAX_DA_CHUNK_COUNT,
-        };
-        assert_eq!(
-            maximum_orphan_chunk_bytes(maximum),
-            wire::MAX_DA_ENCODED_PAYLOAD_BYTES
-        );
-
-        let small = wire::DataAvailabilityLayout {
-            chunk_size_bytes: 8,
-            max_chunk_count: 4,
-            ..maximum
-        };
-        assert_eq!(maximum_orphan_chunk_bytes(small), 32);
-    }
-
-    fn test_io_command_channel(
-        capacity: usize,
-    ) -> (V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>) {
-        let admission = V2IoAdmission::unbounded_for_tests();
-        let (sender, receiver) = v2_io_command_channel(
-            capacity,
-            capacity.max(1),
-            capacity.max(1),
-            capacity.max(1),
-            Arc::clone(&admission),
-        );
-        (sender, receiver, admission)
-    }
-
-    /// Exact test-only worker ownership retained behind a production service.
-    #[must_use = "the exact test I/O fixture must remain alive with its service"]
-    pub(in crate::sumeragi) struct LifecyclePlannerIoFixture {
-        command_rx: V2IoCommandReceiver,
-        _body_store: V2BodyStore,
-    }
-
-    impl LifecyclePlannerIoFixture {
-        /// Count exact queued certified-Fetch persistence commands.
-        pub(in crate::sumeragi) fn queued_certified_fetch_count(&self) -> usize {
-            self.command_rx
-                .queue
-                .lock()
-                .commands
-                .iter()
-                .filter(|command| matches!(command, V2IoCommand::PersistCertifiedFetchBody(_)))
-                .count()
-        }
-
-        /// Fill the exact Consensus threshold with control predecessors.
-        pub(in crate::sumeragi) fn saturate_consensus_prefix(
-            &self,
-            services: &ProductionV2Services,
-        ) {
-            let io = services
-                .io
-                .as_ref()
-                .expect("manual lifecycle planner I/O remains installed");
-            assert!(
-                Arc::ptr_eq(&self.command_rx.queue, &io.command_tx.queue),
-                "the service must retain this fixture's exact queue"
-            );
-            for _ in 0..io.admission.consensus_limit {
-                io.command_tx
-                    .try_send(V2IoCommand::Shutdown)
-                    .expect("control reserve admits the bounded test predecessor");
-            }
-        }
-
-        /// Release one exact synthetic predecessor through the real receiver.
-        pub(in crate::sumeragi) fn release_one_predecessor(&self) {
-            assert!(matches!(
-                self.command_rx.try_recv(),
-                Ok(V2IoCommand::Shutdown)
-            ));
-        }
-
-        /// Release every synthetic control predecessor queued by saturation.
-        pub(in crate::sumeragi) fn release_all_predecessors(&self) {
-            loop {
-                match self.command_rx.try_recv() {
-                    Ok(V2IoCommand::Shutdown) => {}
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Ok(_) => panic!("unexpected non-control saturated predecessor"),
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        panic!("saturated predecessor queue disconnected")
-                    }
-                }
-            }
-        }
-
-        /// Replace only the manual service's output guard for identity tests.
-        pub(in crate::sumeragi) fn install_output_guard_for_test(
-            &self,
-            services: &mut ProductionV2Services,
-            output_guard: Arc<ConsensusOutputGuard>,
-        ) {
-            let io = services
-                .io
-                .as_ref()
-                .expect("manual lifecycle planner I/O remains installed");
-            assert!(
-                Arc::ptr_eq(&self.command_rx.queue, &io.command_tx.queue),
-                "the output guard must change only on this exact test service"
-            );
-            services.output_guard = output_guard;
-        }
-
-        /// Retire the manual queue without invoking worker shutdown semantics.
-        pub(in crate::sumeragi) fn detach(self, services: &mut ProductionV2Services) {
-            services.lifecycle_body_store_identity = None;
-            drop(services.io.take());
-            drop(self);
-        }
-    }
-
-    /// Install the exact body store moved out of a lifecycle owner into one
-    /// bounded production-service queue for the owner transaction regression.
-    pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
-        services: &mut ProductionV2Services,
-        context: wire::HeightContext,
-        output_guard: Arc<ConsensusOutputGuard>,
-        body_store: V2BodyStore,
-        identity: V2BodyStoreInstanceIdentity,
-        class_capacity: usize,
-    ) -> LifecyclePlannerIoFixture {
-        let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
-        install_lifecycle_planner_io_for_validator_for_test(
-            services,
-            context,
-            active_tag,
-            0,
-            output_guard,
-            body_store,
-            identity,
-            class_capacity,
-        )
-    }
-
-    /// Install a moved exact store and reducer tag for a chosen local-validator fixture.
-    pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
-        services: &mut ProductionV2Services,
-        context: wire::HeightContext,
-        active_tag: EventTag,
-        local_validator: wire::ValidatorIndex,
-        output_guard: Arc<ConsensusOutputGuard>,
-        body_store: V2BodyStore,
-        identity: V2BodyStoreInstanceIdentity,
-        class_capacity: usize,
-    ) -> LifecyclePlannerIoFixture {
-        assert!(class_capacity > 0, "test I/O capacity must be non-zero");
-        assert!(
-            body_store.instance_identity().same_instance(&identity),
-            "the worker identity must come from the moved exact store"
-        );
-        assert_eq!(
-            active_tag.height(),
-            context.height,
-            "the test service tag must belong to its installed height context"
-        );
-        let local_index =
-            usize::try_from(local_validator).expect("test validator index fits usize");
-        let local_peer = context
-            .roster
-            .get(local_index)
-            .expect("test validator belongs to the service context")
-            .validator
-            .clone();
-        let admission = Arc::new(
-            V2IoAdmission::new(class_capacity, class_capacity)
-                .expect("bounded lifecycle planner I/O admission"),
-        );
-        let (command_tx, command_rx) = v2_io_command_channel(
-            admission.capacity(),
-            context.roster.len(),
-            class_capacity,
-            class_capacity,
-            Arc::clone(&admission),
-        );
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
-        services.context = context.clone();
-        services.local_peer = local_peer;
-        services.local_validator = Some(local_validator);
-        services.active_tag = active_tag;
-        services.output_guard = output_guard;
-        services.lifecycle_body_store_identity = Some(identity);
-        services.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        LifecyclePlannerIoFixture {
-            command_rx,
-            _body_store: body_store,
-        }
-    }
-
-    /// Install the exact private signer matching the test service's local peer.
-    pub(in crate::sumeragi) fn install_local_signer_for_test(
-        services: &mut ProductionV2Services,
-        key_pair: &KeyPair,
-    ) {
-        assert_eq!(
-            services.local_peer.public_key(),
-            key_pair.public_key(),
-            "test signer must match the already bound local service peer"
-        );
-        services.key_pair = key_pair.clone();
-    }
-
-    #[test]
-    fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() {
-        let (service, _) = fixture();
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let capacity = admission.capacity();
-        let (sender, receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
-        sender
-            .try_send(V2IoCommand::Shutdown)
-            .expect("queue one exact predecessor");
-        let queue = Arc::clone(&sender.queue);
-        let output_guard = ConsensusOutputGuard::isolated();
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .expect("open fail-stop operation");
-        let target = LifecycleIngressIoTargetSeal::for_test(
-            &service.context,
-            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
-            7,
-        );
-        let V2IoLifecycleCapacityCapture::Reserved(reservation) = queue
-            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
-            .expect("reserve consensus target behind one predecessor")
-        else {
-            panic!("consensus target must own its exact FIFO position");
-        };
-        assert_eq!(reservation.predecessor_debt, 1);
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 2);
-
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
-        let producer = std::thread::spawn(move || {
-            let result = sender.try_send(V2IoCommand::Shutdown);
-            done_tx
-                .send(result.is_ok())
-                .expect("report producer result");
-        });
-        assert!(matches!(
-            done_rx.recv_timeout(Duration::from_millis(20)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
-
-        reservation.cancel_before_plan_for_test();
-        assert!(done_rx.recv().expect("producer resumes after rollback"));
-        producer.join().expect("producer thread exits");
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 2);
-        assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Shutdown)));
-        assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Shutdown)));
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-    }
-
-    #[test]
-    fn lifecycle_capacity_unfinished_reservation_closes_output_fail_stop() {
-        let (service, _) = fixture();
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let (sender, _receiver) =
-            v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
-        let output_guard = ConsensusOutputGuard::isolated();
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .expect("open fail-stop operation");
-        let target = LifecycleIngressIoTargetSeal::for_test(
-            &service.context,
-            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
-            8,
-        );
-        let V2IoLifecycleCapacityCapture::Reserved(reservation) = sender
-            .queue
-            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
-            .expect("reserve one exact consensus slot")
-        else {
-            panic!("empty consensus suffix must reserve");
-        };
-
-        drop(reservation);
-
-        assert!(output_guard.restart_required());
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-    }
-
-    #[test]
-    fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
-        let (service, _) = fixture();
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let capacity = admission.capacity();
-        let (sender, _receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
-        assert!(admission.try_reserve(V2IoAdmissionClass::Auxiliary));
-        let output_guard = ConsensusOutputGuard::isolated();
-
-        let auxiliary = LifecycleIngressIoTargetSeal::for_test(
-            &service.context,
-            LifecycleIngressIoTargetKind::CertifiedServe,
-            11,
-        );
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .expect("open fail-stop operation");
-        let V2IoLifecycleCapacityCapture::Unavailable(wait) = sender
-            .queue
-            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), auxiliary)
-            .expect("full auxiliary prefix yields a generation wait")
-        else {
-            panic!("Serve must not borrow consensus-reserved capacity");
-        };
-        assert!(Arc::ptr_eq(&wait.queue, &sender.queue));
-        assert_eq!(wait.observed_generation, 0);
-        assert_eq!(
-            wait.target.kind(),
-            LifecycleIngressIoTargetKind::CertifiedServe
-        );
-
-        let consensus = LifecycleIngressIoTargetSeal::for_test(
-            &service.context,
-            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
-            12,
-        );
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .expect("second fail-stop operation");
-        let V2IoLifecycleCapacityCapture::Reserved(reservation) = sender
-            .queue
-            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), consensus)
-            .expect("consensus suffix remains available")
-        else {
-            panic!("certified-Fetch persistence owns consensus capacity");
-        };
-        reservation.cancel_before_plan_for_test();
-        assert_eq!(admission.lifecycle_capacity_generation(), 1);
-        assert!(admission.lifecycle_capacity_generation() > wait.observed_generation);
-        admission.release();
-    }
-
-    #[test]
-    fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
-        let (mut service, _) = fixture();
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let (sender, _receiver) =
-            v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
-        let output_guard = ConsensusOutputGuard::isolated();
-        let wait = LifecycleIoCapacityWait {
-            queue: Arc::clone(&sender.queue),
-            output_guard: Arc::clone(&output_guard),
-            target: LifecycleIngressIoTargetSeal::for_test(
-                &service.context,
-                LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
-                14,
-            ),
-            observed_generation: 0,
-        };
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.output_guard = Arc::clone(&output_guard);
-        service.io = Some(V2IoHandle {
-            command_tx: sender,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: Arc::clone(&admission),
-        });
-
-        assert_eq!(
-            wait.status(&service),
-            LifecycleIoCapacityWaitStatus::SamePending
-        );
-        assert!(admission.try_reserve(V2IoAdmissionClass::Consensus));
-        admission.release();
-        assert_eq!(
-            wait.status(&service),
-            LifecycleIoCapacityWaitStatus::Released
-        );
-
-        admission
-            .lifecycle_capacity_generation
-            .store(u64::MAX, AtomicOrdering::Release);
-        admission
-            .lifecycle_capacity_generation_exhausted
-            .store(true, AtomicOrdering::Release);
-        assert_eq!(
-            wait.status(&service),
-            LifecycleIoCapacityWaitStatus::GenerationExhausted
-        );
-
-        output_guard.activate_restart_required();
-        assert_eq!(
-            wait.status(&service),
-            LifecycleIoCapacityWaitStatus::ForeignOrDisconnected
-        );
-        drop(service.io.take());
-        assert_eq!(
-            wait.status(&service),
-            LifecycleIoCapacityWaitStatus::ForeignOrDisconnected
-        );
-    }
-
-    #[test]
-    fn lifecycle_capacity_generation_exhaustion_never_wraps() {
-        let (service, _) = fixture();
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let capacity = admission.capacity();
-        let (sender, _receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
-        assert!(admission.try_reserve(V2IoAdmissionClass::Auxiliary));
-        admission
-            .lifecycle_capacity_generation
-            .store(u64::MAX, AtomicOrdering::Release);
-        admission.release();
-        assert_eq!(admission.lifecycle_capacity_generation(), u64::MAX);
-        assert!(admission.lifecycle_capacity_generation_exhausted());
-
-        let output_guard = ConsensusOutputGuard::isolated();
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .expect("open fail-stop operation");
-        let target = LifecycleIngressIoTargetSeal::for_test(
-            &service.context,
-            LifecycleIngressIoTargetKind::CertifiedServe,
-            13,
-        );
-        let Err((failure, restored)) =
-            sender
-                .queue
-                .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
-        else {
-            panic!("exhausted generation must fail closed");
-        };
-        assert_eq!(
-            failure,
-            LifecycleIoCapacityCaptureFailure::GenerationExhausted
-        );
-        assert_eq!(
-            restored.kind(),
-            LifecycleIngressIoTargetKind::CertifiedServe
-        );
-        assert!(output_guard.restart_required());
-    }
-
-    #[test]
-    fn lifecycle_capacity_rejects_repeat_fetch_while_work_is_completion_pending() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let work_id = EffectWorkId::for_test(21);
-        let durable = DurableBodyReceipt::for_test(
-            service.context.id(),
-            proposal.round,
-            proposal.subject,
-            HashOf::new(&proposal.manifest),
-        );
-        let (sender, receiver, admission) = test_io_command_channel(2);
-        sender
-            .try_send(V2IoCommand::Validate(BodyValidationTask::for_test(
-                21, durable,
-            )))
-            .expect("install one exact in-flight work owner");
-        assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Validate(_))));
-        receiver.complete_work(work_id);
-        assert_eq!(
-            sender.queue.lock().work[&work_id].state,
-            V2IoWorkState::CompletionPending
-        );
-
-        let output_guard = ConsensusOutputGuard::isolated();
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .expect("open fail-stop operation");
-        let target = LifecycleIngressIoTargetSeal::for_test(
-            &service.context,
-            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
-            work_id.get(),
-        );
-        let V2IoLifecycleCapacityCapture::Reserved(reservation) = sender
-            .queue
-            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
-            .expect("the service can reserve while the prior owner is active")
-        else {
-            panic!("repeat preflight needs one locked capacity reservation");
-        };
-        assert!(!reservation.preflight_selected_target_work_absent());
-        reservation.cancel_before_plan_for_test();
-        assert_eq!(
-            sender.queue.lock().work[&work_id].state,
-            V2IoWorkState::CompletionPending
-        );
-        sender.acknowledge_completion(work_id);
-        assert!(sender.queue.lock().work.is_empty());
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-    }
-
-    /// Build an empty Serve gate together with its exact actor-global ordinal source.
-    pub(in crate::sumeragi) fn certified_serve_ingress_gate_fixture()
-    -> (CertifiedServeIngressGate, RuntimeLifecycleOrdinalSource) {
-        let (sender, _receiver, _admission) = test_io_command_channel(4);
-        let lifecycle_ordinals = sender.queue.lifecycle_ordinals.clone();
-        let gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&sender.queue),
-        };
-        (gate, lifecycle_ordinals)
-    }
-
-    fn assert_durable_body_receipt_matches(
-        receipt: &DurableBodyReceipt,
-        context: &wire::HeightContext,
-        manifest: &wire::PayloadManifest,
-    ) {
-        assert_eq!(receipt.context_id(), context.id());
-        assert_eq!(receipt.round(), manifest.round);
-        assert_eq!(receipt.subject(), manifest.subject);
-        assert_eq!(receipt.manifest_hash(), HashOf::new(manifest));
-    }
-
-    fn persistent_test_io_command_channel(
-        capacity: usize,
-        root: &Path,
-        context: &wire::HeightContext,
-        body_store: &V2BodyStore,
-    ) -> Result<(V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>), String> {
-        let admission = V2IoAdmission::unbounded_for_tests();
-        let (sender, receiver) = persistent_v2_io_command_channel(
-            capacity,
-            context.roster.len(),
-            capacity.max(1),
-            capacity.max(1),
-            Arc::clone(&admission),
-            root,
-            context,
-            Some(0),
-            None,
-            body_store,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-            CertifiedServeRestartDischarge::PreserveFixtureState,
-        )?;
-        Ok((sender, receiver, admission))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn production_persistent_test_io_command_channel(
-        capacity: usize,
-        root: &Path,
-        context: &wire::HeightContext,
-        body_store: &V2BodyStore,
-        key_pair: &KeyPair,
-        validator_set_pops: &[Vec<u8>],
-        local_validator: Option<wire::ValidatorIndex>,
-        durable_decided_subject: Option<wire::BlockSubject>,
-        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
-    ) -> Result<(V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>), String> {
-        let admission = V2IoAdmission::unbounded_for_tests();
-        let (sender, receiver) = persistent_v2_io_command_channel(
-            capacity,
-            context.roster.len(),
-            capacity.max(1),
-            capacity.max(1),
-            Arc::clone(&admission),
-            root,
-            context,
-            local_validator,
-            durable_decided_subject,
-            body_store,
-            lifecycle_ordinals,
-            CertifiedServeRestartDischarge::Production {
-                key_pair,
-                validator_set_pops,
-            },
-        )?;
-        Ok((sender, receiver, admission))
-    }
-
-    fn persist_unsealed_serve_fixture(
-        root: &Path,
-        context: &wire::HeightContext,
-        request: &AuthenticatedCertifiedBodyRequest,
-        owner: CertifiedServeOwnerKey,
-        lifecycle_ordinal: u128,
-        scheduler_ordinal: Option<u128>,
-    ) -> CertifiedServeLifecycleId {
-        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
-            .expect("fixture Serve family capacity");
-        let (store, mut persisted) = CertifiedServeStateStore::open(root, context, family_capacity)
-            .expect("open fixture durable Serve state");
-        let lifecycle_id = CertifiedServeLifecycleId {
-            admission_ordinal: lifecycle_ordinal,
-            request_hash: request.request_hash(),
-        };
-        persisted.next_lifecycle_admission_ordinal = persisted
-            .next_lifecycle_admission_ordinal
-            .max(lifecycle_ordinal);
-        if let Some(scheduler_ordinal) = scheduler_ordinal {
-            persisted.next_ingress_reservation_ordinal = persisted
-                .next_ingress_reservation_ordinal
-                .max(scheduler_ordinal);
-            persisted
-                .ingress_waiters
-                .push(PersistedCertifiedServeIngressWaiter {
-                    ingress_ordinal: scheduler_ordinal,
-                    lifecycle_id,
-                    owner: owner.clone(),
-                    request: request.request().clone(),
-                });
-            persisted
-                .ingress_waiters
-                .sort_by_key(|waiter| waiter.ingress_ordinal);
-        }
-        persisted
-            .unsealed_lifecycles
-            .push(PersistedCertifiedServeLifecycle {
-                lifecycle_id,
-                owner,
-                request: request.request().clone(),
-            });
-        persisted
-            .unsealed_lifecycles
-            .sort_by_key(|lifecycle| lifecycle.lifecycle_id);
-        store
-            .persist(&persisted)
-            .expect("persist fixture unsealed Serve lifecycle");
-        lifecycle_id
-    }
-
-    fn persist_terminal_serve_fixture(
-        root: &Path,
-        context: &wire::HeightContext,
-        request: &AuthenticatedCertifiedBodyRequest,
-        owner: CertifiedServeOwnerKey,
-        lifecycle_ordinal: u128,
-        response: &wire::CertifiedBodyResponse,
-    ) -> CertifiedServeLifecycleId {
-        assert_eq!(response.request_hash, request.request_hash());
-        let lifecycle_id = persist_unsealed_serve_fixture(
-            root,
-            context,
-            request,
-            owner.clone(),
-            lifecycle_ordinal,
-            None,
-        );
-        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
-            .expect("fixture Serve family capacity");
-        let (store, mut persisted) = CertifiedServeStateStore::open(root, context, family_capacity)
-            .expect("reopen fixture durable Serve state");
-        persisted
-            .unsealed_lifecycles
-            .retain(|lifecycle| lifecycle.lifecycle_id != lifecycle_id);
-        persisted
-            .terminal_tombstones
-            .push(PersistedCertifiedServeTombstone {
-                lifecycle_id,
-                owner,
-                request: request.request().clone(),
-                response_manifest: response.manifest.clone(),
-                response_responder: response.responder,
-                response_signature: response.signature.clone(),
-            });
-        persisted
-            .terminal_tombstones
-            .sort_by_key(|tombstone| tombstone.lifecycle_id);
-        store
-            .persist(&persisted)
-            .expect("persist fixture terminal Serve lifecycle");
-        lifecycle_id
-    }
-
-    fn persist_negative_serve_fixture(
-        root: &Path,
-        context: &wire::HeightContext,
-        request: &AuthenticatedCertifiedBodyRequest,
-        owner: CertifiedServeOwnerKey,
-        lifecycle_ordinal: u128,
-        outcome: CertifiedServeNegativeOutcome,
-    ) -> CertifiedServeLifecycleId {
-        let lifecycle_id = persist_unsealed_serve_fixture(
-            root,
-            context,
-            request,
-            owner.clone(),
-            lifecycle_ordinal,
-            None,
-        );
-        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
-            .expect("fixture Serve family capacity");
-        let (store, mut persisted) = CertifiedServeStateStore::open(root, context, family_capacity)
-            .expect("reopen fixture durable Serve state");
-        persisted
-            .unsealed_lifecycles
-            .retain(|lifecycle| lifecycle.lifecycle_id != lifecycle_id);
-        persisted
-            .negative_tombstones
-            .push(PersistedCertifiedServeNegativeTombstone {
-                lifecycle_id,
-                owner,
-                request: request.request().clone(),
-                outcome,
-            });
-        persisted
-            .negative_tombstones
-            .sort_by_key(|tombstone| tombstone.lifecycle_id);
-        store
-            .persist(&persisted)
-            .expect("persist fixture negative Serve lifecycle");
-        lifecycle_id
-    }
-
-    fn authenticated_serve_request(
-        context: &wire::HeightContext,
-        requester_key: &KeyPair,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        phase: wire::GlobalPhase,
-    ) -> AuthenticatedCertifiedBodyRequest {
-        let mut request = wire::CertifiedBodyRequest {
-            round,
-            subject,
-            certificate: wire::QuorumCertificate {
-                round,
-                proposal_round: round,
-                phase,
-                subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                    Hash::new(b"Serve fixture parent state"),
-                    Hash::new(b"Serve fixture post state"),
-                    Hash::new(b"Serve fixture ordinary writes"),
-                    1,
-                    Hash::new(b"Serve fixture executed block"),
-                ),
-                signers: (0..context.roster.len())
-                    .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
-                    .collect(),
-                aggregate_signature: vec![0xA5; 48],
-            },
-            requester: PeerId::new(requester_key.public_key().clone()),
-            signature: Vec::new(),
-        };
-        request.signature =
-            Signature::new(requester_key.private_key(), &request.signature_preimage())
-                .payload()
-                .to_vec();
-        let requester = request.requester.clone();
-        authenticate_certified_body_request(context, request, &requester, |_, _| {
-            Ok::<(), &'static str>(())
-        })
-        .expect("authenticate certified Serve fixture")
-    }
-
-    pub(in crate::sumeragi) fn production_authenticated_serve_request(
-        context: &wire::HeightContext,
-        keys: &[KeyPair],
-        requester_key: &KeyPair,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        phase: wire::GlobalPhase,
-        signer_indices: &[usize],
-    ) -> (AuthenticatedCertifiedBodyRequest, Vec<Vec<u8>>) {
-        let mut request =
-            authenticated_serve_request(context, requester_key, round, subject, phase)
-                .request()
-                .clone();
-        let signers = signer_indices
-            .iter()
-            .map(|index| u32::try_from(*index).expect("fixture signer index fits u32"))
-            .collect::<Vec<_>>();
-        let vote_preimage = wire::Vote {
-            round: request.certificate.round,
-            proposal_round: request.certificate.proposal_round,
-            phase: request.certificate.phase,
-            subject: request.certificate.subject,
-            execution_commitment: request.certificate.execution_commitment,
-            signer: *signers
-                .first()
-                .expect("production Serve fixture has a signer"),
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let signature_shares = signer_indices
-            .iter()
-            .map(|index| {
-                Signature::new(keys[*index].private_key(), &vote_preimage)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let signature_share_refs = signature_shares
-            .iter()
-            .map(Vec::as_slice)
-            .collect::<Vec<_>>();
-        request.certificate.signers = signers;
-        request.certificate.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&signature_share_refs)
-                .expect("aggregate production Serve fixture certificate");
-        request.signature =
-            Signature::new(requester_key.private_key(), &request.signature_preimage())
-                .payload()
-                .to_vec();
-        let requester = request.requester.clone();
-        let authenticated =
-            authenticate_certified_body_request(context, request, &requester, |_, _| {
-                Ok::<(), &'static str>(())
-            })
-            .expect("authenticate production Serve fixture after certificate replacement");
-        let validator_pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator proof of possession")
-            })
-            .collect();
-        (authenticated, validator_pops)
-    }
-
-    fn certified_serve_response(
-        request: &AuthenticatedCertifiedBodyRequest,
-        manifest: wire::PayloadManifest,
-        body: Vec<u8>,
-        responder_key: &KeyPair,
-    ) -> wire::CertifiedBodyResponse {
-        let mut response = wire::CertifiedBodyResponse {
-            request_hash: request.request_hash(),
-            manifest,
-            body,
-            responder: 0,
-            signature: Vec::new(),
-        };
-        response.signature =
-            Signature::new(responder_key.private_key(), &response.signature_preimage())
-                .payload()
-                .to_vec();
-        response
-    }
-
-    fn commit_and_terminalize_serve(
-        command_tx: &V2IoCommandSender,
-        command_rx: &V2IoCommandReceiver,
-        admission: &CertifiedServeAdmission,
-        authenticated_via: PeerId,
-        route: NetworkReplyRoute,
-        response: wire::CertifiedBodyResponse,
-    ) -> CertifiedServeLifecycleId {
-        let requester = admission.request.requester.clone();
-        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(admission.request.clone()),
-        ));
-        let (routes, ownership) =
-            fair_ingress_route_owner(message, requester, authenticated_via, route);
-        assert!(matches!(
-            command_tx
-                .commit_serve(admission, routes, ownership)
-                .expect("commit prepared Serve lifecycle"),
-            CertifiedServeCommit::Queued
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == admission.lifecycle_id
-        ));
-        command_rx
-            .complete_serve_response(admission.lifecycle_id, &response)
-            .expect("seal terminal Serve response before exposing completion");
-        command_tx
-            .acknowledge_serve_completion(
-                admission.lifecycle_id,
-                V2IoServeTerminal::Response(response),
-            )
-            .expect("terminal response remains bound to the exact Serve lifecycle");
-        admission.lifecycle_id
-    }
-
-    // Scheduler-attempt telemetry is intentionally excluded: even a failed
-    // dequeue records that the fair-ingress queue received a service turn.
-    #[derive(Debug, PartialEq, Eq)]
-    struct FairIngressAccountingSnapshot {
-        last_admission_ordinal: u64,
-        ready: Vec<FairV2IngressSource>,
-        pending_wire_owners: Vec<(FairV2IngressWireKey, FairV2IngressSource)>,
-        lanes: Vec<FairIngressLaneAccountingSnapshot>,
-        len: usize,
-        bytes: usize,
-        nonempty_since: Option<Instant>,
-        open: bool,
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct FairIngressLaneAccountingSnapshot {
-        source: FairV2IngressSource,
-        entries: Vec<FairIngressEntryAccountingSnapshot>,
-        progress_len: usize,
-        timeout_vote_len: usize,
-        transport_completion_len: usize,
-        bytes: usize,
-        timeout_vote_bytes: usize,
-        transport_completion_bytes: usize,
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct FairIngressEntryAccountingSnapshot {
-        admission_ordinal: u64,
-        owns_certified_serve_ticket: bool,
-        class: FairV2IngressClass,
-        wire_key: Option<FairV2IngressWireKey>,
-        encoded_len: usize,
-    }
-
-    fn fair_ingress_accounting_snapshot(ingress: &FairV2Ingress) -> FairIngressAccountingSnapshot {
-        let state = ingress.state.lock();
-        FairIngressAccountingSnapshot {
-            last_admission_ordinal: state.last_admission_ordinal,
-            ready: state.ready.iter().cloned().collect(),
-            pending_wire_owners: state
-                .pending_wire_owners
-                .iter()
-                .map(|(wire, owner)| (wire.clone(), owner.clone()))
-                .collect(),
-            lanes: state
-                .lanes
-                .iter()
-                .map(|(source, lane)| FairIngressLaneAccountingSnapshot {
-                    source: source.clone(),
-                    entries: lane
-                        .entries
-                        .iter()
-                        .map(|entry| FairIngressEntryAccountingSnapshot {
-                            admission_ordinal: entry.admission_ordinal,
-                            owns_certified_serve_ticket: entry
-                                .certified_serve_reservation
-                                .is_some(),
-                            class: entry.class,
-                            wire_key: entry.wire_key.clone(),
-                            encoded_len: entry.encoded_len,
-                        })
-                        .collect(),
-                    progress_len: lane.progress_len,
-                    timeout_vote_len: lane.timeout_vote_len,
-                    transport_completion_len: lane.transport_completion_len,
-                    bytes: lane.bytes,
-                    timeout_vote_bytes: lane.timeout_vote_bytes,
-                    transport_completion_bytes: lane.transport_completion_bytes,
-                })
-                .collect(),
-            len: state.len,
-            bytes: state.bytes,
-            nonempty_since: state.nonempty_since,
-            open: state.open,
-        }
-    }
-
-    fn gated_fair_ingress(
-        context: &wire::HeightContext,
-        command_tx: &V2IoCommandSender,
-    ) -> (FairV2Ingress, CertifiedServeIngressGate) {
-        let ingress = FairV2Ingress::new(
-            128,
-            5 * 64 * 1024 * 1024,
-            64 * 1024 * 1024,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-        );
-        ingress
-            .configure_roster(context.roster.iter().map(|entry| entry.validator.clone()))
-            .expect("test roster fits fair ingress");
-        ingress.require_certified_serve_gate();
-        let gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&command_tx.queue),
-        };
-        ingress
-            .bind_certified_serve_gate(gate.clone())
-            .expect("bind exact Serve gate");
-        ingress.open().expect("open gated fair ingress");
-        (ingress, gate)
-    }
-
-    pub(in crate::sumeragi) fn certified_serve_inbound(
-        request: &wire::CertifiedBodyRequest,
-        authenticated_via: PeerId,
-    ) -> InboundBlockMessage {
-        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via.clone());
-        let route = routes.mint_via(request.requester.clone(), authenticated_via.clone());
-        InboundBlockMessage::try_from_transport_with_reply_route(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-            )),
-            request.requester.clone(),
-            authenticated_via,
-            route,
-        )
-        .expect("fixture exact Serve route matches requester and authenticated hop")
-    }
-
-    fn certified_serve_inbound_with_route(
-        request: &wire::CertifiedBodyRequest,
-        authenticated_via: PeerId,
-        route: NetworkReplyRoute,
-    ) -> InboundBlockMessage {
-        InboundBlockMessage::try_from_transport_with_reply_route(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-            )),
-            request.requester.clone(),
-            authenticated_via,
-            route,
-        )
-        .expect("fixture reply route matches exact Serve ingress")
-    }
-
-    fn drain_and_commit_gated_serve(
-        ingress: &FairV2Ingress,
-        command_tx: &V2IoCommandSender,
-        owner: CertifiedServeOwnerKey,
-        request: &AuthenticatedCertifiedBodyRequest,
-    ) -> (CertifiedServeAdmission, CertifiedServeCommit) {
-        let mut prepared = None;
-        let mut inbound = ingress
-            .try_recv_if(|_| {
-                prepared = Some(
-                    command_tx
-                        .prepare_reserved_serve(owner.clone(), request.clone())
-                        .expect("prepare gated Serve fixture"),
-                );
-                true
-            })
-            .expect("drain gated Serve fixture");
-        let admission = prepared.expect("predicate retained gated Serve admission");
-        let ingress_ownership = inbound
-            .take_ingress_ownership()
-            .expect("gated Serve fixture retains fair ownership");
-        let (_, _, reply_routes) = inbound.into_message_sender_and_reply_routes();
-        let committed = command_tx
-            .commit_serve(
-                &admission,
-                reply_routes.expect("gated Serve fixture retains reply routes"),
-                ingress_ownership,
-            )
-            .expect("commit gated Serve fixture");
-        (admission, committed)
-    }
-
-    struct SaturatedCompletionRuntime {
-        queued: usize,
-        capacity: usize,
-        next_lifecycle_ordinal: u128,
-        effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
-        external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
-        external_lifecycle_owner_capacity: Option<usize>,
-    }
-
-    impl SaturatedCompletionRuntime {
-        fn new(queued: usize, capacity: usize) -> Self {
-            Self {
-                queued,
-                capacity,
-                next_lifecycle_ordinal: 1,
-                effect_owners: BTreeMap::new(),
-                external_lifecycle_owners: Vec::new(),
-                external_lifecycle_owner_capacity: None,
-            }
-        }
-
-        fn reject_completion() -> Result<(), EnqueueError> {
-            Err(EnqueueError::Full)
-        }
-
-        fn effect_ownership(
-            &mut self,
-            effect: &AdapterEffect,
-        ) -> Result<RuntimeEffectOwnership, String> {
-            let mut identity = Vec::new();
-            let tag = match effect {
-                AdapterEffect::FetchBody {
-                    tag,
-                    round,
-                    subject,
-                    ..
-                }
-                | AdapterEffect::StoreBody {
-                    tag,
-                    round,
-                    subject,
-                }
-                | AdapterEffect::ValidateBody {
-                    tag,
-                    round,
-                    subject,
-                } => {
-                    identity.extend_from_slice(b"body-pipeline");
-                    identity.extend_from_slice(&round.encode());
-                    identity.extend_from_slice(&subject.encode());
-                    *tag
-                }
-                AdapterEffect::Sign { tag, request } => {
-                    identity.extend_from_slice(b"sign");
-                    identity.extend_from_slice(&request.signature_preimage());
-                    *tag
-                }
-                AdapterEffect::Apply {
-                    tag,
-                    subject,
-                    certificate,
-                } => {
-                    identity.extend_from_slice(b"apply");
-                    identity.extend_from_slice(&subject.encode());
-                    identity.extend_from_slice(&certificate.as_ref().encode());
-                    *tag
-                }
-                AdapterEffect::Broadcast(message) => {
-                    identity.extend_from_slice(b"broadcast");
-                    identity.extend_from_slice(&message.encode());
-                    EventTag::new(1, 0, Generation::new(0))
-                }
-                AdapterEffect::EnterView { tag, .. } => {
-                    identity.extend_from_slice(b"enter-view");
-                    identity.extend_from_slice(&tag.height().to_le_bytes());
-                    identity.extend_from_slice(&tag.view().to_le_bytes());
-                    *tag
-                }
-                AdapterEffect::ReportEquivocation { .. }
-                | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
-                    identity.extend_from_slice(format!("{effect:?}").as_bytes());
-                    EventTag::new(1, 0, Generation::new(0))
-                }
-            };
-            self.ownership_for_identity(tag, Hash::new(identity))
-        }
-
-        fn ownership_for_identity(
-            &mut self,
-            tag: EventTag,
-            identity: Hash,
-        ) -> Result<RuntimeEffectOwnership, String> {
-            if let Some(existing) = self.effect_owners.get(&identity) {
-                return Ok(existing.clone());
-            }
-            let next_lifecycle_ordinal = self
-                .next_lifecycle_ordinal
-                .checked_add(1)
-                .ok_or_else(|| "saturated runtime lifecycle-owner ordinal overflowed".to_owned())?;
-            let ownership =
-                RuntimeEffectOwnership::fresh_for_test(tag, self.next_lifecycle_ordinal);
-            self.next_lifecycle_ordinal = next_lifecycle_ordinal;
-            self.effect_owners.insert(identity, ownership.clone());
-            Ok(ownership)
-        }
-    }
-
-    impl EffectRuntime for SaturatedCompletionRuntime {
-        fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
-            Ok(RuntimeStep::Idle)
-        }
-
-        fn step_recovery_effects(
-            &mut self,
-            now: Instant,
-        ) -> Result<RuntimeStep<AdapterEffect>, String> {
-            self.step_effects(now)
-        }
-
-        fn take_effect_ownership(
-            &mut self,
-            effects: &[AdapterEffect],
-        ) -> Result<Vec<RuntimeEffectOwnership>, String> {
-            let ownership = effects
-                .iter()
-                .map(|effect| self.effect_ownership(effect))
-                .collect::<Result<Vec<_>, _>>()?;
-            bind_adapter_effect_batch_ownership(effects, ownership)
-        }
-
-        fn take_leader_wire_runtime_terminals(
-            &mut self,
-        ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
-            Ok(Vec::new())
-        }
-
-        fn set_external_lifecycle_owners(
-            &mut self,
-            owners: Vec<RuntimeLifecycleOwner>,
-        ) -> Result<(), String> {
-            let capacity = self.external_lifecycle_owner_capacity.ok_or_else(|| {
-                "saturated test runtime external-owner capacity is not configured".to_owned()
-            })?;
-            if owners.len() > capacity || owners.iter().any(|owner| owner.lifecycle_ordinal() == 0)
-            {
-                return Err(
-                    "saturated test runtime external lifecycle ownership is invalid".to_owned(),
-                );
-            }
-            let mut exact_by_ordinal = BTreeMap::new();
-            for owner in &owners {
-                if exact_by_ordinal
-                    .insert(owner.lifecycle_ordinal(), owner)
-                    .is_some()
-                {
-                    return Err(
-                        "saturated test runtime external lifecycle ownership is not unique"
-                            .to_owned(),
-                    );
-                }
-            }
-            self.external_lifecycle_owners = owners;
-            Ok(())
-        }
-
-        fn configure_external_lifecycle_owner_capacity(
-            &mut self,
-            max_pending_work: usize,
-        ) -> Result<(), String> {
-            let retained_capacity = MAX_EFFECTS_PER_STEP.checked_mul(2).ok_or_else(|| {
-                "saturated test runtime external-owner capacity overflowed".to_owned()
-            })?;
-            let capacity = max_pending_work
-                .checked_add(retained_capacity)
-                .ok_or_else(|| {
-                    "saturated test runtime external-owner capacity overflowed".to_owned()
-                })?;
-            if max_pending_work == 0 || self.external_lifecycle_owners.len() > capacity {
-                return Err("saturated test runtime external-owner capacity is invalid".to_owned());
-            }
-            self.external_lifecycle_owner_capacity = Some(capacity);
-            Ok(())
-        }
-
-        fn mint_local_proposal_effect_ownership(
-            &mut self,
-            tag: EventTag,
-            manifest: &wire::PayloadManifest,
-        ) -> Result<LocalProposalEffectOwnership, String> {
-            let mut identity = Vec::from(b"body-pipeline".as_slice());
-            identity.extend_from_slice(&manifest.round.encode());
-            identity.extend_from_slice(&manifest.subject.encode());
-            let ownership = self.ownership_for_identity(tag, Hash::new(identity))?;
-            let effect = AdapterEffect::StoreBody {
-                tag,
-                round: manifest.round,
-                subject: manifest.subject,
-            };
-            let ownership = bind_adapter_effect_batch_ownership(
-                std::slice::from_ref(&effect),
-                vec![ownership],
-            )?
-            .pop()
-            .ok_or_else(|| "saturated local proposal StoreBody binding was empty".to_owned())?;
-            LocalProposalEffectOwnership::for_test(ownership, &effect, manifest).ok_or_else(|| {
-                "saturated local proposal replay seal did not match its Store owner".to_owned()
-            })
-        }
-
-        fn reconcile_active_view_producer(
-            &mut self,
-            _tag: EventTag,
-            _retain: bool,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn complete_active_view_producer_after_proposal_fanout(
-            &mut self,
-            _proposal_round: wire::ConsensusRound,
-            _ownership: &RuntimeEffectOwnership,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn take_scheduler_ownership(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn authoritative_tag(&self) -> Option<EventTag> {
-            None
-        }
-
-        fn decided_body(
-            &self,
-        ) -> Result<
-            Option<(
-                wire::ConsensusRound,
-                wire::ConsensusRound,
-                wire::BlockSubject,
-                wire::ExecutionCommitment,
-            )>,
-            String,
-        > {
-            Ok(None)
-        }
-
-        fn reserve_body_available(
-            &mut self,
-            _tag: EventTag,
-            _manifest: wire::PayloadManifest,
-        ) -> Result<BodyAvailableReservation, EnqueueError> {
-            Err(EnqueueError::Full)
-        }
-
-        fn commit_body_available(
-            &mut self,
-            _reservation: BodyAvailableReservation,
-        ) -> Result<(), EnqueueError> {
-            Ok(())
-        }
-
-        fn abort_body_available(&mut self, _reservation: BodyAvailableReservation) {}
-
-        fn rebind_body_available(
-            &mut self,
-            _previous: EventTag,
-            _rebound: EventTag,
-            _manifest: &wire::PayloadManifest,
-        ) -> Result<bool, String> {
-            Ok(false)
-        }
-
-        fn rebind_unpublished_body_available(
-            &mut self,
-            _previous: EventTag,
-            _rebound: EventTag,
-            _round: wire::ConsensusRound,
-            _subject: wire::BlockSubject,
-        ) -> Result<bool, String> {
-            Ok(false)
-        }
-
-        fn retire_unpublished_body_available(
-            &mut self,
-            _tag: EventTag,
-            _round: wire::ConsensusRound,
-            _subject: wire::BlockSubject,
-        ) -> Result<bool, String> {
-            Ok(false)
-        }
-
-        fn retire_body_available(
-            &mut self,
-            _tag: EventTag,
-            _manifest: &wire::PayloadManifest,
-        ) -> Result<bool, String> {
-            Ok(false)
-        }
-
-        fn retire_body_pipeline_completions(
-            &mut self,
-            _tag: EventTag,
-            _round: wire::ConsensusRound,
-            _subject: wire::BlockSubject,
-        ) -> Result<RetiredBodyPipelineCompletions, String> {
-            Ok(RetiredBodyPipelineCompletions::default())
-        }
-
-        fn retire_unsafe_proposals_for_lock(
-            &mut self,
-            _locked_round: wire::ConsensusRound,
-            _locked_subject: wire::BlockSubject,
-        ) -> Result<usize, String> {
-            Ok(0)
-        }
-
-        fn retire_proposal_work_after_decision(
-            &mut self,
-            _decision_round: wire::ConsensusRound,
-            _decision_subject: wire::BlockSubject,
-            _decision_commitment: wire::ExecutionCommitment,
-        ) -> Result<DecisionProposalRetirement, String> {
-            Ok(DecisionProposalRetirement::default())
-        }
-
-        fn enqueue_body_stored(
-            &mut self,
-            _tag: EventTag,
-            _round: wire::ConsensusRound,
-            _subject: wire::BlockSubject,
-            _receipt: DurableBodyReceipt,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn enqueue_validation_succeeded(
-            &mut self,
-            _tag: EventTag,
-            _round: wire::ConsensusRound,
-            _subject: wire::BlockSubject,
-            _receipt: ValidatedBodyReceipt,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn enqueue_validation_failed(
-            &mut self,
-            _tag: EventTag,
-            _round: wire::ConsensusRound,
-            _subject: wire::BlockSubject,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn enqueue_validation_failures_atomically(
-            &mut self,
-            _failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn enqueue_signature(
-            &mut self,
-            _tag: EventTag,
-            _signature: Vec<u8>,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn enqueue_application_completed(
-            &mut self,
-            _tag: EventTag,
-            _subject: wire::BlockSubject,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn enqueue_local_proposal(
-            &mut self,
-            _tag: EventTag,
-            _manifest: wire::PayloadManifest,
-            _durable_receipt: DurableBodyReceipt,
-            _validated_receipt: ValidatedBodyReceipt,
-        ) -> Result<(), EnqueueError> {
-            Self::reject_completion()
-        }
-
-        fn verify_certificate(
-            &self,
-            _context: &wire::HeightContext,
-            _certificate: &wire::QuorumCertificate,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn authenticate_certified_body_request(
-            &self,
-            context: &wire::HeightContext,
-            request: wire::CertifiedBodyRequest,
-            authenticated_requester: &PeerId,
-        ) -> Result<
-            AuthenticatedCertifiedBodyRequest,
-            crate::sumeragi::v2_transport::V2TransportError,
-        > {
-            authenticate_certified_body_request(
-                context,
-                request,
-                authenticated_requester,
-                |context, certificate| self.verify_certificate(context, certificate),
-            )
-        }
-
-        fn queued_commands(&self) -> usize {
-            self.queued
-        }
-
-        fn remaining_completion_capacity(&self) -> usize {
-            self.capacity.saturating_sub(self.queued)
-        }
-
-        fn has_certified_fence_escape_credit(&self) -> bool {
-            false
-        }
-
-        fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
-            let empty = RuntimeQueueLaneSnapshot {
-                depth: 0,
-                capacity: self.capacity,
-                oldest_age: None,
-                max_service_debt: 0,
-            };
-            RuntimeQueueSnapshot {
-                normal: empty,
-                progress: empty,
-                completion: RuntimeQueueLaneSnapshot {
-                    depth: self.queued,
-                    oldest_age: (self.queued != 0).then_some(Duration::ZERO),
-                    ..empty
-                },
-            }
-        }
-
-        fn watchdog_threshold(&self) -> Duration {
-            Duration::from_secs(1)
-        }
-    }
-
-    #[test]
-    fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let manifest = proposal.manifest;
-        let tag = EventTag::new(
-            service.context.height,
-            manifest.round.view,
-            Generation::new(service.context.height),
-        );
-        let mut runtime = SaturatedCompletionRuntime::new(0, 1);
-        runtime
-            .configure_external_lifecycle_owner_capacity(1)
-            .expect("configure bounded external owners");
-        let proposal_owner = runtime
-            .mint_local_proposal_effect_ownership(tag, &manifest)
-            .expect("mint local proposal owner");
-        let store = AdapterEffect::StoreBody {
-            tag,
-            round: manifest.round,
-            subject: manifest.subject,
-        };
-        let proposal_effect_owner = proposal_owner
-            .exact_store_task_ownership(&store, &manifest)
-            .expect("local proposal composite retains its exact Store owner");
-        let fetch = AdapterEffect::FetchBody {
-            tag,
-            round: manifest.round,
-            subject: manifest.subject,
-            manifest: Some(manifest),
-            certified_sources: Vec::new(),
-            certificate: None,
-        };
-        let fetch_owner = runtime
-            .take_effect_ownership(&[fetch])
-            .expect("derive positional fetch owner")
-            .pop()
-            .expect("one effect has one owner");
-        assert_eq!(fetch_owner, proposal_effect_owner);
-
-        runtime
-            .set_external_lifecycle_owners(vec![proposal_effect_owner.owner().clone()])
-            .expect("one external owner fits");
-        assert_eq!(runtime.external_lifecycle_owners.len(), 1);
-        assert!(
-            runtime
-                .set_external_lifecycle_owners(vec![
-                    proposal_effect_owner.owner().clone();
-                    MAX_EFFECTS_PER_STEP + 2
-                ])
-                .is_err()
-        );
-        assert_eq!(
-            runtime.external_lifecycle_owners.len(),
-            1,
-            "rejected publication must preserve the prior bounded owner set"
-        );
-    }
-
-    /// Build closed-network production services for sibling runner tests.
-    pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
-        let (exact_output_handoff_owner, _) = durable_exact_output_handoff_owner_pair();
-        let mut keys = (1_u8..=4)
-            .map(|seed| {
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic validator key")
-            })
-            .collect::<Vec<_>>();
-        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let roster = keys
-            .iter()
-            .map(|key| wire::ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
-            protocol_version: wire::PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            epoch_end_height: u64::MAX,
-            next_epoch_snapshot: None,
-            mode: wire::ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: wire::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
-            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 8,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 32,
-                max_chunk_count: 8,
-            },
-            leader_seed: [0x33; 32],
-        };
-        context.validate().expect("valid context");
-        let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
-        let leader_wire_recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                context.id(),
-                context.height,
-                [0xF4; 32],
-                active_tag.view(),
-                false,
-            );
-        let local_peer = context.roster[0].validator.clone();
-        let frozen_semantic_targets = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        let validator_set_pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("worker fixture validator PoP")
-            })
-            .collect::<Vec<_>>();
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            iroha_data_model::ChainId::from("sumeragi-v2-worker-display-name"),
-            context.network_id,
-        ));
-        let kura_replica_advert_refresh = Arc::new(
-            KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
-                .expect("valid test Kura replica advert refresh owner"),
-        );
-        let service = ProductionV2Services {
-            context,
-            validator_set_pops,
-            state,
-            local_peer,
-            local_validator: Some(0),
-            key_pair: keys[0].clone(),
-            network: crate::IrohaNetwork::closed_for_tests(),
-            kura,
-            chunk_root: PathBuf::new(),
-            io: None,
-            lifecycle_body_store_identity: None,
-            lifecycle_payload_store_identity: None,
-            fetches: BTreeMap::new(),
-            fetch_by_manifest: BTreeMap::new(),
-            orphan_chunks: BTreeMap::new(),
-            orphan_chunk_count: 0,
-            orphan_chunk_bytes: 0,
-            orphan_lifecycle_sweep_cursor: None,
-            max_orphan_chunks: 1,
-            max_orphan_chunk_bytes: 32,
-            max_merge_sidecar_deferrals: 1,
-            local_completions: VecDeque::new(),
-            held_io_completion: None,
-            next_completion_source: CompletionSource::Io,
-            locked_candidate_acquisition: None,
-            next_locked_candidate_acquisition_id: 0,
-            proposal_work_retired: false,
-            prepared_candidates: VecDeque::new(),
-            validation_rejections: VecDeque::new(),
-            merge_sidecar_deferrals: VecDeque::new(),
-            outbound_chunks: BTreeMap::new(),
-            fast_path_proposals: BTreeSet::new(),
-            pending_exact_output: Mutex::new(
-                PendingExactOutput::new(16, 5, 4, &frozen_semantic_targets)
-                    .expect("bounded test output corridor"),
-            ),
-            kura_replica_advert_refresh,
-            exact_output_handoff_owner,
-            exact_output_admission_hook: None,
-            active_tag,
-            last_status: None,
-            fatal_reason: None,
-            output_guard: ConsensusOutputGuard::isolated(),
-            leader_wire_ingress: Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
-            leader_wire_recovery_authority,
-            clean_teardown: true,
-        };
-        (service, keys)
-    }
-
+    include!("tests/v2_worker_main_00.rs");
+    include!("tests/v2_worker_main_01.rs");
+    include!("tests/v2_worker_lifecycle_capacity_cases.rs");
     include!("tests/v2_worker_equivocation_and_selected_serve_fixture.rs");
-    fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
-        let validator_set = vec![validator];
-        let validator_set_hash = HashOf::new(&validator_set);
-        let body = LaneBlockVoteBodyV1 {
-            phase: CertPhase::Commit,
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(1),
-            lane_incarnation: Hash::new(b"outbound corridor lane incarnation"),
-            proposal_height: 1,
-            lane_block_height: 1,
-            lane_block_view: 0,
-            proposal_hash: Hash::new(b"outbound corridor proposal"),
-            descriptor_hash: Hash::new(b"outbound corridor descriptor"),
-            subject_hash: Hash::new(b"outbound corridor subject"),
-            payload_ownership_hash: Hash::new(b"outbound corridor ownership"),
-            rbc_instance_hash: Hash::new(b"outbound corridor RBC"),
-            accepted_candidate_indices: Vec::new(),
-            accepted_transaction_hashes: Vec::new(),
-            validator_set_hash_version: 1,
-            validator_set_hash,
-            validator_count: 1,
-            min_quorum: 1,
-            qc_mode_tag: "outbound-corridor-test".to_owned(),
-        };
-        LaneBlockQcV1 {
-            body,
-            validator_set_hash_version: 1,
-            validator_set_hash,
-            validator_set,
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: vec![1],
-            payload_availability_qc: None,
-        }
-    }
-
-    fn non_retireable_lane_transport_messages(validator: PeerId) -> Vec<BlockMessage> {
-        let qc = lane_commit_qc(validator.clone());
-        let body = &qc.body;
-        let descriptor = LaneBlockDescriptorV1 {
-            lane_id: body.lane_id,
-            dataspace_id: body.dataspace_id,
-            lane_incarnation: body.lane_incarnation,
-            proposal_height: body.proposal_height,
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
-            lane_block_height: body.lane_block_height,
-            lane_block_view: body.lane_block_view,
-            subject_hash: body.subject_hash,
-            payload_ownership_hash: body.payload_ownership_hash,
-            rbc_instance_hash: body.rbc_instance_hash,
-            accepted_candidate_indices: body.accepted_candidate_indices.clone(),
-            accepted_transaction_hashes: body.accepted_transaction_hashes.clone(),
-            validator_set_hash_version: body.validator_set_hash_version,
-            validator_set_hash: body.validator_set_hash,
-            validator_set: qc.validator_set.clone(),
-            validator_count: body.validator_count,
-            min_quorum: body.min_quorum,
-            qc_mode_tag: body.qc_mode_tag.clone(),
-            descriptor_hash: body.descriptor_hash,
-        };
-        let proposal = LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: body.proposal_hash,
-            payload_block_hint: None,
-        };
-        let payload_hash = Hash::new(b"non-retireable lane transport payload");
-        let payload = crate::lane_consensus::LaneExecutablePayloadV1 {
-            version: crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-            network_id: crate::sumeragi::synthetic_network_id("non-retireable-lane-transport"),
-            epoch: 0,
-            origin_proposal: proposal,
-            entrypoint_hashes: Vec::new(),
-            entrypoints: Vec::new(),
-            reservation_keys: Vec::new(),
-            routing_plans: Vec::new(),
-            native_amx_receipts: Vec::new(),
-            payload_hash,
-            producer: validator.clone(),
-            producer_signature: Vec::new(),
-        };
-        let new_view_body = crate::lane_consensus::LaneBlockNewViewBodyV1 {
-            version: 1,
-            network_id: payload.network_id,
-            epoch: payload.epoch,
-            lane_id: body.lane_id,
-            dataspace_id: body.dataspace_id,
-            lane_incarnation: body.lane_incarnation,
-            proposal_height: body.proposal_height,
-            lane_block_height: body.lane_block_height,
-            from_view: body.lane_block_view,
-            target_view: body.lane_block_view.saturating_add(1),
-            locked_proposal_hash: body.proposal_hash,
-            locked_descriptor_hash: body.descriptor_hash,
-            executable_payload_hash: payload_hash,
-            validator_set_hash_version: body.validator_set_hash_version,
-            validator_set_hash: body.validator_set_hash,
-            validator_count: body.validator_count,
-            min_quorum: body.min_quorum,
-            qc_mode_tag: body.qc_mode_tag.clone(),
-        };
-        vec![
-            BlockMessage::LaneExecutablePayload(payload),
-            BlockMessage::LaneBlockNewViewVote(crate::lane_consensus::LaneBlockNewViewVoteV1 {
-                body: new_view_body.clone(),
-                signer: validator.clone(),
-                bls_signature: Vec::new(),
-            }),
-            BlockMessage::LaneBlockNewViewCertificate(
-                crate::lane_consensus::LaneBlockNewViewCertificateV1 {
-                    body: new_view_body,
-                    validator_set: qc.validator_set,
-                    signers_bitmap: vec![1],
-                    bls_aggregate_signature: Vec::new(),
-                },
-            ),
-        ]
-    }
-
-    /// Build a deterministic lane CommitQC block for sibling Sumeragi tests.
-    pub(in crate::sumeragi) fn lane_commit_qc_block_message(validator: PeerId) -> BlockMessage {
-        BlockMessage::LaneBlockQc(lane_commit_qc(validator))
-    }
-
-    fn lane_commit_qc_message(validator: PeerId) -> NetworkMessage {
-        let wire =
-            BlockMessageWire::try_preencoded(Arc::new(lane_commit_qc_block_message(validator)))
-                .expect("encode final lane CommitQC");
-        NetworkMessage::SumeragiBlock(Arc::new(wire))
-    }
-
-    fn global_commit_qc_message(
-        artifact: &wire::finality::V2FinalityArtifact,
-    ) -> wire::ConsensusMessageV2 {
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-            artifact.commit_qc.clone(),
-        ))
-    }
-
-    fn merge_share(label: &[u8]) -> MergeCommitteeSignature {
-        MergeCommitteeSignature {
-            version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
-            epoch_id: 7,
-            view: 11,
-            signer: 0,
-            message_digest: Hash::new(label),
-            bls_sig: vec![9; 48],
-            leader_candidate_body: None,
-        }
-    }
-
-    fn merge_share_message(label: &[u8]) -> NetworkMessage {
-        NetworkMessage::MergeCommitteeSignature(Arc::new(merge_share(label)))
-    }
-
-    fn lane_drain_vote(keypair: &KeyPair) -> LaneDrainVoteV1 {
-        let signer = PeerId::new(keypair.public_key().clone());
-        let validator_set = vec![signer.clone()];
-        LaneDrainVoteV1::new_signed(
-            LaneDrainCertificateBodyV1 {
-                version: 1,
-                intent: LaneDrainIntentV1 {
-                    version: 1,
-                    network_id: crate::sumeragi::synthetic_network_id("v2-worker-drain"),
-                    lane_id: LaneId::new(3),
-                    dataspace_id: DataSpaceId::new(5),
-                    lane_incarnation: Hash::new(b"v2-worker-drain-incarnation"),
-                    close_global_height: 1,
-                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                        LaneId::new(3),
-                        DataSpaceId::new(5),
-                        Hash::new(b"v2-worker-drain-incarnation"),
-                        0,
-                        None,
-                    ),
-                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                    validator_set_hash: HashOf::new(&validator_set),
-                    validator_set,
-                    validator_count: 1,
-                    min_quorum: 1,
-                },
-                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
-                    LaneId::new(3),
-                    DataSpaceId::new(5),
-                    Hash::new(b"v2-worker-drain-incarnation"),
-                    0,
-                    None,
-                ),
-            },
-            signer,
-            keypair.private_key(),
-        )
-        .expect("valid worker lane-drain vote")
-    }
-
-    fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmxMessage {
-        let validator_set = vec![signer.clone()];
-        NativeAmxMessage::PrepareVote(crate::native_amx::NativeAmxVoteV2 {
-            body: NativeAmxAttestationBodyV2 {
-                round: wire::ConsensusRound {
-                    context_id: context.id(),
-                    height: context.height,
-                    view: 0,
-                },
-                epoch: context.epoch,
-                network_id: context.network_id,
-                source_id: [0x31; 32],
-                tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"worker Native AMX entrypoint",
-                )),
-                plan_digest: Hash::new(b"worker Native AMX plan"),
-                phase: NativeAmxPhase::Prepare,
-                coordinator_lane_id: LaneId::new(1),
-                coordinator_dataspace_id: DataSpaceId::new(1),
-                coordinator_lane_incarnation: Hash::new(b"worker coordinator incarnation"),
-                participant_lane_id: LaneId::new(2),
-                participant_dataspace_id: DataSpaceId::new(2),
-                participant_lane_incarnation: Hash::new(b"worker participant incarnation"),
-                participant_previous_block_height: 0,
-                participant_previous_block_descriptor_hash: None,
-                participant_lane_block_height: 1,
-                participant_lane_block_view: 0,
-                participant_proposal_hash: Hash::new(b"worker participant proposal"),
-                participant_settlement_commitment: Hash::new(b"worker participant settlement"),
-                participant_validator_set_hash: HashOf::new(&validator_set),
-                participant_validator_count: 1,
-                participant_min_quorum: 1,
-                authority_context_height: context.height,
-                planned_coordinator_block_height: 1,
-                coordinator_lane_block_view: 0,
-                coordinator_proposal_hash: Hash::new(b"worker coordinator proposal"),
-            },
-            signer,
-            bls_signature: vec![0x41; 48],
-        })
-    }
-
-    fn certified_sidecar_outputs(
-        local: &PeerId,
-        peer: &PeerId,
-    ) -> (CertifiedMergeSidecarMessage, CertifiedMergeSidecarMessage) {
-        let semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
-            NonZeroU64::new(1).expect("worker semantic sequence is non-zero"),
-        );
-        let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"worker sidecar entry"));
-        let reference_digest = Hash::new(b"worker sidecar reference");
-        let mut request = CertifiedMergeSidecarRequestV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation:
-                crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            stream_epoch: CertifiedMergeSidecarStreamEpochV1(
-                NonZeroU64::new(1).expect("non-zero worker sidecar request stream epoch"),
-            ),
-            semantic_sequence,
-            closed_through: 0,
-            request_id: Hash::prehashed([0; Hash::LENGTH]),
-            entry_hash,
-            encoded_len: 4,
-            epoch_id: 7,
-            reference_digest,
-            requester: local.clone(),
-            responder: peer.clone(),
-        };
-        request.request_id = request.canonical_request_id();
-        let chunk = CertifiedMergeSidecarChunkV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation:
-                crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            stream_epoch: CertifiedMergeSidecarStreamEpochV1(
-                NonZeroU64::new(1).expect("non-zero worker sidecar response stream epoch"),
-            ),
-            semantic_sequence,
-            request_id: Hash::new(b"worker sidecar response request"),
-            entry_hash,
-            encoded_len: 4,
-            epoch_id: 7,
-            reference_digest,
-            requester: peer.clone(),
-            responder: local.clone(),
-            chunk_index: 0,
-            chunk_count: 1,
-            bytes: vec![1, 2, 3, 4],
-        };
-        (
-            CertifiedMergeSidecarMessage::Request(request),
-            CertifiedMergeSidecarMessage::Chunk(chunk),
-        )
-    }
-
-    fn certified_sidecar_generation_hint(
-        local: &PeerId,
-        peer: &PeerId,
-        ordinal: u64,
-    ) -> CertifiedMergeSidecarMessage {
-        let current_generation = crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1(
-            NonZeroU64::new(
-                ordinal
-                    .checked_add(2)
-                    .expect("worker hint generation does not overflow"),
-            )
-            .expect("worker hint generation is non-zero"),
-        );
-        let mut hint = crate::merge_sidecar::CertifiedMergeSidecarGenerationHintV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            observed_generation:
-                crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            current_generation,
-            observed_message_hash: Hash::new_from_chunks(&[
-                b"worker retryable generation hint",
-                &ordinal.to_le_bytes(),
-            ]),
-            hint_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: peer.clone(),
-            responder: local.clone(),
-        };
-        hint.hint_id = hint.canonical_hint_id();
-        CertifiedMergeSidecarMessage::GenerationHint(hint)
-    }
-
-    fn certified_sidecar_close(
-        local: &PeerId,
-        peer: &PeerId,
-        ordinal: u64,
-    ) -> CertifiedMergeSidecarMessage {
-        let stream_epoch = ordinal
-            .checked_add(1)
-            .expect("worker close epoch does not overflow");
-        let mut close = crate::merge_sidecar::CertifiedMergeSidecarCloseV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation:
-                crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            stream_epoch: CertifiedMergeSidecarStreamEpochV1(
-                NonZeroU64::new(stream_epoch).expect("worker close epoch is non-zero"),
-            ),
-            closed_through: stream_epoch,
-            close_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: local.clone(),
-            responder: peer.clone(),
-        };
-        close.close_id = close.canonical_close_id();
-        CertifiedMergeSidecarMessage::Close(close)
-    }
-
-    fn certified_sidecar_close_ack(
-        local: &PeerId,
-        peer: &PeerId,
-        ordinal: u64,
-    ) -> CertifiedMergeSidecarMessage {
-        let stream_epoch = ordinal
-            .checked_add(1)
-            .expect("worker close acknowledgement epoch does not overflow");
-        let mut ack = crate::merge_sidecar::CertifiedMergeSidecarCloseAckV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation:
-                crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            stream_epoch: CertifiedMergeSidecarStreamEpochV1(
-                NonZeroU64::new(stream_epoch)
-                    .expect("worker close acknowledgement epoch is non-zero"),
-            ),
-            closed_through: stream_epoch,
-            close_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: peer.clone(),
-            responder: local.clone(),
-        };
-        ack.close_id = ack.canonical_close_id();
-        CertifiedMergeSidecarMessage::CloseAck(ack)
-    }
-
-    fn certified_sidecar_control_fanout(
-        scope: ExactOutputCreationScope,
-        peer: &PeerId,
-        message: CertifiedMergeSidecarMessage,
-    ) -> PendingExactFanout {
-        let reply_control = matches!(
-            &message,
-            CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-        );
-        if reply_control {
-            let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-            let reply_route = routes.mint(peer.clone());
-            return certified_sidecar_reply_control_fanout(
-                scope,
-                peer,
-                message,
-                NetworkReplyRoutes::try_from_route(reply_route)
-                    .expect("worker responder control keeps one exact return route"),
-            );
-        }
-        let message_hash = HashOf::new(&message);
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(message));
-        let claim = ExactOutputRolloverClaim::CertifiedSidecarControl {
-            scope,
-            target: peer.clone(),
-            message_hash,
-        };
-        let fanout = PendingExactFanout::claimed(vec![message], vec![peer.clone()], claim);
-        fanout
-            .expect("valid worker sidecar-control rollover claim")
-            .expect("one exact worker sidecar-control fanout")
-    }
-
-    fn certified_sidecar_reply_control_fanout(
-        scope: ExactOutputCreationScope,
-        peer: &PeerId,
-        message: CertifiedMergeSidecarMessage,
-        reply_routes: NetworkReplyRoutes,
-    ) -> PendingExactFanout {
-        assert!(matches!(
-            &message,
-            CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-        ));
-        let message_hash = HashOf::new(&message);
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(message));
-        let claim = ExactOutputRolloverClaim::CertifiedSidecarControl {
-            scope,
-            target: peer.clone(),
-            message_hash,
-        };
-        PendingExactFanout::claimed_with_reply_routes(
-            vec![message],
-            peer.clone(),
-            reply_routes,
-            claim,
-        )
-        .expect("valid worker responder-control rollover claim")
-        .expect("one exact worker responder-control fanout")
-    }
-
-    fn certified_sidecar_request_fanout(
-        scope: ExactOutputCreationScope,
-        local: &PeerId,
-        peer: &PeerId,
-    ) -> PendingExactFanout {
-        let (message, _) = certified_sidecar_outputs(local, peer);
-        let CertifiedMergeSidecarMessage::Request(request) = &message else {
-            unreachable!("worker sidecar fixture returns one request")
-        };
-        let transfer = CertifiedSidecarTransferIdentity::from_request(request);
-        let request_hash = HashOf::new(request);
-        PendingExactFanout::claimed(
-            vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(message))],
-            vec![peer.clone()],
-            ExactOutputRolloverClaim::CertifiedSidecarRequest {
-                scope,
-                target: peer.clone(),
-                transfer,
-                request_hash,
-            },
-        )
-        .expect("valid worker sidecar-request rollover claim")
-        .expect("one exact worker sidecar-request fanout")
-    }
-
-    fn certified_sidecar_flush_fixture(
-        chunk: &CertifiedMergeSidecarChunkV1,
-        route: &NetworkReplyRoute,
-    ) -> (
-        NetworkReplyFlushAckTestFixture,
-        NetworkReplyFlushAck,
-        CertifiedMergeSidecarChunkAdmission,
-    ) {
-        let post = Post {
-            data: NetworkMessage::CertifiedMergeSidecar(Arc::new(
-                CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
-            )),
-            peer_id: chunk.requester.clone(),
-            priority: Priority::High,
-        };
-        let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-        let admission = CertifiedMergeSidecarChunkAdmission::from_admitted_reply(
-            &post,
-            route,
-            0,
-            1,
-            ack.identity(),
-        )
-        .expect("bind exact worker-side sidecar flush fixture");
-        (control, ack, admission)
-    }
-
-    fn merge_share_digest(message: &NetworkMessage) -> Hash {
-        let NetworkMessage::MergeCommitteeSignature(signature) = message else {
-            panic!("expected exact merge-share output");
-        };
-        signature.message_digest
-    }
-
-    include!("tests/v2_worker_reply_route_cases.rs");
-
-    #[test]
-    fn pending_reply_flush_fifo_head_quiesces_later_same_source_fanout() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let routed = |message| {
-            PendingExactFanout::new_with_routes(
-                vec![message],
-                vec![peer.clone()],
-                vec![ExactTargetRoute::Reply(route.clone())],
-            )
-            .expect("one exact reply fanout")
-        };
-        let mut pending =
-            PendingExactOutput::new(2, 1, 1, &[]).expect("two same-source reply fanouts fit");
-        assert_eq!(
-            pending.enqueue(routed(merge_share_message(b"older pending flush"))),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-
-        let mut flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |post, ticket, attempted, timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(attempted) = attempted else {
-                    panic!("exact reply changed route kind")
-                };
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    attempted,
-                    timeout_attempt,
-                );
-                flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                closest_backpressure_rank: None,
-            })
-        );
-        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
-        assert_eq!(
-            pending.enqueue(routed(merge_share_message(b"later same source"))),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-
-        assert_eq!(
-            pending.drive_with_budget_ack(
-                usize::MAX,
-                |_post, _ticket, _route, _timeout_attempt| {
-                    panic!("a later same-source fanout must wait behind its pending flush head")
-                },
-            ),
-            Ok(ExactOutputDriveOutcome::Drained)
-        );
-        assert_eq!(pending.fanouts.len(), 2);
-        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
-        assert!(pending.fanouts[1].has_dispatchable_target());
-        drop(flush_control);
-    }
-
-    #[test]
-    fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"ordinary reply close and reconnect");
-        let payload_hash = HashOf::new(&message);
-        let response_class = exact_output_class(&message).expect("classify ordinary reply");
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
-        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
-        let mut reply_routes =
-            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
-        reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
-            .expect("retain both authenticated sources");
-
-        let mut pending =
-            PendingExactOutput::new(2, 1, 2, &[]).expect("two ordinary reply attempts fit");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(
-                PendingExactFanout::new_with_reply_routes(
-                    vec![message.clone()],
-                    peer.clone(),
-                    reply_routes,
-                )
-                .expect("two-source ordinary reply fanout"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("ordinary reply fanout owns stable FIFO age");
-        let source_a_index = pending.fanouts[0]
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
-            })
-            .expect("fanout retains source A");
-        let mut source_a_control = None;
-        let mut source_b_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, timeout_attempt| {
-                assert!(ticket.is_none());
-                assert_eq!(timeout_attempt, 0);
-                assert_eq!(HashOf::new(&post.data), payload_hash);
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("ordinary reply must retain its authenticated route")
-                };
-                let (mut control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                if route.same_source(&route_a) {
-                    source_a_control = Some(control);
-                } else {
-                    assert!(route.same_source(&route_b));
-                    assert!(control.flush());
-                    source_b_control = Some(control);
-                }
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::Drained)
-        );
-        assert!(source_a_control.is_some());
-        assert!(source_b_control.is_some());
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(
-            pending.fanouts[0]
-                .targets
-                .iter()
-                .filter(|target| target.pending_flush.is_some())
-                .count(),
-            2
-        );
-
-        pending
-            .poll_reply_flushes()
-            .expect("source B writer flush advances independently");
-        let target_a = &pending.fanouts[0].targets[source_a_index];
-        assert_eq!(target_a.message_index, 0);
-        assert!(target_a.pending_flush.is_some());
-        assert_eq!(HashOf::new(&pending.fanouts[0].messages[0]), payload_hash);
-        assert!(pending.source_fifo_owners.contains_key(&source_a));
-        assert!(!pending.source_fifo_owners.contains_key(&source_b));
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(target_a.reply_writer_timeout_attempt, 0);
-
-        assert!(routes.mark_reply_unwritable_while_delivery_active(&route_a));
-        assert!(
-            source_a_control
-                .as_mut()
-                .expect("source A retains its sole writer controller")
-                .timeout()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("timed-out source A acknowledgement retains the exact current item");
-        let target_a = &pending.fanouts[0].targets[source_a_index];
-        assert_eq!(target_a.message_index, 0);
-        assert_eq!(target_a.reply_writer_timeout_attempt, 1);
-        assert!(target_a.current.is_none());
-        assert!(target_a.pending_flush.is_none());
-        assert!(target_a.parked);
-        assert_eq!(HashOf::new(&pending.fanouts[0].messages[0]), payload_hash);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(pending.ownership_units, 1);
-
-        assert!(routes.retire(&route_a));
-        let reconnected_a = routes.mint_via(peer.clone(), hub_a);
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(
-                PendingExactFanout::new_with_reply_routes(
-                    vec![message],
-                    peer,
-                    NetworkReplyRoutes::try_from_route(reconnected_a.clone())
-                        .expect("reconnected source A route set"),
-                )
-                .expect("same-source reconnect candidate"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let target_a = &pending.fanouts[0].targets[source_a_index];
-        assert_eq!(target_a.message_index, 0);
-        assert!(target_a.pending_flush.is_none());
-        assert!(matches!(
-            &target_a.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
-        ));
-
-        let mut retry_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, timeout_attempt| {
-                assert!(ticket.is_none());
-                assert_eq!(
-                    timeout_attempt, 1,
-                    "same-source reconnect preserves its adaptive timeout generation"
-                );
-                assert_eq!(HashOf::new(&post.data), payload_hash);
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("reconnected reply changed route kind")
-                };
-                assert!(route.same_delivery(&reconnected_a));
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                retry_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::Drained)
-        );
-        assert!(
-            retry_control
-                .as_mut()
-                .expect("replacement writer owns the retried item")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("replacement writer completes the retained item");
-        assert!(pending.fanouts.is_empty());
-        assert_eq!(pending.ownership_units, 0);
-        assert!(pending.source_fifo_owners.is_empty());
-    }
-
-    #[test]
-    fn closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"closed draining reply");
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let mut pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one draining reply attempt fits");
-        pending
-            .enqueue(
-                PendingExactFanout::new_with_routes(
-                    vec![message.clone()],
-                    vec![peer],
-                    vec![ExactTargetRoute::Reply(route.clone())],
-                )
-                .expect("one draining reply fanout"),
-            )
-            .expect("retain the draining reply");
-
-        let mut control = None;
-        pending
-            .drive_with_budget_ack(usize::MAX, |post, ticket, attempted, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(attempted) = attempted else {
-                    panic!("draining response changed route kind")
-                };
-                let (writer, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, attempted);
-                control = Some(writer);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("queue the exact writer flush");
-        assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
-        assert!(control.as_mut().expect("writer controller").close());
-        pending
-            .poll_reply_flushes()
-            .expect("closed draining flush is a recoverable route transition");
-
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 0);
-        assert_eq!(
-            target.reply_writer_timeout_attempt, 0,
-            "ordinary Closed must not grow the adaptive timeout generation"
-        );
-        assert!(target.current.is_none());
-        assert!(target.pending_flush.is_none());
-        assert!(target.parked);
-        assert_eq!(pending.fanouts[0].messages.len(), 1);
-        assert_eq!(
-            norito::to_bytes(&pending.fanouts[0].messages[0])
-                .expect("encode retained draining reply"),
-            norito::to_bytes(&message).expect("encode expected draining reply"),
-            "parking an unwritable delivery-active route must retain the exact payload"
-        );
-        assert!(!pending.source_fifo_owners.is_empty());
-    }
-
-    #[test]
-    fn adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let messages = vec![
-            merge_share_message(b"adaptive timeout first"),
-            merge_share_message(b"adaptive timeout second"),
-        ];
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let mut pending =
-            PendingExactOutput::new(1, 2, 1, &[]).expect("one adaptive reply source fits");
-        pending
-            .enqueue(
-                PendingExactFanout::new_with_routes(
-                    messages,
-                    vec![peer],
-                    vec![ExactTargetRoute::Reply(route)],
-                )
-                .expect("two-message adaptive reply fanout"),
-            )
-            .expect("retain the adaptive reply fanout");
-
-        let mut timeout_control = None;
-        pending
-            .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
-                assert_eq!(timeout_attempt, 0);
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("adaptive reply changed route kind")
-                };
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                timeout_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("admit the first adaptive reply occurrence");
-        assert!(
-            timeout_control
-                .as_mut()
-                .expect("first writer controller")
-                .timeout()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("timeout retains the exact current item");
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
-        assert_eq!(
-            pending.fanouts[0].targets[0].reply_writer_timeout_attempt,
-            1
-        );
-
-        let mut closed_control = None;
-        pending
-            .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
-                assert_eq!(timeout_attempt, 1);
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("adaptive retry changed route kind")
-                };
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                closed_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("admit the retry whose writer will close");
-        assert!(
-            closed_control
-                .as_mut()
-                .expect("closed writer controller")
-                .close()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("Closed retains the adaptive generation");
-        assert_eq!(
-            pending.fanouts[0].targets[0].reply_writer_timeout_attempt,
-            1
-        );
-
-        let mut flushed_control = None;
-        pending
-            .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
-                assert_eq!(timeout_attempt, 1);
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("adaptive flush retry changed route kind")
-                };
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                flushed_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("admit the retry whose writer will flush");
-        assert!(
-            flushed_control
-                .as_mut()
-                .expect("successful writer controller")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("Flushed advances and resets the adaptive generation");
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 1);
-        assert_eq!(target.reply_writer_timeout_attempt, 0);
-    }
-
-    #[test]
-    fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"reply timeout-attempt identity mismatch");
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let mut pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one adaptive reply source fits");
-        pending
-            .enqueue(
-                PendingExactFanout::new_with_routes(
-                    vec![message],
-                    vec![peer],
-                    vec![ExactTargetRoute::Reply(route)],
-                )
-                .expect("one adaptive reply fanout"),
-            )
-            .expect("retain the adaptive reply fanout");
-        pending.fanouts[0].targets[0].reply_writer_timeout_attempt = 1;
-
-        let error = pending
-            .drive_with_budget_ack(1, |post, ticket, attempted, timeout_attempt| {
-                assert!(ticket.is_none());
-                assert_eq!(timeout_attempt, 1);
-                let ExactTargetRoute::Reply(attempted) = attempted else {
-                    panic!("adaptive reply changed route kind")
-                };
-                let (_attempt_zero_control, attempt_zero_ack) =
-                    NetworkReplyFlushAckTestFixture::for_reply(&post, attempted);
-                assert_eq!(
-                    attempt_zero_ack.identity().reply_writer_timeout_attempt(),
-                    0
-                );
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(attempt_zero_ack))
-            })
-            .expect_err("attempt-zero acknowledgement must not satisfy attempt one");
-        assert!(error.contains("timeout-attempt identity"));
-
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 0);
-        assert_eq!(target.reply_writer_timeout_attempt, 1);
-        assert!(target.current.is_none());
-        assert!(target.ticket.is_none());
-        assert!(target.pending_flush.is_none());
-        assert_eq!(pending.ownership_units, 1);
-    }
-
-    include!("tests/v2_worker_backpressure_cases.rs");
-
-    include!("v2_worker_output_and_handoff_cases_tests.rs");
-
     include!("v2_worker/applied_height_handoff_tests.rs");
     include!("v2_worker/upstream_reply_route_test.rs");
-
-    include!("v2_worker_locked_candidate_and_routing_cases_tests.rs");
-
-    include!("v2_worker_cold_refanout_and_recovery_cases_tests.rs");
-
-    include!("tests/v2_worker_nonzero_view_restart.rs");
-
-    include!("v2_worker_io_and_selected_serve_cases_01_tests.rs");
-
-    include!("v2_worker_selected_serve_cases_02_tests.rs");
-
-    #[test]
-    fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let predecessor_source = context.roster[0].validator.clone();
-        let serve_source = context.roster[1].validator.clone();
-        let later_source = context.roster[3].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(serve_source.clone());
-        let route = routes.mint_via(requester.clone(), serve_source.clone());
-        let ordinary = |height, source: &PeerId| {
-            InboundBlockMessage::from_transport(
-                BlockMessage::V2(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CommitCertificateRequest(
-                        wire::CommitCertificateRequest {
-                            protocol_version: wire::PROTOCOL_VERSION,
-                            network_id: context.network_id,
-                            context_id: context.id(),
-                            height,
-                            requester: source.clone(),
-                            signature: vec![u8::try_from(height).unwrap_or(u8::MAX)],
-                        },
-                    ),
-                )),
-                source.clone(),
-                source.clone(),
-            )
-        };
-        let body_root = TempDir::new().expect("checked-dequeue body root");
-        let serve_root = TempDir::new().expect("checked-dequeue Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("open checked-dequeue persistent queue");
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-
-        assert!(matches!(
-            ingress.try_push(ordinary(
-                context.height.saturating_add(1),
-                &predecessor_source,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                serve_source,
-                route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(ordinary(context.height.saturating_add(2), &later_source)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let predecessor = ingress
-            .try_recv_if(|inbound| {
-                matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload:
-                            wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
-                        ..
-                    }) if request.height == context.height.saturating_add(1)
-                )
-            })
-            .expect("drain the frozen physical predecessor before testing target publication");
-        assert_eq!(predecessor.sender(), Some(&predecessor_source));
-        let admitted = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(
-            admitted.ready.len(),
-            2,
-            "fixture must cover the failing target and later ready source"
-        );
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect checked-dequeue barrier")
-            .expect("exact carrier owns the checked-dequeue barrier");
-        let temporary_state = serve_root
-            .path()
-            .join(CERTIFIED_SERVE_STATE_FILE)
-            .with_extension("norito.tmp");
-        let mut first_lifecycle = None;
-        let error = ingress
-            .try_recv_if_checked(|inbound| {
-                let is_selected_serve = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == request.request_hash()
-                );
-                if !is_selected_serve {
-                    return false;
-                }
-                let admission = command_tx
-                    .prepare_reserved_serve(
-                        CertifiedServeOwnerKey::Roster(requester.clone()),
-                        request.clone(),
-                    )
-                    .expect("prepare exact lifecycle before forcing drain persistence failure");
-                first_lifecycle = Some(admission.lifecycle_id);
-                fs::create_dir(&temporary_state)
-                    .expect("block the atomic Serve-state temporary file");
-                true
-            })
-            .expect_err("failed retirement publication retains the ingress entry");
-        assert!(
-            error.contains("failed to create Sumeragi v2 Serve temporary state"),
-            "unexpected checked-dequeue error: {error}"
-        );
-        let lifecycle_id = first_lifecycle.expect("failed dequeue prepared one logical lifecycle");
-        let retained = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(retained.ready, admitted.ready);
-        assert_eq!(retained.pending_wire_owners, admitted.pending_wire_owners);
-        assert_eq!(retained.lanes, admitted.lanes);
-        assert_eq!(retained.len, admitted.len);
-        assert_eq!(retained.bytes, admitted.bytes);
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| (reservation.id.0, reservation.state)),
-                Some((
-                    barrier.scheduler_ordinal(),
-                    CertifiedServeIngressReservationState::Prepared(lifecycle_id),
-                )),
-                "failed publication leaves the selected physical occurrence live"
-            );
-            assert_eq!(state.commands.len(), 1);
-        }
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("fixture retains its Serve state store")
-            .load(&context)
-            .expect("reload pre-drain durable snapshot");
-        assert!(
-            persisted
-                .ingress_waiters
-                .iter()
-                .any(|waiter| waiter.ingress_ordinal == barrier.scheduler_ordinal()),
-            "failed publication must not consume the durable ingress occurrence"
-        );
-        {
-            let mut state = command_tx.queue.lock();
-            let before = (
-                state.serve_barrier,
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| (reservation.id, reservation.state)),
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                state.commands.len(),
-            );
-            assert!(
-                command_tx
-                    .queue
-                    .rollback_serve_barrier(&mut state)
-                    .expect_err("failed rollback persistence must fail stop")
-                    .contains("failed to create Sumeragi v2 Serve temporary state")
-            );
-            let after = (
-                state.serve_barrier,
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| (reservation.id, reservation.state)),
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                state.commands.len(),
-            );
-            assert_eq!(
-                after, before,
-                "rollback persistence failure cannot partially mutate the logical handoff"
-            );
-        }
-
-        fs::remove_dir(&temporary_state).expect("unblock Serve-state retirement publication");
-        let mut retried_admission = None;
-        let mut inbound = ingress
-            .try_recv_if_checked(|inbound| {
-                let is_selected_serve = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == request.request_hash()
-                );
-                if !is_selected_serve {
-                    return false;
-                }
-                retried_admission = Some(
-                    command_tx
-                        .prepare_reserved_serve(
-                            CertifiedServeOwnerKey::Roster(requester.clone()),
-                            request.clone(),
-                        )
-                        .expect("retry retained exact lifecycle"),
-                );
-                true
-            })
-            .expect("retry publishes physical retirement")
-            .expect("retry drains the retained exact entry");
-        let retried_admission =
-            retried_admission.expect("successful checked dequeue retained its admission");
-        assert_eq!(retried_admission.lifecycle_id, lifecycle_id);
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.state),
-                Some(
-                    CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(lifecycle_id)
-                )
-            );
-            assert_eq!(
-                state
-                    .commands
-                    .iter()
-                    .filter(|command| command.serve_lifecycle_id() == Some(lifecycle_id))
-                    .count(),
-                1,
-                "retrying the checked cut cannot duplicate the prepared command"
-            );
-        }
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("fixture retains its Serve state store")
-            .load(&context)
-            .expect("reload post-drain durable snapshot");
-        assert!(
-            persisted
-                .ingress_waiters
-                .iter()
-                .all(|waiter| waiter.ingress_ordinal != barrier.scheduler_ordinal()),
-            "successful checked dequeue publishes retirement before returning"
-        );
-        let ingress_ownership = inbound
-            .take_ingress_ownership()
-            .expect("retained entry carries exact fair ownership");
-        let (_, _, reply_routes) = inbound.into_message_sender_and_reply_routes();
-        assert!(matches!(
-            command_tx
-                .commit_serve(
-                    &retried_admission,
-                    reply_routes.expect("retained entry carries its reply route"),
-                    ingress_ownership,
-                )
-                .expect("commit the crash-safe checked dequeue"),
-            CertifiedServeCommit::Queued
-        ));
-        assert!(command_tx.queue.lock().serve_ingress_reservation.is_none());
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire checked-dequeue fixture gate");
-    }
-
-    #[test]
-    fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrier() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let invalid = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[3].validator.clone();
-        let body_root = TempDir::new().expect("negative rollback body root");
-        let serve_root = TempDir::new().expect("negative rollback Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("open negative rollback queue");
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(invalid.request(), via.clone())),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect negative rollback barrier")
-            .expect("invalid raw admission owns a selected occurrence");
-        let fair_before = fair_ingress_accounting_snapshot(&ingress);
-        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-        let durable_before = fs::read(&state_path).expect("read pre-rejection Serve snapshot");
-        let temporary_state = state_path.with_extension("norito.tmp");
-
-        let error = ingress
-            .try_recv_if_checked(|inbound| {
-                let selected = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == invalid.request_hash()
-                );
-                if !selected {
-                    return false;
-                }
-                command_tx
-                    .stage_selected_serve_rejection(
-                        invalid.request_hash(),
-                        CertifiedServeNegativeOutcome::InvalidCertificate,
-                    )
-                    .expect("stage deterministic invalid-certificate outcome");
-                fs::create_dir(&temporary_state)
-                    .expect("block atomic negative Serve-state publication");
-                true
-            })
-            .expect_err("failed negative publication retains the exact fair carrier");
-        assert!(
-            error.contains("failed to create Sumeragi v2 Serve temporary state"),
-            "unexpected negative publication error: {error}"
-        );
-        assert_eq!(
-            fair_ingress_accounting_snapshot(&ingress),
-            fair_before,
-            "failed negative publication cannot consume or reorder the fair carrier"
-        );
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| (reservation.id.0, reservation.state)),
-                Some((
-                    barrier.scheduler_ordinal(),
-                    CertifiedServeIngressReservationState::DeterministicallyRejected(
-                        CertifiedServeNegativeOutcome::InvalidCertificate,
-                    ),
-                )),
-                "the selected negative outcome remains staged for an exact retry"
-            );
-            let tracked = state
-                .serves
-                .get(&barrier.lifecycle_id())
-                .expect("failed publication retains the logical lifecycle");
-            assert_eq!(tracked.state, V2IoServeState::AwaitingRetry);
-            assert!(tracked.terminal.is_none());
-            assert!(tracked.reply_routes.is_none());
-            assert!(tracked.ingress_ownership.is_none());
-        }
-        assert_eq!(
-            fs::read(&state_path).expect("reload failed negative publication"),
-            durable_before,
-            "failed negative publication cannot alter the last durable snapshot"
-        );
-
-        fs::remove_dir(&temporary_state).expect("unblock negative Serve-state publication");
-        let drained = ingress
-            .try_recv_if_checked(|inbound| {
-                let selected = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == invalid.request_hash()
-                );
-                if selected {
-                    command_tx
-                        .stage_selected_serve_rejection(
-                            invalid.request_hash(),
-                            CertifiedServeNegativeOutcome::InvalidCertificate,
-                        )
-                        .expect("retain the exact staged negative outcome");
-                }
-                selected
-            })
-            .expect("retry publishes negative retirement")
-            .expect("retry drains the retained exact carrier");
-        drop(drained);
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
-            let tracked = state
-                .serves
-                .get(&barrier.lifecycle_id())
-                .expect("successful publication retains one negative tombstone");
-            assert_eq!(
-                tracked.state,
-                V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
-            );
-            assert!(tracked.terminal.is_none());
-            assert!(tracked.reply_routes.is_none());
-            assert!(tracked.ingress_ownership.is_none());
-        }
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("negative rollback fixture retains a durable store")
-            .load(&context)
-            .expect("reload successful negative publication");
-        assert!(persisted.ingress_waiters.is_empty());
-        assert!(persisted.unsealed_lifecycles.is_empty());
-        assert_eq!(
-            persisted
-                .negative_tombstones
-                .iter()
-                .map(|tombstone| (tombstone.lifecycle_id, tombstone.outcome))
-                .collect::<Vec<_>>(),
-            vec![(
-                barrier.lifecycle_id(),
-                CertifiedServeNegativeOutcome::InvalidCertificate,
-            )]
-        );
-        let actor_ordinal_after_negative =
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(invalid.request(), via)),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        assert_eq!(
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            actor_ordinal_after_negative,
-            "an exact negative retry cannot consume another actor-global ordinal"
-        );
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire negative rollback gate");
-    }
-
-    #[test]
-    fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detected() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("provisional guard body root");
-        let serve_root = TempDir::new().expect("provisional guard Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("open provisional guard queue");
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect provisional guard barrier")
-            .expect("current-height request owns one raw reservation");
-        let before = fair_ingress_accounting_snapshot(&ingress);
-        let error = ingress
-            .try_recv_if_checked(|_| true)
-            .expect_err("untyped current-height Serve drain must fail closed");
-        assert!(
-            error.contains(
-                "requires a prepared response or deterministic negative outcome before physical drain"
-            ),
-            "unexpected provisional-drain rejection: {error}"
-        );
-        assert_eq!(
-            fair_ingress_accounting_snapshot(&ingress),
-            before,
-            "the mechanical guard retains the exact physical carrier"
-        );
-        assert_eq!(
-            gate.dormant_ingress_scheduler_ordinal()
-                .expect("inspect live provisional owner"),
-            None,
-            "a live raw admission is backed by exactly one physical carrier"
-        );
-
-        {
-            let mut state = command_tx.queue.lock();
-            let removed = state
-                .serve_ingress_reservation
-                .take()
-                .expect("mutation removes the raw reservation");
-            assert_eq!(removed.lifecycle_id, barrier.lifecycle_id());
-            assert_eq!(
-                state
-                    .serves
-                    .get(&barrier.lifecycle_id())
-                    .map(|tracked| tracked.state),
-                Some(V2IoServeState::AwaitingRetry)
-            );
-        }
-        assert_eq!(
-            gate.dormant_ingress_scheduler_ordinal()
-                .expect("detect legacy unbacked AwaitingRetry shape"),
-            Some(barrier.lifecycle_id().admission_ordinal),
-            "the loop-facing invariant reports logical debt even when no waiter survives"
-        );
-        let actor_ordinal_before_retry =
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        let lifecycle_ordinal_before_retry = command_tx.queue.lock().next_serve_admission_ordinal;
-        assert!(matches!(
-            gate.reserve(request.request(), &via, true, 99),
-            Err(CertifiedServeIngressReserveError::Closed)
-        ));
-        assert_eq!(
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            actor_ordinal_before_retry,
-            "an exact retry cannot mint an actor-global owner around unbacked debt"
-        );
-        assert_eq!(
-            command_tx.queue.lock().next_serve_admission_ordinal,
-            lifecycle_ordinal_before_retry,
-            "an exact retry cannot mint or mask a logical lifecycle around unbacked debt"
-        );
-        let producer_error = match command_tx.try_begin_producer_episode() {
-            Err(error) => error,
-            Ok(_) => panic!("direct producers cannot cross unbacked AwaitingRetry debt"),
-        };
-        assert!(
-            producer_error.contains("unbacked AwaitingRetry"),
-            "the queue lock enforces the same invariant between runner polls"
-        );
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire provisional guard gate");
-    }
-
-    #[test]
-    fn live_waiter_rejects_higher_view_without_restart_or_ordinal_mutation() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let higher = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            wire::ConsensusRound {
-                view: proposal.round.view.saturating_add(1),
-                ..proposal.round
-            },
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
-        let gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&command_tx.queue),
-        };
-        let retained = gate
-            .reserve(request.request(), &via, true, 10)
-            .expect("reserve the original exact owner")
-            .expect("current-height request owns one physical reservation");
-        let barrier_before = command_tx
-            .serve_barrier()
-            .expect("inspect live exact owner")
-            .expect("the original exact owner is selected");
-        let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
-
-        assert!(matches!(
-            gate.reserve(higher.request(), &via, true, 11),
-            Err(CertifiedServeIngressReserveError::Busy)
-        ));
-        assert_eq!(
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            actor_ordinal_before,
-            "live higher-view contention cannot mint an actor-global owner"
-        );
-        assert_eq!(
-            command_tx.queue.lock().next_serve_admission_ordinal,
-            lifecycle_ordinal_before,
-            "live higher-view contention cannot replace the admitted lifecycle"
-        );
-        assert_eq!(
-            command_tx
-                .serve_barrier()
-                .expect("reinspect live exact owner"),
-            Some(barrier_before),
-            "higher-view traffic cannot dislodge the selected physical owner"
-        );
-        assert!(command_tx.queue.lock().sender_open);
-        assert!(command_tx.queue.lock().receiver_open);
-        drop(retained);
-    }
-
-    #[test]
-    fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect mutation fixture barrier")
-            .expect("exact request owns one selected barrier");
-        let mutated_ordinal = gate
-            .reserve_ordinary_lifecycle_ordinal()
-            .expect("mint a distinct but source-valid mutation ordinal");
-        assert_ne!(mutated_ordinal, barrier.scheduler_ordinal());
-        {
-            let mut state = ingress.state.lock();
-            let entry = state
-                .lanes
-                .values_mut()
-                .flat_map(|lane| lane.entries.iter_mut())
-                .next()
-                .expect("mutation fixture retains one fair carrier");
-            let inbound = Arc::make_mut(&mut entry.inbound);
-            let ownership = inbound
-                .ingress_ownership
-                .as_mut()
-                .expect("fair carrier retains exact ownership");
-            ownership.first.lifecycle_ordinal = Some(mutated_ordinal);
-            ownership.latest.lifecycle_ordinal = Some(mutated_ordinal);
-            assert!(
-                ownership.validate_exact(),
-                "the mutation weakens only the reservation/evidence binding"
-            );
-        }
-
-        let error = ingress
-            .try_recv_if_checked(|_| true)
-            .expect_err("checked dequeue must reject the mismatched lifecycle owner");
-        assert!(
-            error.contains("Serve carrier ownership disagreed with its reserved lifecycle ordinal"),
-            "unexpected lifecycle-binding rejection: {error}"
-        );
-        assert_eq!(ingress.len(), 1);
-        assert_eq!(
-            command_tx
-                .serve_barrier()
-                .expect("failed mutation dequeue retains the durable barrier"),
-            Some(barrier)
-        );
-
-        {
-            let mut state = ingress.state.lock();
-            let entry = state
-                .lanes
-                .values_mut()
-                .flat_map(|lane| lane.entries.iter_mut())
-                .next()
-                .expect("failed mutation dequeue retains the fair carrier");
-            let inbound = Arc::make_mut(&mut entry.inbound);
-            let ownership = inbound
-                .ingress_ownership
-                .as_mut()
-                .expect("retained carrier keeps ownership");
-            ownership.first.lifecycle_ordinal = Some(barrier.scheduler_ordinal());
-            ownership.latest.lifecycle_ordinal = Some(barrier.scheduler_ordinal());
-            assert!(ownership.validate_exact());
-        }
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored mutation fixture");
-    }
-
-    #[test]
-    fn restored_serviceable_lifecycle_seals_response_before_exposing_producers() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let body_root = TempDir::new().expect("startup-discharge body root");
-        let serve_root = TempDir::new().expect("startup-discharge Serve root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let _ = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("retain canonical startup-discharge body");
-        let lifecycle_id = persist_unsealed_serve_fixture(
-            serve_root.path(),
-            &context,
-            &request,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            1,
-            Some(7),
-        );
-        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
-            4,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            lifecycle_ordinals.clone(),
-        )
-        .expect("startup locally discharges valid retained Serve owner");
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert!(state.serve_ingress_reservation.is_none());
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::Terminal)
-            );
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 7);
-        }
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("production fixture has durable Serve store")
-            .load(&context)
-            .expect("reload startup-discharge response");
-        assert!(persisted.ingress_waiters.is_empty());
-        assert!(persisted.unsealed_lifecycles.is_empty());
-        assert!(persisted.negative_tombstones.is_empty());
-        assert_eq!(persisted.terminal_tombstones.len(), 1);
-
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                request.request(),
-                context.roster[3].validator.clone(),
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let replay_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect startup response replay barrier")
-            .expect("response replay owns one fresh physical occurrence");
-        assert_eq!(replay_barrier.lifecycle_id(), lifecycle_id);
-        assert!(replay_barrier.scheduler_ordinal() > 7);
-        let (admission, replay) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            &request,
-        );
-        assert_eq!(admission.lifecycle_id, lifecycle_id);
-        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire startup-discharge replay gate");
-    }
-
-    #[test]
-    fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapshot() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-
-        let missing_body_root = TempDir::new().expect("missing-body root");
-        let missing_serve_root = TempDir::new().expect("missing-body Serve root");
-        let missing_body_store = V2BodyStore::open(missing_body_root.path(), context.clone())
-            .expect("open empty missing-body store");
-        persist_unsealed_serve_fixture(
-            missing_serve_root.path(),
-            &context,
-            &request,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            1,
-            Some(3),
-        );
-        let missing_state_path = missing_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-        let missing_before =
-            fs::read(&missing_state_path).expect("read pre-discharge missing-body snapshot");
-        let missing_result = production_persistent_test_io_command_channel(
-            4,
-            missing_serve_root.path(),
-            &context,
-            &missing_body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        );
-        let Err(missing_error) = missing_result else {
-            panic!("missing canonical body must fail startup discharge")
-        };
-        assert!(
-            missing_error.contains("failed to discharge restored serviceable Serve lifecycle"),
-            "unexpected missing-body startup error: {missing_error}"
-        );
-        assert_eq!(
-            fs::read(&missing_state_path).expect("reload missing-body Serve snapshot"),
-            missing_before,
-            "a missing canonical body cannot publish a terminal Serve transition"
-        );
-
-        let corrupt_body_root = TempDir::new().expect("corrupt-body root");
-        let corrupt_serve_root = TempDir::new().expect("corrupt-body Serve root");
-        let mut corrupt_body_store = V2BodyStore::open(corrupt_body_root.path(), context.clone())
-            .expect("open corrupt-body store");
-        let _ = corrupt_body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("store canonical body before corrupting its final frame");
-        let context_directory = corrupt_body_root
-            .path()
-            .join(hex::encode(context.id().0.as_ref()));
-        let final_body_path = fs::read_dir(&context_directory)
-            .expect("list corrupt-body context directory")
-            .map(|entry| entry.expect("read corrupt-body directory entry").path())
-            .find(|path| path.extension().and_then(|value| value.to_str()) == Some("norito"))
-            .expect("find durable body frame");
-        let mut corrupt_bytes =
-            fs::read(&final_body_path).expect("read durable body frame before corruption");
-        *corrupt_bytes
-            .last_mut()
-            .expect("durable body frame is non-empty") ^= 0x80;
-        fs::write(&final_body_path, corrupt_bytes).expect("corrupt durable body frame");
-        persist_unsealed_serve_fixture(
-            corrupt_serve_root.path(),
-            &context,
-            &request,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            1,
-            Some(4),
-        );
-        let corrupt_state_path = corrupt_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-        let corrupt_before =
-            fs::read(&corrupt_state_path).expect("read pre-discharge corrupt-body snapshot");
-        let corrupt_result = production_persistent_test_io_command_channel(
-            4,
-            corrupt_serve_root.path(),
-            &context,
-            &corrupt_body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        );
-        let Err(corrupt_error) = corrupt_result else {
-            panic!("corrupt canonical body must fail startup discharge")
-        };
-        assert!(
-            corrupt_error.contains("failed to discharge restored serviceable Serve lifecycle"),
-            "unexpected corrupt-body startup error: {corrupt_error}"
-        );
-        assert_eq!(
-            fs::read(&corrupt_state_path).expect("reload corrupt-body Serve snapshot"),
-            corrupt_before,
-            "a corrupt canonical body cannot publish a terminal Serve transition"
-        );
-    }
-
-    #[test]
-    fn restored_serviceable_lifecycle_rejects_wrong_local_signing_key_before_mutation() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let body_root = TempDir::new().expect("wrong-key body root");
-        let serve_root = TempDir::new().expect("wrong-key Serve root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let _ = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("retain canonical wrong-key fixture body");
-        persist_unsealed_serve_fixture(
-            serve_root.path(),
-            &context,
-            &request,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            1,
-            Some(6),
-        );
-        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-        let before = fs::read(&state_path).expect("read wrong-key Serve snapshot");
-        let result = production_persistent_test_io_command_channel(
-            4,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[1],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        );
-        let Err(error) = result else {
-            panic!("mismatched local validator key must fail startup")
-        };
-        assert!(
-            error.contains("signing key does not match its frozen validator index"),
-            "unexpected wrong-key startup error: {error}"
-        );
-        assert_eq!(
-            fs::read(&state_path).expect("reload wrong-key Serve snapshot"),
-            before,
-            "the key/index binding is checked before any response is signed or persisted"
-        );
-    }
-
-    #[test]
-    fn restored_invalid_qc_is_negative_and_exact_retry_consumes_no_new_ordinal() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let invalid = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let validator_pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let body_root = TempDir::new().expect("invalid startup body root");
-        let serve_root = TempDir::new().expect("invalid startup Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open empty body store");
-        let lifecycle_id = persist_unsealed_serve_fixture(
-            serve_root.path(),
-            &context,
-            &invalid,
-            CertifiedServeOwnerKey::Roster(invalid.request().requester.clone()),
-            1,
-            Some(5),
-        );
-        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-        let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
-            4,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            lifecycle_ordinals,
-        )
-        .expect("startup negatively terminalizes invalid QC");
-        assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .serves
-                .get(&lifecycle_id)
-                .map(|tracked| tracked.state),
-            Some(V2IoServeState::Rejected(
-                CertifiedServeNegativeOutcome::InvalidCertificate
-            ))
-        );
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        let ordinal_before = command_tx
-            .queue
-            .lock()
-            .next_serve_ingress_reservation_ordinal;
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                invalid.request(),
-                context.roster[3].validator.clone(),
-            )),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        let state = command_tx.queue.lock();
-        assert_eq!(
-            state.next_serve_ingress_reservation_ordinal, ordinal_before,
-            "negative exact retry is rejected before reserving a scheduler ordinal"
-        );
-        assert_eq!(state.next_serve_admission_ordinal, 1);
-        drop(state);
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("production fixture has durable Serve store")
-            .load(&context)
-            .expect("reload invalid-QC negative");
-        assert_eq!(
-            persisted
-                .negative_tombstones
-                .iter()
-                .map(|tombstone| tombstone.outcome)
-                .collect::<Vec<_>>(),
-            vec![CertifiedServeNegativeOutcome::InvalidCertificate]
-        );
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire invalid-QC negative gate");
-    }
-
-    #[test]
-    fn restored_valid_qc_without_local_retention_authority_is_negative() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        for (case, local_validator, signers) in [
-            ("observer", None, vec![0, 1, 2, 3]),
-            ("non-signer", Some(0), vec![1, 2, 3]),
-        ] {
-            let (request, validator_pops) = production_authenticated_serve_request(
-                &context,
-                &keys,
-                &keys[1],
-                proposal.round,
-                proposal.subject,
-                wire::GlobalPhase::Prepare,
-                &signers,
-            );
-            let body_root = TempDir::new().expect("nonowner startup body root");
-            let serve_root = TempDir::new().expect("nonowner startup Serve root");
-            let body_store = V2BodyStore::open(body_root.path(), context.clone())
-                .expect("open empty nonowner body store");
-            let lifecycle_id = persist_unsealed_serve_fixture(
-                serve_root.path(),
-                &context,
-                &request,
-                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                1,
-                Some(3),
-            );
-            let (command_tx, _command_rx, _admission) =
-                production_persistent_test_io_command_channel(
-                    4,
-                    serve_root.path(),
-                    &context,
-                    &body_store,
-                    &keys[0],
-                    &validator_pops,
-                    local_validator,
-                    None,
-                    RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-                )
-                .unwrap_or_else(|error| panic!("{case} startup discharge failed: {error}"));
-            assert_eq!(
-                command_tx
-                    .queue
-                    .lock()
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|tracked| tracked.state),
-                Some(V2IoServeState::Rejected(
-                    CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent
-                )),
-                "{case} must deterministically negative-terminalize the lifecycle"
-            );
-        }
-    }
-
-    #[test]
-    fn restored_negative_outcome_tags_must_match_reconstructed_authority() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let (valid, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let invalid = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let foreign_decision = wire::BlockSubject {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"foreign durable Decision tag mutation",
-            )),
-            ..proposal.subject
-        };
-        let other_decision = wire::BlockSubject {
-            payload_hash: Hash::new(b"other durable Decision tag mutation"),
-            ..foreign_decision
-        };
-        let body_root = TempDir::new().expect("negative-tag body root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open empty body store");
-        for (case, request, outcome, durable_decided_subject) in [
-            (
-                "invalid certificate tagged as missing authority",
-                &invalid,
-                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
-                None,
-            ),
-            (
-                "valid certificate tagged as invalid",
-                &valid,
-                CertifiedServeNegativeOutcome::InvalidCertificate,
-                None,
-            ),
-            (
-                "local signer tagged as missing authority",
-                &valid,
-                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
-                None,
-            ),
-            (
-                "supersession tag without Decision",
-                &valid,
-                CertifiedServeNegativeOutcome::SupersededByDurableDecision(foreign_decision),
-                None,
-            ),
-            (
-                "supersession tag equal to request subject",
-                &valid,
-                CertifiedServeNegativeOutcome::SupersededByDurableDecision(proposal.subject),
-                Some(proposal.subject),
-            ),
-            (
-                "supersession tag names another Decision",
-                &valid,
-                CertifiedServeNegativeOutcome::SupersededByDurableDecision(foreign_decision),
-                Some(other_decision),
-            ),
-        ] {
-            let serve_root = TempDir::new().expect("negative-tag Serve root");
-            persist_negative_serve_fixture(
-                serve_root.path(),
-                &context,
-                request,
-                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                1,
-                outcome,
-            );
-            let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-            let before = fs::read(&state_path).expect("read mutated negative snapshot");
-            let result = production_persistent_test_io_command_channel(
-                4,
-                serve_root.path(),
-                &context,
-                &body_store,
-                &keys[0],
-                &validator_pops,
-                Some(0),
-                durable_decided_subject,
-                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-            );
-            let Err(error) = result else {
-                panic!("{case} must fail source-bound negative validation")
-            };
-            assert!(
-                error.contains(
-                    "durable negative Serve tombstone does not match its reconstructed authority"
-                ),
-                "{case} produced an unexpected error: {error}"
-            );
-            assert_eq!(
-                fs::read(&state_path).expect("reload rejected negative tag"),
-                before,
-                "{case} cannot mutate durable Serve state"
-            );
-        }
-    }
-
-    #[test]
-    fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (canonical_wire, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let invalid = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let higher_round = wire::ConsensusRound {
-            view: proposal.round.view + 1,
-            ..proposal.round
-        };
-        let (higher, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            higher_round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let _ = fully_authenticate_persisted_certified_serve_request(
-            &context,
-            higher.request().clone(),
-            &validator_pops,
-        )
-        .expect("strict higher fixture has a valid production QC");
-        let body_root = TempDir::new().expect("negative successor body root");
-        let serve_root = TempDir::new().expect("negative successor Serve root");
-        let (higher_manifest, _) =
-            encode_payload(&context, higher_round, proposal.subject, &canonical_wire)
-                .expect("encode strict higher canonical body")
-                .into_parts();
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let _ = body_store
-            .store(higher_manifest.clone(), canonical_wire.clone())
-            .expect("retain strict higher canonical body");
-        let response = certified_serve_response(&higher, higher_manifest, canonical_wire, &keys[0]);
-        let negative_id = persist_unsealed_serve_fixture(
-            serve_root.path(),
-            &context,
-            &invalid,
-            CertifiedServeOwnerKey::Roster(invalid.request().requester.clone()),
-            1,
-            Some(4),
-        );
-        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
-            4,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("install initial invalid-QC negative");
-        assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .serves
-                .get(&negative_id)
-                .map(|tracked| tracked.state),
-            Some(V2IoServeState::Rejected(
-                CertifiedServeNegativeOutcome::InvalidCertificate
-            ))
-        );
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                invalid.request(),
-                context.roster[3].validator.clone(),
-            )),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .next_serve_ingress_reservation_ordinal,
-            4
-        );
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                higher.request(),
-                context.roster[3].validator.clone(),
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect strict negative successor")
-            .expect("strict higher view owns one fresh occurrence");
-        assert_eq!(barrier.scheduler_ordinal(), 5);
-        assert_eq!(barrier.lifecycle_id().admission_ordinal, 2);
-        assert_ne!(barrier.lifecycle_id(), negative_id);
-        {
-            let state = command_tx.queue.lock();
-            assert!(!state.serves.contains_key(&negative_id));
-            assert_eq!(
-                state
-                    .serve_by_family
-                    .get(&CertifiedServeFamilyKey {
-                        requester: higher.request().requester.clone(),
-                        phase: higher.request().certificate.phase,
-                    })
-                    .copied(),
-                Some(barrier.lifecycle_id())
-            );
-        }
-        let (admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(higher.request().requester.clone()),
-            &higher,
-        );
-        assert_eq!(admission.lifecycle_id, barrier.lifecycle_id());
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == admission.lifecycle_id
-        ));
-        command_rx
-            .complete_serve_response(admission.lifecycle_id, &response)
-            .expect("seal strict higher response");
-        command_tx
-            .acknowledge_serve_completion(
-                admission.lifecycle_id,
-                V2IoServeTerminal::Response(response),
-            )
-            .expect("acknowledge strict higher response");
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire strict negative-successor gate");
-        drop(ingress);
-        drop(command_rx);
-        drop(command_tx);
-
-        let (restart_tx, _restart_rx, _admission) = production_persistent_test_io_command_channel(
-            4,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("restart validates the strict higher terminal");
-        assert_eq!(
-            restart_tx
-                .queue
-                .lock()
-                .serves
-                .get(&barrier.lifecycle_id())
-                .map(|tracked| tracked.state),
-            Some(V2IoServeState::Terminal)
-        );
-        let (restart_ingress, restart_gate) = gated_fair_ingress(&context, &restart_tx);
-        let actor_ordinal_before_old_retry =
-            restart_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        assert!(matches!(
-            restart_ingress.try_push(certified_serve_inbound(
-                invalid.request(),
-                context.roster[3].validator.clone(),
-            )),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        assert_eq!(
-            restart_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            actor_ordinal_before_old_retry,
-            "the displaced lower negative cannot resurrect after successor restart"
-        );
-        assert!(matches!(
-            restart_ingress.try_push(certified_serve_inbound(
-                higher.request(),
-                context.roster[3].validator.clone(),
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert_eq!(
-            restart_tx
-                .serve_barrier()
-                .expect("inspect restarted higher replay")
-                .expect("higher terminal replay owns one fresh occurrence")
-                .lifecycle_id(),
-            barrier.lifecycle_id()
-        );
-        restart_ingress.close();
-        restart_ingress
-            .unbind_certified_serve_gate(&restart_gate)
-            .expect("retire restarted strict higher gate");
-    }
-
-    #[test]
-    fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let _ = fully_authenticate_persisted_certified_serve_request(
-            &context,
-            request.request().clone(),
-            &validator_pops,
-        )
-        .expect("supersession fixture request has a valid production QC");
-        let decided_subject = wire::BlockSubject {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"durable Decision superseding retained Serve response",
-            )),
-            payload_hash: Hash::new(b"durable Decision exact payload"),
-            ..proposal.subject
-        };
-        assert_ne!(decided_subject, proposal.subject);
-        let body_root = TempDir::new().expect("superseded response body root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let _ = body_store
-            .store(payload.manifest().clone(), canonical_wire.clone())
-            .expect("retain canonical body for response reconstruction");
-        let response = certified_serve_response(
-            &request,
-            payload.manifest().clone(),
-            canonical_wire,
-            &keys[0],
-        );
-
-        let live_serve_root = TempDir::new().expect("live supersession Serve root");
-        let live_lifecycle_id = {
-            let (command_tx, command_rx, _admission) = persistent_test_io_command_channel(
-                4,
-                live_serve_root.path(),
-                &context,
-                &body_store,
-            )
-            .expect("open live supersession queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            let via = context.roster[3].validator.clone();
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let (admission, committed) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                &request,
-            );
-            assert!(matches!(committed, CertifiedServeCommit::Queued));
-            assert!(matches!(
-                command_rx.try_recv(),
-                Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                    if lifecycle_id == admission.lifecycle_id
-            ));
-            command_rx
-                .complete_serve_response(admission.lifecycle_id, &response)
-                .expect("seal the exact certified-body response");
-            command_tx
-                .acknowledge_serve_completion(
-                    admission.lifecycle_id,
-                    V2IoServeTerminal::Response(response.clone()),
-                )
-                .expect("acknowledge the exact certified-body response");
-            {
-                let state = command_tx.queue.lock();
-                let tracked = state
-                    .serves
-                    .get(&admission.lifecycle_id)
-                    .expect("terminal response remains indexed");
-                assert_eq!(tracked.state, V2IoServeState::Terminal);
-                assert!(tracked.terminal.is_some());
-                assert!(tracked.reply_routes.is_some());
-                assert!(tracked.ingress_ownership.is_some());
-            }
-
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let superseding_occurrence = command_tx
-                .serve_barrier()
-                .expect("inspect live supersession barrier")
-                .expect("terminal replay owns one physical occurrence");
-            assert_eq!(
-                superseding_occurrence.lifecycle_id(),
-                admission.lifecycle_id
-            );
-            let actor_ordinal_before_decision =
-                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-            let (ingress_highwater_before_decision, lifecycle_highwater_before_decision) = {
-                let state = command_tx.queue.lock();
-                (
-                    state.next_serve_ingress_reservation_ordinal,
-                    state.next_serve_admission_ordinal,
-                )
-            };
-            command_tx
-                .begin_decision_serve_reconciliation()
-                .expect("fence Serve admission before the durable Decision step");
-            command_tx
-                .finish_decision_serve_reconciliation(Some(decided_subject))
-                .expect("publish the durable Decision under the Serve queue lock");
-            {
-                let state = command_tx.queue.lock();
-                let retained = state
-                    .serves
-                    .get(&admission.lifecycle_id)
-                    .expect("pre-fence terminal replay retains its logical lifecycle");
-                assert_eq!(retained.state, V2IoServeState::Terminal);
-                assert_eq!(
-                    retained.terminal.as_ref(),
-                    Some(&V2IoServeTerminal::Response(response.clone()))
-                );
-                assert_eq!(
-                    state
-                        .serve_ingress_reservation
-                        .as_ref()
-                        .map(|reservation| reservation.lifecycle_id),
-                    Some(admission.lifecycle_id),
-                    "Decision publication must not detach or eagerly rewrite a pre-fence carrier"
-                );
-                assert_eq!(state.durable_decided_subject, Some(decided_subject));
-                assert!(!state.decision_reconciliation_pending);
-                assert_eq!(
-                    state.next_serve_ingress_reservation_ordinal,
-                    ingress_highwater_before_decision
-                );
-                assert_eq!(
-                    state.next_serve_admission_ordinal,
-                    lifecycle_highwater_before_decision
-                );
-            }
-            assert_eq!(
-                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-                actor_ordinal_before_decision
-            );
-            let fair_before_supersession = fair_ingress_accounting_snapshot(&ingress);
-            let state_path = live_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-            let durable_before_supersession =
-                fs::read(&state_path).expect("read terminal response before supersession");
-            let temporary_state = state_path.with_extension("norito.tmp");
-            let error = ingress
-                .try_recv_if_checked(|inbound| {
-                    let selected = matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload:
-                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                            ..
-                        }) if HashOf::new(candidate) == request.request_hash()
-                    );
-                    if selected {
-                        command_tx
-                            .stage_selected_serve_rejection(
-                                request.request_hash(),
-                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                                    decided_subject,
-                                ),
-                            )
-                            .expect("stage Decision supersession before fault injection");
-                        fs::create_dir(&temporary_state)
-                            .expect("block atomic supersession publication");
-                    }
-                    selected
-                })
-                .expect_err("failed supersession publication retains the terminal replay");
-            assert!(
-                error.contains("failed to create Sumeragi v2 Serve temporary state"),
-                "unexpected supersession publication error: {error}"
-            );
-            assert_eq!(
-                fair_ingress_accounting_snapshot(&ingress),
-                fair_before_supersession,
-                "failed supersession publication retains the exact fair carrier"
-            );
-            {
-                let state = command_tx.queue.lock();
-                let tracked = state
-                    .serves
-                    .get(&admission.lifecycle_id)
-                    .expect("failed supersession retains the response lifecycle");
-                assert_eq!(tracked.state, V2IoServeState::Terminal);
-                assert_eq!(
-                    tracked.terminal.as_ref(),
-                    Some(&V2IoServeTerminal::Response(response.clone()))
-                );
-                assert!(
-                    tracked.reply_routes.is_some() && tracked.ingress_ownership.is_some(),
-                    "failed supersession restores response transport ownership"
-                );
-                assert_eq!(
-                    state
-                        .serve_ingress_reservation
-                        .as_ref()
-                        .map(|reservation| reservation.state),
-                    Some(
-                        CertifiedServeIngressReservationState::DeterministicallyRejected(
-                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                                decided_subject,
-                            ),
-                        ),
-                    )
-                );
-            }
-            assert_eq!(
-                fs::read(&state_path).expect("reload failed supersession snapshot"),
-                durable_before_supersession,
-                "failed supersession cannot alter the terminal durable snapshot"
-            );
-            fs::remove_dir(&temporary_state).expect("unblock supersession publication");
-            let drained = ingress
-                .try_recv_if_checked(|inbound| {
-                    let selected = matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload:
-                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                            ..
-                        }) if HashOf::new(candidate) == request.request_hash()
-                    );
-                    if selected {
-                        command_tx
-                            .stage_selected_serve_rejection(
-                                request.request_hash(),
-                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                                    decided_subject,
-                                ),
-                            )
-                            .expect("stage the fully authenticated Decision supersession");
-                    }
-                    selected
-                })
-                .expect("publish live Decision supersession")
-                .expect("drain live superseded replay");
-            drop(drained);
-            {
-                let state = command_tx.queue.lock();
-                let tracked = state
-                    .serves
-                    .get(&admission.lifecycle_id)
-                    .expect("negative terminal remains indexed");
-                assert_eq!(
-                    tracked.state,
-                    V2IoServeState::Rejected(
-                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject,),
-                    )
-                );
-                assert!(tracked.terminal.is_none());
-                assert!(
-                    tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none(),
-                    "Decision supersession retires stale response transport ownership"
-                );
-                assert!(state.serve_ingress_reservation.is_none());
-            }
-            let persisted = command_tx
-                .queue
-                .serve_state_store
-                .as_ref()
-                .expect("live supersession retains a durable store")
-                .load(&context)
-                .expect("reload live supersession");
-            assert!(persisted.terminal_tombstones.is_empty());
-            assert_eq!(
-                persisted
-                    .negative_tombstones
-                    .iter()
-                    .map(|tombstone| (tombstone.lifecycle_id, tombstone.outcome))
-                    .collect::<Vec<_>>(),
-                vec![(
-                    admission.lifecycle_id,
-                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-                )]
-            );
-            let actor_ordinal_after_negative =
-                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via)),
-                Err(FairV2IngressPushError::Rejected(_))
-            ));
-            assert_eq!(
-                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-                actor_ordinal_after_negative
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire live supersession gate");
-            admission.lifecycle_id
-        };
-
-        let (live_restart_tx, _live_restart_rx, _admission) =
-            production_persistent_test_io_command_channel(
-                4,
-                live_serve_root.path(),
-                &context,
-                &body_store,
-                &keys[0],
-                &validator_pops,
-                Some(0),
-                Some(decided_subject),
-                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-            )
-            .expect("restart validates the live supersession outcome");
-        assert_eq!(
-            live_restart_tx
-                .queue
-                .lock()
-                .serves
-                .get(&live_lifecycle_id)
-                .map(|tracked| tracked.state),
-            Some(V2IoServeState::Rejected(
-                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-            ))
-        );
-
-        let terminal_serve_root = TempDir::new().expect("startup terminal supersession root");
-        let terminal_lifecycle_id = persist_terminal_serve_fixture(
-            terminal_serve_root.path(),
-            &context,
-            &request,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            1,
-            &response,
-        );
-        let (terminal_restart_tx, _terminal_restart_rx, _admission) =
-            production_persistent_test_io_command_channel(
-                4,
-                terminal_serve_root.path(),
-                &context,
-                &body_store,
-                &keys[0],
-                &validator_pops,
-                Some(0),
-                Some(decided_subject),
-                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-            )
-            .expect("startup converts a superseded response before producer exposure");
-        assert_eq!(
-            terminal_restart_tx
-                .queue
-                .lock()
-                .serves
-                .get(&terminal_lifecycle_id)
-                .map(|tracked| tracked.state),
-            Some(V2IoServeState::Rejected(
-                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-            ))
-        );
-
-        let raw_serve_root = TempDir::new().expect("post-Decision raw admission root");
-        let raw_lifecycle_id = persist_unsealed_serve_fixture(
-            raw_serve_root.path(),
-            &context,
-            &request,
-            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-            1,
-            Some(9),
-        );
-        let (raw_restart_tx, _raw_restart_rx, _admission) =
-            production_persistent_test_io_command_channel(
-                4,
-                raw_serve_root.path(),
-                &context,
-                &body_store,
-                &keys[0],
-                &validator_pops,
-                Some(0),
-                Some(decided_subject),
-                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-            )
-            .expect("post-Decision raw admission is terminalized during startup");
-        {
-            let state = raw_restart_tx.queue.lock();
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert!(state.serve_ingress_reservation.is_none());
-            assert_eq!(
-                state
-                    .serves
-                    .get(&raw_lifecycle_id)
-                    .map(|tracked| tracked.state),
-                Some(V2IoServeState::Rejected(
-                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
-                ))
-            );
-        }
-    }
-
-    #[test]
-    fn missing_or_retargeted_reply_capability_is_rejected_before_serve_admission() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("route-less Serve body root");
-        let serve_root = TempDir::new().expect("route-less Serve state root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
-                .expect("open route-less Serve queue");
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.request().clone()),
-        ));
-        for _ in 0..2 {
-            let without_route = InboundBlockMessage::from_transport(
-                message.clone(),
-                request.request().requester.clone(),
-                via.clone(),
-            );
-            assert!(matches!(
-                ingress.try_push(without_route),
-                Err(FairV2IngressPushError::Rejected(_))
-            ));
-        }
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let wrong_target = context.roster[2].validator.clone();
-        let wrong_route = routes.mint_via(wrong_target, via.clone());
-        let retargeted = InboundBlockMessage {
-            message,
-            sender: Some(request.request().requester.clone()),
-            via: Some(via),
-            reply_routes: Some(
-                NetworkReplyRoutes::try_from_route(wrong_route)
-                    .expect("wrong-target fixture still forms a bounded route set"),
-            ),
-            ingress_ownership: None,
-        };
-        assert!(matches!(
-            ingress.try_push(retargeted),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
-            assert!(state.serves.is_empty());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert!(state.serve_ingress_reservation.is_none());
-        }
-        assert_eq!(
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            actor_ordinal_before,
-            "missing or retargeted reply capabilities are rejected before the actor-global ordinal source"
-        );
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("route-less fixture has durable Serve store")
-            .load(&context)
-            .expect("reload route-less snapshot");
-        assert!(persisted.ingress_waiters.is_empty());
-        assert!(persisted.unsealed_lifecycles.is_empty());
-        assert!(persisted.negative_tombstones.is_empty());
-        assert!(persisted.terminal_tombstones.is_empty());
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire route-less Serve gate");
-    }
-
-    #[test]
-    fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let invalid = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let mut honest_request = authenticated_serve_request(
-            &context,
-            &keys[2],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Commit,
-        )
-        .request()
-        .clone();
-        let validator_pops = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture validator proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let honest_signers = (0..context.roster.len())
-            .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
-            .collect::<Vec<_>>();
-        let honest_vote_preimage = wire::Vote {
-            round: honest_request.certificate.round,
-            proposal_round: honest_request.certificate.proposal_round,
-            phase: honest_request.certificate.phase,
-            subject: honest_request.certificate.subject,
-            execution_commitment: honest_request.certificate.execution_commitment,
-            signer: honest_signers[0],
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let honest_signature_shares = honest_signers
-            .iter()
-            .map(|signer| {
-                Signature::new(
-                    keys[usize::try_from(*signer).expect("fixture signer index fits usize")]
-                        .private_key(),
-                    &honest_vote_preimage,
-                )
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let honest_signature_share_refs = honest_signature_shares
-            .iter()
-            .map(Vec::as_slice)
-            .collect::<Vec<_>>();
-        honest_request.certificate.signers = honest_signers;
-        honest_request.certificate.aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&honest_signature_share_refs)
-                .expect("aggregate honest Serve certificate");
-        honest_request.signature =
-            Signature::new(keys[2].private_key(), &honest_request.signature_preimage())
-                .payload()
-                .to_vec();
-        let honest = authenticate_certified_body_request(
-            &context,
-            honest_request,
-            &PeerId::new(keys[2].public_key().clone()),
-            |context, certificate| {
-                wire::finality::verify_quorum_certificate_with_validator_pops(
-                    context,
-                    certificate,
-                    &validator_pops,
-                )
-            },
-        )
-        .expect("production verification accepts the distinct honest Serve QC");
-        assert!(
-            authenticate_certified_body_request(
-                &context,
-                invalid.request().clone(),
-                &invalid.request().requester,
-                |context, certificate| {
-                    wire::finality::verify_quorum_certificate_with_validator_pops(
-                        context,
-                        certificate,
-                        &validator_pops,
-                    )
-                },
-            )
-            .is_err(),
-            "the requester signature is valid, but production QC verification must reject the fixture certificate"
-        );
-
-        let via = context.roster[0].validator.clone();
-        let retry_via = context.roster[3].validator.clone();
-        let body_root = TempDir::new().expect("invalid-QC quarantine body root");
-        let serve_root = TempDir::new().expect("invalid-QC quarantine Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let invalid_lifecycle = {
-            let (command_tx, command_rx, _admission) =
-                persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
-                    .expect("open invalid-QC quarantine queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(invalid.request(), via.clone())),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let invalid_lifecycle = command_tx
-                .serve_barrier()
-                .expect("inspect invalid-QC barrier")
-                .expect("raw invalid-QC admission owns one physical occurrence")
-                .lifecycle_id();
-            assert_eq!(invalid_lifecycle.admission_ordinal, 1);
-
-            let mut reject_invalid_qc = |inbound: &InboundBlockMessage| {
-                let BlockMessage::V2(message) = inbound.message() else {
-                    panic!("invalid-QC fixture changed transport message class")
-                };
-                let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
-                    &message.payload
-                else {
-                    panic!("invalid-QC fixture changed v2 payload class")
-                };
-                assert_eq!(request, invalid.request());
-                let requester = inbound
-                    .sender()
-                    .expect("invalid-QC fixture retains its authenticated requester");
-                assert_eq!(requester, &request.requester);
-                assert!(
-                    authenticate_certified_body_request(
-                        &context,
-                        request.clone(),
-                        requester,
-                        |context, certificate| {
-                            wire::finality::verify_quorum_certificate_with_validator_pops(
-                                context,
-                                certificate,
-                                &validator_pops,
-                            )
-                        },
-                    )
-                    .is_err(),
-                    "checked dequeue must observe production QC rejection before draining"
-                );
-                command_tx
-                    .stage_selected_serve_rejection(
-                        invalid.request_hash(),
-                        CertifiedServeNegativeOutcome::InvalidCertificate,
-                    )
-                    .expect("stage invalid-QC outcome before checked physical drain");
-                true
-            };
-            let rejected = ingress
-                .try_recv_if_checked(&mut reject_invalid_qc)
-                .expect("publish runner-side invalid-QC rejection")
-                .expect("drain the rejected invalid-QC carrier");
-            drop(rejected);
-            {
-                let state = command_tx.queue.lock();
-                let tracked = state
-                    .serves
-                    .get(&invalid_lifecycle)
-                    .expect("invalid family retains one durable quarantine owner");
-                assert_eq!(
-                    tracked.state,
-                    V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
-                );
-                assert!(tracked.reply_routes.is_none());
-                assert!(tracked.ingress_ownership.is_none());
-                assert!(tracked.terminal.is_none());
-                assert!(state.serve_barrier.is_none());
-                assert!(state.serve_barrier_predecessors.is_empty());
-                assert!(state.serve_ingress_reservation.is_none());
-                assert!(state.serve_ingress_waiters.is_empty());
-                assert!(state.pending_serve_requests.is_empty());
-                assert!(state.serve_replacements.is_empty());
-                assert!(state.commands.is_empty());
-                assert_eq!(state.serves.len(), 1);
-                assert_eq!(state.serve_by_request.len(), 1);
-                assert_eq!(state.serve_by_family.len(), 1);
-                assert_eq!(state.next_serve_admission_ordinal, 1);
-            }
-            assert!(matches!(
-                command_rx.try_recv(),
-                Err(mpsc::TryRecvError::Empty)
-            ));
-
-            for _ in 0..2 {
-                assert!(matches!(
-                    ingress.try_push(certified_serve_inbound(
-                        invalid.request(),
-                        retry_via.clone()
-                    )),
-                    Err(FairV2IngressPushError::Rejected(_))
-                ));
-                assert_eq!(
-                    command_tx
-                        .queue
-                        .lock()
-                        .next_serve_ingress_reservation_ordinal,
-                    1,
-                    "negative retries cannot mint another physical occurrence"
-                );
-            }
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire invalid-QC quarantine gate");
-            invalid_lifecycle
-        };
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
-                .expect("restart invalid-QC quarantine queue");
-        {
-            let state = command_tx.queue.lock();
-            let tracked = state
-                .serves
-                .get(&invalid_lifecycle)
-                .expect("restart retains the exact invalid family owner");
-            assert_eq!(
-                tracked.state,
-                V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
-            );
-            assert!(tracked.reply_routes.is_none());
-            assert!(tracked.ingress_ownership.is_none());
-            assert!(tracked.terminal.is_none());
-            assert_eq!(state.serves.len(), 1);
-            assert!(state.serve_barrier.is_none());
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert!(state.pending_serve_requests.is_empty());
-            assert!(state.commands.is_empty());
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-        }
-        assert!(matches!(
-            command_tx.try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(8_002),
-                    subject: proposal.subject,
-                },
-            ),
-            Ok(())
-        ));
-
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(honest.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let honest_lifecycle = command_tx
-            .serve_barrier()
-            .expect("inspect distinct honest Serve barrier")
-            .expect("distinct honest family retains physical Serve capacity")
-            .lifecycle_id();
-        assert_ne!(honest_lifecycle, invalid_lifecycle);
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.serves.len(), 2);
-            assert_eq!(state.serve_by_request.len(), 2);
-            assert_eq!(state.serve_by_family.len(), 2);
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-            assert_eq!(
-                state
-                    .serves
-                    .get(&invalid_lifecycle)
-                    .map(|tracked| tracked.state),
-                Some(V2IoServeState::Rejected(
-                    CertifiedServeNegativeOutcome::InvalidCertificate
-                ))
-            );
-            assert_eq!(
-                state
-                    .serves
-                    .get(&honest_lifecycle)
-                    .map(|tracked| tracked.state),
-                Some(V2IoServeState::AwaitingRetry)
-            );
-            assert!(
-                state.commands.iter().any(|command| matches!(
-                    command,
-                    V2IoCommand::LoadCandidate {
-                        acquisition_id: LockedCandidateAcquisitionId(8_002),
-                        subject,
-                    } if *subject == proposal.subject
-                )),
-                "the quarantined Byzantine family cannot consume ordinary honest I/O capacity"
-            );
-        }
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire honest-capacity quarantine gate");
-    }
-
-    #[test]
-    fn durable_raw_admission_restart_locally_seals_before_later_producers() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let higher = authenticated_serve_request(
-            &context,
-            &keys[1],
-            wire::ConsensusRound {
-                view: proposal.round.view + 1,
-                ..proposal.round
-            },
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let replay_via = context.roster[3].validator.clone();
-        let body_root = TempDir::new().expect("raw-admission restart body root");
-        let serve_root = TempDir::new().expect("raw-admission restart Serve root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let _ = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("retain raw-admission restart body");
-
-        let (scheduler_ordinal, lifecycle_id) = {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open pre-crash raw-admission queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let barrier = command_tx
-                .serve_barrier()
-                .expect("inspect raw-admission barrier")
-                .expect("raw exact admission owns its barrier");
-            assert_eq!(barrier.scheduler_ordinal(), 1);
-            assert_eq!(barrier.lifecycle_id().admission_ordinal, 1);
-            let before_higher = fair_ingress_accounting_snapshot(&ingress);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
-                Err(FairV2IngressPushError::Full(_))
-            ));
-            assert_eq!(
-                fair_ingress_accounting_snapshot(&ingress),
-                before_higher,
-                "a later family view cannot replace an admitted exact raw target"
-            );
-            {
-                let state = command_tx.queue.lock();
-                assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-                assert_eq!(state.next_serve_admission_ordinal, 1);
-                assert_eq!(
-                    state
-                        .serves
-                        .get(&barrier.lifecycle_id())
-                        .map(|tracked| tracked.state),
-                    Some(V2IoServeState::AwaitingRetry)
-                );
-            }
-            let persisted = command_tx
-                .queue
-                .serve_state_store
-                .as_ref()
-                .expect("fixture retains durable Serve state")
-                .load(&context)
-                .expect("reload raw-admission snapshot");
-            assert_eq!(
-                persisted
-                    .ingress_waiters
-                    .iter()
-                    .map(|waiter| (waiter.ingress_ordinal, waiter.lifecycle_id))
-                    .collect::<Vec<_>>(),
-                vec![(barrier.scheduler_ordinal(), barrier.lifecycle_id())]
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("detach pre-crash raw carrier");
-            (barrier.scheduler_ordinal(), barrier.lifecycle_id())
-        };
-
-        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
-            2,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("restart locally discharges raw admission");
-        {
-            let state = command_tx.queue.lock();
-            assert!(
-                state.serve_ingress_waiters.is_empty(),
-                "startup discharge retires every requester-dependent scheduler ticket"
-            );
-            assert_eq!(
-                state.next_serve_ingress_reservation_ordinal,
-                scheduler_ordinal
-            );
-            assert_eq!(
-                state.next_serve_admission_ordinal,
-                lifecycle_id.admission_ordinal
-            );
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::Terminal)
-            );
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert_eq!(
-            gate.dormant_ingress_scheduler_ordinal()
-                .expect("inspect discharged durable admission debt"),
-            None
-        );
-        drop(
-            command_tx
-                .try_begin_producer_episode()
-                .expect("inspect producer admission after startup discharge")
-                .expect("startup discharge exposes later finite producers"),
-        );
-        assert!(command_tx.queue.can_enqueue_as(V2IoAdmissionClass::Control));
-        assert!(matches!(
-            command_tx.try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(8_001),
-                    subject: proposal.subject,
-                },
-            ),
-            Ok(())
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id: LockedCandidateAcquisitionId(8_001),
-                ..
-            })
-        ));
-        let unrelated = InboundBlockMessage::from_transport(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CommitCertificateRequest(
-                    wire::CommitCertificateRequest {
-                        protocol_version: wire::PROTOCOL_VERSION,
-                        network_id: context.network_id,
-                        context_id: context.id(),
-                        height: context.height.saturating_add(1),
-                        requester: replay_via.clone(),
-                        signature: vec![0x5A],
-                    },
-                ),
-            )),
-            replay_via.clone(),
-            replay_via.clone(),
-        );
-        assert!(matches!(
-            ingress.try_push(unrelated),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(
-            ingress.try_recv_if(|_| true).is_some(),
-            "unrelated traffic drains after local startup service"
-        );
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                request.request(),
-                replay_via.clone()
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let restored_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect restored raw barrier")
-            .expect("exact retransmission owns a fresh replay occurrence");
-        assert!(restored_barrier.scheduler_ordinal() > scheduler_ordinal);
-        assert_eq!(restored_barrier.lifecycle_id(), lifecycle_id);
-        assert_eq!(
-            gate.dormant_ingress_scheduler_ordinal()
-                .expect("exact head retry clears physical admission debt"),
-            None
-        );
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                request.request(),
-                replay_via.clone()
-            )),
-            Ok(FairV2IngressPushDisposition::Coalesced)
-        ));
-        assert_eq!(
-            command_tx
-                .serve_barrier()
-                .expect("inspect coalesced restored barrier"),
-            Some(restored_barrier)
-        );
-
-        let (admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(admission.lifecycle_id, lifecycle_id);
-        assert!(matches!(committed, CertifiedServeCommit::Replay { .. }));
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), replay_via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let post_drain = command_tx
-            .serve_barrier()
-            .expect("inspect post-drain exact replay")
-            .expect("post-drain replay owns a fresh scheduler ticket");
-        assert!(post_drain.scheduler_ordinal() > scheduler_ordinal);
-        assert_eq!(post_drain.lifecycle_id(), lifecycle_id);
-        assert_eq!(
-            command_tx.queue.lock().next_serve_admission_ordinal,
-            lifecycle_id.admission_ordinal,
-            "physical replay cannot mint another logical Serve lifecycle"
-        );
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire raw-admission restart fixture gate");
-    }
-
-    #[test]
-    fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let observer = KeyPair::random();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let (request, validator_pops) = production_authenticated_serve_request(
-            &context,
-            &keys,
-            &observer,
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-            &[0, 1, 2, 3],
-        );
-        let authenticated_source = PeerId::new(KeyPair::random().public_key().clone());
-        let body_root = TempDir::new().expect("observer-waiter body root");
-        let serve_root = TempDir::new().expect("observer-waiter Serve root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let _ = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("retain observer startup-discharge body");
-
-        let (scheduler_ordinal, lifecycle_id) = {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open pre-crash observer queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(
-                    request.request(),
-                    authenticated_source.clone(),
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let barrier = command_tx
-                .serve_barrier()
-                .expect("inspect observer raw barrier")
-                .expect("observer raw admission owns a scheduler ticket");
-            let persisted = command_tx
-                .queue
-                .serve_state_store
-                .as_ref()
-                .expect("fixture retains durable Serve state")
-                .load(&context)
-                .expect("reload observer raw-admission snapshot");
-            assert_eq!(persisted.ingress_waiters.len(), 1);
-            assert!(matches!(
-                &persisted.ingress_waiters[0].owner,
-                CertifiedServeOwnerKey::AuthenticatedSource(source)
-                    if source == &authenticated_source
-            ));
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("detach pre-crash observer carrier");
-            (barrier.scheduler_ordinal(), barrier.lifecycle_id())
-        };
-
-        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
-            2,
-            serve_root.path(),
-            &context,
-            &body_store,
-            &keys[0],
-            &validator_pops,
-            Some(0),
-            None,
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("restore and locally service observer raw admission");
-        {
-            let state = command_tx.queue.lock();
-            assert!(
-                state.serve_ingress_waiters.is_empty(),
-                "a non-responsive observer cannot retain global scheduler debt after restore"
-            );
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::Terminal),
-                "observer scheduler retirement must locally finish the exact lifecycle"
-            );
-            assert_eq!(
-                state.next_serve_ingress_reservation_ordinal, scheduler_ordinal,
-                "retired observer ordinals remain consumed"
-            );
-        }
-        let persisted = command_tx
-            .queue
-            .serve_state_store
-            .as_ref()
-            .expect("restored fixture retains durable Serve state")
-            .load(&context)
-            .expect("reload locally retired observer snapshot");
-        assert!(
-            persisted.ingress_waiters.is_empty(),
-            "observer scheduler retirement is durable across another crash"
-        );
-        assert!(
-            persisted.unsealed_lifecycles.is_empty()
-                && persisted
-                    .terminal_tombstones
-                    .iter()
-                    .any(|lifecycle| lifecycle.lifecycle_id == lifecycle_id)
-        );
-
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert_eq!(
-            gate.dormant_ingress_scheduler_ordinal()
-                .expect("inspect restored observer scheduler debt"),
-            None
-        );
-        let producer_episode = command_tx
-            .try_begin_producer_episode()
-            .expect("inspect producer admission after observer restore")
-            .expect("external restored debt cannot block local producers");
-        drop(producer_episode);
-        assert!(command_tx.queue.can_enqueue_as(V2IoAdmissionClass::Control));
-        command_tx
-            .try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(8_101),
-                    subject: proposal.subject,
-                },
-            )
-            .expect("local control work proceeds without observer retransmission");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id: LockedCandidateAcquisitionId(8_101),
-                ..
-            })
-        ));
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(
-                request.request(),
-                authenticated_source.clone(),
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let retry = command_tx
-            .serve_barrier()
-            .expect("inspect post-restore observer retry")
-            .expect("exact observer retry takes a new scheduler position");
-        assert_eq!(retry.lifecycle_id(), lifecycle_id);
-        assert!(retry.scheduler_ordinal() > scheduler_ordinal);
-        let (admission, replay) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::AuthenticatedSource(authenticated_source),
-            &request,
-        );
-        assert_eq!(admission.lifecycle_id, lifecycle_id);
-        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire observer restore fixture gate");
-    }
-
-    #[test]
-    fn durable_raw_waiter_rejects_mutated_logical_lineage() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("raw-lineage mutation body root");
-        let serve_root = TempDir::new().expect("raw-lineage mutation Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open raw-lineage queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via)),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("detach raw-lineage carrier");
-        }
-
-        let family_capacity = certified_serve_family_capacity(context.roster.len(), 2, 2)
-            .expect("raw-lineage family capacity");
-        let (store, mut persisted) =
-            CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
-                .expect("open raw-lineage durable state");
-        let waiter = persisted
-            .ingress_waiters
-            .first_mut()
-            .expect("raw admission persists one waiter");
-        waiter.lifecycle_id = CertifiedServeLifecycleId {
-            admission_ordinal: 2,
-            request_hash: request.request_hash(),
-        };
-        persisted.next_lifecycle_admission_ordinal = 2;
-        store
-            .persist(&persisted)
-            .expect("publish canonically checksummed lineage mutation");
-
-        let error =
-            match persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store) {
-                Ok(_) => panic!("mutated raw lifecycle lineage must fail closed"),
-                Err(error) => error,
-            };
-        assert!(
-            error.contains("atomically admitted logical lifecycle"),
-            "unexpected raw-lineage rejection: {error}"
-        );
-    }
-
-    #[test]
-    fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let route = routes.mint_via(requester.clone(), via);
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                service.context.roster[0].validator.clone(),
-                route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let mut admission = None;
-        let inbound = ingress
-            .try_recv_if_checked(|_| {
-                admission = Some(
-                    command_tx
-                        .prepare_reserved_serve(
-                            CertifiedServeOwnerKey::Roster(requester.clone()),
-                            request.clone(),
-                        )
-                        .expect("prepare abort-mismatch handoff"),
-                );
-                true
-            })
-            .expect("publish abort-mismatch physical drain")
-            .expect("drain abort-mismatch carrier");
-        drop(inbound);
-        let admission = admission.expect("retain abort-mismatch admission");
-        let reservation_id = admission
-            .ingress_reservation_id
-            .expect("gated admission retains its physical reservation");
-        let snapshot = {
-            let state = command_tx.queue.lock();
-            (
-                state.serve_barrier,
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&admission.lifecycle_id)
-                    .map(|serve| serve.state),
-                state
-                    .commands
-                    .iter()
-                    .map(V2IoCommand::serve_lifecycle_id)
-                    .collect::<Vec<_>>(),
-                state.next_serve_admission_ordinal,
-                state.next_serve_ingress_reservation_ordinal,
-            )
-        };
-        let mismatched = CertifiedServeAdmission {
-            lifecycle_id: admission.lifecycle_id,
-            kind: admission.kind,
-            request: admission.request.clone(),
-            ingress_reservation_id: Some(CertifiedServeIngressReservationId(
-                reservation_id
-                    .0
-                    .checked_add(1)
-                    .expect("fixture reservation has a successor"),
-            )),
-        };
-        assert!(
-            command_tx
-                .abort_serve(mismatched)
-                .expect_err("mismatched physical abort must fail closed")
-                .contains("changed its physically drained ingress handoff")
-        );
-        let after = {
-            let state = command_tx.queue.lock();
-            (
-                state.serve_barrier,
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&admission.lifecycle_id)
-                    .map(|serve| serve.state),
-                state
-                    .commands
-                    .iter()
-                    .map(V2IoCommand::serve_lifecycle_id)
-                    .collect::<Vec<_>>(),
-                state.next_serve_admission_ordinal,
-                state.next_serve_ingress_reservation_ordinal,
-            )
-        };
-        assert_eq!(
-            after, snapshot,
-            "abort mismatch cannot mutate either side of the exact handoff"
-        );
-        command_tx
-            .abort_serve(admission)
-            .expect("valid abort retires the exact physical handoff");
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_barrier.is_none());
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.commands.is_empty());
-        }
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire abort-mismatch fixture gate");
-    }
-
-    #[test]
-    fn certified_serve_abort_error_preserves_primary_and_rollback_failures() {
-        let primary = "primary Serve failure".to_owned();
-        assert_eq!(
-            combine_certified_serve_abort_error(primary.clone(), Ok(())),
-            primary
-        );
-        let combined = combine_certified_serve_abort_error(
-            primary.clone(),
-            Err("durable rollback failure".to_owned()),
-        );
-        assert!(combined.starts_with(&primary));
-        assert!(combined.contains("durable rollback failure"));
-    }
-
-    #[test]
-    fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
-        let (service, keys) = fixture_with_block_payload();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("raw-admission failure body root");
-        let serve_root = TempDir::new().expect("raw-admission failure Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("open raw-admission failure queue");
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        let temporary_state = serve_root
-            .path()
-            .join(CERTIFIED_SERVE_STATE_FILE)
-            .with_extension("norito.tmp");
-        fs::create_dir(&temporary_state).expect("block atomic raw-admission temporary file");
-        let before = fair_ingress_accounting_snapshot(&ingress);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Err(FairV2IngressPushError::Closed(_))
-        ));
-        let after = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(after.last_admission_ordinal, before.last_admission_ordinal);
-        assert_eq!(after.len, before.len);
-        assert_eq!(after.bytes, before.bytes);
-        assert!(!after.open);
-        {
-            let state = command_tx.queue.lock();
-            assert!(!state.sender_open);
-            assert!(state.receiver_open);
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert!(state.serves.is_empty());
-            assert!(state.serve_by_request.is_empty());
-            assert!(state.serve_by_family.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
-            assert_eq!(
-                command_tx
-                    .queue
-                    .lifecycle_ordinals
-                    .next_ordinal_for_test()
-                    .expect("inspect fail-closed shared scheduler source"),
-                Some(2),
-                "failed persistence may consume a scheduler candidate, but the closed queue cannot reuse it"
-            );
-        }
-        fs::remove_dir(&temporary_state).expect("unblock raw-admission state path");
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("detach failed raw-admission gate");
-    }
-
-    #[test]
-    fn fair_ingress_gate_overflow_closes_without_partial_admission() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        {
-            let mut state = command_tx.queue.lock();
-            state.next_serve_ingress_reservation_ordinal = u128::MAX;
-        }
-        command_tx.queue.lifecycle_ordinals.exhaust_for_test();
-        let before = fair_ingress_accounting_snapshot(&ingress);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
-            Err(FairV2IngressPushError::Closed(_))
-        ));
-        let after = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(after.last_admission_ordinal, before.last_admission_ordinal);
-        assert_eq!(after.ready, before.ready);
-        assert_eq!(after.pending_wire_owners, before.pending_wire_owners);
-        assert_eq!(after.lanes, before.lanes);
-        assert_eq!(after.len, before.len);
-        assert_eq!(after.bytes, before.bytes);
-        assert!(!after.open, "closed Serve owner fail-closes fair ingress");
-        {
-            let state = command_tx.queue.lock();
-            assert!(!state.sender_open);
-            assert!(state.receiver_open);
-            assert!(state.serve_ingress_reservation.is_none());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, u128::MAX);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
-        }
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Err(FairV2IngressPushError::Closed(_))
-        ));
-        let repeated = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(repeated, after);
-
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("closed empty ingress detaches failed gate");
-    }
-
-    #[test]
-    fn fair_ingress_classifies_current_historical_future_and_unauthenticated_requests() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let authenticated = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("raw-gate body root");
-        let serve_root = TempDir::new().expect("raw-gate Serve root");
-        let body_store = V2BodyStore::open(body_root.path(), service.context.clone())
-            .expect("open raw-gate body store");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &service.context, &body_store)
-                .expect("open raw-gate persistent queue");
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
-        let (mut foreign_service, foreign_keys) = fixture();
-        allow_fixture_block_payload(&mut foreign_service.context);
-        foreign_service.context.network_id =
-            crate::sumeragi::synthetic_network_id("v2-worker-foreign-test");
-        foreign_service
-            .context
-            .validate()
-            .expect("valid distinct foreign context");
-        let (_, _, foreign_proposal) =
-            proposal_body_and_payload(&foreign_service.context, &foreign_keys);
-        let foreign = authenticated_serve_request(
-            &foreign_service.context,
-            &foreign_keys[1],
-            foreign_proposal.round,
-            foreign_proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(foreign.request(), via.clone(),)),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-
-        let forged_outer = InboundBlockMessage::from_transport(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
-                    authenticated.request().clone(),
-                ),
-            )),
-            service.context.roster[3].validator.clone(),
-            via.clone(),
-        );
-        assert!(matches!(
-            ingress.try_push(forged_outer),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-
-        let mut future = authenticated.request().clone();
-        future.round.height += 1;
-        future.certificate.round.height += 1;
-        future.certificate.proposal_round.height += 1;
-        future.signature = Signature::new(keys[1].private_key(), &future.signature_preimage())
-            .payload()
-            .to_vec();
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(&future, via.clone())),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-
-        let mut invalid = authenticated.request().clone();
-        invalid.signature[0] ^= 0xFF;
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(&invalid, via.clone())),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert!(state.serve_barrier.is_none());
-            assert!(state.serves.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
-        }
-        assert_eq!(ingress.len(), 0);
-        assert_eq!(
-            ingress.state.lock().last_admission_ordinal,
-            0,
-            "raw gate rejection precedes both fair and Serve ordinal mutation"
-        );
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire rejection fixture gate");
-
-        let mut active_context = service.context.clone();
-        active_context.height += 1;
-        active_context.snapshot_bootstrap = Some(wire::SnapshotBootstrapAnchor {
-            snapshot_height: service.context.height,
-            snapshot_block_hash: proposal.subject.block_hash,
-            snapshot_block_creation_time_ms: service.context.height,
-            snapshot_state_hash: Hash::new(b"historical Serve gate snapshot state"),
-        });
-        active_context
-            .validate()
-            .expect("valid snapshot-successor active context");
-        let active_body_root = TempDir::new().expect("historical-gate body root");
-        let active_serve_root = TempDir::new().expect("historical-gate Serve root");
-        let active_body_store = V2BodyStore::open(active_body_root.path(), active_context.clone())
-            .expect("open active-height body store");
-        let (active_tx, active_rx, _active_admission) = persistent_test_io_command_channel(
-            2,
-            active_serve_root.path(),
-            &active_context,
-            &active_body_store,
-        )
-        .expect("open active-height persistent queue");
-        let (historical_ingress, historical_gate) = gated_fair_ingress(&active_context, &active_tx);
-
-        assert!(matches!(
-            historical_ingress.try_push(certified_serve_inbound(authenticated.request(), via,)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let active_round = wire::ConsensusRound {
-            context_id: active_context.id(),
-            height: active_context.height,
-            view: proposal.round.view,
-        };
-        let active = authenticated_serve_request(
-            &active_context,
-            &keys[2],
-            active_round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let active_via = active_context.roster[3].validator.clone();
-        assert!(matches!(
-            historical_ingress.try_push(certified_serve_inbound(active.request(), active_via,)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert_eq!(
-            active_tx
-                .serve_barrier_request_hash()
-                .expect("inspect mixed historical/current Serve target"),
-            Some(active.request_hash())
-        );
-        let admitted = fair_ingress_accounting_snapshot(&historical_ingress);
-        assert_eq!(admitted.last_admission_ordinal, 2);
-        let ticket_owners = admitted
-            .lanes
-            .iter()
-            .flat_map(|lane| &lane.entries)
-            .filter(|entry| entry.owns_certified_serve_ticket)
-            .count();
-        assert_eq!(
-            ticket_owners, 1,
-            "only the current-height request charges the active exact-Serve geometry"
-        );
-        {
-            let state = active_tx.queue.lock();
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.projection.request_hash),
-                Some(active.request_hash())
-            );
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-        }
-        let (active_admission, active_commit) = drain_and_commit_gated_serve(
-            &historical_ingress,
-            &active_tx,
-            CertifiedServeOwnerKey::Roster(active.request().requester.clone()),
-            &active,
-        );
-        assert!(matches!(active_commit, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            active_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == active_admission.lifecycle_id
-        ));
-        assert!(
-            active_tx
-                .serve_barrier_request_hash()
-                .expect("prepared active target crosses the checked physical cut")
-                .is_none()
-        );
-        let delivered = historical_ingress
-            .try_recv_if_checked(|_| true)
-            .expect("historical physical drain cannot fail Serve publication")
-            .expect("authenticated historical request reaches context-store service");
-        let BlockMessage::V2(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(delivered_request),
-            ..
-        }) = delivered.message()
-        else {
-            panic!("historical classification preserves the certified request");
-        };
-        assert_eq!(delivered_request, authenticated.request());
-        historical_ingress.close();
-        historical_ingress
-            .unbind_certified_serve_gate(&historical_gate)
-            .expect("retire historical classification gate");
-    }
-
-    include!("tests/v2_worker_serve_unsealed_cases.rs");
-    include!("tests/v2_worker_serve_decision_restart_cases.rs");
-
-    include!("tests/v2_worker_certified_serve_budget_cases.rs");
-
-    #[test]
-    fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
-        let (mut service, _) = fixture();
-        service.clean_teardown = false;
-        let output_guard = Arc::clone(&service.output_guard);
-        let permit_guard = Arc::clone(&output_guard);
-        let (permit_ready_tx, permit_ready_rx) = mpsc::sync_channel(1);
-        let (release_permit_tx, release_permit_rx) = mpsc::sync_channel(1);
-        let permit_holder = thread::spawn(move || {
-            let admitted_output = permit_guard.acquire().expect("admit earlier output");
-            permit_ready_tx.send(()).expect("publish admitted output");
-            release_permit_rx
-                .recv()
-                .expect("release admitted output after worker shutdown");
-            drop(admitted_output);
-        });
-        permit_ready_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("earlier output must be admitted before abnormal teardown");
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        let (shutdown_seen_tx, shutdown_seen_rx) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || {
-            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Shutdown)));
-            shutdown_seen_tx.send(()).expect("publish worker shutdown");
-            release_permit_tx
-                .send(())
-                .expect("release output after worker shutdown");
-            drop(completion_tx);
-        });
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: Some(worker),
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        drop(service);
-
-        shutdown_seen_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("abnormal teardown must stop the worker before draining admitted output");
-        permit_holder.join().expect("join admitted-output holder");
-        assert!(output_guard.restart_required());
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
-        let gate = ConsensusOutputGuard::isolated();
-        let admitted_output = gate.acquire().expect("initial output permit");
-        let worker_gate = Arc::clone(&gate);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        let later_candidate_published = Arc::new(AtomicBool::new(false));
-        let worker_candidate_published = Arc::clone(&later_candidate_published);
-        let worker = thread::spawn(move || {
-            let fatal_operation = worker_gate
-                .begin_fail_stop_operation()
-                .expect("fatal worker output operation");
-            drop(fatal_operation);
-            let _ = completion_tx.try_send(V2IoCompletion::RecoveryRequired(
-                "committed marker requires restart".to_owned(),
-            ));
-            assert!(worker_gate.restart_required());
-            if worker_gate.acquire().is_some() {
-                worker_candidate_published.store(true, Ordering::Release);
-            }
-        });
-
-        let completion = completion_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("fatal completion must follow recovery admission closure");
-        assert!(matches!(
-            completion,
-            V2IoCompletion::RecoveryRequired(reason)
-                if reason == "committed marker requires restart"
-        ));
-        assert!(
-            gate.restart_required(),
-            "the guard must close before publishing the fatal completion"
-        );
-        assert!(
-            gate.acquire().is_none(),
-            "a second output must not enter while fatal recovery activation drains"
-        );
-        drop(admitted_output);
-        worker.join().expect("join recovery worker");
-        assert!(gate.restart_required());
-        assert!(gate.acquire().is_none());
-        assert!(
-            !later_candidate_published.load(Ordering::Acquire),
-            "no candidate may be published after the fatal durability transition"
-        );
-    }
-
-    #[test]
-    fn io_command_panic_latches_restart_required_before_unwinding() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let unwind = std::panic::catch_unwind({
-            let output_guard = Arc::clone(&output_guard);
-            move || {
-                let _ = execute_fail_stop_io_command(&output_guard, || {
-                    panic!("model I/O command panic");
-                });
-            }
-        });
-
-        assert!(unwind.is_err());
-        assert!(output_guard.restart_required());
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn retire_panic_closes_gate_before_inflight_output_drains() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let admitted_output = output_guard.acquire().expect("admit earlier output");
-        let worker_guard = Arc::clone(&output_guard);
-        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || {
-            let unwind = std::panic::catch_unwind(move || {
-                let _ = execute_retire_io_command(&worker_guard, || {
-                    entered_tx.send(()).expect("publish Retire entry");
-                    panic!("model Retire panic");
-                });
-            });
-            assert!(unwind.is_err());
-        });
-
-        entered_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("Retire operation entered");
-        let activation_deadline = Instant::now() + Duration::from_secs(1);
-        while !output_guard.restart_required() && Instant::now() < activation_deadline {
-            thread::yield_now();
-        }
-        assert!(
-            output_guard.restart_required(),
-            "Retire panic must close admission while earlier output still drains"
-        );
-        assert!(
-            output_guard.acquire().is_none(),
-            "no later output may cross the gate after the Retire panic"
-        );
-
-        drop(admitted_output);
-        worker.join().expect("join panicking Retire model");
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn retire_failure_is_nonfatal_and_leaves_output_guard_open() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(
-            Arc::clone(&output_guard),
-            Arc::new(AtomicBool::new(false)),
-        );
-        let completion = execute_retire_io_command(&output_guard, || {
-            Err("injected post-finality retirement failure".to_owned())
-        })
-        .expect("open guard admits Retire");
-        assert!(matches!(
-            completion,
-            V2IoCompletion::RetirementFailed(reason)
-                if reason == "injected post-finality retirement failure"
-        ));
-        worker_failure_guard.disarm();
-        drop(worker_failure_guard);
-
-        assert!(!output_guard.restart_required());
-        assert!(output_guard.acquire().is_some());
-    }
-
-    #[test]
-    fn io_worker_lifetime_guard_latches_panic_after_success_before_completion_delivery() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let unwind = std::panic::catch_unwind({
-            let output_guard = Arc::clone(&output_guard);
-            move || {
-                let _worker_failure_guard = V2IoWorkerFailureGuard::new(
-                    Arc::clone(&output_guard),
-                    Arc::new(AtomicBool::new(false)),
-                );
-                let completion = execute_fail_stop_io_command(&output_guard, || {
-                    Ok(V2IoCompletion::AuxiliaryNoop)
-                })
-                .expect("model successful I/O operation");
-                assert!(matches!(completion, V2IoCompletion::AuxiliaryNoop));
-                panic!("model panic before completion delivery");
-            }
-        });
-
-        assert!(unwind.is_err());
-        assert!(output_guard.restart_required());
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn io_worker_explicit_shutdown_leaves_output_guard_open() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let mut worker_failure_guard = V2IoWorkerFailureGuard::new(
-            Arc::clone(&output_guard),
-            Arc::new(AtomicBool::new(false)),
-        );
-        worker_failure_guard.disarm();
-        drop(worker_failure_guard);
-
-        assert!(!output_guard.restart_required());
-        assert!(output_guard.acquire().is_some());
-    }
-
-    #[test]
-    fn unconsumed_certified_fetch_persistence_closes_output() {
-        let abandoned_output = ConsensusOutputGuard::isolated();
-        drop(CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(
-            &abandoned_output,
-        )));
-        assert!(abandoned_output.restart_required());
-        assert!(abandoned_output.acquire().is_none());
-
-        let transferred_output = ConsensusOutputGuard::isolated();
-        let mut transferred =
-            CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(&transferred_output));
-        transferred.disarm();
-        drop(transferred);
-        assert!(!transferred_output.restart_required());
-        assert!(transferred_output.acquire().is_some());
-    }
-
-    #[test]
-    fn flagged_finalized_disconnect_leaves_output_guard_open() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
-        allow_finalized_disconnect.store(true, AtomicOrdering::Release);
-        let worker_failure_guard =
-            V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
-
-        drop(worker_failure_guard);
-
-        assert!(!output_guard.restart_required());
-        assert!(output_guard.acquire().is_some());
-    }
-
-    #[test]
-    fn flagged_worker_panic_closes_gate_before_inflight_output_drains() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let admitted_output = output_guard.acquire().expect("admit earlier output");
-        let allow_finalized_disconnect = Arc::new(AtomicBool::new(true));
-        let worker_output_guard = Arc::clone(&output_guard);
-        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || {
-            let _worker_failure_guard =
-                V2IoWorkerFailureGuard::new(worker_output_guard, allow_finalized_disconnect);
-            entered_tx.send(()).expect("publish worker entry");
-            panic!("model flagged finalized-cleanup worker panic");
-        });
-
-        entered_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("flagged worker entered");
-        let activation_deadline = Instant::now() + Duration::from_secs(1);
-        while !output_guard.restart_required() && Instant::now() < activation_deadline {
-            thread::yield_now();
-        }
-        assert!(output_guard.restart_required());
-        assert!(
-            output_guard.acquire().is_none(),
-            "the finalized-disconnect flag must never suppress panic closure"
-        );
-
-        drop(admitted_output);
-        assert!(worker.join().is_err());
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn flagged_worker_fail_stop_error_still_latches_restart_required() {
-        let output_guard = ConsensusOutputGuard::isolated();
-        let allow_finalized_disconnect = Arc::new(AtomicBool::new(true));
-        let worker_failure_guard =
-            V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
-
-        assert!(
-            execute_fail_stop_io_command(&output_guard, || {
-                Err("injected fail-stop I/O error".to_owned())
-            })
-            .is_err()
-        );
-        drop(worker_failure_guard);
-
-        assert!(output_guard.restart_required());
-        assert!(output_guard.acquire().is_none());
-    }
-
-    #[test]
-    fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
-        let (mut service, _) = fixture();
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        let encoded = encode_payload(
-            &service.context,
-            wire::ConsensusRound {
-                context_id: service.context.id(),
-                height: service.context.height,
-                view: 0,
-            },
-            wire::BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked block")),
-                payload_hash: Hash::new(b"blocked body"),
-            },
-            b"blocked body",
-        )
-        .expect("encode bounded payload");
-        service
-            .prepared_candidates
-            .push_back(PreparedCandidateBody {
-                tag: EventTag::new(1, 0, Generation::new(1)),
-                subject: wire::BlockSubject {
-                    parent_block_hash: None,
-                    block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
-                    payload_hash: Hash::new(b"blocked payload"),
-                },
-            });
-        service.output_guard.activate_restart_required();
-
-        assert!(service.take_prepared_candidate().is_none());
-        let blocked_subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked load block")),
-            payload_hash: Hash::new(b"blocked load payload"),
-        };
-        assert!(
-            service
-                .request_locked_candidate(
-                    EventTag::new(1, 0, Generation::new(1)),
-                    locked_candidate_round(&service, 0),
-                    blocked_subject,
-                )
-                .is_err()
-        );
-        assert!(service.locked_candidate_acquisition.is_none());
-        assert!(
-            command_rx.try_recv().is_err(),
-            "post-latch service work must not mutate the ordered I/O queue"
-        );
-        assert!(
-            service
-                .register_outbound_payload(service.active_tag, encoded)
-                .is_err(),
-            "recovery must reject new proposal material before publication"
-        );
-        assert!(service.output_permit().is_err());
-        drop(completion_tx);
-    }
-
-    fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {
-        HashOf::from_untyped_unchecked(Hash::new(label))
-    }
-
-    /// Build exact finality and Kura-receipt authority for sibling rollover tests.
-    pub(in crate::sumeragi) fn durable_finality_fixture(
-        service: &ProductionV2Services,
-        keys: &[KeyPair],
-    ) -> (KuraV2CommitReceipt, wire::finality::V2FinalityArtifact) {
-        let subject = wire::BlockSubject {
-            parent_block_hash: service
-                .context
-                .parent_commit_qc
-                .as_ref()
-                .map(|parent| parent.subject.block_hash),
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized worker block")),
-            payload_hash: Hash::new(b"finalized worker payload"),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"worker parent state"),
-            Hash::new(b"worker post state"),
-            Hash::new(b"worker ordinary writes"),
-            1,
-            Hash::new(b"worker executed block wire"),
-        );
-        let preimage = wire::Vote {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let signature_shares = keys[..3]
-            .iter()
-            .map(|key| {
-                Signature::new(key.private_key(), &preimage)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let signature_refs = signature_shares
-            .iter()
-            .map(Vec::as_slice)
-            .collect::<Vec<_>>();
-        let certificate = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-                .expect("aggregate valid worker CommitQC"),
-        };
-        let artifact = wire::finality::V2FinalityArtifact::new(
-            service.context.clone(),
-            subject,
-            certificate,
-            keys.iter()
-                .map(|key| {
-                    iroha_crypto::bls_normal_pop_prove(key.private_key())
-                        .expect("worker fixture validator PoP")
-                })
-                .collect(),
-        );
-        artifact.validate().expect("valid worker finality artifact");
-        (KuraV2CommitReceipt::for_test(&artifact), artifact)
-    }
-
-    fn durable_receipt(service: &ProductionV2Services, keys: &[KeyPair]) -> KuraV2CommitReceipt {
-        durable_finality_fixture(service, keys).0
-    }
-
-    fn seal_empty_exact_output_for_cleanup_test(service: &ProductionV2Services) {
-        let pending = service
-            .pending_exact_output
-            .lock()
-            .expect("cleanup fixture exact-output corridor");
-        assert!(
-            !pending.is_pending(),
-            "cleanup fixture must not bypass pending exact output"
-        );
-        service
-            .exact_output_handoff_owner
-            .seal()
-            .expect("seal the cleanup fixture's empty exact-output corridor");
-    }
-
-    /// Rebind closed-network production services to an exact durable context.
-    pub(in crate::sumeragi) fn service_for_history_context(
-        kura: Arc<Kura>,
-        context: wire::HeightContext,
-        validators: &[KeyPair],
-    ) -> ProductionV2Services {
-        service_for_history_context_with_local_validator(kura, context, validators, 0)
-    }
-
-    /// Rebind a closed-network service to an explicit paired handoff owner.
-    pub(in crate::sumeragi) fn service_for_history_context_with_handoff_owner(
-        kura: Arc<Kura>,
-        context: wire::HeightContext,
-        validators: &[KeyPair],
-        exact_output_handoff_owner: DurableExactOutputServiceOwner,
-    ) -> ProductionV2Services {
-        let mut service = service_for_history_context(kura, context, validators);
-        service.exact_output_handoff_owner = exact_output_handoff_owner;
-        service
-    }
-
-    /// Rebind one explicit validator and pair the service with its exact handoff owner.
-    pub(in crate::sumeragi) fn service_for_history_context_with_local_validator_and_handoff_owner(
-        kura: Arc<Kura>,
-        context: wire::HeightContext,
-        validators: &[KeyPair],
-        local_validator: wire::ValidatorIndex,
-        exact_output_handoff_owner: DurableExactOutputServiceOwner,
-    ) -> ProductionV2Services {
-        let mut service = service_for_history_context_with_local_validator(
-            kura,
-            context,
-            validators,
-            local_validator,
-        );
-        service.exact_output_handoff_owner = exact_output_handoff_owner;
-        service
-    }
-
-    /// Rebind closed-network production services to one validator in an exact durable context.
-    pub(in crate::sumeragi) fn service_for_history_context_with_local_validator(
-        kura: Arc<Kura>,
-        context: wire::HeightContext,
-        validators: &[KeyPair],
-        local_validator: wire::ValidatorIndex,
-    ) -> ProductionV2Services {
-        let (mut service, _) = fixture();
-        context.validate().expect("valid history-fixture successor");
-        let local_index = usize::try_from(local_validator)
-            .expect("history-fixture validator index fits this platform");
-        let local_key = validators
-            .get(local_index)
-            .expect("history-fixture validator index belongs to its key roster")
-            .clone();
-        let local_peer = PeerId::new(local_key.public_key().clone());
-        assert_eq!(
-            context
-                .roster
-                .get(local_index)
-                .map(|entry| &entry.validator),
-            Some(&local_peer),
-            "history-fixture key roster must match its durable context"
-        );
-        service.validator_set_pops = validators
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("history-fixture validator PoP")
-            })
-            .collect();
-        let business_chain_id = service.state.chain_id.clone();
-        service.state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            business_chain_id,
-            context.network_id,
-        ));
-        service.context = context;
-        service.local_peer = local_peer;
-        service.local_validator = Some(local_validator);
-        service.key_pair = local_key;
-        service.kura = kura;
-        service.active_tag = EventTag::new(
-            service.context.height,
-            0,
-            Generation::new(service.context.height),
-        );
-        service
-    }
-
-    fn successor_service_for_history(
-        kura: Arc<Kura>,
-        parent: &wire::finality::V2FinalityArtifact,
-        validators: &[KeyPair],
-    ) -> ProductionV2Services {
-        successor_service_for_history_as(kura, parent, validators, 0)
-    }
-
-    fn successor_service_for_history_as(
-        kura: Arc<Kura>,
-        parent: &wire::finality::V2FinalityArtifact,
-        validators: &[KeyPair],
-        local_validator: wire::ValidatorIndex,
-    ) -> ProductionV2Services {
-        let mut context = parent.height_context.clone();
-        context.height = parent.height.saturating_add(1);
-        context.parent_commit_qc = Some(parent.commit_qc.clone());
-        service_for_history_context_with_local_validator(kura, context, validators, local_validator)
-    }
-
-    #[test]
-    fn finalized_cleanup_without_exact_output_seal_latches_restart() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        let output_guard = Arc::clone(&service.output_guard);
-        service.clean_teardown = false;
-        let mut supervisor = V2CleanupSupervisor::default();
-
-        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
-        assert!(output_guard.restart_required());
-        assert!(
-            outcome.warnings().iter().any(|warning| {
-                warning.target() == PostFinalityCleanupTarget::CleanupWorker
-                    && warning.reason().contains("was not sealed")
-            }),
-            "finalized cleanup must diagnose an unsealed exact-output owner"
-        );
-    }
-
-    #[test]
-    fn finalized_cleanup_without_context_worker_retains_all_local_files() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        seal_empty_exact_output_for_cleanup_test(&service);
-        let directory = TempDir::new().expect("cleanup test directory");
-        let chunk_root = directory.path().join("chunk-root-is-a-file");
-        std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
-        service.chunk_root = chunk_root.clone();
-
-        let mut supervisor = V2CleanupSupervisor::default();
-        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
-        assert_eq!(outcome.warnings().len(), 1);
-        assert!(outcome.warnings()[0].reason().contains("unavailable"));
-        assert!(chunk_root.is_file());
-    }
-
-    #[test]
-    fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        seal_empty_exact_output_for_cleanup_test(&service);
-        let directory = TempDir::new().expect("cleanup test directory");
-        service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        drop(command_rx);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        let mut supervisor = V2CleanupSupervisor::default();
-        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
-        assert_eq!(outcome.warnings().len(), 1);
-        assert_eq!(
-            outcome.warnings()[0].target(),
-            PostFinalityCleanupTarget::CleanupWorker
-        );
-        assert!(outcome.warnings()[0].reason().contains("disconnected"));
-    }
-
-    #[test]
-    fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        seal_empty_exact_output_for_cleanup_test(&service);
-        let directory = TempDir::new().expect("cleanup test directory");
-        let chunk_root = directory.path().join("retained-chunks");
-        std::fs::create_dir_all(&chunk_root).expect("seed retained chunk root");
-        std::fs::write(chunk_root.join("chunk"), b"retained").expect("seed retained chunk");
-        service.chunk_root = chunk_root.clone();
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        service.output_guard.activate_restart_required();
-
-        let mut supervisor = V2CleanupSupervisor::default();
-        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
-        assert!(command_rx.try_recv().is_err());
-        assert!(chunk_root.join("chunk").is_file());
-        assert_eq!(outcome.warnings().len(), 1);
-        assert!(outcome.warnings()[0].reason().contains("restart"));
-    }
-
-    #[test]
-    fn finalized_cleanup_does_not_wait_for_post_retire_completion() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        seal_empty_exact_output_for_cleanup_test(&service);
-        let directory = TempDir::new().expect("cleanup test directory");
-        service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(2);
-        let join = thread::spawn(move || {
-            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
-        });
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: Some(join),
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        let mut supervisor = V2CleanupSupervisor::default();
-        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
-        assert!(outcome.warnings().is_empty());
-    }
-
-    #[test]
-    fn finalized_cleanup_releases_rollover_after_retire_enqueue() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        seal_empty_exact_output_for_cleanup_test(&service);
-        let directory = TempDir::new().expect("cleanup test directory");
-        service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
-        let join = thread::spawn(move || {
-            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
-            accepted_tx
-                .send(())
-                .expect("announce accepted retirement request");
-            // Deliberately withhold a completion. Closing the command channel
-            // at the deadline must still give this worker a supervised exit.
-            assert!(command_rx.recv().is_err());
-            drop(completion_tx);
-        });
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: Some(join),
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        let mut supervisor = V2CleanupSupervisor::default();
-        let started = Instant::now();
-
-        let outcome = service.finish_height(receipt, Duration::from_millis(10), &mut supervisor);
-
-        accepted_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("worker accepted the queued Retire request");
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "a silent post-finality worker must not hold successor rollover"
-        );
-        assert!(outcome.warnings().is_empty());
-    }
-
-    #[test]
-    fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
-        let (mut service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        seal_empty_exact_output_for_cleanup_test(&service);
-        let directory = TempDir::new().expect("cleanup test directory");
-        service.chunk_root = directory.path().join("already-absent-chunks");
-        let output_guard = Arc::clone(&service.output_guard);
-        let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
-        let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let queued_subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"queued cleanup block")),
-            payload_hash: Hash::new(b"queued cleanup payload"),
-        };
-        assert!(
-            command_tx
-                .try_send(V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(0),
-                    subject: queued_subject,
-                })
-                .is_ok(),
-            "fill ordered I/O queue before Retire enqueue"
-        );
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        let (release_tx, release_rx) = mpsc::sync_channel(1);
-        let worker_output_guard = Arc::clone(&output_guard);
-        let join = thread::spawn(move || {
-            let _worker_failure_guard =
-                V2IoWorkerFailureGuard::new(worker_output_guard, worker_allow_finalized_disconnect);
-            release_rx
-                .recv()
-                .expect("release full-queue cleanup worker");
-            assert!(matches!(
-                command_rx.recv(),
-                Ok(V2IoCommand::LoadCandidate { .. })
-            ));
-            assert!(command_rx.recv().is_err());
-            drop(completion_tx);
-        });
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: Some(join),
-            allow_finalized_disconnect: Arc::clone(&allow_finalized_disconnect),
-            admission,
-        });
-        let mut supervisor = V2CleanupSupervisor::default();
-
-        let outcome = service.finish_height(receipt, Duration::from_millis(10), &mut supervisor);
-
-        assert!(
-            allow_finalized_disconnect.load(AtomicOrdering::Acquire),
-            "typed-finality timeout must authorize the ensuing normal disconnect"
-        );
-        assert_eq!(outcome.warnings().len(), 1);
-        assert!(outcome.warnings()[0].reason().contains("enqueue exceeded"));
-        assert!(!output_guard.restart_required());
-        release_tx.send(()).expect("release cleanup worker");
-        assert!(!output_guard.restart_required());
-        assert!(output_guard.acquire().is_some());
-    }
-
-    #[test]
-    fn cleanup_diagnostics_retain_height_context_and_block_hash() {
-        let (service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-
-        let identity = CleanupWorkerIdentity::from_receipt(&receipt);
-
-        assert_eq!(identity.height, receipt.height());
-        assert_eq!(identity.context_id, receipt.context_id());
-        assert_eq!(identity.block_hash, receipt.block_hash());
-    }
-
-    fn cleanup_job_fixture(
-        service: &ProductionV2Services,
-        receipt: &KuraV2CommitReceipt,
-        body_root: &Path,
-        chunk_root: PathBuf,
-    ) -> PostFinalityCleanupJob {
-        let bodies = V2BodyStore::open(body_root, service.context.clone())
-            .expect("open cleanup body fixture")
-            .into_retirement_job(receipt)
-            .expect("authorize exact cleanup fixture");
-        PostFinalityCleanupJob {
-            identity: CleanupWorkerIdentity::from_receipt(receipt),
-            bodies,
-            chunk_root,
-        }
-    }
-
-    #[test]
-    fn cleanup_submission_is_bounded_and_never_waits_for_capacity() {
-        let (service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        let first_root = TempDir::new().expect("first cleanup body root");
-        let second_root = TempDir::new().expect("second cleanup body root");
-        let (sender, _receiver) = mpsc::sync_channel(1);
-        let submission = V2CleanupSubmission { sender };
-        submission
-            .try_submit(cleanup_job_fixture(
-                &service,
-                &receipt,
-                first_root.path(),
-                first_root.path().join("chunks"),
-            ))
-            .expect("first cleanup fills the bounded queue");
-
-        let started = Instant::now();
-        let error = submission
-            .try_submit(cleanup_job_fixture(
-                &service,
-                &receipt,
-                second_root.path(),
-                second_root.path().join("chunks"),
-            ))
-            .expect_err("second cleanup cannot exceed queue capacity");
-        assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(error.contains("queue is full"));
-    }
-
-    #[test]
-    fn cleanup_worker_job_removes_bodies_and_chunks_off_the_consensus_path() {
-        let (service, keys) = fixture();
-        let receipt = durable_receipt(&service, &keys);
-        let root = TempDir::new().expect("cleanup execution root");
-        let chunk_root = root.path().join("chunks");
-        std::fs::create_dir_all(&chunk_root).expect("create cleanup chunks");
-        std::fs::write(chunk_root.join("chunk"), b"chunk").expect("seed cleanup chunk");
-        let job = cleanup_job_fixture(&service, &receipt, root.path(), chunk_root.clone());
-        let context_directory = root
-            .path()
-            .join(hex::encode(service.context.id().0.as_ref()));
-        assert!(context_directory.is_dir());
-
-        execute_post_finality_cleanup(job);
-
-        assert!(!context_directory.exists());
-        assert!(!chunk_root.exists());
-    }
-
-    fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
-        CertifiedMergeLedgerReference {
-            version: 1,
-            entry_hash: HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(label)),
-            encoded_len: 512,
-            epoch_id: 9,
-            execution_batch_hash: None,
-            entrypoint_count: None,
-            entrypoint_merkle_root: None,
-            result_merkle_root: None,
-            base_state_height: None,
-            base_state_hash: None,
-            merge_qc: MergeQuorumCertificate::new(
-                2,
-                9,
-                1,
-                HashOf::from_untyped_unchecked(Hash::new(b"merge parent")),
-                crate::sumeragi::synthetic_network_id("v2-worker-merge-sidecar"),
-                1,
-                HashOf::new(&Vec::<PeerId>::new()),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Hash::new(b"merge certificate message"),
-            ),
-        }
-    }
-
-    fn chunk(
-        manifest_hash: HashOf<wire::PayloadManifest>,
-        index: u32,
-        bytes: &[u8],
-        sender: wire::ValidatorIndex,
-    ) -> wire::PayloadChunk {
-        wire::PayloadChunk {
-            manifest_hash,
-            index,
-            bytes: bytes.to_vec(),
-            sender,
-            signature: vec![0xA5],
-        }
-    }
-
-    fn fair_ingress_route_owner(
-        message: BlockMessage,
-        semantic_origin: PeerId,
-        authenticated_via: PeerId,
-        route: NetworkReplyRoute,
-    ) -> (NetworkReplyRoutes, FairV2IngressOwnershipEvidence) {
-        let roster = vec![semantic_origin.clone()];
-        let mut admitted = fair_v2_ingress_admit_with_roster_for_test(
-            InboundBlockMessage::try_from_transport_with_reply_route(
-                message,
-                semantic_origin,
-                authenticated_via,
-                route,
-            )
-            .expect("test route binds fair-ingress ownership"),
-            roster,
-        );
-        let ownership = admitted
-            .take_ingress_ownership()
-            .expect("fair ingress attaches exact ownership");
-        let (_, _, routes) = admitted.into_message_sender_and_reply_routes();
-        (
-            routes.expect("authenticated test ingress retains its reply route"),
-            ownership,
-        )
-    }
-
-    #[test]
-    fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
-        let (service, _) = fixture();
-        let requester = service.context.roster[1].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = route_fixture.mint_via(requester.clone(), hub_a.clone());
-        let route_b = route_fixture.mint_via(requester.clone(), hub_b.clone());
-        let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
-                manifest_hash(b"fair output request"),
-                0,
-                b"owned",
-                0,
-            )),
-        ));
-        let (routes_a, ownership_a) =
-            fair_ingress_route_owner(request.clone(), requester.clone(), hub_a, route_a.clone());
-        let (routes_b, ownership_b) =
-            fair_ingress_route_owner(request.clone(), requester.clone(), hub_b, route_b.clone());
-        let response = lane_commit_qc_message(service.local_peer.clone());
-        let mut retained = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
-            vec![response.clone()],
-            requester.clone(),
-            routes_a,
-            Some(ownership_a),
-            ExactOutputRolloverClaim::Exact,
-        )
-        .expect("source A ownership is exact")
-        .expect("source A response fanout");
-        let candidate = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
-            vec![response.clone()],
-            requester.clone(),
-            routes_b.clone(),
-            Some(ownership_b),
-            ExactOutputRolloverClaim::Exact,
-        )
-        .expect("source B ownership is exact")
-        .expect("source B response fanout");
-
-        assert!(retained.coalesce_retry(&candidate).expect("lossless merge"));
-        assert_eq!(retained.targets.len(), 2);
-        let ownership = retained
-            .ingress_ownership
-            .as_ref()
-            .expect("coalesced response retains fair ownership");
-        assert!(ownership.validate_exact());
-        assert_eq!(ownership.admission_count, 2);
-        assert!(ownership.matches_reply_routes(retained.reply_routes.as_ref()));
-        assert!(retained.targets.iter().any(|target| {
-            matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&route_a))
-        }));
-        assert!(retained.targets.iter().any(|target| {
-            matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&route_b))
-        }));
-        let source_a_index = retained
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&route_a))
-            })
-            .expect("source A target");
-        retained
-            .mark_admitted(source_a_index)
-            .expect("source A advances independently");
-        let ownership = retained
-            .ingress_ownership
-            .as_ref()
-            .expect("admission retains fair ownership");
-        let source_a_cursor = ownership
-            .attempts
-            .iter()
-            .find(|attempt| attempt.route.same_source(&route_a))
-            .expect("source A cursor");
-        let source_b_cursor = ownership
-            .attempts
-            .iter()
-            .find(|attempt| attempt.route.same_source(&route_b))
-            .expect("source B cursor");
-        assert_eq!(source_a_cursor.message_cursor, 1);
-        assert_eq!(source_b_cursor.message_cursor, 0);
-
-        {
-            let owned_fanout = |authenticated_via: PeerId, route: NetworkReplyRoute| {
-                let (reply_routes, ownership) = fair_ingress_route_owner(
-                    request.clone(),
-                    requester.clone(),
-                    authenticated_via,
-                    route,
-                );
-                PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
-                    vec![response.clone()],
-                    requester.clone(),
-                    reply_routes,
-                    Some(ownership),
-                    ExactOutputRolloverClaim::Exact,
-                )
-                .expect("race source ownership is exact")
-                .expect("race source response fanout")
-            };
-
-            let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-            let hub_d = PeerId::new(KeyPair::random().public_key().clone());
-            let route_c = route_fixture.mint_via(requester.clone(), hub_c.clone());
-            let route_d = route_fixture.mint_via(requester.clone(), hub_d.clone());
-            let mut retained_race = owned_fanout(hub_c, route_c.clone());
-            let candidate_race = owned_fanout(hub_d, route_d.clone());
-            let plan = retained_race
-                .reply_target_merge_plan_after_route_merge(&candidate_race, || {
-                    assert!(
-                        route_fixture.retire(&route_c),
-                        "retained source retires after the initial route merge"
-                    );
-                })
-                .expect("candidate source survives retained-source retirement");
-
-            assert_eq!(
-                plan.targets,
-                vec![ReplyTargetMerge::Append { candidate_index: 0 }]
-            );
-            assert_eq!(
-                plan.reply_routes.len(),
-                2,
-                "a disconnect after reconciliation is deferred to the next bounded snapshot"
-            );
-            assert!(
-                plan.reply_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_d))
-            );
-            assert!(
-                plan.reply_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_c))
-            );
-            let ownership = plan
-                .ingress_ownership
-                .as_ref()
-                .expect("candidate source retains fair-ingress ownership");
-            assert!(ownership.validate_exact());
-            assert!(ownership.matches_reply_routes(Some(&plan.reply_routes)));
-            assert_eq!(ownership.admission_count, 2);
-            assert_eq!(ownership.attempts.len(), 2);
-            assert!(ownership.attempts.iter().any(|attempt| {
-                attempt.route.same_delivery(&route_d)
-                    && attempt.message_cursor == 0
-                    && attempt.chunk_cursor == 0
-            }));
-            let preview = retained_race
-                .preview_coalesce_plan(&candidate_race, &plan)
-                .expect("snapshot-coherent race plan has valid target geometry");
-            retained_race.commit_coalesce_plan(
-                &candidate_race,
-                &plan,
-                preview.current_source_targets,
-            );
-            assert_eq!(
-                retained_race
-                    .retain_active_unowned_reply_targets()
-                    .expect("the next service snapshot prunes only retired source C"),
-                1
-            );
-            let retained_routes = retained_race
-                .reply_routes
-                .as_ref()
-                .expect("source D retains route history");
-            assert_eq!(retained_routes.len(), 1);
-            assert!(
-                retained_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_d))
-            );
-            assert!(
-                retained_race
-                    .ingress_ownership
-                    .as_ref()
-                    .is_some_and(|ownership| ownership.validate_exact()
-                        && ownership.matches_reply_routes(Some(retained_routes)))
-            );
-
-            let hub_e = PeerId::new(KeyPair::random().public_key().clone());
-            let hub_f = PeerId::new(KeyPair::random().public_key().clone());
-            let route_e = route_fixture.mint_via(requester.clone(), hub_e.clone());
-            let route_f = route_fixture.mint_via(requester.clone(), hub_f.clone());
-            let mut retained_race = owned_fanout(hub_e, route_e.clone());
-            let candidate_race = owned_fanout(hub_f, route_f.clone());
-            let plan = retained_race
-                .reply_target_merge_plan_after_route_merge(&candidate_race, || {
-                    assert!(
-                        route_fixture.retire(&route_f),
-                        "candidate source retires after the initial route merge"
-                    );
-                })
-                .expect("retained source survives candidate-source retirement");
-
-            assert_eq!(
-                plan.targets,
-                vec![ReplyTargetMerge::Append { candidate_index: 0 }]
-            );
-            assert_eq!(plan.reply_routes.len(), 2);
-            assert!(
-                plan.reply_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_e))
-            );
-            assert!(
-                plan.reply_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_f))
-            );
-            let ownership = plan
-                .ingress_ownership
-                .as_ref()
-                .expect("retained source keeps fair-ingress ownership");
-            assert!(ownership.validate_exact());
-            assert!(ownership.matches_reply_routes(Some(&plan.reply_routes)));
-            assert_eq!(ownership.admission_count, 2);
-            assert_eq!(ownership.attempts.len(), 2);
-            let preview = retained_race
-                .preview_coalesce_plan(&candidate_race, &plan)
-                .expect("candidate-retirement plan remains snapshot coherent");
-            retained_race.commit_coalesce_plan(
-                &candidate_race,
-                &plan,
-                preview.current_source_targets,
-            );
-            assert_eq!(
-                retained_race
-                    .retain_active_unowned_reply_targets()
-                    .expect("the next service snapshot prunes only retired source F"),
-                1
-            );
-            let retained_routes = retained_race
-                .reply_routes
-                .as_ref()
-                .expect("source E retains route history");
-            assert_eq!(retained_routes.len(), 1);
-            assert!(
-                retained_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&route_e))
-            );
-            assert!(
-                retained_race
-                    .ingress_ownership
-                    .as_ref()
-                    .is_some_and(|ownership| ownership.validate_exact()
-                        && ownership.matches_reply_routes(Some(retained_routes)))
-            );
-
-            let hub_g = PeerId::new(KeyPair::random().public_key().clone());
-            let hub_h = PeerId::new(KeyPair::random().public_key().clone());
-            let route_g = route_fixture.mint_via(requester.clone(), hub_g.clone());
-            let route_h = route_fixture.mint_via(requester.clone(), hub_h.clone());
-            let (routes_g, ownership_g) = fair_ingress_route_owner(
-                request.clone(),
-                requester.clone(),
-                hub_g.clone(),
-                route_g.clone(),
-            );
-            let (routes_h, ownership_h) = fair_ingress_route_owner(
-                request.clone(),
-                requester.clone(),
-                hub_h,
-                route_h.clone(),
-            );
-            let repeated_responses = vec![response.clone(), response.clone()];
-            let mut retained_cursor =
-                PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
-                    repeated_responses.clone(),
-                    requester.clone(),
-                    routes_g,
-                    Some(ownership_g),
-                    ExactOutputRolloverClaim::Exact,
-                )
-                .expect("source G cursor ownership is exact")
-                .expect("source G response fanout");
-            retained_cursor
-                .mark_admitted(0)
-                .expect("source G advances to its second immutable response");
-            let candidate_h = PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
-                repeated_responses.clone(),
-                requester.clone(),
-                routes_h,
-                Some(ownership_h),
-                ExactOutputRolloverClaim::Exact,
-            )
-            .expect("source H cursor ownership is exact")
-            .expect("source H response fanout");
-            assert!(
-                route_fixture.retire(&route_g),
-                "source G retires before the authoritative strict-merge snapshot"
-            );
-            let plan = retained_cursor
-                .reply_target_merge_plan(&candidate_h)
-                .expect("source H progresses while retired source G stays owned");
-            assert_eq!(
-                plan.targets,
-                vec![
-                    ReplyTargetMerge::Park { prior_index: 0 },
-                    ReplyTargetMerge::Append { candidate_index: 0 },
-                ]
-            );
-            let preview = retained_cursor
-                .preview_coalesce_plan(&candidate_h, &plan)
-                .expect("parked-source merge preserves bounded geometry");
-            retained_cursor.commit_coalesce_plan(
-                &candidate_h,
-                &plan,
-                preview.current_source_targets,
-            );
-            assert!(retained_cursor.targets[0].parked);
-            assert_eq!(retained_cursor.targets[0].message_index, 1);
-            let parked_cursor = retained_cursor
-                .ingress_ownership
-                .as_ref()
-                .expect("parked source retains fair ownership")
-                .attempts
-                .iter()
-                .find(|attempt| attempt.route.same_source(&route_g))
-                .expect("parked source G retains its cursor");
-            assert_eq!(parked_cursor.message_cursor, 1);
-            assert_eq!(parked_cursor.chunk_cursor, 0);
-            assert!(retained_cursor.targets.iter().any(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route)
-                    if route.same_delivery(&route_h) && !target.parked)
-            }));
-
-            let reconnect_g = route_fixture.mint_via(requester.clone(), hub_g.clone());
-            let (reconnect_routes, reconnect_ownership) = fair_ingress_route_owner(
-                request.clone(),
-                requester.clone(),
-                hub_g,
-                reconnect_g.clone(),
-            );
-            let reconnect_candidate =
-                PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(
-                    repeated_responses,
-                    requester.clone(),
-                    reconnect_routes,
-                    Some(reconnect_ownership),
-                    ExactOutputRolloverClaim::Exact,
-                )
-                .expect("reconnect ownership is exact")
-                .expect("reconnect response fanout");
-            let reconnect_plan = retained_cursor
-                .reply_target_merge_plan(&reconnect_candidate)
-                .expect("reconnect reuses the parked source owner");
-            assert_eq!(
-                reconnect_plan.targets,
-                vec![ReplyTargetMerge::Update {
-                    prior_index: 0,
-                    candidate_index: 0,
-                    update: NetworkReplyRouteSourceUpdate::Reconnected,
-                }]
-            );
-            let reconnect_preview = retained_cursor
-                .preview_coalesce_plan(&reconnect_candidate, &reconnect_plan)
-                .expect("reconnect preview preserves the current item");
-            retained_cursor.commit_coalesce_plan(
-                &reconnect_candidate,
-                &reconnect_plan,
-                reconnect_preview.current_source_targets,
-            );
-            assert!(!retained_cursor.targets[0].parked);
-            assert_eq!(retained_cursor.targets[0].message_index, 1);
-            assert!(matches!(
-                &retained_cursor.targets[0].route,
-                ExactTargetRoute::Reply(route) if route.same_delivery(&reconnect_g)
-            ));
-            let resumed_cursor = retained_cursor
-                .ingress_ownership
-                .as_ref()
-                .expect("reconnected source retains fair ownership")
-                .attempts
-                .iter()
-                .find(|attempt| attempt.route.same_source(&reconnect_g))
-                .expect("reconnected source G retains its cursor");
-            assert_eq!(resumed_cursor.message_cursor, 1);
-            assert_eq!(resumed_cursor.chunk_cursor, 0);
-        }
-
-        let missing = PendingExactFanout::claimed_with_reply_routes(
-            vec![response],
-            requester,
-            routes_b,
-            ExactOutputRolloverClaim::Exact,
-        )
-        .expect("shape-only candidate")
-        .expect("shape-only response fanout");
-        assert!(retained.coalesce_retry(&missing).is_err());
-    }
-
-    #[test]
-    fn orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 4;
-        let sender = service.context.roster[0].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = route_fixture.mint_via(sender.clone(), hub_a.clone());
-        let route_b = route_fixture.mint_via(sender.clone(), hub_b.clone());
-        let payload_chunk = chunk(manifest_hash(b"fair buffered chunk"), 0, b"a", 0);
-        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(payload_chunk.clone()),
-        ));
-        let (_, ownership_a) =
-            fair_ingress_route_owner(message.clone(), sender.clone(), hub_a, route_a.clone());
-        let (_, ownership_b) =
-            fair_ingress_route_owner(message, sender.clone(), hub_b, route_b.clone());
-
-        assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(
-                sender.clone(),
-                payload_chunk.clone(),
-                ownership_a,
-            ),
-            PayloadChunkDisposition::Buffered
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), ownership_b),
-            PayloadChunkDisposition::Duplicate
-        );
-        let ownership = service
-            .orphan_chunks
-            .get(&payload_chunk.manifest_hash)
-            .and_then(|chunks| chunks.front())
-            .and_then(|chunk| chunk.ingress_ownership.as_ref())
-            .expect("buffered duplicate retains fair ownership");
-        assert_eq!(ownership.admission_count, 2);
-        let routes = ownership
-            .current_reply_routes()
-            .expect("both authenticated routes remain available");
-        assert_eq!(routes.len(), 2);
-        assert!(routes.iter().any(|route| route.same_delivery(&route_a)));
-        assert!(routes.iter().any(|route| route.same_delivery(&route_b)));
-    }
-
-    #[test]
-    fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 1;
-        service.max_orphan_chunk_bytes = 1;
-        let sender = service.context.roster[0].validator.clone();
-        let payload_chunk = chunk(manifest_hash(b"promoted buffered chunk"), 0, b"a", 0);
-        let envelope = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(payload_chunk.clone()),
-        );
-        let message = BlockMessage::V2(envelope.clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-        let route = route_fixture.mint_via(sender.clone(), hub.clone());
-        let (_, proofless) = fair_ingress_route_owner(message, sender.clone(), hub, route);
-        let mut productive = proofless.clone();
-
-        let token = super::super::FairV2IngressLeaderWireToken {
-            identity: super::super::FairV2IngressLeaderWireIdentity {
-                context_id: service.context.id(),
-                height: service.context.height,
-                view: 0,
-                subject_hash: Hash::new(b"promoted buffered subject"),
-                manifest_hash: Some(payload_chunk.manifest_hash.clone().into()),
-                phase: super::super::FairV2IngressLeaderWirePhase::Chunk,
-                semantic_origin: sender.clone(),
-                canonical_wire_hash: Hash::new(envelope.encode()),
-            },
-            slot: super::super::FairV2IngressLeaderWireSlot {
-                semantic_origin: sender.clone(),
-                phase: super::super::FairV2IngressLeaderWirePhase::Chunk,
-                chunk_index: Some(payload_chunk.index),
-            },
-            admission_ordinal: 1,
-            scheduler_ordinal: 73,
-            source_class: super::super::FairV2IngressLeaderWireSourceClass::Chunk,
-        };
-        let directory = TempDir::new().expect("temporary promoted-orphan gate");
-        let owner = [0xE1; 32];
-        let capacity =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-                service.context.roster.len(),
-                service.context.da_layout.max_chunk_count,
-            )
-            .expect("finite promoted-orphan lifecycle capacity");
-        let recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                service.context.id(),
-                service.context.height,
-                owner,
-                0,
-                false,
-            );
-        let (gate, _) = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-            &directory.path().join("promoted-orphan.wal"),
-            service.context.id(),
-            service.context.height,
-            owner,
-            service
-                .context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect(),
-            capacity,
-            service.context.da_layout.max_chunk_count,
-            recovery_authority,
-            &[],
-            &[],
-        )
-        .expect("open promoted-orphan lifecycle gate");
-        gate.reserve(token.clone())
-            .expect("reserve promoted-orphan token");
-        gate.mark_ingress(&token)
-            .expect("mark promoted-orphan ingress");
-        let runtime_owner = super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
-            token.identity_hash(),
-            token.scheduler_ordinal(),
-        )
-        .expect("construct promoted-orphan runtime owner");
-        let runtime = gate
-            .mark_runtime(&token, runtime_owner)
-            .expect("mark promoted-orphan runtime");
-        productive.leader_wire_token = Some(token);
-        assert!(
-            productive.install_leader_wire_runtime_receipt(runtime),
-            "productive duplicate must validate its exact runtime carrier"
-        );
-
-        assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(
-                sender.clone(),
-                payload_chunk.clone(),
-                proofless,
-            ),
-            PayloadChunkDisposition::Buffered
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), productive,),
-            PayloadChunkDisposition::Duplicate
-        );
-        let promoted = service
-            .orphan_chunks
-            .get(&payload_chunk.manifest_hash)
-            .and_then(|chunks| chunks.front())
-            .and_then(|buffered| buffered.ingress_ownership.as_ref())
-            .expect("one promoted orphan remains retained");
-        assert!(promoted.leader_wire_runtime_receipt().is_some());
-        assert!(
-            !service.evict_one_proofless_orphan_chunk(),
-            "proofless eviction cannot discard the promoted runtime owner"
-        );
-        assert_eq!(service.orphan_chunk_count, 1);
-        assert_eq!(service.orphan_chunk_bytes, 1);
-    }
-
-    fn bind_productive_orphan_test_ingress(
-        service: &mut ProductionV2Services,
-        directory: &TempDir,
-    ) -> Arc<FairV2Ingress> {
-        let roster = service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        let ingress = Arc::new(
-            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-                64,
-                512 * 1024 * 1024,
-                64 * 1024 * 1024,
-                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-                8 * 1024 * 1024,
-                8 * 1024 * 1024,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                None,
-            ),
-        );
-        ingress
-            .configure_roster_for_context(
-                roster.clone(),
-                &service.context.network_id,
-                service.context.da_layout,
-            )
-            .expect("configure productive-orphan ingress");
-        ingress.require_leader_wire_lifecycle_gate();
-        let capacity =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-                roster.len(),
-                service.context.da_layout.max_chunk_count,
-            )
-            .expect("derive productive-orphan lifecycle capacity");
-        let owner = [0xE2; 32];
-        let recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                service.context.id(),
-                service.context.height,
-                owner,
-                0,
-                false,
-            );
-        let (gate, restore) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &directory.path().join("productive-orphan-tail.wal"),
-                service.context.id(),
-                service.context.height,
-                owner,
-                roster.iter().cloned().collect(),
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open productive-orphan lifecycle gate");
-        ingress
-            .bind_leader_wire_lifecycle_gate(
-                gate,
-                restore,
-                RuntimeLifecycleOrdinalSource::after_high_watermark(64),
-                service.context.id(),
-                service.context.height,
-            )
-            .expect("bind productive-orphan lifecycle gate");
-        ingress.open().expect("open productive-orphan ingress");
-        service.leader_wire_recovery_authority = recovery_authority;
-        service.leader_wire_ingress = Arc::clone(&ingress);
-        ingress
-    }
-
-    fn admit_productive_orphan_runtime(
-        ingress: &FairV2Ingress,
-        message: wire::ConsensusMessageV2,
-        sender: PeerId,
-    ) -> FairV2IngressOwnershipEvidence {
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                BlockMessage::V2(message),
-                Some(sender),
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let mut admitted = ingress.try_recv().expect("drain productive-orphan ingress");
-        let mut ownership = admitted
-            .take_ingress_ownership()
-            .expect("productive orphan retains fair-ingress ownership");
-        ingress
-            .bind_leader_wire_runtime_ownership(&mut ownership)
-            .expect("bind productive-orphan runtime receipt");
-        ownership
-    }
-
-    fn buffer_productive_orphan_for_replay(
-        service: &mut ProductionV2Services,
-        ingress: &FairV2Ingress,
-        sender: PeerId,
-        chunk: wire::PayloadChunk,
-    ) -> super::super::FairV2IngressLeaderWireToken {
-        let ownership = admit_productive_orphan_runtime(
-            ingress,
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-                chunk.clone(),
-            )),
-            sender.clone(),
-        );
-        let token = ownership
-            .leader_wire_token()
-            .expect("productive orphan has a leader-wire token")
-            .clone();
-        assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(sender, chunk, ownership),
-            PayloadChunkDisposition::Buffered
-        );
-        token
-    }
-
-    fn productive_chunk_at_view(
-        service: &ProductionV2Services,
-        keys: &[KeyPair],
-        view: u64,
-    ) -> (
-        Vec<u8>,
-        wire::PayloadManifest,
-        wire::Proposal,
-        wire::PayloadChunk,
-        PeerId,
-    ) {
-        let (canonical_wire, payload) =
-            proposal_body_and_payload_at_view(&service.context, keys, view);
-        let (manifest, chunks) = payload.into_parts();
-        assert!(
-            !chunks.is_empty(),
-            "fixture body must have an exact data chunk"
-        );
-        let proposer = service.context.leader(view);
-        let proposer_index = usize::try_from(proposer).expect("small proposer index");
-        let sender = service.context.roster[proposer_index].validator.clone();
-        let proposal = wire::Proposal {
-            round: manifest.round,
-            proposer,
-            subject: manifest.subject,
-            manifest: manifest.clone(),
-            justification: wire::ProposalJustification::ParentCommit(
-                wire::ParentCommitJustification { certificate: None },
-            ),
-            signature: Vec::new(),
-        };
-        let mut chunk = wire::PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
-            index: 0,
-            bytes: chunks.into_iter().next().expect("fixture data chunk"),
-            sender: proposer,
-            signature: Vec::new(),
-        };
-        chunk.signature = Signature::new(
-            keys[proposer_index].private_key(),
-            &chunk
-                .signature_preimage(&service.context, &manifest)
-                .expect("chunk signature preimage"),
-        )
-        .payload()
-        .to_vec();
-        (canonical_wire, manifest, proposal, chunk, sender)
-    }
-
-    fn admit_and_terminalize_productive_proposal(
-        ingress: &FairV2Ingress,
-        proposal: wire::Proposal,
-        sender: PeerId,
-    ) {
-        let ownership = admit_productive_orphan_runtime(
-            ingress,
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal)),
-            sender,
-        );
-        ingress
-            .mark_leader_wire_volatile_terminal(
-                ownership
-                    .leader_wire_runtime_receipt()
-                    .expect("proposal has productive runtime ownership"),
-            )
-            .expect("terminalize proposal after binding its manifest coordinates");
-    }
-
-    fn chunk_effect_executor(
-        service: &ProductionV2Services,
-        recovered: BTreeMap<
-            (wire::ConsensusRound, wire::BlockSubject),
-            (wire::PayloadManifest, DurableBodyReceipt),
-        >,
-    ) -> V2EffectExecutor<SaturatedCompletionRuntime> {
-        V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime::new(0, 8),
-            recovered,
-            service.context.clone(),
-            service.local_peer.clone(),
-            service.local_validator,
-            EffectQueueConfig::default(),
-        )
-        .expect("construct productive-chunk effect executor")
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
-        for durable_before_late_chunk in [false, true] {
-            let (mut service, keys) = fixture_with_block_payload();
-            service.max_orphan_chunks = 16;
-            service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-            let gate_directory = TempDir::new().expect("temporary durable-chunk gate");
-            let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-            let (_, manifest, proposal, chunk, sender) =
-                productive_chunk_at_view(&service, &keys, 0);
-            admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
-            let ownership = admit_productive_orphan_runtime(
-                &ingress,
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-                    chunk.clone(),
-                )),
-                sender.clone(),
-            );
-            let token = ownership
-                .leader_wire_token()
-                .expect("late chunk has a productive token")
-                .clone();
-            let durable = DurableBodyReceipt::for_test(
-                service.context.id(),
-                manifest.round,
-                manifest.subject,
-                HashOf::new(&manifest),
-            );
-            let recovered = BTreeMap::from([(
-                (manifest.round, manifest.subject),
-                (manifest.clone(), durable),
-            )]);
-            let mut executor = chunk_effect_executor(
-                &service,
-                if durable_before_late_chunk {
-                    recovered.clone()
-                } else {
-                    BTreeMap::new()
-                },
-            );
-            let disposition = service
-                .route_payload_chunk(&mut executor, sender.clone(), chunk, ownership)
-                .expect("route late chunk around durable recovery");
-            if durable_before_late_chunk {
-                assert_eq!(
-                    disposition,
-                    PayloadChunkDisposition::Duplicate,
-                    "pre-existing durable recovery must terminalize the late chunk immediately"
-                );
-            } else {
-                assert_eq!(
-                    disposition,
-                    PayloadChunkDisposition::Buffered,
-                    "the late chunk must remain owned until durable recovery arrives"
-                );
-                assert_eq!(service.orphan_chunk_count, 1);
-                assert_ne!(service.orphan_chunk_bytes, 0);
-                executor = chunk_effect_executor(&service, recovered);
-                assert_eq!(
-                    service
-                        .replay_buffered_chunks(&mut executor)
-                        .expect("durable recovery sweeps the buffered runtime owner"),
-                    0
-                );
-            }
-            assert!(
-                service.orphan_chunks.is_empty(),
-                "durable_before_late_chunk={durable_before_late_chunk}"
-            );
-            assert_eq!(
-                service.orphan_chunk_count, 0,
-                "durable_before_late_chunk={durable_before_late_chunk}"
-            );
-            assert_eq!(
-                service.orphan_chunk_bytes, 0,
-                "durable_before_late_chunk={durable_before_late_chunk}"
-            );
-            assert_eq!(
-                ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
-                super::super::FairV2IngressLeaderWireStatus::Terminal,
-                "durable_before_late_chunk={durable_before_late_chunk}"
-            );
-
-            let next_view = (1..=1_024)
-                .find(|view| service.context.leader(*view) == service.context.leader(0))
-                .expect("bounded view search returns to the same leader");
-            let (_, _, next_proposal, next_chunk, next_sender) =
-                productive_chunk_at_view(&service, &keys, next_view);
-            assert_eq!(
-                next_sender, sender,
-                "view rotation returns to the same origin"
-            );
-            admit_and_terminalize_productive_proposal(&ingress, next_proposal, next_sender.clone());
-            let next = admit_productive_orphan_runtime(
-                &ingress,
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-                    next_chunk,
-                )),
-                next_sender,
-            );
-            let next_token = next.leader_wire_token().expect("next-view token");
-            assert_eq!(
-                next_token.view(),
-                next_view,
-                "durable_before_late_chunk={durable_before_late_chunk}"
-            );
-            assert!(
-                next.leader_wire_runtime_receipt().is_some(),
-                "higher-view chunk must reach Runtime admission"
-            );
-            assert_eq!(
-                ingress.state.lock().leader_wire_lifecycles[&next_token.slot].status,
-                super::super::FairV2IngressLeaderWireStatus::Runtime,
-                "durable_before_late_chunk={durable_before_late_chunk}"
-            );
-        }
-    }
-
-    #[test]
-    fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let capacity = usize::try_from(service.context.da_layout.max_chunk_count)
-            .expect("fixture orphan capacity fits usize");
-        service.max_orphan_chunks = capacity;
-        service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-        let gate_directory = TempDir::new().expect("temporary bounded orphan-sweep gate");
-        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-        let mut complete_recovered = BTreeMap::new();
-        let mut recovered_keys = Vec::with_capacity(capacity);
-        let mut tokens = Vec::with_capacity(capacity);
-
-        for view in 0..u64::try_from(capacity).expect("fixture capacity fits u64") {
-            let (_, manifest, proposal, chunk, sender) =
-                productive_chunk_at_view(&service, &keys, view);
-            admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
-            let manifest_hash = HashOf::new(&manifest);
-            let token = buffer_productive_orphan_for_replay(&mut service, &ingress, sender, chunk);
-            tokens.push((manifest_hash, token));
-            let durable = DurableBodyReceipt::for_test(
-                service.context.id(),
-                manifest.round,
-                manifest.subject,
-                manifest_hash,
-            );
-            let key = (manifest.round, manifest.subject);
-            recovered_keys.push((manifest_hash, key));
-            complete_recovered.insert(key, (manifest, durable));
-        }
-        assert_eq!(service.orphan_chunk_count, capacity);
-        assert_eq!(
-            service
-                .orphan_chunks
-                .values()
-                .map(VecDeque::len)
-                .sum::<usize>(),
-            capacity
-        );
-
-        // Keep the last deterministic sweep position live while every other
-        // exact owner is already durable. This forces a full cursor cycle and
-        // a wrap before the final owner can retire.
-        let retained_manifest_hash = *service
-            .orphan_chunks
-            .keys()
-            .next_back()
-            .expect("capacity fixture has a final manifest");
-        let retained_key = recovered_keys
-            .iter()
-            .find_map(|(manifest_hash, key)| {
-                (*manifest_hash == retained_manifest_hash).then_some(*key)
-            })
-            .expect("retained manifest has exact recovered coordinates");
-        let mut partial_recovered = complete_recovered.clone();
-        assert!(partial_recovered.remove(&retained_key).is_some());
-        let mut executor = chunk_effect_executor(&service, partial_recovered);
-
-        let (command_tx, _command_rx, admission) = test_io_command_channel(1);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        completion_tx
-            .try_send(V2IoCompletion::AuxiliaryNoop)
-            .expect("queue completion behind the first bounded sweep");
-
-        assert_eq!(
-            service
-                .replay_buffered_chunks(&mut executor)
-                .expect("first bounded lifecycle sweep remains valid"),
-            0
-        );
-        assert_eq!(service.orphan_chunk_count, capacity.saturating_sub(1));
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("bounded sweep returns a completion service opportunity"),
-            1,
-            "a ready service completion must run before the next lifecycle sweep"
-        );
-        // No worker owns this synthetic channel; remove it before service Drop
-        // attempts the production shutdown handshake.
-        drop(service.io.take());
-
-        for _ in 1..capacity {
-            let before = service.orphan_chunk_count;
-            assert_eq!(
-                service
-                    .replay_buffered_chunks(&mut executor)
-                    .expect("bounded lifecycle sweep remains valid"),
-                0,
-                "terminal lifecycle sweeping must not report chunk delivery"
-            );
-            assert!(
-                before.saturating_sub(service.orphan_chunk_count) <= 1,
-                "one service turn may deeply classify at most one orphan"
-            );
-        }
-        assert_eq!(
-            service.orphan_chunk_count, 1,
-            "one Retain owner must not starve the durable tail during a complete cursor cycle"
-        );
-        let retained_token = tokens
-            .iter()
-            .find_map(|(manifest_hash, token)| {
-                (*manifest_hash == retained_manifest_hash).then_some(token)
-            })
-            .expect("retained manifest has a lifecycle token");
-        assert_eq!(
-            ingress.state.lock().leader_wire_lifecycles[&retained_token.slot].status,
-            super::super::FairV2IngressLeaderWireStatus::Runtime
-        );
-
-        let mut complete_executor = chunk_effect_executor(&service, complete_recovered);
-        assert_eq!(
-            service
-                .replay_buffered_chunks(&mut complete_executor)
-                .expect("cursor wrap reaches the newly durable retained owner"),
-            0
-        );
-        assert!(service.orphan_chunks.is_empty());
-        assert_eq!(service.orphan_chunk_count, 0);
-        assert_eq!(service.orphan_chunk_bytes, 0);
-        assert!(tokens.iter().all(|(_, token)| {
-            ingress.state.lock().leader_wire_lifecycles[&token.slot].status
-                == super::super::FairV2IngressLeaderWireStatus::Terminal
-        }));
-        assert_eq!(
-            service
-                .replay_buffered_chunks(&mut complete_executor)
-                .expect("an empty lifecycle sweep is idle"),
-            0
-        );
-        assert!(service.orphan_lifecycle_sweep_cursor.is_none());
-    }
-
-    #[test]
-    fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
-        let (mut service, keys) = fixture_with_block_payload();
-        service.max_orphan_chunks = 16;
-        service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        let gate_directory = TempDir::new().expect("temporary reconstructed-chunk gate");
-        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-        let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
-
-        let proofless = admit_productive_orphan_runtime(
-            &ingress,
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-                chunk.clone(),
-            )),
-            sender.clone(),
-        );
-        assert!(proofless.leader_wire_runtime_receipt().is_none());
-        let mut executor = chunk_effect_executor(&service, BTreeMap::new());
-        assert_eq!(
-            service
-                .route_payload_chunk(&mut executor, sender.clone(), chunk.clone(), proofless)
-                .expect("buffer proofless chunk"),
-            PayloadChunkDisposition::Buffered
-        );
-
-        admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
-        let tag = service.active_tag;
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag,
-                    round: manifest.round,
-                    subject: manifest.subject,
-                    manifest: Some(manifest),
-                    certified_sources: Vec::new(),
-                    certificate: None,
-                }],
-                &mut service,
-            )
-            .expect("open proofless reconstruction fetch");
-        assert_eq!(
-            service
-                .replay_buffered_chunks(&mut executor)
-                .expect("reconstruct proofless body"),
-            1
-        );
-        assert_eq!(service.local_completions.len(), 1);
-
-        let productive = admit_productive_orphan_runtime(
-            &ingress,
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
-                chunk.clone(),
-            )),
-            sender.clone(),
-        );
-        let token = productive
-            .leader_wire_token()
-            .expect("retransmit binds productive token")
-            .clone();
-        assert_eq!(
-            service
-                .route_payload_chunk(&mut executor, sender, chunk, productive)
-                .expect("queued reconstruction owns the exact bytes"),
-            PayloadChunkDisposition::Duplicate
-        );
-        assert!(service.orphan_chunks.is_empty());
-        assert_eq!(
-            ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
-            super::super::FairV2IngressLeaderWireStatus::VolatileTerminal
-        );
-    }
-
-    #[test]
-    fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        service.max_orphan_chunks = 4;
-        service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        let gate_directory = TempDir::new().expect("temporary productive-orphan gate");
-        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let proposer = service.context.roster
-            [usize::try_from(proposal.proposer).expect("small proposer index")]
-        .validator
-        .clone();
-        let _proposal_ownership = admit_productive_orphan_runtime(
-            &ingress,
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
-                proposal.clone(),
-            )),
-            proposer,
-        );
-        let (manifest, chunks) = payload.into_parts();
-        assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
-        let mut completing_chunk = wire::PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
-            index: 0,
-            bytes: chunks.into_iter().next().expect("one fixture chunk"),
-            sender: 0,
-            signature: Vec::new(),
-        };
-        completing_chunk.signature = Signature::new(
-            keys[0].private_key(),
-            &completing_chunk
-                .signature_preimage(&service.context, &manifest)
-                .expect("canonical chunk signature preimage"),
-        )
-        .payload()
-        .to_vec();
-        let sender = service.context.roster[0].validator.clone();
-        let current_failure_chunk =
-            chunk(HashOf::new(&manifest), 1, b"current terminal failure", 0);
-        let tail_failure_chunk = chunk(HashOf::new(&manifest), 2, b"tail terminal failure", 0);
-        let tail_success_chunk = chunk(HashOf::new(&manifest), 3, b"tail terminal success", 0);
-        let expected_bytes = [
-            &completing_chunk,
-            &current_failure_chunk,
-            &tail_failure_chunk,
-            &tail_success_chunk,
-        ]
-        .into_iter()
-        .map(|chunk| u64::try_from(chunk.bytes.len()).expect("small orphan chunk"))
-        .sum::<u64>();
-
-        let _completing_token = buffer_productive_orphan_for_replay(
-            &mut service,
-            &ingress,
-            sender.clone(),
-            completing_chunk,
-        );
-        let current_failure_token = buffer_productive_orphan_for_replay(
-            &mut service,
-            &ingress,
-            sender.clone(),
-            current_failure_chunk,
-        );
-        let tail_failure_token = buffer_productive_orphan_for_replay(
-            &mut service,
-            &ingress,
-            sender.clone(),
-            tail_failure_chunk,
-        );
-        let tail_success_token =
-            buffer_productive_orphan_for_replay(&mut service, &ingress, sender, tail_success_chunk);
-        assert_eq!(service.orphan_chunk_count, 4);
-        assert_eq!(service.orphan_chunk_bytes, expected_bytes);
-
-        {
-            let mut state = ingress.state.lock();
-            state
-                .leader_wire_lifecycles
-                .get_mut(&current_failure_token.slot)
-                .expect("current faulted productive orphan remains indexed")
-                .status = super::super::FairV2IngressLeaderWireStatus::Terminal;
-            assert!(
-                state
-                    .leader_wire_lifecycles
-                    .remove(&tail_failure_token.slot)
-                    .is_some(),
-                "tail fault injection removes only its in-memory terminal target"
-            );
-        }
-
-        let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime::new(0, 8),
-            BTreeMap::new(),
-            service.context.clone(),
-            service.local_peer.clone(),
-            service.local_validator,
-            EffectQueueConfig::default(),
-        )
-        .expect("construct productive-orphan effect executor");
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag,
-                    round: manifest.round,
-                    subject: manifest.subject,
-                    manifest: Some(manifest.clone()),
-                    certified_sources: Vec::new(),
-                    certificate: None,
-                }],
-                &mut service,
-            )
-            .expect("open productive-orphan fetch session");
-
-        let current_error = "leader-wire volatile terminal changed runtime ownership";
-        let tail_error = "leader-wire volatile terminal has no runtime record";
-        assert_eq!(
-            service
-                .replay_buffered_chunks(&mut executor)
-                .expect_err("current session-changed terminal transfer must fail"),
-            format!(
-                "{current_error}; additionally failed to retire buffered payload tail: {tail_error}"
-            )
-        );
-        assert!(service.orphan_chunks.is_empty());
-        assert_eq!(service.orphan_chunk_count, 0);
-        assert_eq!(service.orphan_chunk_bytes, 0);
-        assert!(matches!(
-            service.local_completions.front(),
-            Some(LocalCompletion::Reconstructed { body, .. })
-                if body.as_ref() == canonical_wire.as_slice()
-        ));
-        let state = ingress.state.lock();
-        assert_eq!(
-            state
-                .leader_wire_lifecycles
-                .get(&current_failure_token.slot)
-                .expect("current faulted owner remains indexed")
-                .status,
-            super::super::FairV2IngressLeaderWireStatus::Terminal
-        );
-        assert!(
-            !state
-                .leader_wire_lifecycles
-                .contains_key(&tail_failure_token.slot),
-            "the combined error must come from attempting the missing tail target"
-        );
-        assert_eq!(
-            state
-                .leader_wire_lifecycles
-                .get(&tail_success_token.slot)
-                .expect("last tail owner remains indexed")
-                .status,
-            super::super::FairV2IngressLeaderWireStatus::VolatileTerminal,
-            "tail retirement must continue after retaining its first error"
-        );
-    }
-
-    #[test]
-    fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        service.max_orphan_chunks = 4;
-        service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let (manifest, chunks) = payload.into_parts();
-        assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
-        let mut payload_chunk = wire::PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
-            index: 0,
-            bytes: chunks.into_iter().next().expect("one fixture chunk"),
-            sender: 0,
-            signature: Vec::new(),
-        };
-        payload_chunk.signature = Signature::new(
-            keys[0].private_key(),
-            &payload_chunk
-                .signature_preimage(&service.context, &manifest)
-                .expect("canonical chunk signature preimage"),
-        )
-        .payload()
-        .to_vec();
-
-        let sender = service.context.roster[0].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = route_fixture.mint_via(sender.clone(), hub_a.clone());
-        let route_b = route_fixture.mint_via(sender.clone(), hub_b.clone());
-        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(payload_chunk.clone()),
-        ));
-        let (_, mut ownership_a) =
-            fair_ingress_route_owner(message.clone(), sender.clone(), hub_a, route_a.clone());
-        let (_, ownership_b) =
-            fair_ingress_route_owner(message, sender.clone(), hub_b, route_b.clone());
-        assert!(ownership_a.advance_reply_cursors(&route_a, 3, 5));
-
-        let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime::new(0, 8),
-            BTreeMap::new(),
-            service.context.clone(),
-            service.local_peer.clone(),
-            service.local_validator,
-            EffectQueueConfig::default(),
-        )
-        .expect("construct exact-body effect executor");
-        assert_eq!(
-            service
-                .route_payload_chunk(
-                    &mut executor,
-                    sender.clone(),
-                    payload_chunk.clone(),
-                    ownership_a,
-                )
-                .expect("buffer owned orphan chunk"),
-            PayloadChunkDisposition::Buffered
-        );
-        assert_eq!(
-            service
-                .route_payload_chunk(&mut executor, sender, payload_chunk.clone(), ownership_b,)
-                .expect("coalesce alternate owned orphan route"),
-            PayloadChunkDisposition::Duplicate
-        );
-
-        let expected_ownership_projection = {
-            let ownership = service
-                .orphan_chunks
-                .get_mut(&payload_chunk.manifest_hash)
-                .and_then(|buffered| buffered.front_mut())
-                .and_then(|buffered| buffered.ingress_ownership.as_mut())
-                .expect("coalesced orphan retains fair-ingress ownership");
-            assert!(ownership.advance_reply_cursors(&route_b, 7, 11));
-            assert_eq!(ownership.admission_count, 2);
-            let routes = ownership
-                .current_reply_routes()
-                .expect("both authenticated source routes remain owned");
-            assert_eq!(routes.len(), 2);
-            assert!(routes.iter().any(|route| route.same_delivery(&route_a)));
-            assert!(routes.iter().any(|route| route.same_delivery(&route_b)));
-            let source_a = ownership
-                .attempts
-                .iter()
-                .find(|attempt| attempt.route.same_source(&route_a))
-                .expect("source A cursor ownership");
-            let source_b = ownership
-                .attempts
-                .iter()
-                .find(|attempt| attempt.route.same_source(&route_b))
-                .expect("source B cursor ownership");
-            assert_eq!((source_a.message_cursor, source_a.chunk_cursor), (3, 5));
-            assert_eq!((source_b.message_cursor, source_b.chunk_cursor), (7, 11));
-            ownership.process_local_projection_hash()
-        };
-
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        assert_eq!(
-            executor
-                .consume_effects(
-                    vec![AdapterEffect::FetchBody {
-                        tag,
-                        round: manifest.round,
-                        subject: manifest.subject,
-                        manifest: Some(manifest.clone()),
-                        certified_sources: Vec::new(),
-                        certificate: None,
-                    }],
-                    &mut service,
-                )
-                .expect("open matching live fetch session"),
-            1
-        );
-        assert!(
-            service
-                .fetch_work_for_manifest(payload_chunk.manifest_hash)
-                .is_some()
-        );
-        let retained = service
-            .orphan_chunks
-            .get(&payload_chunk.manifest_hash)
-            .and_then(|buffered| buffered.front())
-            .and_then(|buffered| buffered.ingress_ownership.as_ref())
-            .expect("opening the session must not alter orphan ownership");
-        assert_eq!(
-            retained.process_local_projection_hash(),
-            expected_ownership_projection
-        );
-
-        assert_eq!(
-            service
-                .replay_buffered_chunks(&mut executor)
-                .expect("replay exact owned orphan chunk"),
-            1
-        );
-        assert!(service.orphan_chunks.is_empty());
-        assert_eq!(service.orphan_chunk_count, 0);
-        assert_eq!(service.orphan_chunk_bytes, 0);
-        assert!(matches!(
-            service.local_completions.front(),
-            Some(LocalCompletion::Reconstructed {
-                manifest: completed_manifest,
-                body,
-                ..
-            }) if completed_manifest == &manifest && body.as_ref() == canonical_wire.as_slice()
-        ));
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn orphan_chunk_bounds_preserve_exact_duplicate_semantics_at_capacity() {
-        let (mut service, _) = fixture();
-        let hash = manifest_hash(b"manifest-a");
-        let sender = service.context.roster[0].validator.clone();
-        let first = chunk(hash, 0, b"a", 0);
-
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(sender.clone(), first.clone()),
-            PayloadChunkDisposition::Buffered
-        );
-        assert_eq!(service.orphan_chunk_count, 1);
-        assert_eq!(service.orphan_chunk_bytes, 1);
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(sender.clone(), first),
-            PayloadChunkDisposition::Duplicate,
-            "an exact retransmission remains idempotent even when the buffer is full"
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(sender.clone(), chunk(hash, 0, b"b", 0)),
-            PayloadChunkDisposition::Rejected,
-            "a conflicting claim cannot replace retained bytes"
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(
-                sender,
-                chunk(manifest_hash(b"manifest-b"), 0, b"c", 0)
-            ),
-            PayloadChunkDisposition::Rejected,
-            "one unknown manifest cannot force storage beyond the global bound"
-        );
-        assert_eq!(service.orphan_chunk_count, 1);
-        assert_eq!(service.orphan_chunk_bytes, 1);
-    }
-
-    #[test]
-    fn proofless_orphan_eviction_releases_exact_count_and_byte_capacity() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 2;
-        service.max_orphan_chunk_bytes = 2;
-        let sender = service.context.roster[0].validator.clone();
-        let first_hash = manifest_hash(b"proofless-eviction-a");
-        let second_hash = manifest_hash(b"proofless-eviction-b");
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(sender.clone(), chunk(first_hash, 0, b"a", 0),),
-            PayloadChunkDisposition::Buffered
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(sender, chunk(second_hash, 0, b"b", 0)),
-            PayloadChunkDisposition::Buffered
-        );
-
-        assert!(service.evict_one_proofless_orphan_chunk());
-        assert_eq!(service.orphan_chunk_count, 1);
-        assert_eq!(service.orphan_chunk_bytes, 1);
-        assert_eq!(
-            service
-                .orphan_chunks
-                .values()
-                .map(VecDeque::len)
-                .sum::<usize>(),
-            1
-        );
-        assert!(service.evict_one_proofless_orphan_chunk());
-        assert_eq!(service.orphan_chunk_count, 0);
-        assert_eq!(service.orphan_chunk_bytes, 0);
-        assert!(service.orphan_chunks.is_empty());
-        assert!(!service.evict_one_proofless_orphan_chunk());
-    }
-
-    #[test]
-    fn authenticated_orphan_flood_stays_inside_frozen_count_and_byte_geometry() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 4;
-        service.max_orphan_chunk_bytes = 4;
-
-        for sender_index in 0..4_u32 {
-            let sender_position =
-                usize::try_from(sender_index).expect("test sender index fits usize");
-            let sender = service.context.roster[sender_position].validator.clone();
-            assert_eq!(
-                service.buffer_orphan_payload_chunk(
-                    sender,
-                    chunk(
-                        manifest_hash(&[0xA0, u8::try_from(sender_index).expect("small index")]),
-                        0,
-                        &[u8::try_from(sender_index).expect("small index")],
-                        sender_index,
-                    ),
-                ),
-                PayloadChunkDisposition::Buffered,
-                "each authenticated roster source can consume only the shared finite orphan budget"
-            );
-        }
-        assert_eq!(service.orphan_chunk_count, 4);
-        assert_eq!(service.orphan_chunk_bytes, 4);
-
-        let attacker = service.context.roster[0].validator.clone();
-        let retained = chunk(manifest_hash(&[0xA0, 0]), 0, &[0], 0);
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(attacker.clone(), retained),
-            PayloadChunkDisposition::Duplicate,
-            "the exact retained identity still coalesces at the capacity boundary"
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(
-                attacker,
-                chunk(manifest_hash(b"fifth authenticated orphan"), 1, &[0xFF], 0),
-            ),
-            PayloadChunkDisposition::Rejected,
-            "authenticated junk cannot replenish beyond the frozen global owner universe"
-        );
-        assert_eq!(service.orphan_chunk_count, 4);
-        assert_eq!(service.orphan_chunk_bytes, 4);
-    }
-
-    #[test]
-    fn orphan_chunk_cheap_checks_reject_spoofing_and_oversize_without_allocation() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 8;
-        let hash = manifest_hash(b"manifest-cheap-checks");
-        let validator_zero = service.context.roster[0].validator.clone();
-        let validator_one = service.context.roster[1].validator.clone();
-
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(validator_one, chunk(hash, 0, b"a", 0)),
-            PayloadChunkDisposition::Rejected,
-            "outer transport identity must match the claimed validator index"
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(validator_zero.clone(), chunk(hash, 4, b"a", 0)),
-            PayloadChunkDisposition::Rejected
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(validator_zero.clone(), chunk(hash, 0, &[], 0)),
-            PayloadChunkDisposition::Rejected
-        );
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(
-                validator_zero.clone(),
-                chunk(hash, 0, b"123456789", 0)
-            ),
-            PayloadChunkDisposition::Rejected
-        );
-        service.max_orphan_chunk_bytes = 1;
-        assert_eq!(
-            service.buffer_orphan_payload_chunk(validator_zero, chunk(hash, 0, b"ab", 0)),
-            PayloadChunkDisposition::Rejected
-        );
-        assert!(service.orphan_chunks.is_empty());
-        assert_eq!(service.orphan_chunk_count, 0);
-        assert_eq!(service.orphan_chunk_bytes, 0);
-    }
-
-    #[test]
-    fn merge_sidecar_validation_deferral_retains_exact_request_idempotently() {
-        let (mut service, _) = fixture();
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 3,
-        };
-        let subject = wire::BlockSubject {
-            parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"merge carrier parent",
-            ))),
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"merge carrier block")),
-            payload_hash: Hash::new(b"merge carrier payload"),
-        };
-        let reference = merge_sidecar_reference(b"merge sidecar");
-        let work_id = EffectWorkId::for_test(7);
-
-        service
-            .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
-            .expect("retain exact merge-sidecar deferral");
-        service
-            .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
-            .expect("exact retransmission is idempotent");
-        let mut conflicting = reference.clone();
-        conflicting.encoded_len += 1;
-        assert!(
-            service
-                .work_deferred_for_merge_sidecar(work_id, round, subject, &conflicting)
-                .is_err(),
-            "one work ID cannot claim conflicting reference metadata"
-        );
-
-        assert_eq!(service.merge_sidecar_deferrals.len(), 1);
-        let deferred = service
-            .take_merge_sidecar_deferral()
-            .expect("retained merge-sidecar deferral");
-        assert_eq!(deferred.round(), round);
-        assert_eq!(deferred.work_id(), work_id);
-        assert_eq!(deferred.subject(), subject);
-        assert_eq!(deferred.reference(), &reference);
-        assert!(service.take_merge_sidecar_deferral().is_none());
-    }
-
-    #[test]
-    fn merge_sidecar_validation_deferral_returns_error_at_capacity_without_eviction() {
-        let (mut service, _) = fixture();
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 3,
-        };
-        let first_subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"first merge carrier")),
-            payload_hash: Hash::new(b"first merge payload"),
-        };
-        let second_subject = wire::BlockSubject {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"second merge carrier")),
-            payload_hash: Hash::new(b"second merge payload"),
-            ..first_subject
-        };
-        let first_reference = merge_sidecar_reference(b"first merge sidecar");
-        let second_reference = merge_sidecar_reference(b"second merge sidecar");
-
-        service
-            .work_deferred_for_merge_sidecar(
-                EffectWorkId::for_test(1),
-                round,
-                first_subject,
-                &first_reference,
-            )
-            .expect("fill bounded deferral queue");
-        assert_eq!(service.merge_sidecar_deferrals.len(), 1);
-        assert!(
-            service
-                .work_deferred_for_merge_sidecar(
-                    EffectWorkId::for_test(2),
-                    round,
-                    second_subject,
-                    &second_reference,
-                )
-                .is_err(),
-            "a different validation cannot displace the retained exact request"
-        );
-
-        assert_eq!(service.merge_sidecar_deferrals.len(), 1);
-        let retained = service
-            .take_merge_sidecar_deferral()
-            .expect("original deferral remains retained");
-        assert_eq!(retained.subject(), first_subject);
-        assert_eq!(retained.reference(), &first_reference);
-    }
-
-    #[test]
-    fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 8;
-        let payload = b"authoritative body";
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block")),
-            payload_hash: Hash::new(payload),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let encoded = encode_payload(&service.context, round, subject, payload).expect("encode");
-        let expected_manifest = encoded.manifest().clone();
-
-        assert_eq!(
-            service
-                .register_outbound_payload(service.active_tag, encoded.clone())
-                .expect("first registration"),
-            expected_manifest
-        );
-        assert_eq!(
-            service
-                .register_outbound_payload(service.active_tag, encoded)
-                .expect("exact retransmission"),
-            expected_manifest
-        );
-        let messages = service
-            .outbound_chunks
-            .get(&HashOf::new(&expected_manifest))
-            .expect("retained chunks");
-        assert_eq!(
-            messages.messages.len(),
-            expected_manifest.chunk_hashes.len()
-        );
-        assert!(messages.messages.iter().all(|message| matches!(
-            &message.payload,
-            wire::ConsensusMessageV2Payload::PayloadChunk(chunk) if !chunk.signature.is_empty()
-        )));
-    }
-
-    #[test]
-    fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral() {
-        let (mut service, _) = fixture();
-        service.max_orphan_chunks = 8;
-        service.max_merge_sidecar_deferrals = 2;
-        let decision_round = locked_candidate_round(&service, 0);
-        let decision_subject = locked_candidate_subject(b"decided candidate");
-        let losing_subject = locked_candidate_subject(b"losing candidate");
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        service
-            .request_locked_candidate(service.active_tag, decision_round, decision_subject)
-            .expect("queue decided candidate acquisition");
-        service
-            .prepared_candidates
-            .push_back(PreparedCandidateBody {
-                tag: service.active_tag,
-                subject: decision_subject,
-            });
-        service
-            .validation_rejections
-            .push_back(RejectedCandidateBody {
-                round: decision_round,
-                subject: losing_subject,
-                reason: "losing validation".to_owned(),
-            });
-        let reference = merge_sidecar_reference(b"decided merge sidecar");
-        service
-            .merge_sidecar_deferrals
-            .push_back(DeferredMergeSidecarWork {
-                work_id: EffectWorkId::for_test(91),
-                round: decision_round,
-                subject: decision_subject,
-                reference: reference.clone(),
-            });
-        service
-            .merge_sidecar_deferrals
-            .push_back(DeferredMergeSidecarWork {
-                work_id: EffectWorkId::for_test(92),
-                round: decision_round,
-                subject: losing_subject,
-                reference,
-            });
-        let encoded = outbound_payload_at_view(&service, 0);
-        service
-            .register_outbound_payload(service.active_tag, encoded)
-            .expect("retain terminally superseded outbound payload");
-
-        service
-            .retire_all_outbound_payloads()
-            .expect("retire outbound payloads at Decision");
-        service
-            .retire_candidate_work_after_decision(decision_round, decision_subject)
-            .expect("retire candidate work at Decision");
-
-        assert!(service.proposal_work_retired);
-        assert!(service.outbound_chunks.is_empty());
-        assert!(service.locked_candidate_acquisition.is_none());
-        assert!(service.prepared_candidates.is_empty());
-        assert!(service.validation_rejections.is_empty());
-        assert!(matches!(
-            service.merge_sidecar_deferrals.as_slices(),
-            ([deferred], [])
-                if deferred.round() == decision_round
-                    && deferred.subject() == decision_subject
-        ));
-        let terminal_payload = outbound_payload_at_view(&service, 0);
-        assert!(
-            service
-                .register_outbound_payload(service.active_tag, terminal_payload)
-                .is_err()
-        );
-        assert!(command_rx.try_iter().next().is_some());
-        detach_locked_candidate_io(&mut service);
-    }
-
-    fn outbound_payload_at_view(service: &ProductionV2Services, view: u64) -> EncodedV2Payload {
-        let body = view.to_le_bytes();
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                &[b"bounded outbound view", body.as_slice()].concat(),
-            )),
-            payload_hash: Hash::new(&body),
-        };
-        encode_payload(
-            &service.context,
-            wire::ConsensusRound {
-                context_id: service.context.id(),
-                height: service.context.height,
-                view,
-            },
-            subject,
-            &body,
-        )
-        .expect("encode view-owned payload")
-    }
-
-    fn timeout_certificate_at_view(
-        service: &ProductionV2Services,
-        view: u64,
-    ) -> wire::TimeoutCertificate {
-        wire::TimeoutCertificate {
-            round: wire::ConsensusRound {
-                context_id: service.context.id(),
-                height: service.context.height,
-                view,
-            },
-            groups: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn entered_view_accepts_same_view_higher_generation_supersession() {
-        let (mut service, _) = fixture();
-        let initial = service.active_tag;
-        let view_one = EventTag::new(
-            initial.height(),
-            initial.view() + 1,
-            Generation::new(initial.generation().get() + 1),
-        );
-        service
-            .entered_view(
-                view_one,
-                timeout_certificate_at_view(&service, initial.view()),
-            )
-            .expect("install the first certified successor view");
-        let payload = outbound_payload_at_view(&service, view_one.view());
-        service
-            .register_outbound_payload(view_one, payload)
-            .expect("retain work owned by the first view-one generation");
-
-        assert!(
-            service
-                .entered_view(
-                    view_one,
-                    timeout_certificate_at_view(&service, view_one.view() - 1),
-                )
-                .is_err(),
-            "an equal lifecycle tag is not a supersession"
-        );
-        let rebound = EventTag::new(
-            view_one.height(),
-            view_one.view(),
-            Generation::new(view_one.generation().get() + 1),
-        );
-        assert!(
-            service
-                .entered_view(
-                    rebound,
-                    timeout_certificate_at_view(&service, view_one.view()),
-                )
-                .is_err(),
-            "the certificate must still identify the immediate predecessor round"
-        );
-        service
-            .entered_view(
-                rebound,
-                timeout_certificate_at_view(&service, view_one.view() - 1),
-            )
-            .expect("a stricter same-round TC installs a new same-view generation");
-
-        assert_eq!(service.active_tag, rebound);
-        assert!(service.outbound_chunks.is_empty());
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn entered_view_advances_live_leader_wire_recovery_cut() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let gate_directory = TempDir::new().expect("temporary live view-cut gate");
-        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-        let initial = service.active_tag;
-        let next = EventTag::new(
-            initial.height(),
-            initial.view() + 1,
-            Generation::new(initial.generation().get() + 1),
-        );
-        service
-            .entered_view(next, timeout_certificate_at_view(&service, initial.view()))
-            .expect("install the certified successor and its live recovery cut");
-
-        let (_, _, stale_proposal, _, stale_sender) =
-            productive_chunk_at_view(&service, &keys, initial.view());
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                BlockMessage::V2(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::Proposal(stale_proposal),
-                )),
-                Some(stale_sender),
-            )),
-            Err(super::super::FairV2IngressPushError::Rejected(_))
-        ));
-
-        let (_, _, current_proposal, _, current_sender) =
-            productive_chunk_at_view(&service, &keys, next.view());
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                BlockMessage::V2(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::Proposal(current_proposal),
-                )),
-                Some(current_sender),
-            )),
-            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
-        ));
-    }
-
-    #[test]
-    fn durable_decision_advances_live_leader_wire_recovery_cut() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let gate_directory = TempDir::new().expect("temporary live Decision-cut gate");
-        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
-        let _command_rx = attach_locked_candidate_io(&mut service, 4);
-        let decided_subject = locked_candidate_subject(b"live leader-wire Decision cut");
-        service
-            .begin_decision_serve_reconciliation()
-            .expect("fence Serve before Decision publication");
-        service
-            .finish_decision_serve_reconciliation(Some(decided_subject))
-            .expect("publish Decision and close live leader-wire admission");
-
-        for view in [service.active_tag.view(), service.active_tag.view() + 1] {
-            let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
-            assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
-                    BlockMessage::V2(wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::Proposal(proposal),
-                    )),
-                    Some(sender),
-                )),
-                Err(super::super::FairV2IngressPushError::Rejected(_))
-            ));
-        }
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn outbound_payload_retention_is_constant_across_many_view_changes() {
-        let (mut service, _) = fixture();
-        let mut max_manifests = 0usize;
-        let mut max_payload_bytes = 0usize;
-
-        for view in 0..=1_024 {
-            let tag = EventTag::new(
-                service.context.height,
-                view,
-                Generation::new(view.saturating_add(1)),
-            );
-            if view != 0 {
-                service
-                    .entered_view(tag, timeout_certificate_at_view(&service, view - 1))
-                    .expect("install monotonic certified view");
-                assert!(
-                    service.outbound_chunks.is_empty(),
-                    "view installation must prune the prior payload before publishing ownership"
-                );
-            }
-            let encoded = outbound_payload_at_view(&service, view);
-            service
-                .register_outbound_payload(tag, encoded)
-                .expect("register exact active-view payload");
-            let payload_bytes = service
-                .outbound_chunks
-                .values()
-                .flat_map(|retained| retained.messages.iter())
-                .map(|message| match &message.payload {
-                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => chunk.bytes.len(),
-                    _ => 0,
-                })
-                .sum::<usize>();
-            max_manifests = max_manifests.max(service.outbound_chunks.len());
-            max_payload_bytes = max_payload_bytes.max(payload_bytes);
-            assert_eq!(service.outbound_chunks.len(), 1);
-            assert_eq!(payload_bytes, std::mem::size_of::<u64>());
-        }
-
-        assert_eq!(max_manifests, 1);
-        assert_eq!(max_payload_bytes, std::mem::size_of::<u64>());
-    }
-
-    #[test]
-    fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
-        let (mut service, _) = fixture();
-        let old_tag = service.active_tag;
-        let old_payload = outbound_payload_at_view(&service, old_tag.view());
-        service
-            .register_outbound_payload(old_tag, old_payload.clone())
-            .expect("register old-view proposal payload");
-        assert_eq!(service.outbound_chunks.len(), 1);
-
-        let new_tag = EventTag::new(
-            service.context.height,
-            old_tag.view() + 1,
-            Generation::new(old_tag.generation().get() + 1),
-        );
-        service
-            .entered_view(
-                new_tag,
-                timeout_certificate_at_view(&service, old_tag.view()),
-            )
-            .expect("install next certified view");
-        assert!(service.outbound_chunks.is_empty());
-
-        service
-            .restore_outbound_payload_after_signature(
-                CompletionDisposition::Stale,
-                Some(old_payload),
-            )
-            .expect("stale completion is retired without restoring bytes");
-        assert!(service.outbound_chunks.is_empty());
-        assert_eq!(service.active_tag, new_tag);
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn observer_cannot_register_or_disseminate_a_proposal_payload() {
-        let (mut service, _) = fixture();
-        service.local_validator = None;
-        let payload = b"observer payload";
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"observer block")),
-            payload_hash: Hash::new(payload),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let encoded = encode_payload(&service.context, round, subject, payload).expect("encode");
-
-        assert!(
-            service
-                .register_outbound_payload(service.active_tag, encoded)
-                .is_err()
-        );
-        assert!(service.outbound_chunks.is_empty());
-    }
-
-    #[test]
-    fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
-        let (mut service, _) = fixture();
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        let tag = EventTag::new(
-            service.context.height,
-            0,
-            Generation::new(service.context.height),
-        );
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"prepared block")),
-            payload_hash: Hash::new(b"prepared payload"),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"worker prepared parent state"),
-            Hash::new(b"worker prepared post state"),
-            Hash::new(b"worker prepared ordinary writes"),
-            1,
-            Hash::new(b"worker prepared executed block wire"),
-        );
-        let vote = |phase| wire::Vote {
-            round,
-            proposal_round: round,
-            phase,
-            subject,
-            execution_commitment,
-            signer: 0,
-            signature: Vec::new(),
-        };
-
-        service
-            .enqueue_consensus_sign(ConsensusSignTask::for_test(
-                1,
-                tag,
-                super::super::v2::SignRequest::Vote(vote(wire::GlobalPhase::Prepare)),
-            ))
-            .expect("queue Prepare signature");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign {
-                restore_outbound_payload: false,
-                ..
-            })
-        ));
-        assert_eq!(
-            service.take_prepared_candidate(),
-            Some(PreparedCandidateBody { tag, subject })
-        );
-
-        service
-            .enqueue_consensus_sign(ConsensusSignTask::for_test(
-                2,
-                tag,
-                super::super::v2::SignRequest::Vote(vote(wire::GlobalPhase::Commit)),
-            ))
-            .expect("queue Commit signature");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign {
-                restore_outbound_payload: false,
-                ..
-            })
-        ));
-        assert_eq!(service.take_prepared_candidate(), None);
-
-        // No worker owns this synthetic channel; remove it before service Drop
-        // attempts the production shutdown handshake.
-        drop(service.io.take());
-    }
+    include!("tests/v2_worker_main_02.rs");
+    include!("tests/v2_worker_main_03.rs");
+    include!("tests/v2_worker_main_04.rs");
+    include!("tests/v2_worker_main_05.rs");
 }

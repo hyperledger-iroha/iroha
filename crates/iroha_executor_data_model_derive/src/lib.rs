@@ -1,20 +1,15 @@
 //! Crate with executor-related derive macros.
-
 mod parameter;
 mod permission;
-
 use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
-
 /// Derive macro for `Parameter` trait.
 #[manyhow]
 #[proc_macro_derive(Parameter)]
 pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
     let input = syn::parse2(input)?;
-
     Ok(parameter::impl_derive_parameter(&input))
 }
-
 /// Derive macro for `Permission` trait.
 ///
 /// # Example
@@ -52,6 +47,5 @@ pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
 #[proc_macro_derive(Permission)]
 pub fn derive_permission(input: TokenStream) -> Result<TokenStream> {
     let input = syn::parse2(input)?;
-
     Ok(permission::impl_derive_permission(&input))
 }

@@ -17,7 +17,6 @@ fn fixture_actions_accept_formatter_trailing_commas() {
     assert_eq!(program.fixtures[0].actions.len(), 1);
     assert_eq!(program.fixtures[0].actions[0].args.len(), 3);
 }
-
 #[test]
 fn rejects_unregistered_unicode_attributes() {
     let src = r#"
@@ -29,7 +28,6 @@ fn rejects_unregistered_unicode_attributes() {
     let error = parse(src).expect_err("unregistered Unicode attributes are invalid");
     assert!(error.contains("non-ASCII"), "{error}");
 }
-
 #[test]
 fn parse_koto_test_target_fixture_and_test_binding() {
     let src = r#"
@@ -55,7 +53,6 @@ fn parse_koto_test_target_fixture_and_test_binding() {
     assert_eq!(prog.fixtures.len(), 1);
     assert_eq!(prog.fixtures[0].name, "seeded");
     assert_eq!(prog.fixtures[0].actions.len(), 2);
-
     let func = prog
         .items
         .iter()

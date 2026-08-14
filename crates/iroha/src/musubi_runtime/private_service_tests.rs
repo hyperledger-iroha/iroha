@@ -35,7 +35,6 @@ fn authorization_is_domain_bound_and_verifiable() {
             )
             .is_err()
     );
-
     let mut substituted = authorization.clone();
     substituted.payload.domain = [0x99; 32];
     assert!(substituted.payload.validate().is_err());
@@ -49,7 +48,6 @@ fn authorization_is_domain_bound_and_verifiable() {
             .is_err()
     );
 }
-
 #[test]
 fn authorization_verifier_enforces_fixed_clock_skew_bound() {
     let (client, _) = client();
@@ -66,7 +64,6 @@ fn authorization_verifier_enforces_fixed_clock_skew_bound() {
     let authorization = runtime
         .authorization_at(operation, operation_id, digest, issued_at_ms)
         .expect("future-skew authorization");
-
     authorization
         .verify_with_clock_skew(
             operation,
@@ -76,7 +73,6 @@ fn authorization_verifier_enforces_fixed_clock_skew_bound() {
             MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
         )
         .expect("the exact protocol skew boundary is accepted");
-
     for (verification_time_ms, skew_ms) in [
         (
             current_time_ms,
@@ -100,13 +96,11 @@ fn authorization_verifier_enforces_fixed_clock_skew_bound() {
         );
     }
 }
-
 #[test]
 fn publisher_authorization_resamples_clock_after_signing() {
     let operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
     let operation_id = [0x48; 32];
     let digest = [0x59; 32];
-
     let (slow_client, _) = client();
     let slow_runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
         &slow_client,
@@ -127,7 +121,6 @@ fn publisher_authorization_resamples_clock_after_signing() {
         error.class(),
         MusubiPublicationRuntimeTransportFailureClassV1::Retryable
     );
-
     let (regressing_client, _) = client();
     let regressing_runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
         &regressing_client,
@@ -149,7 +142,6 @@ fn publisher_authorization_resamples_clock_after_signing() {
         MusubiPublicationRuntimeTransportFailureClassV1::Retryable
     );
 }
-
 #[test]
 fn publisher_authorization_accepts_exact_multisig_quorum_and_rejects_bad_sets() {
     let operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
@@ -163,7 +155,6 @@ fn publisher_authorization_accepts_exact_multisig_quorum_and_rejects_bad_sets() 
     authorization
         .verify(operation, operation_id, digest, 1_001)
         .expect("verify multisig publisher authorization");
-
     for (behavior, code, class) in [
         (
             ThresholdAuthorizationSigningBehavior::BelowThreshold,
@@ -208,7 +199,6 @@ fn publisher_authorization_accepts_exact_multisig_quorum_and_rejects_bad_sets() 
         assert_eq!(error.class(), class);
     }
 }
-
 #[test]
 fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
     let operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
@@ -257,7 +247,6 @@ fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
             approvals,
         }
     };
-
     authorization_for(&[0])
         .verify(operation, operation_id, digest, 1_001)
         .expect("one weight-three member meets threshold three");
@@ -265,7 +254,6 @@ fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
         .verify(operation, operation_id, digest, 1_001)
         .expect_err("two weight-one members remain below threshold three");
     assert_eq!(error.code(), "MUSUBI_RUNTIME_AUTHORIZATION_THRESHOLD_UNMET");
-
     let valid_policy = MultisigPolicy::new(
         1,
         vec![MultisigMember::new(key_pairs[0].public_key().clone(), 1).expect("publisher member")],
@@ -297,7 +285,6 @@ fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
         "MUSUBI_RUNTIME_AUTHORIZATION_CONTROLLER_UNSUPPORTED"
     );
 }
-
 #[test]
 fn software_publisher_authorizer_requires_one_matching_controller_key() {
     let keys: Vec<_> = (0_u8..2)
@@ -322,7 +309,6 @@ fn software_publisher_authorizer_requires_one_matching_controller_key() {
         "MUSUBI_RUNTIME_MULTISIG_AUTH_PROVIDER_REQUIRED"
     );
 }
-
 #[test]
 fn private_service_urls_reject_credentials_redirect_primitives_and_retired_upload() {
     for valid in [
@@ -350,7 +336,6 @@ fn private_service_urls_reject_credentials_redirect_primitives_and_retired_uploa
         );
     }
 }
-
 #[test]
 fn request_digest_binds_operation_length_and_body() {
     let body = b"canonical request";
@@ -373,7 +358,6 @@ fn request_digest_binds_operation_length_and_body() {
         .expect("bounded digest input")
     );
 }
-
 #[test]
 fn remote_error_retryability_uses_canonical_service_response() {
     for (retryable, expected_class) in [
@@ -399,7 +383,6 @@ fn remote_error_retryability_uses_canonical_service_response() {
             MusubiPublicationServiceErrorCodeV1::AuthorizationExpired.as_str()
         );
     }
-
     let fallback = remote_transport_error(StatusCode::SERVICE_UNAVAILABLE, b"not-norito");
     assert_eq!(
         fallback.class(),
@@ -407,7 +390,6 @@ fn remote_error_retryability_uses_canonical_service_response() {
     );
     assert_eq!(fallback.code(), "MUSUBI_RUNTIME_REMOTE_RETRYABLE");
 }
-
 #[test]
 fn receipt_verification_accepts_only_bounded_service_clock_lead() {
     let fixture = control_service_fixture(false, false);
@@ -426,7 +408,6 @@ fn receipt_verification_accepts_only_bounded_service_clock_lead() {
             .expect("bounded-lead receipt signature");
     verify_seed_ingress_receipt(&at_limit, &at_limit.payload.binding, current_time_ms)
         .expect("bounded service clock lead");
-
     let mut too_far_ahead = at_limit;
     too_far_ahead.payload.issued_at_ms += 1;
     too_far_ahead.payload.expires_at_ms += 1;
@@ -443,7 +424,6 @@ fn receipt_verification_accepts_only_bounded_service_clock_lead() {
     .expect_err("service clock lead exceeds the fixed bound");
     assert_eq!(error.code(), "MUSUBI_SEED_INGRESS_RECEIPT_INVALID");
 }
-
 #[test]
 fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body() {
     let (mut client, _) = client();
@@ -490,7 +470,6 @@ fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body()
             car.clone(),
         )
         .expect("prepare seed-ingress request");
-
     assert_eq!(
         prepared.body().and_then(reqwest::blocking::Body::as_bytes),
         Some(car.as_slice())
@@ -524,7 +503,6 @@ fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body()
     let decoded_request: MusubiSeedIngressStageRequestV1 =
         norito::decode_canonical(&decoded_metadata).expect("decode canonical metadata");
     assert_eq!(decoded_request, stage_request);
-
     let encoded_authorization = prepared
         .headers()
         .get(AUTHORIZATION_HEADER)
@@ -552,7 +530,6 @@ fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body()
         )
         .expect("authorization binds exact metadata");
 }
-
 #[test]
 fn seed_ingress_plan_witness_round_trips_only_the_exact_commitment_chunker() {
     let fixture = private_service_fixture(false);
@@ -570,12 +547,10 @@ fn seed_ingress_plan_witness_round_trips_only_the_exact_commitment_chunker() {
             .expect("reconstruct exact plan"),
         fixture.plan
     );
-
     let mut substituted = fixture.request.commitment;
     substituted.chunker.name = "sf2".to_owned();
     assert!(decoded.to_car_build_plan(&substituted).is_err());
 }
-
 #[test]
 fn seed_ingress_plan_witness_reports_portable_path_failures_as_source_tree() {
     let fixture = private_service_fixture(false);
@@ -589,7 +564,6 @@ fn seed_ingress_plan_witness_reports_portable_path_failures_as_source_tree() {
         .expect("fixture source file");
     source.path = vec!["bad?.ko".to_owned()];
     let canonical = norito::encode_canonical(&witness).expect("invalid-path wire plan");
-
     let error = decode_seed_ingress_plan_witness(&canonical)
         .expect_err("nonportable source path must fail before archive verification");
     assert_eq!(
@@ -604,7 +578,6 @@ fn seed_ingress_plan_witness_reports_portable_path_failures_as_source_tree() {
         ))
     );
 }
-
 #[test]
 fn seed_ingress_and_provider_bundle_verifier_have_evidence_and_error_parity() {
     let fixture = private_service_fixture(false);
@@ -612,7 +585,6 @@ fn seed_ingress_and_provider_bundle_verifier_have_evidence_and_error_parity() {
         .expect("seed ingress accepts the complete fixture bundle");
     assert_eq!(&seed_evidence.plan, &fixture.plan);
     assert_eq!(seed_evidence.car, fixture.raw_car.as_slice());
-
     let provider_evidence = MusubiBundleVerifierV1::verify(
         &fixture.plan,
         &fixture.raw_car,
@@ -627,7 +599,6 @@ fn seed_ingress_and_provider_bundle_verifier_have_evidence_and_error_parity() {
         provider_evidence.descriptor().verification_lock_digest,
         provider_evidence.verification_lock().digest()
     );
-
     for (shared, service) in [
         (
             MusubiBundleIntegritySurfaceV1::ArchiveCommitment,
@@ -664,7 +635,6 @@ fn seed_ingress_and_provider_bundle_verifier_have_evidence_and_error_parity() {
         );
     }
 }
-
 #[test]
 fn seed_ingress_wire_accepts_valid_high_path_heap_geometry() {
     let fixture = private_service_fixture(false);
@@ -704,7 +674,6 @@ fn seed_ingress_wire_accepts_valid_high_path_heap_geometry() {
     assert!(
         validation.estimated_ingest_heap_bytes() <= DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES
     );
-
     let mut commitment = fixture.request.commitment;
     commitment.content_length = plan.content_length;
     commitment.chunk_plan_digest =
@@ -725,7 +694,6 @@ fn seed_ingress_wire_accepts_valid_high_path_heap_geometry() {
         plan
     );
 }
-
 #[test]
 fn seed_ingress_rejects_portable_unicode_aliases_before_backend() {
     for (collision_path, case) in [
@@ -745,7 +713,6 @@ fn seed_ingress_rejects_portable_unicode_aliases_before_backend() {
             .iter()
             .position(|file| !file.path.join("/").starts_with(".musubi/"))
             .expect("fixture source file");
-
         let mut forged_plan = fixture.plan.clone();
         forged_plan.files[source_index].path = collision_path.clone();
         forged_plan
@@ -758,7 +725,6 @@ fn seed_ingress_rejects_portable_unicode_aliases_before_backend() {
             .is_err(),
             "the long-s spelling must reject the mandatory .musubi {case}"
         );
-
         let mut witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(
             &fixture.plan,
             &fixture.request.commitment,
@@ -794,7 +760,6 @@ fn seed_ingress_rejects_portable_unicode_aliases_before_backend() {
         assert_eq!(*fixture.calls.lock().expect("seed calls"), 0, "{case}");
     }
 }
-
 #[test]
 fn seed_ingress_source_transcript_uses_joined_path_byte_order() {
     let a_dash_digest = *blake3::hash(b"dash").as_bytes();
@@ -822,7 +787,6 @@ fn seed_ingress_source_transcript_uses_joined_path_byte_order() {
         expected
     );
 }
-
 #[test]
 fn private_service_accepts_plan_witness_larger_than_metadata_header() {
     let mut fixture = private_service_fixture(false);
@@ -834,7 +798,6 @@ fn private_service_accepts_plan_witness_larger_than_metadata_header() {
         .payload_reader()
         .read_to_end(&mut payload)
         .expect("read authenticated fixture payload");
-
     let mut source_entries = Vec::new();
     let mut source_transcript = Vec::new();
     let mut semantic_release_bytes = None;
@@ -860,7 +823,6 @@ fn private_service_accepts_plan_witness_larger_than_metadata_header() {
         payload_offset = file_end;
     }
     assert_eq!(payload_offset, payload.len());
-
     // Empty files need no undersized chunks, yet each contributes a bounded portable file
     // witness. This grows the canonical plan beyond the 64 KiB metadata-header ceiling while
     // retaining the exact registered SF1 profile and all package bundle commitments.
@@ -979,7 +941,6 @@ fn private_service_accepts_plan_witness_larger_than_metadata_header() {
         canonical_plan.len() > MAX_SEED_INGRESS_METADATA_BYTES,
         "plan witness must prove it cannot fit in the authenticated metadata header"
     );
-
     let mut request = fixture.request.clone();
     request.commitment = commitment;
     request.binding.archive_id = request.commitment.archive_id();
@@ -995,7 +956,6 @@ fn private_service_accepts_plan_witness_larger_than_metadata_header() {
     assert_eq!(response.status, 200);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
 }
-
 #[test]
 fn private_service_rejects_frame_plan_and_commitment_substitution_before_backend() {
     {
@@ -1014,7 +974,6 @@ fn private_service_rejects_frame_plan_and_commitment_substitution_before_backend
         );
         assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
     }
-
     {
         let mut fixture = private_service_fixture(false);
         let mut request = fixture.request.clone();
@@ -1030,7 +989,6 @@ fn private_service_rejects_frame_plan_and_commitment_substitution_before_backend
         );
         assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
     }
-
     {
         let mut fixture = private_service_fixture(false);
         let mut request = fixture.request.clone();
@@ -1048,7 +1006,6 @@ fn private_service_rejects_frame_plan_and_commitment_substitution_before_backend
         assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
     }
 }
-
 #[test]
 fn private_service_constructs_and_verifies_exact_external_signer_payload() {
     let mut fixture = private_service_fixture(false);
@@ -1069,7 +1026,6 @@ fn private_service_constructs_and_verifies_exact_external_signer_payload() {
         fail_first: false,
         clock_after_stage: Some((Arc::clone(&fixture.clock), 1_901)),
     });
-
     let metadata = fixture.metadata.clone();
     let car = fixture.car.clone();
     let authorization = authorization_header(&fixture.runtime, &fixture.request, &metadata, 900);
@@ -1087,7 +1043,6 @@ fn private_service_constructs_and_verifies_exact_external_signer_payload() {
     assert_eq!(receipt.payload.issued_at_ms, 1_901);
     assert_eq!(receipt.payload.expires_at_ms, 61_901);
 }
-
 #[test]
 fn private_service_rejects_invalid_or_unavailable_external_signer_and_retries_exactly() {
     for (behavior, expected_status, expected_retryable) in [
@@ -1121,7 +1076,6 @@ fn private_service_rejects_invalid_or_unavailable_external_signer_and_retries_ex
         );
         assert_eq!(failure.retryable, expected_retryable);
         assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
-
         let (correct, _) = TestReceiptSigningProvider::new(
             fixture.request.binding.ingress_broker.clone(),
             broker_key,
@@ -1136,7 +1090,6 @@ fn private_service_rejects_invalid_or_unavailable_external_signer_and_retries_ex
         );
         assert_eq!(*fixture.calls.lock().expect("seed calls"), 2);
     }
-
     let mut fixture = private_service_fixture(false);
     let broker_key = KeyPair::try_from_seed(
         b"musubi-publication-runtime-broker-test".to_vec(),
@@ -1161,7 +1114,6 @@ fn private_service_rejects_invalid_or_unavailable_external_signer_and_retries_ex
         MusubiPublicationServiceErrorCodeV1::ReceiptSigningUnavailable
     );
     assert!(expired_error.retryable);
-
     let (correct, _) = TestReceiptSigningProvider::new(
         fixture.request.binding.ingress_broker.clone(),
         broker_key,
@@ -1173,7 +1125,6 @@ fn private_service_rejects_invalid_or_unavailable_external_signer_and_retries_ex
     assert_eq!(retried.status, 200);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 2);
 }
-
 #[test]
 fn private_service_constructor_binds_signer_and_seed_backend_identities() {
     let broker_key = KeyPair::try_from_seed(
@@ -1191,7 +1142,6 @@ fn private_service_constructor_binds_signer_and_seed_backend_identities() {
         receipt_lifetime_ms: 60_000,
     };
     let journal_binding = MusubiPublicationServiceJournalBindingV1::from_configuration(&config);
-
     let wrong_broker_key = KeyPair::try_from_seed(
         b"musubi-publication-constructor-wrong-broker".to_vec(),
         Algorithm::Ed25519,
@@ -1223,7 +1173,6 @@ fn private_service_constructor_binds_signer_and_seed_backend_identities() {
         signer_mismatch,
         Err(MusubiPublicationServiceErrorCodeV1::IdentityMismatch)
     ));
-
     let signer = SoftwareMusubiSeedIngressReceiptSignerV1::new(broker, broker_key)
         .expect("matching software signer");
     let signer_debug = format!("{signer:?}");
@@ -1251,7 +1200,6 @@ fn private_service_constructor_binds_signer_and_seed_backend_identities() {
         Err(MusubiPublicationServiceErrorCodeV1::IdentityMismatch)
     ));
 }
-
 #[test]
 fn private_service_verifies_bounded_threshold_signing_provider() {
     let mut fixture = threshold_private_service_fixture(ThresholdSigningBehavior::Correct);
@@ -1267,7 +1215,6 @@ fn private_service_verifies_bounded_threshold_signing_provider() {
         .verify(&fixture.request.binding, 1_001)
         .expect("2-of-3 broker receipt");
     assert_eq!(receipt.approvals.len(), 2);
-
     for behavior in [
         ThresholdSigningBehavior::BelowThreshold,
         ThresholdSigningBehavior::Empty,
@@ -1289,7 +1236,6 @@ fn private_service_verifies_bounded_threshold_signing_provider() {
         assert!(!error.retryable);
     }
 }
-
 #[test]
 fn private_service_rejects_broker_quorum_larger_than_receipt_bound() {
     let key_pairs: Vec<_> =
@@ -1350,7 +1296,6 @@ fn private_service_rejects_broker_quorum_larger_than_receipt_bound() {
         Err(MusubiPublicationServiceErrorCodeV1::IdentityMismatch)
     ));
 }
-
 #[test]
 fn private_service_rejects_trusted_clock_regression() {
     let mut fixture = private_service_fixture(false);
@@ -1359,7 +1304,6 @@ fn private_service_rejects_trusted_clock_regression() {
     let authorization = authorization_header(&fixture.runtime, &fixture.request, &metadata, 3_000);
     let first = seed_http_response(&mut fixture, &authorization, &metadata, &car, 3_001);
     assert_eq!(first.status, 200);
-
     let regressed_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 2_999);
     let regressed = seed_http_response(
@@ -1376,7 +1320,6 @@ fn private_service_rejects_trusted_clock_regression() {
         MusubiPublicationServiceErrorCodeV1::TrustedClockUnavailable
     );
     assert!(error.retryable);
-
     let recovered_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 3_002);
     let recovered = seed_http_response(
@@ -1390,7 +1333,6 @@ fn private_service_rejects_trusted_clock_regression() {
     assert_eq!(recovered.body, first.body);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
 }
-
 #[test]
 fn private_service_classifies_receipt_expiry_overflow_as_clock_failure() {
     let mut fixture = private_service_fixture(false);
@@ -1413,7 +1355,6 @@ fn private_service_classifies_receipt_expiry_overflow_as_clock_failure() {
     assert!(!error.retryable);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
 }
-
 #[test]
 fn private_service_returns_one_broker_receipt_and_reuses_exact_completed_operation() {
     let mut fixture = private_service_fixture(false);
@@ -1429,14 +1370,12 @@ fn private_service_returns_one_broker_receipt_and_reuses_exact_completed_operati
     receipt
         .verify(&fixture.request.binding, 1_001)
         .expect("receipt binds the exact staged CAR");
-
     let retry_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 1_002);
     let retry = seed_http_response(&mut fixture, &retry_authorization, &metadata, &car, 1_003);
     assert_eq!(retry.status, 200);
     assert_eq!(retry.body, first.body);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
-
     let mut substituted = fixture.request.clone();
     substituted.binding.nonce = [0x7b; 32];
     let substituted_metadata =
@@ -1456,7 +1395,6 @@ fn private_service_returns_one_broker_receipt_and_reuses_exact_completed_operati
         MusubiPublicationServiceErrorCodeV1::OperationConflict
     );
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
-
     let refresh_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 62_000);
     let refreshed = seed_http_response(
@@ -1476,7 +1414,6 @@ fn private_service_returns_one_broker_receipt_and_reuses_exact_completed_operati
         .expect("refreshed receipt is live and exact");
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 2);
 }
-
 #[test]
 fn private_service_rejects_consumed_authorization_but_accepts_fresh_retry() {
     let mut fixture = private_service_fixture(true);
@@ -1491,7 +1428,6 @@ fn private_service_rejects_consumed_authorization_but_accepts_fresh_retry() {
         MusubiPublicationServiceErrorCodeV1::SeedIngressUnavailable
     );
     assert!(failed_error.retryable);
-
     let replay = seed_http_response(&mut fixture, &authorization, &metadata, &car, 2_002);
     assert_eq!(replay.status, 401);
     let replay_error = decode_service_error(&replay);
@@ -1501,7 +1437,6 @@ fn private_service_rejects_consumed_authorization_but_accepts_fresh_retry() {
     );
     assert!(replay_error.retryable);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
-
     let mut substituted = fixture.request.clone();
     substituted.binding.nonce = [0x7c; 32];
     let substituted_metadata =
@@ -1521,19 +1456,16 @@ fn private_service_rejects_consumed_authorization_but_accepts_fresh_retry() {
         MusubiPublicationServiceErrorCodeV1::OperationConflict
     );
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
-
     let fresh = authorization_header(&fixture.runtime, &fixture.request, &metadata, 2_005);
     let success = seed_http_response(&mut fixture, &fresh, &metadata, &car, 2_006);
     assert_eq!(success.status, 200);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 2);
 }
-
 #[test]
 fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
     let mut fixture = private_service_fixture(false);
     let metadata = fixture.metadata.clone();
     let car = fixture.car.clone();
-
     let expired_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 3_000);
     let expired = seed_http_response(
@@ -1549,7 +1481,6 @@ fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
         MusubiPublicationServiceErrorCodeV1::AuthorizationExpired
     );
     assert!(expired_error.retryable);
-
     let future_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 50_000);
     let future = seed_http_response(&mut fixture, &future_authorization, &metadata, &car, 33_002);
@@ -1559,7 +1490,6 @@ fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
         MusubiPublicationServiceErrorCodeV1::AuthorizationExpired
     );
     assert!(future_error.retryable);
-
     let valid_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 33_003);
     let mut substituted_request = fixture.request.clone();
@@ -1577,7 +1507,6 @@ fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
         decode_service_error(&substituted).code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationInvalid
     );
-
     let mut wrong_body = car.clone();
     wrong_body[0] ^= 0x01;
     let wrong_body_response = seed_http_response(
@@ -1591,7 +1520,6 @@ fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
         decode_service_error(&wrong_body_response).code,
         MusubiPublicationServiceErrorCodeV1::CarBodyMismatch
     );
-
     let authorization_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(&valid_authorization)
         .expect("decode authorization");
@@ -1617,7 +1545,6 @@ fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
     );
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
 }
-
 #[test]
 fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
     let mut fixture = private_service_fixture(false);
@@ -1626,7 +1553,6 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
     let authorization = authorization_header(&fixture.runtime, &fixture.request, &metadata, 6_000);
     let encoded_metadata = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&metadata);
     fixture.clock.store(6_001, Ordering::SeqCst);
-
     let route = fixture
         .service
         .handle(MusubiPublicationPrivateHttpRequestV1 {
@@ -1642,7 +1568,6 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         decode_service_error(&route).code,
         MusubiPublicationServiceErrorCodeV1::RouteNotFound
     );
-
     let method = fixture
         .service
         .handle(MusubiPublicationPrivateHttpRequestV1 {
@@ -1658,7 +1583,6 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         decode_service_error(&method).code,
         MusubiPublicationServiceErrorCodeV1::MethodInvalid
     );
-
     let legacy_raw_car = fixture
         .service
         .handle(MusubiPublicationPrivateHttpRequestV1 {
@@ -1675,7 +1599,6 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         MusubiPublicationServiceErrorCodeV1::MediaTypeInvalid
     );
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
-
     let padded_authorization = format!("{authorization}=");
     let noncanonical = fixture
         .service
@@ -1692,7 +1615,6 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         decode_service_error(&noncanonical).code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationInvalid
     );
-
     let malformed_control = fixture
         .service
         .handle(MusubiPublicationPrivateHttpRequestV1 {
@@ -1709,7 +1631,6 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         MusubiPublicationServiceErrorCodeV1::RequestInvalid
     );
 }
-
 #[test]
 fn private_service_authenticates_control_requests_before_embedded_evidence() {
     let mut fixture = control_service_fixture(false, false);
@@ -1718,7 +1639,6 @@ fn private_service_authenticates_control_requests_before_embedded_evidence() {
         Algorithm::Ed25519,
     )
     .expect("attacker key");
-
     let mut storage_request = fixture.storage_request.clone();
     let receipt_hash = storage_request.staging_receipt.payload.signing_hash();
     storage_request.staging_receipt.approvals[0].signature =
@@ -1741,7 +1661,6 @@ fn private_service_authenticates_control_requests_before_embedded_evidence() {
         decode_service_error(&anonymous_storage).code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationInvalid
     );
-
     let storage_authorization = control_authorization_header(
         &fixture.runtime,
         MusubiPublicationRuntimeOperationV1::StorageCoordination,
@@ -1764,7 +1683,6 @@ fn private_service_authenticates_control_requests_before_embedded_evidence() {
         decode_service_error(&authenticated_storage).code,
         MusubiPublicationServiceErrorCodeV1::RequestInvalid
     );
-
     let valid_storage_body =
         norito::encode_canonical(&fixture.storage_request).expect("valid storage request bytes");
     let valid_storage_authorization = control_authorization_header(
@@ -1786,7 +1704,6 @@ fn private_service_authenticates_control_requests_before_embedded_evidence() {
             body: &valid_storage_body,
         });
     assert_eq!(valid_storage.status, 200);
-
     let mut readback_request = fixture.readback_request.clone();
     readback_request.location.archive_id = ArchiveId::new([0xee; 32]);
     let readback_body =
@@ -1807,7 +1724,6 @@ fn private_service_authenticates_control_requests_before_embedded_evidence() {
         decode_service_error(&anonymous_readback).code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationInvalid
     );
-
     let readback_authorization = control_authorization_header(
         &fixture.runtime,
         MusubiPublicationRuntimeOperationV1::ProviderReadback,
@@ -1831,7 +1747,6 @@ fn private_service_authenticates_control_requests_before_embedded_evidence() {
         MusubiPublicationServiceErrorCodeV1::RequestInvalid
     );
 }
-
 #[test]
 fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
     let mut invalid_fixture = control_service_fixture(false, false);
@@ -1874,7 +1789,6 @@ fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
             MusubiIngestDeadletterReasonV1::ReceiptInvalid,
         ))
     );
-
     let mut future_fixture = control_service_fixture(false, false);
     future_fixture.service.config.max_future_clock_skew_ms = 1;
     let future_body = norito::encode_canonical(&future_fixture.storage_request)
@@ -1907,7 +1821,6 @@ fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
         ))
     );
 }
-
 #[test]
 fn storage_coordination_accepts_an_expired_receipt_for_the_exact_finalized_archive() {
     let mut fixture = control_service_fixture(false, false);
@@ -1939,7 +1852,6 @@ fn storage_coordination_accepts_an_expired_receipt_for_the_exact_finalized_archi
             .expect("storage response");
     assert_eq!(decoded, fixture.storage_response);
 }
-
 #[test]
 fn private_service_accepts_exact_storage_and_provider_readback_evidence() {
     let mut fixture = control_service_fixture(false, false);
@@ -1968,7 +1880,6 @@ fn private_service_accepts_exact_storage_and_provider_readback_evidence() {
         norito::decode_canonical_with_limits(&storage.body, RESPONSE_DECODE_LIMITS)
             .expect("storage response");
     assert_eq!(storage_response, fixture.storage_response);
-
     let readback_body =
         norito::encode_canonical(&fixture.readback_request).expect("readback request bytes");
     let readback_authorization = control_authorization_header(
@@ -1995,7 +1906,6 @@ fn private_service_accepts_exact_storage_and_provider_readback_evidence() {
             .expect("readback response");
     assert_eq!(readback_response, fixture.readback_response);
 }
-
 #[cfg(unix)]
 #[test]
 fn durable_readback_journal_separates_replacement_and_renewal_targets() {
@@ -2020,12 +1930,10 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     fixture.service.readback = Box::new(RecordingExactReadback {
         calls: Arc::clone(&calls),
     });
-
     let initial = fixture.readback_request.clone();
     let initial_response = control_readback_response(&mut fixture, &initial, 3_000);
     assert_eq!(initial_response.status, 200);
     assert_eq!(calls.lock().expect("readback calls").len(), 1);
-
     let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
         .expect("temporary journal");
     let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
@@ -2034,12 +1942,10 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
         DurableMusubiPublicationServiceJournalV1::open(root.path(), binding.clone(), limits)
             .expect("reopen durable readback journal"),
     );
-
     let cached = control_readback_response(&mut fixture, &initial, 3_100);
     assert_eq!(cached.status, 200);
     assert_eq!(cached.body, initial_response.body);
     assert_eq!(calls.lock().expect("cached readback calls").len(), 1);
-
     let mut replacement = initial.clone();
     replacement.location.location_id = MusubiArchiveLocationIdV1::new([0xe1; 32]);
     replacement.location.finalized_height += 1;
@@ -2049,7 +1955,6 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     );
     let replacement_response = control_readback_response(&mut fixture, &replacement, 3_200);
     assert_eq!(replacement_response.status, 200);
-
     let mut renewal = replacement.clone();
     renewal.location.revision += 1;
     renewal.location.finalized_height += 1;
@@ -2062,7 +1967,6 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     let renewal_response = control_readback_response(&mut fixture, &renewal, 3_300);
     assert_eq!(renewal_response.status, 200);
     assert_eq!(calls.lock().expect("replacement readback calls").len(), 3);
-
     let fallback = InMemoryMusubiPublicationServiceJournalV1::new(binding.clone(), 1, 1)
         .expect("second temporary journal");
     let durable = std::mem::replace(&mut fixture.service.journal, Box::new(fallback));
@@ -2071,7 +1975,6 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
         DurableMusubiPublicationServiceJournalV1::open(root.path(), binding, limits)
             .expect("reopen durable journal with all readback targets"),
     );
-
     let cached_replacement = control_readback_response(&mut fixture, &replacement, 3_400);
     assert_eq!(cached_replacement.status, 200);
     assert_eq!(cached_replacement.body, replacement_response.body);
@@ -2082,7 +1985,6 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
         calls.lock().expect("durable cached readback calls").len(),
         3
     );
-
     let mut substituted_same_tuple = renewal.clone();
     substituted_same_tuple.location.renew_after_epoch += 1;
     assert_eq!(
@@ -2100,7 +2002,6 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
     );
     assert_eq!(calls.lock().expect("conflicting readback calls").len(), 3);
 }
-
 #[test]
 fn storage_response_rejects_a_refreshed_receipt_after_registration() {
     let fixture = control_service_fixture(false, false);
@@ -2129,7 +2030,6 @@ fn storage_response_rejects_a_refreshed_receipt_after_registration() {
         request.staging_receipt
     );
     assert!(fixture.storage_response.validate_for(&request).is_err());
-
     request.staging_receipt.payload.binding.nonce = [0xee; 32];
     request.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
         broker_key.private_key(),
@@ -2138,7 +2038,6 @@ fn storage_response_rejects_a_refreshed_receipt_after_registration() {
     .expect("different-operation receipt signature");
     assert!(fixture.storage_response.validate_for(&request).is_err());
 }
-
 #[test]
 fn storage_response_requires_replication_quorum_and_exact_lock_digest() {
     let fixture = control_service_fixture(false, false);
@@ -2152,12 +2051,10 @@ fn storage_response_requires_replication_quorum_and_exact_lock_digest() {
     };
     provider_attestations.truncate(usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1).saturating_sub(1));
     assert!(below_quorum.validate_for(&fixture.storage_request).is_err());
-
     let mut wrong_lock = fixture.storage_request.clone();
     wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
     assert!(fixture.storage_response.validate_for(&wrong_lock).is_err());
 }
-
 #[test]
 fn storage_location_generations_have_distinct_bounded_journal_targets() {
     let first = storage_generation_target(1);
@@ -2177,7 +2074,6 @@ fn storage_location_generations_have_distinct_bounded_journal_targets() {
     malformed[31] = 1;
     assert!(!valid_storage_generation_target(malformed));
 }
-
 #[test]
 fn storage_response_never_reuses_a_prior_location_generation() {
     let fixture = control_service_fixture(false, false);
@@ -2195,13 +2091,11 @@ fn storage_response_never_reuses_a_prior_location_generation() {
             .is_err(),
         "the coordinator cannot return a retired stable identity"
     );
-
     let mut replacement = fixture.storage_response;
     replacement.location_id = MusubiArchiveLocationIdV1::new([0xee; 32]);
     replacement
         .validate_for(&replacement_request)
         .expect("a never-before-used replacement identity remains valid");
-
     let mut unsorted_third = replacement_request;
     unsorted_third.generation = 3;
     unsorted_third.prior_location_ids = vec![
@@ -2210,11 +2104,9 @@ fn storage_response_never_reuses_a_prior_location_generation() {
     ];
     assert!(unsorted_third.validate().is_err());
 }
-
 #[test]
 fn storage_request_binds_immutable_registration_without_freezing_location_state() {
     let fixture = control_service_fixture(false, false);
-
     let mut wrong_height = fixture.storage_request.clone();
     wrong_height
         .finalized_registration
@@ -2243,7 +2135,6 @@ fn storage_request_binds_immutable_registration_without_freezing_location_state(
             .validate_for(&wrong_height)
             .is_err()
     );
-
     let mut wrong_registrant = fixture.storage_request.clone();
     let other = KeyPair::try_from_seed(
         b"musubi-storage-authoritative-record-substitution".to_vec(),
@@ -2255,11 +2146,9 @@ fn storage_request_binds_immutable_registration_without_freezing_location_state(
         .registration
         .registered_by = AccountId::new(other.public_key().clone());
     assert!(wrong_registrant.validate().is_err());
-
     let mut missing_transaction = fixture.storage_request.clone();
     missing_transaction.finalized_registration.transaction_hash = [0; 32];
     assert!(missing_transaction.validate().is_err());
-
     let mut wrong_lock = fixture.storage_request.clone();
     wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
     wrong_lock
@@ -2268,7 +2157,6 @@ fn storage_request_binds_immutable_registration_without_freezing_location_state(
     assert!(fixture.storage_response.validate_for(&wrong_lock).is_err());
     wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0; 32]);
     assert!(wrong_lock.validate().is_err());
-
     let mut pre_registration_snapshot = fixture.storage_request.clone();
     pre_registration_snapshot
         .finalized_registration
@@ -2279,7 +2167,6 @@ fn storage_request_binds_immutable_registration_without_freezing_location_state(
         .registered_at_height
         .saturating_sub(1);
     assert!(pre_registration_snapshot.validate().is_err());
-
     let mut later_current_archive = fixture.storage_response;
     later_current_archive.archive.location_revision = 2;
     later_current_archive.archive.location_ids = vec![MusubiArchiveLocationIdV1::new([0xdd; 32])];
@@ -2295,7 +2182,6 @@ fn storage_request_binds_immutable_registration_without_freezing_location_state(
         .validate_for(&fixture.storage_request)
         .expect("a later finalized location directory preserves registration evidence");
 }
-
 #[test]
 fn private_service_rejects_substituted_storage_and_readback_backend_evidence() {
     let mut fixture = control_service_fixture(true, true);
@@ -2324,7 +2210,6 @@ fn private_service_rejects_substituted_storage_and_readback_backend_evidence() {
         decode_service_error(&storage).code,
         MusubiPublicationServiceErrorCodeV1::BackendResponseInvalid
     );
-
     let readback_body =
         norito::encode_canonical(&fixture.readback_request).expect("readback request bytes");
     let readback_authorization = control_authorization_header(
@@ -2351,7 +2236,6 @@ fn private_service_rejects_substituted_storage_and_readback_backend_evidence() {
         MusubiPublicationServiceErrorCodeV1::BackendResponseInvalid
     );
 }
-
 #[test]
 fn restored_journal_preserves_completed_idempotency_and_replay_state() {
     let (client, _) = client();
@@ -2388,7 +2272,6 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
     journal
         .commit(attempt.key, attempt.request_digest, b"canonical response")
         .expect("commit");
-
     // Cloning models restoring the same durable records into a replacement service process.
     let mut restored = journal.clone();
     let mut retry = attempt.clone();
@@ -2401,21 +2284,18 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
         restored.begin(&retry, 10_001).expect("cached replay"),
         MusubiPublicationJournalBeginV1::Cached(b"canonical response".to_vec())
     );
-
     let mut conflict = retry.clone();
     conflict.binding.archive_id = ArchiveId::new([0x87; 32]);
     assert_eq!(
         restored.begin(&conflict, 10_002),
         Err(MusubiPublicationServiceJournalErrorV1::Conflict)
     );
-
     let mut reset_conflict = retry.clone();
     reset_conflict.binding.network_id = test_network_id(0x8a);
     assert_eq!(
         restored.begin(&reset_conflict, 10_002),
         Err(MusubiPublicationServiceJournalErrorV1::Invalid)
     );
-
     let replay = MusubiPublicationJournalAttemptV1 {
         key: MusubiPublicationIdempotencyKeyV1 {
             operation: MusubiPublicationRuntimeOperationV1::ProviderReadback,

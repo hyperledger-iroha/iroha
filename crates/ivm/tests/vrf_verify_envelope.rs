@@ -1,11 +1,8 @@
 //! VRF envelope type, decoding, and verification-status tests.
-
 #![cfg(feature = "ivm_vrf_tests")]
 use group::prime::PrimeCurveAffine;
 use ivm::{self, IVM, IVMHost, Memory, PointerType};
-
 mod common;
-
 fn build_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(ty, payload);
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -17,7 +14,6 @@ fn build_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&h);
     tlv
 }
-
 #[test]
 fn vrf_verify_wrong_tlv_type_sets_err_type() {
     // DefaultHost with no special config
@@ -42,7 +38,6 @@ fn vrf_verify_wrong_tlv_type_sets_err_type() {
     assert_eq!(vm.register(10), 0, "r10 should be 0 (no output)");
     assert_eq!(vm.register(11), 1, "r11 should be ERR_TYPE=1");
 }
-
 #[test]
 fn vrf_verify_malformed_payload_sets_err_decode() {
     let host = ivm::host::DefaultHost::new();
@@ -64,7 +59,6 @@ fn vrf_verify_malformed_payload_sets_err_decode() {
     assert_eq!(vm.register(10), 0, "r10 should be 0 (no output)");
     assert_eq!(vm.register(11), 2, "r11 should be ERR_DECODE=2");
 }
-
 #[test]
 fn vrf_verify_with_valid_lengths_and_network_yields_verify_error() {
     use blstrs::{G1Affine, G2Affine};

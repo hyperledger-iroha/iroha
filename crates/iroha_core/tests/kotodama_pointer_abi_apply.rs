@@ -1,7 +1,6 @@
 //! End-to-end test for Kotodama pointer ABI asset operations.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::explicit_into_iter_loop, clippy::map_unwrap_or)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -16,14 +15,12 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
-
 fn pointer_abi_test_compiler() -> KotodamaCompiler {
     KotodamaCompiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Production,
         ..CompilerOptions::default()
     })
 }
-
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
     let entrypoint = metadata
@@ -39,7 +36,6 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(entrypoint_pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
-
 fn prepare_kotodama_arguments(
     program: &[u8],
     entrypoint_name: &str,
@@ -64,11 +60,9 @@ fn prepare_kotodama_arguments(
     ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
         .unwrap_or_else(|error| panic!("prepare `{entrypoint_name}` arguments: {error:?}"))
 }
-
 fn parsed_asset_definition_literal(literal: &str) -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(literal).expect("canonical asset definition literal")
 }
-
 fn world_with_asset_definitions(
     authority: &AccountId,
     asset_definitions: &[AssetDefinitionId],
@@ -83,10 +77,8 @@ fn world_with_asset_definitions(
         )
         .build(authority)
     });
-
     World::with_assets([], [], definitions, [], [])
 }
-
 fn state_with_asset_definitions(
     authority: &AccountId,
     asset_definitions: &[AssetDefinitionId],
@@ -99,7 +91,6 @@ fn state_with_asset_definitions(
         query_handle,
     )
 }
-
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
@@ -116,7 +107,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         .replace("6pEP9RjNoZ7beWkT3pLfKoM1dyfi", &sample_asset_literal);
     let compiler = KotodamaCompiler::new();
     let program = compiler.compile_source(&src).expect("compile kotodama");
-
     // Prepare VM with CoreHost
     let from = ALICE_ID.clone();
     let to = BOB_ID.clone();
@@ -129,7 +119,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     vm.load_program(&program).expect("load program");
     select_kotodama_entrypoint(&mut vm, &program, "execute");
     vm.run_with_host(&mut host).expect("run VM");
-
     // Drain queued ISIs
     let queued = host.drain_instructions();
     assert!(!queued.is_empty());
@@ -137,7 +126,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     for (i, instr) in queued.iter().enumerate() {
         eprintln!("queued[{i}]: {instr:?}");
     }
-
     // Seed the canonical asset definition directly. This test exercises the
     // generated asset operations, not registration authorization.
     let kura = Kura::blank_kura_for_testing();
@@ -173,7 +161,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let executor = tx.world.executor().clone();
-
     // Apply deterministic ISIs mirroring the sample program
     assert_eq!(queued.len(), 3, "expected three enqueued instructions");
     let expected_asset_id = AssetId::of(asset_def.clone(), from.clone());
@@ -185,7 +172,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         to.clone(),
     );
     let burn = iroha_data_model::isi::Burn::asset_quantity(100u32, expected_asset_id_to.clone());
-
     tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
         [0x51; iroha_crypto::Hash::LENGTH],
     ));
@@ -201,7 +187,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     }
     tx.apply();
     block.commit().expect("commit block");
-
     // Rough balance checks: after sample, net effect:
     // mint 1000 to from, transfer 500 from->to, burn 100 from to
     // from: 1000 - 500 = 500; to: +500 - 100 = 400
@@ -222,7 +207,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     assert_eq!(from_bal, Quantity::from(500u32));
     assert_eq!(to_bal, Quantity::from(400u32));
 }
-
 #[test]
 fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let asset_domain_id = DomainId::try_new("wonder", "universal").unwrap();
@@ -249,7 +233,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let program = pointer_abi_test_compiler()
         .compile_source(&src)
         .expect("compile pointer state transfer");
-
     let authority = ALICE_ID.clone();
     let query_asset_def = parsed_asset_definition_literal(&asset_literal);
     let query_state = state_with_asset_definitions(&authority, &[query_asset_def]);
@@ -262,7 +245,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run_with_host(&mut host)
         .expect("state-loaded pointers should be accepted by transfer_asset");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -292,17 +274,14 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-
     let mint = MintBox::from(Mint::asset_quantity(
         1u32,
         AssetId::of(asset_def.clone(), authority.clone()),
     ));
-
     let executor = tx.world.executor().clone();
     executor
         .execute_instruction(&mut tx, &authority, InstructionBox::from(mint))
         .expect("setup mint should succeed");
-
     let queued = host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
     let transfer = queued[0]
@@ -320,7 +299,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     assert_eq!(transfer.object, Quantity::from(1_u32));
     tx.apply();
     block.commit().expect("commit block");
-
     let balance = state
         .view()
         .world
@@ -329,7 +307,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(balance, Quantity::from(1u32));
 }
-
 #[test]
 fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let asset_def: AssetDefinitionId =
@@ -363,7 +340,6 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     "#
     );
     let authority = ALICE_ID.clone();
-
     let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
@@ -376,7 +352,6 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 1, "expected one durable state write");
-
     let query_asset_def = parsed_asset_definition_literal(&asset_literal);
     let mut world = world_with_asset_definitions(&authority, &[query_asset_def]);
     for (path, value) in overlay {
@@ -389,7 +364,6 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
     let view = state.view();
-
     let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
@@ -403,11 +377,9 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_vm
         .run_with_host(&mut read_host)
         .expect("name-keyed state-loaded pointers should survive cross-call");
-
     let queued = read_host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
-
 #[test]
 fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let asset_def: AssetDefinitionId =
@@ -419,7 +391,6 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let authority = ALICE_ID.clone();
     let vault = BOB_ID.clone();
     let vault_literal = vault.to_string();
-
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
@@ -448,7 +419,6 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
         }}
     "#
     );
-
     let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
@@ -461,7 +431,6 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 2, "expected two durable state writes");
-
     let query_asset_def = parsed_asset_definition_literal(&asset_literal);
     let mut world = world_with_asset_definitions(&authority, &[query_asset_def]);
     for (path, value) in overlay {
@@ -474,7 +443,6 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
     let view = state.view();
-
     let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
@@ -488,11 +456,9 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_vm
         .run_with_host(&mut read_host)
         .expect("mixed state-loaded pointers should survive cross-call");
-
     let queued = read_host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
-
 #[test]
 fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
@@ -500,7 +466,6 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let vault = BOB_ID.clone();
     let authority_literal = authority.to_string();
     let vault_literal = vault.to_string();
-
     let write_src = format!(
         r#"
         seiyaku PointerStateWrite {{
@@ -535,7 +500,6 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
         }}
     "#
     );
-
     let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
@@ -548,7 +512,6 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     write_vm.run().expect("writer run");
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 2, "expected two durable state writes");
-
     let query_asset_def = parsed_asset_definition_literal(asset_literal);
     let mut world = world_with_asset_definitions(&authority, &[query_asset_def]);
     for (path, value) in overlay {
@@ -561,7 +524,6 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
     let view = state.view();
-
     let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
@@ -575,11 +537,9 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     read_vm
         .run_with_host(&mut read_host)
         .expect("event-fed state-loaded transfer_asset should survive cross-call");
-
     let queued = read_host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
-
 #[test]
 fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     let source = r#"
@@ -646,11 +606,9 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
             .find(|entry| entry.name == "seed_bin")
             .expect("seed_bin entrypoint")
             .entry_pc;
-
     let authority = ALICE_ID.clone();
     let authority_literal = authority.to_string();
     let accounts = Arc::new(vec![authority.clone()]);
-
     let init_args = Json::new(norito::json!({
         "base_asset": "6qLb5RYJbzychndCXgFa9aZzjWyx",
         "quote_asset": "7Dsw1EgqCsPmv9HpEztf26xEL2qo",
@@ -682,7 +640,6 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         !overlay.is_empty(),
         "expected durable state writes from init_pool"
     );
-
     let base_asset = parsed_asset_definition_literal("6qLb5RYJbzychndCXgFa9aZzjWyx");
     let quote_asset = parsed_asset_definition_literal("7Dsw1EgqCsPmv9HpEztf26xEL2qo");
     let mut world = world_with_asset_definitions(&authority, &[base_asset, quote_asset]);
@@ -696,7 +653,6 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
     let view = state.view();
-
     let provider_literal = authority.to_string();
     let seed_args = Json::new(norito::json!({
         "provider": provider_literal,
@@ -723,7 +679,6 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         .precharge_vm(&mut seed_vm)
         .expect("precharge seed_bin arguments");
     seed_vm.run_with_host(&mut seed_host).expect("seed_bin run");
-
     let queued = seed_host.drain_instructions();
     assert_eq!(queued.len(), 2, "expected two queued transfer instructions");
 }

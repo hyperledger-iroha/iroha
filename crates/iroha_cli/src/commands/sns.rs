@@ -4,12 +4,10 @@
 //! `iroha app alias` and are submitted as normal locally signed transactions.
 //! This command tree deliberately exposes only committed SNS records and live
 //! suffix-policy inspection.
-
 use crate::{Run, RunContext};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, eyre};
 use iroha::sns::SnsNamespacePath;
-
 /// Read-only SNS commands.
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -18,7 +16,6 @@ pub enum Command {
     /// Fetch the live policy for one numeric suffix identifier.
     Policy(GetPolicyArgs),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -27,7 +24,6 @@ impl Run for Command {
         }
     }
 }
-
 /// Canonical SNS namespace used by the read endpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum NamespaceArg {
@@ -38,7 +34,6 @@ pub enum NamespaceArg {
     /// Dataspace alias literal.
     Dataspace,
 }
-
 impl From<NamespaceArg> for SnsNamespacePath {
     fn from(value: NamespaceArg) -> Self {
         match value {
@@ -48,7 +43,6 @@ impl From<NamespaceArg> for SnsNamespacePath {
         }
     }
 }
-
 /// Arguments for committed SNS record lookup.
 #[derive(Args, Debug)]
 pub struct GetRegistrationArgs {
@@ -59,7 +53,6 @@ pub struct GetRegistrationArgs {
     #[arg(long, value_name = "LITERAL")]
     pub literal: String,
 }
-
 impl Run for GetRegistrationArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         validate_literal(&self.literal)?;
@@ -70,7 +63,6 @@ impl Run for GetRegistrationArgs {
         context.print_data(&record)
     }
 }
-
 /// Arguments for live suffix-policy lookup.
 #[derive(Args, Debug)]
 pub struct GetPolicyArgs {
@@ -78,7 +70,6 @@ pub struct GetPolicyArgs {
     #[arg(long = "suffix-id", value_name = "U16")]
     pub suffix_id: u16,
 }
-
 impl Run for GetPolicyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let policy = context
@@ -88,7 +79,6 @@ impl Run for GetPolicyArgs {
         context.print_data(&policy)
     }
 }
-
 fn validate_literal(literal: &str) -> Result<()> {
     if literal.is_empty()
         || literal.trim() != literal
@@ -101,18 +91,15 @@ fn validate_literal(literal: &str) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
-
     #[derive(Parser, Debug)]
     struct Wrapper {
         #[command(subcommand)]
         command: Command,
     }
-
     #[test]
     fn parses_typed_read_commands() {
         let registration = Wrapper::parse_from([
@@ -130,14 +117,12 @@ mod tests {
             }
             Command::Policy(_) => panic!("expected registration command"),
         }
-
         let policy = Wrapper::parse_from(["iroha", "policy", "--suffix-id", "7"]);
         match policy.command {
             Command::Policy(args) => assert_eq!(args.suffix_id, 7),
             Command::Registration(_) => panic!("expected policy command"),
         }
     }
-
     #[test]
     fn mutation_commands_and_payment_proofs_are_absent() {
         for command in [
@@ -168,7 +153,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn rejects_non_exact_or_path_like_literals() {
         for literal in ["", " merchant", "merchant ", "merchant/name", "merchant\n"] {

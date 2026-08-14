@@ -1,13 +1,10 @@
 //! Interop fixture checks for Android-emitted Connect approve frames.
-
 use base64::Engine as _;
 use iroha_data_model::account::{AccountId, ParsedAccountId};
 use iroha_torii_shared::connect::{
     ConnectControlV1, FrameKind, decode_connect_frame_bare, encode_connect_frame_bare,
 };
-
 const ANDROID_ACCOUNT_ID: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-
 #[test]
 fn decodes_android_approve_frame_fixture() {
     let hex = include_str!("fixtures/android_approve_frame.hex")
@@ -20,14 +17,12 @@ fn decodes_android_approve_frame_fixture() {
         bytes,
         "Rust must preserve the Android-emitted wire bytes",
     );
-
     assert_eq!(frame.seq, 1);
     assert_eq!(frame.sid, [0xCDu8; 32]);
     assert!(matches!(
         frame.dir,
         iroha_torii_shared::connect::Dir::WalletToApp
     ));
-
     match frame.kind {
         FrameKind::Control(ConnectControlV1::Approve {
             wallet_pk,
@@ -53,7 +48,6 @@ fn decodes_android_approve_frame_fixture() {
         _ => panic!("expected control approve frame"),
     }
 }
-
 #[test]
 fn fixture_base64_roundtrip_sanity() {
     let hex = include_str!("fixtures/android_approve_frame.hex")

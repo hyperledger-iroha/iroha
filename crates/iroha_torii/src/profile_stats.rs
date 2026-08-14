@@ -1,7 +1,5 @@
 //! Shared latency summary helpers for opt-in Torii profiling.
-
 use std::time::Duration;
-
 /// Summary of one latency profile run.
 #[derive(Clone, Copy, Debug)]
 pub struct ProfileSummary {
@@ -28,13 +26,11 @@ pub struct ProfileSummary {
     /// Completed operations per second based on wall-clock duration.
     pub throughput_per_sec: f64,
 }
-
 /// Convert a duration to microseconds.
 #[must_use]
 pub fn micros(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000_000.0
 }
-
 fn percentile_permille(sorted_samples: &[Duration], permille: usize) -> Duration {
     assert!(!sorted_samples.is_empty());
     let index = (sorted_samples.len() - 1)
@@ -43,7 +39,6 @@ fn percentile_permille(sorted_samples: &[Duration], permille: usize) -> Duration
         / 1_000;
     sorted_samples[index.min(sorted_samples.len() - 1)]
 }
-
 /// Build a latency summary from measured samples.
 ///
 /// `samples` is sorted in place to avoid extra allocation in profiling paths.
@@ -77,11 +72,9 @@ pub fn summarize_profile(
         },
     }
 }
-
 fn p999_label(p999_us: Option<f64>) -> String {
     p999_us.map_or_else(|| "NA".to_owned(), |value| format!("{value:.3}"))
 }
-
 /// Print one stable machine-readable Torii profile line.
 pub fn print_profile(
     suite: &str,
@@ -107,24 +100,19 @@ pub fn print_profile(
         summary.max_us,
     );
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn assert_close(actual: f64, expected: f64) {
         assert!(
             (actual - expected).abs() < f64::EPSILON * 4096.0,
             "expected {expected}, got {actual}"
         );
     }
-
     #[test]
     fn summary_reports_expected_percentiles_and_throughput() {
         let mut samples = (1..=1_000).map(Duration::from_micros).collect::<Vec<_>>();
-
         let summary = summarize_profile(&mut samples, 10, 4, Duration::from_secs(2));
-
         assert_eq!(summary.samples, 1_000);
         assert_eq!(summary.warmup_samples, 10);
         assert_eq!(summary.concurrency, 4);
@@ -135,13 +123,10 @@ mod tests {
         assert_close(summary.max_us, 1_000.0);
         assert_close(summary.throughput_per_sec, 500.0);
     }
-
     #[test]
     fn summary_omits_p999_for_small_samples() {
         let mut samples = [Duration::from_micros(1), Duration::from_micros(2)];
-
         let summary = summarize_profile(&mut samples, 0, 1, Duration::from_millis(1));
-
         assert_eq!(summary.p999_us, None);
     }
 }

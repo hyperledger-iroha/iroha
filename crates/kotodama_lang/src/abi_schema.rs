@@ -2,14 +2,11 @@
 //!
 //! Keeping ABI-shape validation independent of instruction emission ensures
 //! `check` and `build` reject the same oversized or unsupported typed values.
-
 use crate::semantic::{ExprKind, Type, TypedExpr};
-
 pub(crate) fn state_value_kind_for_type(
     ty: &Type,
 ) -> Option<ivm_abi::state_value::StateValueKindV1> {
     use ivm_abi::state_value::StateValueKindV1 as Kind;
-
     Some(match ty {
         Type::Int => Kind::Int,
         Type::Decimal => Kind::Decimal,
@@ -41,10 +38,8 @@ pub(crate) fn state_value_kind_for_type(
         | Type::NamedStruct(_) => return None,
     })
 }
-
 fn state_value_schema_nodes(ty: &Type) -> Option<Vec<ivm_abi::state_value::StateValueNodeV1>> {
     use ivm_abi::state_value::StateValueNodeV1 as Node;
-
     enum Pending<'a> {
         Visit {
             ty: &'a Type,
@@ -56,7 +51,6 @@ fn state_value_schema_nodes(ty: &Type) -> Option<Vec<ivm_abi::state_value::State
             capacity: u8,
         },
     }
-
     let mut node_streams = vec![Vec::new()];
     let mut pending = vec![Pending::Visit { ty, target: 0 }];
     while let Some(item) = pending.pop() {
@@ -131,20 +125,17 @@ fn state_value_schema_nodes(ty: &Type) -> Option<Vec<ivm_abi::state_value::State
     }
     node_streams.into_iter().next()
 }
-
 pub(crate) fn state_value_schema(ty: &Type) -> Option<ivm_abi::state_value::StateValueSchemaV1> {
     let schema = ivm_abi::state_value::StateValueSchemaV1 {
         nodes: state_value_schema_nodes(ty)?,
     };
     schema.validate().then_some(schema)
 }
-
 fn append_json_construction_schema_nodes(
     expression: &TypedExpr,
     nodes: &mut Vec<ivm_abi::json::JsonConstructionNodeV1>,
 ) -> bool {
     use ivm_abi::json::JsonConstructionNodeV1 as Node;
-
     let mut pending = vec![expression];
     while let Some(expression) = pending.pop() {
         match expression.kind() {
@@ -174,13 +165,11 @@ fn append_json_construction_schema_nodes(
     }
     true
 }
-
 /// A fully validated V1 native-JSON construction schema.
 pub(crate) struct JsonConstructionSchema {
     pub(crate) encoded: Vec<u8>,
     pub(crate) word_count: usize,
 }
-
 /// Stable reason a typed native-JSON expression cannot cross the V1 ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum JsonConstructionSchemaError {
@@ -189,7 +178,6 @@ pub(crate) enum JsonConstructionSchemaError {
     Encoding,
     EncodedSize,
 }
-
 impl core::fmt::Display for JsonConstructionSchemaError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
@@ -202,7 +190,6 @@ impl core::fmt::Display for JsonConstructionSchemaError {
         })
     }
 }
-
 pub(crate) fn json_construction_schema(
     expression: &TypedExpr,
 ) -> Result<JsonConstructionSchema, JsonConstructionSchemaError> {
@@ -224,11 +211,9 @@ pub(crate) fn json_construction_schema(
         word_count,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn state_schema_construction_accepts_the_255_list_boundary_on_a_small_stack() {
         std::thread::Builder::new()
@@ -239,13 +224,11 @@ mod tests {
                     accepted = Type::List(Box::new(accepted), 1);
                 }
                 assert!(state_value_schema(&accepted).is_some());
-
                 let mut rejected = Type::Bool;
                 for _ in 0..256 {
                     rejected = Type::List(Box::new(rejected), 1);
                 }
                 assert!(state_value_schema(&rejected).is_none());
-
                 // These source-type fixtures intentionally exercise construction rather
                 // than the recursive derived drop glue of the semantic-only test value.
                 std::mem::forget(accepted);

@@ -1,13 +1,11 @@
 //! Taira-shaped local-node lifecycle coverage for the canonical typed ZK-ACE
 //! privacy transfer.
 #![cfg(feature = "zk-stark")]
-
 use std::{
     num::NonZeroU32,
     thread::sleep,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -48,16 +46,13 @@ use zk_ace_prover::{
     SignedZkAcePrivacyTransferV1, ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1,
     ZkAcePrivacyWitnessV1, build_signed_zk_ace_privacy_transfer_v1,
 };
-
 const TEST_NAME: &str = "canonical_zk_ace_privacy_transfer_taira_localnet";
 const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const BALANCE_TIMEOUT: Duration = Duration::from_secs(45);
-
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
-
 fn require_test_network_feature(feature: &str) -> Result<()> {
     let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -72,14 +67,12 @@ fn require_test_network_feature(feature: &str) -> Result<()> {
     );
     Ok(())
 }
-
 fn asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("default domain"),
         "zkace_typed".parse().expect("asset name"),
     )
 }
-
 fn submit_instruction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
@@ -90,21 +83,18 @@ fn submit_instruction(
         .wrap_err_with(|| context.to_owned())?;
     Ok(())
 }
-
 fn submit_signed(client: &Client, transaction: &SignedTransaction, context: &str) -> Result<()> {
     client
         .submit_transaction_blocking(transaction)
         .wrap_err_with(|| context.to_owned())?;
     Ok(())
 }
-
 fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
     let needle = needle.to_ascii_lowercase();
     error
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
 }
-
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let blocks = client
         .query(FindBlocks)
@@ -123,7 +113,6 @@ fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash is zero");
     Ok(hash)
 }
-
 fn next_incoming_height(client: &Client) -> Result<u64> {
     client
         .get_privacy_capabilities()
@@ -132,7 +121,6 @@ fn next_incoming_height(client: &Client) -> Result<u64> {
         .checked_add(1)
         .ok_or_else(|| eyre!("privacy height overflow"))
 }
-
 fn advance_to_height(client: &Client, target: u64) -> Result<()> {
     loop {
         let current = client
@@ -156,7 +144,6 @@ fn advance_to_height(client: &Client, target: u64) -> Result<()> {
         )?;
     }
 }
-
 fn wait_for_balance(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -185,7 +172,6 @@ fn wait_for_balance(
         "balance did not converge for {account_id}; expected {expected:?}, observed {last:?}"
     ))
 }
-
 fn witness(seed: u8) -> ZkAcePrivacyWitnessV1 {
     ZkAcePrivacyWitnessV1::try_new(
         [seed; 32],
@@ -194,7 +180,6 @@ fn witness(seed: u8) -> ZkAcePrivacyWitnessV1 {
     )
     .expect("valid localnet witness")
 }
-
 fn policy(
     witness: &ZkAcePrivacyWitnessV1,
     epoch: u64,
@@ -211,7 +196,6 @@ fn policy(
     )
     .expect("valid governed policy")
 }
-
 fn build_transfer(
     client: &Client,
     policy: PrivacyZkAcePolicyRecordV1,
@@ -243,12 +227,10 @@ fn build_transfer(
     )
     .wrap_err("build canonical signed ZK-ACE privacy transfer")
 }
-
 #[test]
 fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
     require_test_network_feature("zk-stark")?;
     init_instruction_registry();
-
     let asset_definition_id = asset_definition_id();
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let builder = NetworkBuilder::new()
@@ -271,7 +253,6 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
     let genesis_hash = canonical_genesis_hash(&client)?;
     let compiled =
         compiled_privacy_profile_v1(PROTOCOL).wrap_err("load compiled ZK-ACE profile")?;
-
     submit_instruction(
         &client,
         Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()),
@@ -308,7 +289,6 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
         .find(|row| row.protocol_id == PROTOCOL)
         .ok_or_else(|| eyre!("ZK-ACE capability row missing"))?;
     ensure!(row.activation == Some(active), "ZK-ACE activation drifted");
-
     let first_witness = witness(0x11);
     let initial_policy = policy(
         &first_witness,
@@ -320,7 +300,6 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
         RegisterPrivacyZkAcePolicyV1::new(initial_policy.clone()),
         "register canonical ZK-ACE policy",
     )?;
-
     let accepted = build_transfer(
         &client,
         initial_policy.clone(),
@@ -345,7 +324,6 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
     )?;
     wait_for_balance(&client, &asset_definition_id, &ALICE_ID, 81)?;
     wait_for_balance(&client, &asset_definition_id, &BOB_ID, 19)?;
-
     let replay_error = client
         .submit_transaction_blocking(accepted.signed_transaction())
         .expect_err("exact transaction replay must reject");
@@ -356,7 +334,6 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
             .any(|needle| error_chain_contains(&replay_report, needle)),
         "exact replay rejected for the wrong reason: {replay_report:?}"
     );
-
     let rotated_witness = witness(0x31);
     let rotated_policy = policy(
         &rotated_witness,
@@ -381,7 +358,6 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
     );
     wait_for_balance(&client, &asset_definition_id, &ALICE_ID, 81)?;
     wait_for_balance(&client, &asset_definition_id, &BOB_ID, 19)?;
-
     let revoked_policy = PrivacyZkAcePolicyRecordV1::new(
         rotated_policy.policy_id,
         rotated_policy.identity_commitment,
@@ -402,6 +378,5 @@ fn canonical_zk_ace_privacy_transfer_taira_localnet() -> Result<()> {
             .is_err(),
         "client builder admitted a revoked policy"
     );
-
     Ok(())
 }

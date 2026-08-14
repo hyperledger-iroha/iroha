@@ -6,7 +6,6 @@ fn accept_transaction_limit_failure_sets_header_code() {
                 reason: "too big".into(),
             },
         ));
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let headers = response.headers();
@@ -16,7 +15,6 @@ fn accept_transaction_limit_failure_sets_header_code() {
             .and_then(|v| v.to_str().ok()),
         Some("transaction_rejected")
     );
-
     let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
         .expect("collect body")
         .to_bytes();
@@ -25,7 +23,6 @@ fn accept_transaction_limit_failure_sets_header_code() {
     assert_eq!(envelope.code(), "transaction_rejected");
     assert!(envelope.message().contains("too big"));
 }
-
 #[test]
 fn accept_transaction_nts_unhealthy_sets_header_code() {
     let err = super::Error::AcceptTransaction(
@@ -33,7 +30,6 @@ fn accept_transaction_nts_unhealthy_sets_header_code() {
             reason: "fallback".to_owned(),
         },
     );
-
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let headers = response.headers();
@@ -43,7 +39,6 @@ fn accept_transaction_nts_unhealthy_sets_header_code() {
             .and_then(|v| v.to_str().ok()),
         Some("PRTRY:NTS_UNHEALTHY")
     );
-
     let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
         .expect("collect body")
         .to_bytes();
@@ -56,13 +51,9 @@ fn accept_transaction_nts_unhealthy_sets_header_code() {
             .contains("Network time service is unhealthy")
     );
 }
-
 #[test]
 fn offline_reason_query_error_sets_reject_code_header() {
-    use iroha_data_model::{
-        offline::OFFLINE_REJECTION_REASON_PREFIX, query::error::QueryExecutionFail,
-    };
-
+    use iroha_data_model::{offline::OFFLINE_REJECTION_REASON_PREFIX, query::error::QueryExecutionFail};
     let message =
         format!("{OFFLINE_REJECTION_REASON_PREFIX}certificate_expired:certificate expired");
     let err = super::Error::Query(iroha_data_model::ValidationFail::QueryFailed(

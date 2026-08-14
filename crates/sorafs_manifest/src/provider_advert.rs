@@ -4,10 +4,8 @@
 //! propagated through the discovery mesh. TTLs are capped at 24 hours with
 //! clients refreshing half-way through the validity window to avoid stale
 //! routes.
-
+use crate::{chunker_registry, deal::XorQuantity};
 use core::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
@@ -16,19 +14,14 @@ use norito::{
     json::{FastJsonWrite, JsonSerialize as NoritoJsonSerialize},
 };
 use soranet_pq::MlDsaSuite;
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-
-use crate::{chunker_registry, deal::XorQuantity};
-
 /// Advertisement schema version.
 pub const PROVIDER_ADVERT_VERSION_V1: u8 = 1;
-
 /// Domain separator prepended to canonical provider-advert signature payloads.
 pub const PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.provider-advert.v1\0";
-
 /// Maximum advertisement time-to-live (seconds).
 pub const MAX_ADVERT_TTL_SECS: u64 = 24 * 60 * 60;
-
 /// Recommended refresh interval (seconds) == 12 hours.
 pub const REFRESH_RECOMMENDATION_SECS: u64 = 12 * 60 * 60;
 /// Maximum exact canonical size of one V1 provider advertisement.
@@ -63,7 +56,6 @@ pub const PROVIDER_ADVERT_RENDEZVOUS_REGION_MAX_BYTES_V1: usize = 32;
 pub const PROVIDER_ADVERT_NOTES_MAX_BYTES_V1: usize = 4 * 1024;
 /// Maximum transport hints, equal to the V1 protocol enum cardinality.
 pub const PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1: usize = 4;
-
 /// Norito payload advertised by storage providers.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertV1 {
@@ -83,7 +75,6 @@ pub struct ProviderAdvertV1 {
     #[norito(default)]
     pub allow_unknown_capabilities: bool,
 }
-
 /// Canonical provider-advert fields covered by an envelope signature.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertSignaturePayloadV1 {
@@ -104,59 +95,47 @@ pub struct ProviderAdvertSignaturePayloadV1 {
     /// Whether consumers may ignore unknown capability identifiers.
     pub allow_unknown_capabilities: bool,
 }
-
 mod borrowed_norito {
     use norito::core::NoritoSerialize;
-
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
-
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             self.0.encoded_len_hint()
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             self.0.encoded_len_exact()
         }
     }
-
     /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
     pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
-
     impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             self.0.encoded_len_hint()
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             self.0.encoded_len_exact()
         }
     }
 }
-
 #[derive(NoritoSerialize)]
 struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
     version: u8,
@@ -168,9 +147,7 @@ struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
     signature_strict: bool,
     allow_unknown_capabilities: bool,
 }
-
 struct ProviderAdvertSignaturePayloadViewV1<'a>(ProviderAdvertSignaturePayloadViewWireV1<'a>);
-
 impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a> {
     fn from(advert: &'a ProviderAdvertV1) -> Self {
         Self(ProviderAdvertSignaturePayloadViewWireV1 {
@@ -185,32 +162,26 @@ impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a>
         })
     }
 }
-
 impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         ProviderAdvertSignaturePayloadV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl ProviderAdvertV1 {
     /// Returns the advert TTL in seconds.
     #[must_use]
     pub fn ttl(&self) -> u64 {
         self.expires_at.saturating_sub(self.issued_at)
     }
-
     /// Returns the recommended refresh deadline (`issued_at + min(ceil(TTL/2), 12h)`).
     #[must_use]
     pub fn refresh_deadline(&self) -> u64 {
@@ -219,7 +190,6 @@ impl ProviderAdvertV1 {
         let refresh_offset = half_ttl.min(REFRESH_RECOMMENDATION_SECS);
         self.issued_at.saturating_add(refresh_offset)
     }
-
     /// Validates timestamps, TTL, and required body fields.
     pub fn validate(&self, now: u64) -> Result<(), AdvertValidationError> {
         preflight_provider_advert_len(self, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
@@ -285,7 +255,6 @@ impl ProviderAdvertV1 {
         Ok(())
     }
 }
-
 /// Provider advertisement body included in the provider-signed envelope.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertBodyV1 {
@@ -317,7 +286,6 @@ pub struct ProviderAdvertBodyV1 {
     #[norito(default)]
     pub transport_hints: Option<Vec<TransportHintV1>>,
 }
-
 /// Stake pointer encoded in the advertisement.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StakePointer {
@@ -326,7 +294,6 @@ pub struct StakePointer {
     /// Exact XOR-denominated amount staked in the pool.
     pub stake_amount: XorQuantity,
 }
-
 impl StakePointer {
     /// Returns true if the stake is non-zero.
     #[must_use]
@@ -334,7 +301,6 @@ impl StakePointer {
         !self.stake_amount.is_zero()
     }
 }
-
 /// QoS hints used by clients to pick storage providers.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct QosHints {
@@ -345,7 +311,6 @@ pub struct QosHints {
     /// Maximum concurrent streams guaranteed.
     pub max_concurrent_streams: u16,
 }
-
 impl QosHints {
     /// Ensures the QoS configuration is internally consistent.
     pub fn validate(&self) -> Result<(), AdvertValidationError> {
@@ -358,7 +323,6 @@ impl QosHints {
         Ok(())
     }
 }
-
 /// Availability tier definitions.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -370,7 +334,6 @@ pub enum AvailabilityTier {
     /// Cold availability — archival with relaxed SLA.
     Cold = 3,
 }
-
 /// Capability TLV advertised by a provider.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapabilityTlv {
@@ -379,7 +342,6 @@ pub struct CapabilityTlv {
     /// Capability payload, encoded as raw bytes.
     pub payload: Vec<u8>,
 }
-
 /// Enumerates high-level capability families.
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
@@ -399,7 +361,6 @@ pub enum CapabilityType {
     /// Custom capability encoded via payload.
     VendorReserved = 0xFF00,
 }
-
 /// Errors raised while validating a governed PoTR ML-DSA capability.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PotrMldsaCapabilityError {
@@ -418,7 +379,6 @@ pub enum PotrMldsaCapabilityError {
     #[error("PoTR ML-DSA capability public key is invalid")]
     InvalidKey,
 }
-
 /// Validate the raw ML-DSA-65 public key carried by a governed PoTR capability.
 pub fn validate_potr_mldsa_capability(public_key: &[u8]) -> Result<(), PotrMldsaCapabilityError> {
     let expected = MlDsaSuite::MlDsa65.public_key_len();
@@ -435,7 +395,6 @@ pub fn validate_potr_mldsa_capability(public_key: &[u8]) -> Result<(), PotrMldsa
         .map_err(|_| PotrMldsaCapabilityError::InvalidKey)?;
     Ok(())
 }
-
 /// Payload describing range-fetch capability metadata.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderCapabilityRangeV1 {
@@ -450,7 +409,6 @@ pub struct ProviderCapabilityRangeV1 {
     /// Whether Merkle proofs can accompany ranged responses.
     pub supports_merkle_proof: bool,
 }
-
 impl Default for ProviderCapabilityRangeV1 {
     fn default() -> Self {
         Self {
@@ -462,11 +420,9 @@ impl Default for ProviderCapabilityRangeV1 {
         }
     }
 }
-
 const PQ_FLAG_GUARD: u8 = 0x01;
 const PQ_FLAG_MAJORITY: u8 = 0x02;
 const PQ_FLAG_STRICT: u8 = 0x04;
-
 /// Errors raised when validating SoraNet PQ capability payloads.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PqCapabilityError {
@@ -477,7 +433,6 @@ pub enum PqCapabilityError {
     #[error("soranet_pq capability marked strict support without majority support")]
     StrictWithoutMajority,
 }
-
 /// Bitflag payload describing SoraNet PQ support levels.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderCapabilitySoranetPqV1 {
@@ -485,7 +440,6 @@ pub struct ProviderCapabilitySoranetPqV1 {
     pub supports_majority: bool,
     pub supports_strict: bool,
 }
-
 impl ProviderCapabilitySoranetPqV1 {
     /// Validate invariants for the payload.
     pub fn validate(&self) -> Result<(), PqCapabilityError> {
@@ -497,7 +451,6 @@ impl ProviderCapabilitySoranetPqV1 {
         }
         Ok(())
     }
-
     /// Encode the payload into the compact bitflag representation.
     pub fn to_bytes(self) -> Result<Vec<u8>, PqCapabilityError> {
         self.validate()?;
@@ -513,7 +466,6 @@ impl ProviderCapabilitySoranetPqV1 {
         }
         Ok(vec![mask])
     }
-
     /// Decode the payload from the bitflag representation.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PqCapabilityError> {
         if bytes.len() != 1 {
@@ -532,7 +484,6 @@ impl ProviderCapabilitySoranetPqV1 {
         Ok(payload)
     }
 }
-
 impl ProviderCapabilityRangeV1 {
     /// Validates the capability metadata.
     pub fn validate(&self) -> Result<(), RangeCapabilityError> {
@@ -550,7 +501,6 @@ impl ProviderCapabilityRangeV1 {
         }
         Ok(())
     }
-
     /// Encodes the capability metadata to the compact 9-byte TLV payload.
     pub fn to_bytes(self) -> Result<Vec<u8>, RangeCapabilityError> {
         self.validate()?;
@@ -570,7 +520,6 @@ impl ProviderCapabilityRangeV1 {
         bytes.push(flags);
         Ok(bytes)
     }
-
     /// Decodes metadata from the compact TLV payload.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, RangeCapabilityError> {
         if bytes.len() != 9 {
@@ -593,7 +542,6 @@ impl ProviderCapabilityRangeV1 {
         Ok(value)
     }
 }
-
 /// Advertised stream budget for ranged fetches.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamBudgetV1 {
@@ -605,13 +553,11 @@ pub struct StreamBudgetV1 {
     #[norito(default)]
     pub burst_bytes: Option<u64>,
 }
-
 impl<'a> DecodeFromSlice<'a> for StreamBudgetV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         decode_field_canonical::<Self>(bytes)
     }
 }
-
 impl StreamBudgetV1 {
     /// Validates the stream budget configuration.
     pub fn validate(&self) -> Result<(), StreamBudgetError> {
@@ -635,7 +581,6 @@ impl StreamBudgetV1 {
         Ok(())
     }
 }
-
 /// Hint describing a supported ranged-fetch transport.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct TransportHintV1 {
@@ -644,7 +589,6 @@ pub struct TransportHintV1 {
     /// Preference ordering (lower values are preferred).
     pub priority: u8,
 }
-
 impl TransportHintV1 {
     /// Ensures the transport hint is internally consistent.
     pub fn validate(&self) -> Result<(), TransportHintError> {
@@ -654,7 +598,6 @@ impl TransportHintV1 {
         Ok(())
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for TransportHintV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (protocol_raw, used_protocol) = <u8 as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -666,7 +609,6 @@ impl<'a> DecodeFromSlice<'a> for TransportHintV1 {
         Ok((Self { protocol, priority }, used_protocol + used_priority))
     }
 }
-
 /// Transport protocols supported by providers.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -680,7 +622,6 @@ pub enum TransportProtocol {
     /// Vendor-reserved protocol identifier.
     VendorReserved = 255,
 }
-
 impl TransportProtocol {
     fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -692,7 +633,6 @@ impl TransportProtocol {
         }
     }
 }
-
 /// Errors raised when validating range capability metadata.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RangeCapabilityError {
@@ -707,7 +647,6 @@ pub enum RangeCapabilityError {
     #[error("failed to decode capability payload: {0}")]
     Decode(String),
 }
-
 /// Errors raised when validating stream budgets.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum StreamBudgetError {
@@ -720,14 +659,12 @@ pub enum StreamBudgetError {
     #[error("burst_bytes {burst} must be <= max_bytes_per_sec {rate}")]
     BurstExceedsRate { burst: u64, rate: u64 },
 }
-
 /// Errors raised when validating transport hints.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum TransportHintError {
     #[error("transport hint priority is out of range")]
     InvalidPriority,
 }
-
 /// Service endpoint exposed by the provider.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AdvertEndpoint {
@@ -738,7 +675,6 @@ pub struct AdvertEndpoint {
     /// Optional TLS fingerprint / ALPN hints.
     pub metadata: Vec<EndpointMetadata>,
 }
-
 /// Endpoint metadata TLV fields.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct EndpointMetadata {
@@ -747,7 +683,6 @@ pub struct EndpointMetadata {
     /// Raw value bytes.
     pub value: Vec<u8>,
 }
-
 /// Metadata keys for endpoint hints.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u16)]
@@ -759,7 +694,6 @@ pub enum EndpointMetadataKey {
     /// Region tag for routing hints.
     Region = 0x0003,
 }
-
 /// Endpoint kind enumeration.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -771,7 +705,6 @@ pub enum EndpointKind {
     /// Norito-RPC streaming endpoint.
     NoritoRpc = 3,
 }
-
 /// Rendezvous topic advertised for discovery.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct RendezvousTopic {
@@ -780,7 +713,6 @@ pub struct RendezvousTopic {
     /// Region or locale code (ISO-3166 alpha-2 or `global`).
     pub region: String,
 }
-
 /// Path diversity policy to mitigate eclipse attacks.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PathDiversityPolicy {
@@ -791,7 +723,6 @@ pub struct PathDiversityPolicy {
     /// Maximum entries from the same staking pool.
     pub max_same_pool_per_path: u8,
 }
-
 /// Signature covering the domain-separated canonical advertisement envelope.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -803,7 +734,6 @@ pub struct AdvertSignature {
     /// Raw signature bytes.
     pub signature: Vec<u8>,
 }
-
 /// Supported advertisement signature algorithms.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -813,7 +743,6 @@ pub enum SignatureAlgorithm {
     /// Multi-signature aggregated via Norito (reserved).
     MultiSig = 2,
 }
-
 impl FastJsonWrite for SignatureAlgorithm {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -823,7 +752,6 @@ impl FastJsonWrite for SignatureAlgorithm {
         NoritoJsonSerialize::json_serialize(&label, out);
     }
 }
-
 impl norito::json::JsonDeserialize for SignatureAlgorithm {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -837,7 +765,6 @@ impl norito::json::JsonDeserialize for SignatureAlgorithm {
             ))),
         }
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         match value.as_str() {
             Some("ed25519") => Ok(Self::Ed25519),
@@ -851,7 +778,6 @@ impl norito::json::JsonDeserialize for SignatureAlgorithm {
         }
     }
 }
-
 /// Builder for constructing provider advertisements.
 #[derive(Debug, Default)]
 pub struct ProviderAdvertBuilder {
@@ -879,7 +805,6 @@ pub struct ProviderAdvertBuilder {
     signature: Option<Vec<u8>>,
     allow_unknown_capabilities: bool,
 }
-
 /// Errors raised while building provider adverts.
 #[derive(Debug, Error)]
 pub enum ProviderAdvertBuildError {
@@ -888,68 +813,57 @@ pub enum ProviderAdvertBuildError {
     #[error("provider advert validation failed: {0}")]
     Validation(AdvertValidationError),
 }
-
 impl ProviderAdvertBuilder {
     /// Creates a new, empty builder.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
-
     #[must_use]
     pub fn profile_id(&mut self, profile_id: impl Into<String>) -> &mut Self {
         self.profile_id = Some(profile_id.into());
         self
     }
-
     #[must_use]
     pub fn profile_aliases(&mut self, aliases: Vec<String>) -> &mut Self {
         self.profile_aliases = Some(aliases);
         self
     }
-
     #[must_use]
     pub fn provider_id(&mut self, provider_id: [u8; 32]) -> &mut Self {
         self.provider_id = Some(provider_id);
         self
     }
-
     #[must_use]
     pub fn stake_pool_id(&mut self, stake_pool_id: [u8; 32]) -> &mut Self {
         self.stake_pool_id = Some(stake_pool_id);
         self
     }
-
     #[must_use]
     pub fn stake_amount(&mut self, stake_amount: XorQuantity) -> &mut Self {
         self.stake_amount = Some(stake_amount);
         self
     }
-
     #[must_use]
     pub fn availability(&mut self, availability: AvailabilityTier) -> &mut Self {
         self.availability = Some(availability);
         self
     }
-
     #[must_use]
     pub fn max_retrieval_latency_ms(&mut self, latency: u32) -> &mut Self {
         self.max_latency_ms = Some(latency);
         self
     }
-
     #[must_use]
     pub fn max_concurrent_streams(&mut self, streams: u16) -> &mut Self {
         self.max_streams = Some(streams);
         self
     }
-
     #[must_use]
     pub fn add_capability(&mut self, capability: CapabilityTlv) -> &mut Self {
         self.capabilities.push(capability);
         self
     }
-
     pub fn add_range_capability(
         &mut self,
         capability: ProviderCapabilityRangeV1,
@@ -963,85 +877,71 @@ impl ProviderAdvertBuilder {
         });
         Ok(self)
     }
-
     #[must_use]
     pub fn add_endpoint(&mut self, endpoint: AdvertEndpoint) -> &mut Self {
         self.endpoints.push(endpoint);
         self
     }
-
     #[must_use]
     pub fn add_topic(&mut self, topic: RendezvousTopic) -> &mut Self {
         self.topics.push(topic);
         self
     }
-
     #[must_use]
     pub fn allow_unknown_capabilities(&mut self, allow: bool) -> &mut Self {
         self.allow_unknown_capabilities = allow;
         self
     }
-
     #[must_use]
     pub fn path_policy_min_guard_weight(&mut self, weight: u16) -> &mut Self {
         self.min_guard_weight = Some(weight);
         self
     }
-
     #[must_use]
     pub fn path_policy_max_same_asn_per_path(&mut self, limit: u8) -> &mut Self {
         self.max_same_asn = Some(limit);
         self
     }
-
     #[must_use]
     pub fn path_policy_max_same_pool_per_path(&mut self, limit: u8) -> &mut Self {
         self.max_same_pool = Some(limit);
         self
     }
-
     #[must_use]
     pub fn notes(&mut self, notes: impl Into<String>) -> &mut Self {
         self.notes = Some(notes.into());
         self
     }
-
     #[must_use]
     pub fn stream_budget(&mut self, budget: StreamBudgetV1) -> &mut Self {
         self.stream_budget = Some(budget);
         self
     }
-
     #[must_use]
     pub fn clear_stream_budget(&mut self) -> &mut Self {
         self.stream_budget = None;
         self
     }
-
     #[must_use]
     pub fn transport_hints(&mut self, hints: Vec<TransportHintV1>) -> &mut Self {
         self.transport_hints = hints;
         self
     }
-
     #[must_use]
     pub fn add_transport_hint(&mut self, hint: TransportHintV1) -> &mut Self {
         self.transport_hints.push(hint);
         self
     }
-
     #[must_use]
     pub fn issued_at(&mut self, issued_at: u64) -> &mut Self {
         self.issued_at = Some(issued_at);
         self
     }
-
     #[must_use]
     pub fn ttl_secs(&mut self, ttl: u64) -> &mut Self {
         self.ttl_secs = Some(ttl);
         self
     }
-
     #[must_use]
     pub fn signature(
         &mut self,
@@ -1054,7 +954,6 @@ impl ProviderAdvertBuilder {
         self.signature = Some(signature);
         self
     }
-
     /// Consumes the builder and returns a fully validated advert.
     pub fn build(self) -> Result<ProviderAdvertV1, ProviderAdvertBuildError> {
         let requested_profile = self
@@ -1108,7 +1007,6 @@ impl ProviderAdvertBuilder {
         let signature = self
             .signature
             .ok_or(ProviderAdvertBuildError::MissingField("signature"))?;
-
         let issued_at = self
             .issued_at
             .unwrap_or_else(|| unix_time_now().unwrap_or(0));
@@ -1121,13 +1019,11 @@ impl ProviderAdvertBuilder {
             .ok_or(ProviderAdvertBuildError::Validation(
                 AdvertValidationError::InvalidTimestamps,
             ))?;
-
         if ttl == 0 {
             return Err(ProviderAdvertBuildError::Validation(
                 AdvertValidationError::InvalidTimestamps,
             ));
         }
-
         let profile_aliases = self.profile_aliases.map(|mut aliases| {
             if !aliases.iter().any(|alias| alias == &profile_id) {
                 aliases.insert(0, profile_id.clone());
@@ -1141,14 +1037,12 @@ impl ProviderAdvertBuilder {
             }
             aliases
         });
-
         let stream_budget = self.stream_budget;
         let transport_hints = if self.transport_hints.is_empty() {
             None
         } else {
             Some(self.transport_hints.clone())
         };
-
         let body = ProviderAdvertBodyV1 {
             provider_id,
             profile_id,
@@ -1174,10 +1068,8 @@ impl ProviderAdvertBuilder {
             stream_budget,
             transport_hints,
         };
-
         body.validate()
             .map_err(ProviderAdvertBuildError::Validation)?;
-
         let advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
             issued_at,
@@ -1191,14 +1083,12 @@ impl ProviderAdvertBuilder {
             signature_strict: true,
             allow_unknown_capabilities: self.allow_unknown_capabilities,
         };
-
         advert
             .validate_with_body(issued_at)
             .map_err(ProviderAdvertBuildError::Validation)?;
         Ok(advert)
     }
 }
-
 impl ProviderAdvertV1 {
     /// Returns a builder for the advert.
     #[must_use]
@@ -1206,7 +1096,6 @@ impl ProviderAdvertV1 {
         ProviderAdvertBuilder::new()
     }
 }
-
 /// Errors raised while validating a provider advert.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AdvertValidationError {
@@ -1330,7 +1219,6 @@ pub enum AdvertValidationError {
     #[error("operator notes are noncanonical or exceed {maximum} bytes")]
     InvalidNotes { maximum: usize },
 }
-
 fn preflight_provider_advert_len(
     advert: &ProviderAdvertV1,
     maximum: usize,
@@ -1347,7 +1235,6 @@ fn preflight_provider_advert_len(
     }
     Ok(found)
 }
-
 /// Decode one bounded, canonically encoded V1 provider advertisement.
 ///
 /// Structural and signature-policy validation remains the caller's
@@ -1387,7 +1274,6 @@ pub fn decode_provider_advert_v1(bytes: &[u8]) -> Result<ProviderAdvertV1, norit
     }
     Ok(advert)
 }
-
 impl ProviderAdvertBodyV1 {
     /// Validates the body independently of outer metadata.
     pub fn validate(&self) -> Result<(), AdvertValidationError> {
@@ -1445,7 +1331,6 @@ impl ProviderAdvertBodyV1 {
                 });
             }
         }
-
         if self.capabilities.len() > PROVIDER_ADVERT_CAPABILITIES_MAX_V1 {
             return Err(AdvertValidationError::TooManyCapabilities {
                 found: self.capabilities.len(),
@@ -1471,7 +1356,6 @@ impl ProviderAdvertBodyV1 {
                 });
             }
         }
-
         let mut seen_range_capability = false;
         let mut seen_potr_mldsa_capability = false;
         for capability in &self.capabilities {
@@ -1496,7 +1380,6 @@ impl ProviderAdvertBodyV1 {
                 seen_potr_mldsa_capability = true;
             }
         }
-
         if self.endpoints.len() > PROVIDER_ADVERT_ENDPOINTS_MAX_V1 {
             return Err(AdvertValidationError::TooManyEndpoints {
                 found: self.endpoints.len(),
@@ -1541,7 +1424,6 @@ impl ProviderAdvertBodyV1 {
                 }
             }
         }
-
         if self.rendezvous_topics.len() > PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1 {
             return Err(AdvertValidationError::TooManyRendezvousTopics {
                 found: self.rendezvous_topics.len(),
@@ -1568,7 +1450,6 @@ impl ProviderAdvertBodyV1 {
                 });
             }
         }
-
         if self.notes.as_ref().is_some_and(|notes| {
             !is_canonical_bounded_text(notes, PROVIDER_ADVERT_NOTES_MAX_BYTES_V1)
         }) {
@@ -1576,7 +1457,6 @@ impl ProviderAdvertBodyV1 {
                 maximum: PROVIDER_ADVERT_NOTES_MAX_BYTES_V1,
             });
         }
-
         let mut has_stream_budget = false;
         if let Some(budget) = &self.stream_budget {
             has_stream_budget = true;
@@ -1584,7 +1464,6 @@ impl ProviderAdvertBodyV1 {
                 .validate()
                 .map_err(AdvertValidationError::InvalidStreamBudget)?;
         }
-
         let mut has_transport_hints = false;
         if let Some(hints) = &self.transport_hints {
             if hints.is_empty() {
@@ -1617,21 +1496,18 @@ impl ProviderAdvertBodyV1 {
                 return Err(AdvertValidationError::SoranetTransportWithoutCapability);
             }
         }
-
         if (has_stream_budget || has_transport_hints) && !seen_range_capability {
             return Err(AdvertValidationError::RangeMetadataWithoutCapability);
         }
         Ok(())
     }
 }
-
 fn is_canonical_bounded_text(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
-
 impl ProviderAdvertV1 {
     /// Combined validation helper for outer advert and inner body.
     pub fn validate_with_body(&self, now: u64) -> Result<(), AdvertValidationError> {
@@ -1639,7 +1515,6 @@ impl ProviderAdvertV1 {
         self.body.validate()?;
         Ok(())
     }
-
     /// Returns the canonical envelope fields covered by the signature.
     #[must_use]
     pub fn signature_payload(&self) -> ProviderAdvertSignaturePayloadV1 {
@@ -1654,7 +1529,6 @@ impl ProviderAdvertV1 {
             allow_unknown_capabilities: self.allow_unknown_capabilities,
         }
     }
-
     /// Returns the domain-separated canonical bytes covered by the signature.
     ///
     /// The signed envelope binds the schema version, timestamps, body,
@@ -1680,14 +1554,12 @@ impl ProviderAdvertV1 {
         payload.extend_from_slice(&envelope_bytes);
         Ok(payload)
     }
-
     /// Verifies the provider signature over the canonical advert envelope.
     pub fn verify_signature(&self) -> Result<(), AdvertSignatureError> {
         match self.signature.algorithm {
             SignatureAlgorithm::Ed25519 => {}
             other => return Err(AdvertSignatureError::UnsupportedAlgorithm(other)),
         }
-
         if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
             return Err(AdvertSignatureError::InvalidPublicKeyLength {
                 length: self.signature.public_key.len(),
@@ -1698,24 +1570,20 @@ impl ProviderAdvertV1 {
                 length: self.signature.signature.len(),
             });
         }
-
         let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
         public_key.copy_from_slice(&self.signature.public_key);
         let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
             .map_err(AdvertSignatureError::InvalidPublicKey)?;
-
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(&self.signature.signature);
         let signature = crate::checked_ed25519_signature_from_bytes(&signature)
             .map_err(AdvertSignatureError::Verification)?;
-
         let payload = self.signature_payload_bytes()?;
         verifying_key
             .verify_strict(&payload, &signature)
             .map_err(|err| AdvertSignatureError::Verification(err.to_string()))
     }
 }
-
 /// Human-friendly accessors useful for monitoring dashboards.
 impl ProviderAdvertV1 {
     /// Returns the TTL as a [`Duration`].
@@ -1723,14 +1591,12 @@ impl ProviderAdvertV1 {
     pub fn ttl_duration(&self) -> Duration {
         Duration::from_secs(self.ttl())
     }
-
     /// Returns the refresh deadline as a [`Duration`] since epoch.
     #[must_use]
     pub fn refresh_deadline_duration(&self) -> Duration {
         Duration::from_secs(self.refresh_deadline())
     }
 }
-
 /// Errors raised while verifying a provider advert signature.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AdvertSignatureError {
@@ -1770,37 +1636,30 @@ pub enum AdvertSignatureError {
     #[error("provider advert signature verification failed: {0}")]
     Verification(String),
 }
-
 fn unix_time_now() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_secs())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{NoritoSerialize as _, decode_from_bytes, to_bytes};
-
-    use super::*;
-
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
-
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         norito::to_bytes(value).expect("serialize explicit canonical frame")
     }
-
     fn supported_layouts() -> [u8; 8] {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-
         [
             0,
             COMPACT_LEN,
@@ -1812,7 +1671,6 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
-
     fn sample_advert(now: u64) -> ProviderAdvertV1 {
         let issued_at = now;
         let expires_at = now + REFRESH_RECOMMENDATION_SECS * 2;
@@ -1889,7 +1747,6 @@ mod tests {
             allow_unknown_capabilities: false,
         }
     }
-
     fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
         let mut advert = sample_advert(now);
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
@@ -1904,13 +1761,11 @@ mod tests {
         advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
         advert
     }
-
     #[test]
     fn advert_roundtrip() {
         let advert = sample_advert(1_700_000_000);
         advert.body.validate().unwrap();
         advert.validate_with_body(1_700_000_000).unwrap();
-
         let bytes = norito::to_bytes(&advert).expect("serialize advert");
         let decoded = decode_provider_advert_v1(&bytes).expect("decode bounded canonical advert");
         assert_eq!(decoded, advert);
@@ -1923,7 +1778,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn advert_size_and_signature_preflight_accept_boundaries_and_reject_one_over() {
         let now = 1_700_000_000;
@@ -1938,7 +1792,6 @@ mod tests {
                 maximum: exact.saturating_sub(1),
             })
         );
-
         let mut unsupported = advert.clone();
         unsupported.signature.algorithm = SignatureAlgorithm::MultiSig;
         assert_eq!(
@@ -1947,7 +1800,6 @@ mod tests {
                 algorithm: SignatureAlgorithm::MultiSig,
             })
         );
-
         let mut bad_key = advert.clone();
         bad_key.signature.public_key.push(7);
         assert_eq!(
@@ -1957,7 +1809,6 @@ mod tests {
                 expected: PUBLIC_KEY_LENGTH,
             })
         );
-
         let mut oversized = advert;
         oversized.body.notes = Some("x".repeat(PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1));
         assert!(matches!(
@@ -1973,13 +1824,11 @@ mod tests {
                 if reason.contains("maximum")
         ));
     }
-
     #[test]
     fn borrowed_advert_signature_view_is_byte_exact_for_every_layout() {
         let advert = sample_advert(1_700_000_000);
         let owned = advert.signature_payload();
         let borrowed = ProviderAdvertSignaturePayloadViewV1::from(&advert);
-
         assert_eq!(
             <ProviderAdvertSignaturePayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
             ProviderAdvertSignaturePayloadV1::schema_hash()
@@ -1997,7 +1846,6 @@ mod tests {
                 .expect("encode domain-separated borrowed signature envelope"),
             expected_domain_separated
         );
-
         for flags in supported_layouts() {
             let owned_bytes = encode_bare_with_flags(&owned, flags);
             let borrowed_bytes = encode_bare_with_flags(&borrowed, flags);
@@ -2033,7 +1881,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn advert_body_collection_boundaries_are_deterministic() {
         let mut body = sample_advert(1_700_000_000).body;
@@ -2057,7 +1904,6 @@ mod tests {
             .collect();
         body.notes = Some("x".repeat(PROVIDER_ADVERT_NOTES_MAX_BYTES_V1));
         assert!(body.validate().is_ok());
-
         let mut too_many_aliases = body.clone();
         too_many_aliases
             .profile_aliases
@@ -2071,7 +1917,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1,
             })
         );
-
         let mut too_many_capabilities = body.clone();
         too_many_capabilities.capabilities.push(CapabilityTlv {
             cap_type: CapabilityType::ToriiGateway,
@@ -2084,7 +1929,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_CAPABILITIES_MAX_V1,
             })
         );
-
         let mut too_many_endpoints = body.clone();
         too_many_endpoints
             .endpoints
@@ -2096,7 +1940,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_ENDPOINTS_MAX_V1,
             })
         );
-
         let mut too_many_topics = body;
         too_many_topics.rendezvous_topics.push(RendezvousTopic {
             topic: "overflow".to_owned(),
@@ -2110,7 +1953,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn advert_body_byte_aggregates_accept_boundaries_and_reject_one_over() {
         let mut body = sample_advert(1_700_000_000).body;
@@ -2134,7 +1976,6 @@ mod tests {
         capability_boundary
             .validate()
             .expect("exact capability aggregate boundary validates");
-
         capability_boundary.capabilities.push(CapabilityTlv {
             cap_type: CapabilityType::VendorReserved,
             payload: vec![1],
@@ -2146,7 +1987,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1,
             })
         );
-
         body.capabilities.push(CapabilityTlv {
             cap_type: CapabilityType::VendorReserved,
             payload: vec![1; PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1],
@@ -2171,7 +2011,6 @@ mod tests {
                 .expect("bounded decoder accepts the maximum capability field"),
             boundary_advert
         );
-
         let mut oversized_capability = body.clone();
         oversized_capability
             .capabilities
@@ -2186,7 +2025,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut oversized_host = body.clone();
         oversized_host.endpoints[0].host_pattern.push('h');
         assert_eq!(
@@ -2196,7 +2034,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_ENDPOINT_HOST_MAX_BYTES_V1,
             })
         );
-
         let mut aggregate_overflow = body.clone();
         aggregate_overflow.endpoints.push(AdvertEndpoint {
             kind: EndpointKind::Torii,
@@ -2213,7 +2050,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1,
             })
         );
-
         let mut oversized_topic = body.clone();
         oversized_topic.rendezvous_topics[0].topic.push('t');
         assert_eq!(
@@ -2223,7 +2059,6 @@ mod tests {
                 maximum: PROVIDER_ADVERT_RENDEZVOUS_TOPIC_MAX_BYTES_V1,
             })
         );
-
         let mut oversized_notes = body;
         oversized_notes.notes = Some("n".repeat(PROVIDER_ADVERT_NOTES_MAX_BYTES_V1 + 1));
         assert_eq!(
@@ -2233,7 +2068,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn advert_transport_hint_enum_boundary_is_enforced() {
         let mut body = sample_advert(1_700_000_000).body;
@@ -2260,7 +2094,6 @@ mod tests {
             },
         ]);
         assert!(body.validate().is_ok());
-
         body.transport_hints
             .as_mut()
             .expect("transport hints")
@@ -2276,7 +2109,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn verify_signature_accepts_signed_advert_envelope() {
         let advert = signed_sample_advert(1_700_000_000);
@@ -2284,7 +2116,6 @@ mod tests {
             .verify_signature()
             .expect("signature should verify over canonical envelope bytes");
     }
-
     #[test]
     fn verify_signature_rejects_every_tampered_envelope_field() {
         let advert = signed_sample_advert(1_700_000_000);
@@ -2335,7 +2166,6 @@ mod tests {
                 value
             }),
         ];
-
         for (field, value) in tampered {
             assert!(
                 value.verify_signature().is_err(),
@@ -2343,7 +2173,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_signature_rejects_legacy_body_only_signature() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2354,13 +2183,11 @@ mod tests {
             public_key: signing_key.verifying_key().to_bytes().to_vec(),
             signature: signing_key.sign(&body_bytes).to_bytes().to_vec(),
         };
-
         assert!(matches!(
             advert.verify_signature(),
             Err(AdvertSignatureError::Verification(_))
         ));
     }
-
     #[test]
     fn verify_signature_rejects_undomained_envelope_signature() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2373,18 +2200,15 @@ mod tests {
         let envelope_bytes = norito::to_bytes(&advert.signature_payload())
             .expect("encode undomained advert envelope");
         advert.signature.signature = signing_key.sign(&envelope_bytes).to_bytes().to_vec();
-
         assert!(matches!(
             advert.verify_signature(),
             Err(AdvertSignatureError::Verification(_))
         ));
     }
-
     #[test]
     fn verify_signature_rejects_all_zero_signature_material() {
         let mut advert = signed_sample_advert(1_700_000_000);
         advert.signature.signature.fill(0);
-
         let err = advert
             .verify_signature()
             .expect_err("all-zero provider advert signature must be rejected");
@@ -2393,7 +2217,6 @@ mod tests {
             AdvertSignatureError::Verification(reason) if reason.contains("all zero")
         ));
     }
-
     #[test]
     fn verify_signature_rejects_malformed_signature_r() {
         const SMALL_ORDER_R: [u8; PUBLIC_KEY_LENGTH] = [
@@ -2405,14 +2228,12 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         for (label, replacement_r, expected) in [
             ("small-order", SMALL_ORDER_R, "small-order"),
             ("noncanonical", NONCANONICAL_R, "not a canonical"),
         ] {
             let mut advert = signed_sample_advert(1_700_000_000);
             advert.signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
-
             let err = advert
                 .verify_signature()
                 .expect_err("malformed provider advert signature R must be rejected");
@@ -2422,12 +2243,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_signature_rejects_all_zero_public_key_material() {
         let mut advert = signed_sample_advert(1_700_000_000);
         advert.signature.public_key = vec![0; PUBLIC_KEY_LENGTH];
-
         let err = advert
             .verify_signature()
             .expect_err("all-zero provider advert public key must be rejected");
@@ -2436,7 +2255,6 @@ mod tests {
             AdvertSignatureError::InvalidPublicKey(reason) if reason.contains("all zero")
         ));
     }
-
     #[test]
     fn ttl_enforced() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2447,7 +2265,6 @@ mod tests {
             AdvertValidationError::TtlOutOfRange { ttl, max } if ttl == MAX_ADVERT_TTL_SECS + 1 && max == MAX_ADVERT_TTL_SECS
         ));
     }
-
     #[test]
     fn future_issued_advert_is_rejected() {
         let now = 1_700_000_000;
@@ -2460,17 +2277,14 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn refresh_deadline_tracks_half_ttl() {
         let mut advert = sample_advert(1_700_000_000);
         advert.expires_at = advert.issued_at + 2 * 60 * 60;
         assert_eq!(advert.refresh_deadline(), advert.issued_at + 60 * 60);
-
         advert.expires_at = advert.issued_at + 3;
         assert_eq!(advert.refresh_deadline(), advert.issued_at + 2);
     }
-
     #[test]
     fn detects_missing_endpoints() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2478,7 +2292,6 @@ mod tests {
         let err = advert.validate_with_body(1_700_000_000).unwrap_err();
         assert_eq!(err, AdvertValidationError::MissingEndpoints);
     }
-
     #[test]
     fn qos_validation() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2486,7 +2299,6 @@ mod tests {
         let err = advert.body.validate().unwrap_err();
         assert_eq!(err, AdvertValidationError::InvalidQos);
     }
-
     #[test]
     fn stream_budget_option_roundtrip() {
         let budget = StreamBudgetV1 {
@@ -2498,7 +2310,6 @@ mod tests {
         let decoded: Option<StreamBudgetV1> = decode_from_bytes(&bytes).expect("decode option");
         assert_eq!(decoded, Some(budget));
     }
-
     #[test]
     fn builder_constructs_advert() {
         let mut builder = ProviderAdvertV1::builder();
@@ -2557,7 +2368,6 @@ mod tests {
             .ttl_secs(3600)
             .issued_at(1_700_000_000)
             .allow_unknown_capabilities(true);
-
         let advert = builder.build().expect("builder constructs advert");
         advert
             .validate_with_body(1_700_000_100)
@@ -2586,7 +2396,6 @@ mod tests {
             Some(1)
         );
     }
-
     #[test]
     fn stream_budget_validation() {
         let err = StreamBudgetV1 {
@@ -2597,7 +2406,6 @@ mod tests {
         .validate()
         .unwrap_err();
         assert_eq!(err, StreamBudgetError::InvalidMaxInFlight);
-
         let err = StreamBudgetV1 {
             max_in_flight: 1,
             max_bytes_per_sec: 0,
@@ -2606,7 +2414,6 @@ mod tests {
         .validate()
         .unwrap_err();
         assert_eq!(err, StreamBudgetError::InvalidMaxBytesPerSec);
-
         let err = StreamBudgetV1 {
             max_in_flight: 1,
             max_bytes_per_sec: 32,
@@ -2615,7 +2422,6 @@ mod tests {
         .validate()
         .unwrap_err();
         assert_eq!(err, StreamBudgetError::InvalidBurstBytes);
-
         let err = StreamBudgetV1 {
             max_in_flight: 1,
             max_bytes_per_sec: 32,
@@ -2631,7 +2437,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn transport_hint_priority_validation() {
         let hint = TransportHintV1 {
@@ -2641,18 +2446,15 @@ mod tests {
         let err = hint.validate().unwrap_err();
         assert_eq!(err, TransportHintError::InvalidPriority);
     }
-
     #[test]
     fn signature_algorithm_json_deserializes_stable_labels() {
         let ed25519: SignatureAlgorithm =
             norito::json::from_slice(br#""ed25519""#).expect("parse ed25519");
         assert_eq!(ed25519, SignatureAlgorithm::Ed25519);
-
         let multisig: SignatureAlgorithm =
             norito::json::from_slice(br#""multi-sig""#).expect("parse multi-sig");
         assert_eq!(multisig, SignatureAlgorithm::MultiSig);
     }
-
     #[test]
     fn duplicate_transport_protocol_rejected() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2669,7 +2471,6 @@ mod tests {
         let err = advert.body.validate().unwrap_err();
         assert_eq!(err, AdvertValidationError::DuplicateTransportProtocol);
     }
-
     #[test]
     fn soranet_transport_requires_capability() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2683,7 +2484,6 @@ mod tests {
             AdvertValidationError::SoranetTransportWithoutCapability
         );
     }
-
     #[test]
     fn soranet_transport_accepts_matching_capability() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2704,7 +2504,6 @@ mod tests {
         });
         advert.body.validate().unwrap();
     }
-
     #[test]
     fn invalid_range_capability_rejected() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2724,7 +2523,6 @@ mod tests {
             ) | AdvertValidationError::InvalidRangeCapabilityPayload
         ));
     }
-
     #[test]
     fn soranet_pq_payload_roundtrip() {
         let pq = ProviderCapabilitySoranetPqV1 {
@@ -2736,7 +2534,6 @@ mod tests {
         let decoded = ProviderCapabilitySoranetPqV1::from_bytes(&bytes).expect("decode soranet_pq");
         assert_eq!(decoded, pq);
     }
-
     #[test]
     fn soranet_pq_requires_guard_and_majority() {
         let invalid_guard = ProviderCapabilitySoranetPqV1 {
@@ -2746,7 +2543,6 @@ mod tests {
         };
         let err = invalid_guard.to_bytes().unwrap_err();
         assert_eq!(err, PqCapabilityError::MissingGuardSupport);
-
         let invalid_strict = ProviderCapabilitySoranetPqV1 {
             supports_guard: true,
             supports_majority: false,
@@ -2755,7 +2551,6 @@ mod tests {
         let err = invalid_strict.to_bytes().unwrap_err();
         assert_eq!(err, PqCapabilityError::StrictWithoutMajority);
     }
-
     #[test]
     fn potr_mldsa_capability_requires_a_canonical_mldsa65_key() {
         assert!(matches!(
@@ -2776,7 +2571,6 @@ mod tests {
         assert_eq!(algorithm, Algorithm::MlDsa);
         validate_potr_mldsa_capability(public_key).expect("canonical ML-DSA-65 capability key");
     }
-
     #[test]
     fn stream_budget_without_range_capability_rejected() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2787,7 +2581,6 @@ mod tests {
         let err = advert.body.validate().unwrap_err();
         assert_eq!(err, AdvertValidationError::RangeMetadataWithoutCapability);
     }
-
     #[test]
     fn transport_hints_without_range_capability_rejected() {
         let mut advert = sample_advert(1_700_000_000);
@@ -2799,7 +2592,6 @@ mod tests {
         let err = advert.body.validate().unwrap_err();
         assert_eq!(err, AdvertValidationError::RangeMetadataWithoutCapability);
     }
-
     #[test]
     fn empty_transport_hints_rejected() {
         let mut advert = sample_advert(1_700_000_000);

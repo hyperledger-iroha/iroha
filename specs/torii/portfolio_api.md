@@ -292,8 +292,10 @@ The endpoint returns HTTP 200 with `submitted: false`, canonical padded-base64
 `transaction_payload_b64`, and the corresponding `signing_message_b64`. Torii
 does not accept a private key or submit the draft. The client validates and
 signs the payload locally, constructs a `SignedTransaction`, and submits it
-through the ordinary transaction endpoint. The usual CIDR/API-token/fee-policy
-gates apply. Upon execution the node emits
+through the ordinary transaction endpoint. Exact-NetworkId canonical account
+headers must sign the exact method, path, query, and raw JSON body, and their
+account must equal the request `authority`. CIDR/API-token/fee-policy gates are
+only additional admission controls. Upon execution the node emits
 `SpaceDirectoryEvent::ManifestActivated`, rebuilds UAID bindings, and the read
 surfaces immediately expose the updated manifest.
 
@@ -329,9 +331,9 @@ Example payload:
 ```
 
 Torii responds with the same canonical unsigned transaction-draft envelope as
-publication and never submits it. The same CIDR/API-token/fee-policy gates
-applied to the read endpoints protect this route as well. After a locally
-signed transaction executes, the node emits
+publication and never submits it. The same exact-NetworkId canonical account
+signature and body-authority binding are mandatory. After a locally signed
+transaction executes, the node emits
 `SpaceDirectoryEvent::ManifestRevoked`, rebuilds UAID bindings automatically,
 and the read APIs immediately reflect the revoked status. See
 `specs/space_directory.md` for the operator runbook and evidence expectations.

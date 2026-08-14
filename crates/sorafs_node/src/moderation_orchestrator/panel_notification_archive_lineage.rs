@@ -14,7 +14,6 @@ fn panel_notification_archive_payload_digest(
         ],
     ))
 }
-
 fn hash_optional_archive_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
     match value {
         Some(value) => {
@@ -26,7 +25,6 @@ fn hash_optional_archive_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 
         }
     }
 }
-
 fn panel_notification_archive_signer_epoch_digest(
     epoch: &ModerationPanelNotificationArchiveSignerEpochV1,
 ) -> [u8; 32] {
@@ -71,7 +69,6 @@ fn panel_notification_archive_signer_epoch_digest(
     }
     *hasher.finalize().as_bytes()
 }
-
 fn panel_notification_archive_signer_rotation_message(
     network_id: &iroha_data_model::NetworkId,
     epoch: &ModerationPanelNotificationArchiveSignerEpochV1,
@@ -95,14 +92,12 @@ fn panel_notification_archive_signer_rotation_message(
         ],
     )
 }
-
 fn panel_notification_archive_signer_pop_message(rotation_message: [u8; 32]) -> [u8; 32] {
     domain_hash(
         PANEL_NOTIFICATION_ARCHIVE_SIGNER_POP_DOMAIN_V1,
         &[&rotation_message],
     )
 }
-
 fn verify_archive_ed25519_signature(
     public_key: [u8; 32],
     signature: [u8; 64],
@@ -116,7 +111,6 @@ fn verify_archive_ed25519_signature(
     };
     signature.verify(&public_key, &message).is_ok()
 }
-
 fn validate_panel_notification_archive_signer_epochs(
     epochs: &[ModerationPanelNotificationArchiveSignerEpochV1],
     network_id: &iroha_data_model::NetworkId,
@@ -193,7 +187,6 @@ fn validate_panel_notification_archive_signer_epochs(
     }
     Ok(())
 }
-
 fn verify_panel_notification_archive_head_signer_epoch(
     head: &ModerationPanelNotificationArchiveHeadV1,
     epochs: &[ModerationPanelNotificationArchiveSignerEpochV1],
@@ -220,7 +213,6 @@ fn verify_panel_notification_archive_head_signer_epoch(
     }
     Ok(())
 }
-
 fn reconcile_panel_notification_archive_signer_epochs(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -384,7 +376,6 @@ fn reconcile_panel_notification_archive_signer_epochs(
     }
     Ok(changed)
 }
-
 fn hash_panel_notification_archive_head_fields(
     hasher: &mut blake3::Hasher,
     head: &ModerationPanelNotificationArchiveHeadV1,
@@ -431,7 +422,6 @@ fn hash_panel_notification_archive_head_fields(
     hasher.update(&head.archive_signer_epoch.to_le_bytes());
     hasher.update(&head.archive_signer_epoch_digest);
 }
-
 fn panel_notification_archive_source_binding_digest(
     statement: &ModerationPanelNotificationSourceAttestationV1,
 ) -> [u8; 32] {
@@ -440,7 +430,6 @@ fn panel_notification_archive_source_binding_digest(
         &[&panel_notification_source_attestation_message(statement)],
     )
 }
-
 fn panel_notification_archive_source_manifest_digest(
     manifest: &ModerationPanelNotificationArchiveSourceManifestV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
@@ -457,7 +446,6 @@ fn panel_notification_archive_source_manifest_digest(
         ],
     ))
 }
-
 fn panel_notification_source_attestation_message(
     statement: &ModerationPanelNotificationSourceAttestationV1,
 ) -> [u8; 32] {
@@ -486,7 +474,6 @@ fn panel_notification_source_attestation_message(
         ],
     )
 }
-
 fn validate_panel_notification_source_attestation(
     statement: &ModerationPanelNotificationSourceAttestationV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -514,7 +501,6 @@ fn validate_panel_notification_source_attestation(
     }
     Ok(())
 }
-
 /// Validate one checkpoint-attestor broker request without accepting a caller-supplied message.
 ///
 /// The exact terminal payload must equal the pre-CAS reservation sealed into
@@ -625,7 +611,6 @@ pub fn validate_moderation_panel_notification_source_attestation_for_broker_v1(
     }
     Ok(panel_notification_source_attestation_message(statement))
 }
-
 fn panel_notification_source_attestation_from_head(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> ModerationPanelNotificationSourceAttestationV1 {
@@ -648,7 +633,6 @@ fn panel_notification_source_attestation_from_head(
         attestor_public_key: head.source_attestor_public_key,
     }
 }
-
 fn panel_notification_archive_operation_id(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> [u8; 32] {
@@ -657,7 +641,6 @@ fn panel_notification_archive_operation_id(
     hash_panel_notification_archive_head_fields(&mut hasher, head);
     *hasher.finalize().as_bytes()
 }
-
 fn panel_notification_archive_head_digest(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> [u8; 32] {
@@ -667,7 +650,6 @@ fn panel_notification_archive_head_digest(
     hasher.update(&head.operation_id);
     *hasher.finalize().as_bytes()
 }
-
 fn panel_notification_archive_chain_commitment(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> [u8; 32] {
@@ -682,7 +664,6 @@ fn panel_notification_archive_chain_commitment(
         ],
     )
 }
-
 fn panel_notification_archive_audit_page_commitment(
     previous: [u8; 32],
     head: &ModerationPanelNotificationArchiveHeadV1,
@@ -699,7 +680,6 @@ fn panel_notification_archive_audit_page_commitment(
         ],
     )
 }
-
 fn panel_notification_archive_receipt_message(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> [u8; 32] {
@@ -716,7 +696,6 @@ fn panel_notification_archive_receipt_message(
         ],
     )
 }
-
 fn verify_panel_notification_archive_head_core(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -788,7 +767,6 @@ fn verify_panel_notification_archive_head_core(
         .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
     Ok(())
 }
-
 fn verify_panel_notification_archive_head(
     head: &ModerationPanelNotificationArchiveHeadV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -804,7 +782,6 @@ fn verify_panel_notification_archive_head(
         .verify(&key, &panel_notification_archive_receipt_message(head))
         .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
 }
-
 fn verify_panel_notification_archive_head_is_current(
     head: &ModerationPanelNotificationArchiveHeadV1,
     expected_handle: &str,
@@ -821,7 +798,6 @@ fn verify_panel_notification_archive_head_is_current(
         expected_public_key,
     )
 }
-
 fn verify_panel_notification_archive_head_core_is_current(
     head: &ModerationPanelNotificationArchiveHeadV1,
     expected_handle: &str,
@@ -840,7 +816,6 @@ fn verify_panel_notification_archive_head_core_is_current(
     }
     Ok(())
 }
-
 fn verify_panel_notification_archive_lineage_link(
     successor: &ModerationPanelNotificationArchiveHeadV1,
     predecessor: &ModerationPanelNotificationArchiveHeadV1,
@@ -860,7 +835,6 @@ fn verify_panel_notification_archive_lineage_link(
     }
     Ok(())
 }
-
 fn panel_notification_archive_record_from_stored(
     entry: &StoredPanelNotificationV1,
 ) -> Result<ModerationPanelNotificationArchiveRecordV1, ModerationOrchestratorError> {
@@ -909,7 +883,6 @@ fn panel_notification_archive_record_from_stored(
         source_record_digest: entry.record_digest,
     })
 }
-
 fn archived_panel_notification_record_matches_source(
     record: &ModerationPanelNotificationArchiveRecordV1,
 ) -> impl FnOnce(&StoredPanelNotificationV1) -> bool + '_ {
@@ -944,7 +917,6 @@ fn archived_panel_notification_record_matches_source(
         }
     }
 }
-
 fn validate_archived_panel_notification_record_shape(
     record: &ModerationPanelNotificationArchiveRecordV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -966,7 +938,6 @@ fn validate_archived_panel_notification_record_shape(
         }
     }
 }
-
 fn validate_archived_panel_notification_record(
     record: &ModerationPanelNotificationArchiveRecordV1,
     source: &StoredPanelNotificationV1,
@@ -1001,7 +972,6 @@ fn validate_archived_panel_notification_record(
     }
     Ok(())
 }
-
 fn terminal_handoff_outcome_group_identity(
     cursor: ModerationFinalizedEventCursorV1,
     outcome_digest: [u8; 32],
@@ -1018,7 +988,6 @@ fn terminal_handoff_outcome_group_identity(
         ],
     )
 }
-
 fn terminal_archive_record_key(
     record: &ModerationTerminalArchiveRecordV1,
 ) -> Result<(u8, [u8; 32], [u8; 32]), ModerationOrchestratorError> {
@@ -1072,7 +1041,6 @@ fn terminal_archive_record_key(
         )),
     }
 }
-
 fn terminal_archive_record_boundary_id(
     record: &ModerationTerminalArchiveRecordV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
@@ -1082,7 +1050,6 @@ fn terminal_archive_record_boundary_id(
         &[&[tag], &identity, &source_digest],
     ))
 }
-
 fn terminal_archive_record_is_dead_letter(record: &ModerationTerminalArchiveRecordV1) -> bool {
     matches!(
         record,
@@ -1090,7 +1057,6 @@ fn terminal_archive_record_is_dead_letter(record: &ModerationTerminalArchiveReco
             | ModerationTerminalArchiveRecordV1::DurableDeadLetter { .. }
     )
 }
-
 fn validate_terminal_archive_record_shape(
     record: &ModerationTerminalArchiveRecordV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -1215,7 +1181,6 @@ fn validate_terminal_archive_record_shape(
     }
     Ok(())
 }
-
 fn collect_terminal_archive_records(
     state: &ModerationOrchestratorCheckpointV1,
 ) -> Result<Vec<ModerationTerminalArchiveRecordV1>, ModerationOrchestratorError> {
@@ -1310,7 +1275,6 @@ fn collect_terminal_archive_records(
             source_record_digest: durable_dead_letter_source_record_digest(entry)?,
         });
     }
-
     for completed in &state.completed_handoffs {
         records.push(ModerationTerminalArchiveRecordV1::CompletedHandoff {
             handoff_id: completed.handoff.handoff_id,
@@ -1407,7 +1371,6 @@ fn collect_terminal_archive_records(
     }
     Ok(records)
 }
-
 fn safe_terminal_archive_prefix_len(
     records: &[ModerationTerminalArchiveRecordV1],
     requested: usize,

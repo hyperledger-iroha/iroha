@@ -1,7 +1,8 @@
 //! Adapters from the external-signer protocol to existing Torii provider traits.
-
-use std::sync::Arc;
-
+use super::{
+    protocol::{SoftwareSignerPublicBindingV1, SoftwareSignerRoleV1, digest_parts},
+    unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
+};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
@@ -16,15 +17,9 @@ use iroha_torii::{
     SorafsNativeTransactionSignerProviderV1, SorafsNativeTransactionSignerQualificationV1,
     SorafsNativeTransactionSignerRoleV1,
 };
-
-use super::{
-    protocol::{SoftwareSignerPublicBindingV1, SoftwareSignerRoleV1, digest_parts},
-    unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
-};
-
+use std::sync::Arc;
 const NATIVE_OPERATION_ID_DOMAIN_V1: &[u8] =
     b"iroha.external-signer.native-transaction.operation.v1";
-
 /// One exact-role external software signer implementing Torii's provider API.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerNativeAdapterV1 {
@@ -32,7 +27,6 @@ pub struct ExternalSoftwareSignerNativeAdapterV1 {
     binding: SoftwareSignerPublicBindingV1,
     native_binding: SorafsNativeTransactionSignerBindingV1,
 }
-
 impl ExternalSoftwareSignerNativeAdapterV1 {
     /// Qualify a pinned external service twice and construct its Torii binding.
     ///
@@ -73,13 +67,11 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
             native_binding,
         })
     }
-
     /// Return the existing Torii binding consumed by runtime-provider catalogs.
     #[must_use]
     pub const fn native_binding(&self) -> &SorafsNativeTransactionSignerBindingV1 {
         &self.native_binding
     }
-
     fn sign_native(
         &self,
         expected_role: SoftwareSignerRoleV1,
@@ -120,7 +112,6 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
         }
         Ok(transaction)
     }
-
     fn qualify_live(&self) -> Result<(), SorafsNativeTransactionSignerProbeErrorV1> {
         let provenance = self
             .client
@@ -132,7 +123,6 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
         Ok(())
     }
 }
-
 impl SorafsNativeTransactionSignerProviderV1 for ExternalSoftwareSignerNativeAdapterV1 {
     fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
         self.binding
@@ -140,20 +130,16 @@ impl SorafsNativeTransactionSignerProviderV1 for ExternalSoftwareSignerNativeAda
             .native_role()
             .expect("native adapter construction excludes promotion role")
     }
-
     fn handle(&self) -> &str {
         &self.binding.handle
     }
-
     fn authority(&self) -> AccountId {
         self.native_binding.authority().clone()
     }
-
     fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
         self.qualify_live()?;
         Ok(self.binding.public_key.clone())
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -164,7 +150,6 @@ impl SorafsNativeTransactionSignerProviderV1 for ExternalSoftwareSignerNativeAda
         Ok(self.native_binding.qualification())
     }
 }
-
 macro_rules! impl_role_signer {
     ($trait_name:ident, $error:ident, $role:expr) => {
         impl $trait_name for ExternalSoftwareSignerNativeAdapterV1 {
@@ -189,7 +174,6 @@ macro_rules! impl_role_signer {
         }
     };
 }
-
 impl_role_signer!(
     SoraFsProofOutcomeTransactionSigner,
     SoraFsProofOutcomeSigningError,
@@ -210,7 +194,6 @@ impl_role_signer!(
     SoraFsOrderbookTransactionSigningError,
     SoftwareSignerRoleV1::Orderbook
 );
-
 /// Role-indexed set that attaches external signers to the existing broker API.
 #[derive(Clone, Default)]
 pub struct ExternalSoftwareSignerNativeBackendsV1 {
@@ -219,7 +202,6 @@ pub struct ExternalSoftwareSignerNativeBackendsV1 {
     reserve: Option<Arc<ExternalSoftwareSignerNativeAdapterV1>>,
     orderbook: Option<Arc<ExternalSoftwareSignerNativeAdapterV1>>,
 }
-
 impl ExternalSoftwareSignerNativeBackendsV1 {
     /// Create an empty role set.
     #[must_use]
@@ -231,7 +213,6 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
             orderbook: None,
         }
     }
-
     /// Add one exact native role, rejecting duplicates and promotion services.
     ///
     /// # Errors
@@ -263,7 +244,6 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
         *slot = Some(adapter);
         Ok(())
     }
-
     /// Attach every present role through existing broker builder methods.
     #[must_use]
     pub fn attach_to(
@@ -285,7 +265,6 @@ impl ExternalSoftwareSignerNativeBackendsV1 {
         backends
     }
 }
-
 impl crate::RuntimeProviderBrokerBackendRegistryV1 for ExternalSoftwareSignerNativeBackendsV1 {
     fn resolve(
         &self,
@@ -328,7 +307,6 @@ impl crate::RuntimeProviderBrokerBackendRegistryV1 for ExternalSoftwareSignerNat
             .attach_to(crate::RuntimeProviderBrokerBackendsV1::new()))
     }
 }
-
 fn map_client_error(
     error: ExternalSoftwareSignerClientErrorV1,
 ) -> ExternalSoftwareSignerAdapterErrorV1 {
@@ -348,7 +326,6 @@ fn map_client_error(
         }
     }
 }
-
 /// Payload-free adapter failure classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalSoftwareSignerAdapterErrorV1 {

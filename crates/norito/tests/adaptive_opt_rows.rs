@@ -1,5 +1,4 @@
 //! Adaptive tests for optional columns.
-
 #![allow(unused_imports)]
 use norito::{
     columnar as ncb,
@@ -9,7 +8,6 @@ use norito::{
         encode_rows_u64_optu32_bool_adaptive,
     },
 };
-
 #[test]
 fn adaptive_optstr_small_prefers_aos() {
     let mut rows: Vec<(u64, Option<String>, bool)> = Vec::new();
@@ -29,7 +27,6 @@ fn adaptive_optstr_small_prefers_aos() {
     let decoded = decode_rows_u64_optstr_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_optstr_large_prefers_ncb() {
     let mut rows: Vec<(u64, Option<String>, bool)> = Vec::new();
@@ -49,7 +46,6 @@ fn adaptive_optstr_large_prefers_ncb() {
     let decoded = decode_rows_u64_optstr_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_optu32_small_prefers_aos() {
     let mut rows: Vec<(u64, Option<u32>, bool)> = Vec::new();
@@ -64,7 +60,6 @@ fn adaptive_optu32_small_prefers_aos() {
     let decoded = decode_rows_u64_optu32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_optu32_large_prefers_ncb() {
     let mut rows: Vec<(u64, Option<u32>, bool)> = Vec::new();
@@ -80,7 +75,6 @@ fn adaptive_optu32_large_prefers_ncb() {
     let decoded = decode_rows_u64_optu32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn small_n_optstr_all_none_prefers_ncb() {
     // When all Option<&str> are None, the presence bitset + minimal offsets
@@ -96,7 +90,6 @@ fn small_n_optstr_all_none_prefers_ncb() {
         .collect();
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn small_n_optu32_all_none_prefers_ncb() {
     // Same rationale: bitset + zero present values should be smaller than
@@ -108,7 +101,6 @@ fn small_n_optu32_all_none_prefers_ncb() {
     let decoded = decode_rows_u64_optu32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn small_n_optstr_repeated_some_roundtrip_either_tag() {
     // Repeated Some strings do not deduplicate in opt-str column; selector may choose either.

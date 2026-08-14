@@ -1,10 +1,8 @@
 //! Deterministic host mapping backed by canonical manifest helpers.
-
 use iroha_data_model::prelude::ChainId;
 use sorafs_manifest::hosts::{
     DirectCarLocator, HostMappingInput as ManifestHostInput, HostMappingSummary as ManifestSummary,
 };
-
 /// Input parameters used to derive canonical and vanity hostnames.
 #[derive(Debug, Clone)]
 pub struct HostMappingInput<'a> {
@@ -13,7 +11,6 @@ pub struct HostMappingInput<'a> {
     /// Provider identifier recognised by governance.
     pub provider_id: &'a [u8; 32],
 }
-
 impl HostMappingInput<'_> {
     fn as_manifest_input(&self) -> ManifestHostInput<'_> {
         ManifestHostInput {
@@ -21,25 +18,21 @@ impl HostMappingInput<'_> {
             provider_id: self.provider_id,
         }
     }
-
     /// Compute a canonical host binding providers to their governance hash.
     #[must_use]
     pub fn canonical_host(&self) -> String {
         self.as_manifest_input().canonical_host()
     }
-
     /// Compute a developer-friendly vanity host seeded by the provider id.
     #[must_use]
     pub fn vanity_host(&self) -> String {
         self.as_manifest_input().vanity_host()
     }
-
     /// Render both canonical and vanity hosts as a struct suitable for JSON or templates.
     #[must_use]
     pub fn to_summary(&self) -> HostMappingSummary {
         self.as_manifest_input().to_summary()
     }
-
     /// Produce direct-CAR endpoints for the supplied manifest digest.
     ///
     /// # Errors
@@ -53,15 +46,12 @@ impl HostMappingInput<'_> {
             .direct_car_locator(scheme, manifest_digest_hex)
     }
 }
-
 /// Helper structure used when serialising host mapping results.
 pub type HostMappingSummary = ManifestSummary;
 pub use sorafs_manifest::hosts::HostMappingError;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn derives_deterministic_hosts() {
         let chain_id: ChainId = "nexus".parse().expect("chain id");
@@ -70,15 +60,12 @@ mod tests {
             chain_id: &chain_id,
             provider_id: &provider,
         };
-
         assert_eq!(input.canonical_host(), "abababab.nexus.sorafs");
         assert_eq!(input.vanity_host(), "abab.nexus.direct.sorafs");
-
         let summary = input.to_summary();
         assert_eq!(summary.canonical, "abababab.nexus.sorafs");
         assert_eq!(summary.vanity, "abab.nexus.direct.sorafs");
     }
-
     #[test]
     fn shares_direct_car_locator() {
         let chain_id: ChainId = "nexus".parse().expect("chain id");

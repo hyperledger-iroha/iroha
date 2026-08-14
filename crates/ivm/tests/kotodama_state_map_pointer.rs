@@ -1,12 +1,10 @@
 //! Verify durable map path hashing and pointer Norito encoding helpers align with CoreHost.
-
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
 use ivm::{CoreHost, PointerType, pointer_abi::validate_tlv_bytes};
 use ivm_abi::state_value::StateValueKindV1;
 use norito::to_bytes;
 mod common;
-
 fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + IrohaHash::LENGTH);
     out.extend_from_slice(&(ty as u16).to_be_bytes());
@@ -17,13 +15,11 @@ fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&hash);
     out
 }
-
 fn parse_account_id_literal(id: &str) -> AccountId {
     AccountId::parse_encoded(id)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("account literal must be canonical I105")
 }
-
 fn account_pointer_tlvs(id: &str) -> (Vec<u8>, Vec<u8>) {
     let account = parse_account_id_literal(id);
     let payload = to_bytes(&account).expect("encode account id");
@@ -31,11 +27,9 @@ fn account_pointer_tlvs(id: &str) -> (Vec<u8>, Vec<u8>) {
     let norito = encode_pointer_tlv(PointerType::NoritoBytes, &raw);
     (raw, norito)
 }
-
 fn map_path(base: &str, pointer_payload: &[u8]) -> String {
     format!("{base}/{}", hex::encode(pointer_payload))
 }
-
 #[test]
 fn durable_map_account_id_path_is_reversible_canonical_hex() {
     const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -43,7 +37,6 @@ fn durable_map_account_id_path_is_reversible_canonical_hex() {
     let path = map_path("balances", &raw_ptr);
     assert!(path.starts_with("balances/"));
     assert_eq!(path, format!("balances/{}", hex::encode(raw_ptr)));
-
     let mut host = CoreHost::new();
     host.insert_state_value(&path, common::encode_int_state_value(5));
     let stored = host
@@ -51,7 +44,6 @@ fn durable_map_account_id_path_is_reversible_canonical_hex() {
         .expect("stored value should be present");
     assert_eq!(stored, common::encode_int_state_value(5));
 }
-
 #[test]
 fn durable_map_name_value_roundtrip() {
     let mut host = CoreHost::new();
@@ -67,7 +59,6 @@ fn durable_map_name_value_roundtrip() {
     assert_eq!(decoded.type_id, PointerType::Name);
     assert_eq!(decoded.payload, payload);
 }
-
 #[test]
 fn durable_map_account_id_value_roundtrip() {
     const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";

@@ -15,6 +15,18 @@ All manifests consume the same Norito JSON configuration file and rely on the
 `RelayDescriptorManifestV1` secret format documented in
 `specs/soranet_handshake.md`.
 
+The first-release loader admits relay configuration JSON up to 1 MiB, with at
+most 8,192 entries in one collection, 32 levels of nesting, and 128 KiB in one
+decoded string (the latter preserves the maximum legal GREASE payload). It
+admits descriptor-manifest JSON up to 64 KiB, with at most 1,024 entries in one
+collection, 16 levels of nesting, and 8 KiB in one decoded string. SRCv2
+certificate bundles use their protocol-defined 64 KiB maximum. These three
+inputs must be direct regular files: symbolic links/reparse points and files
+replaced or changed during a read are rejected. Publish rotations by writing a
+complete bounded file and atomically renaming it into place before restarting
+the relay; do not mutate a configured file in place while startup is reading
+it.
+
 ## Directory Layout
 
 - `config/relay.entry.json` – sample relay configuration suitable for entry
@@ -81,21 +93,36 @@ All manifests consume the same Norito JSON configuration file and rely on the
     automatically collects and staples the verified proofs into the metadata
     without editing the JSON by hand.
   - Review the `congestion` block (`max_circuits_per_client`,
-    `handshake_cooldown_millis`) and tune it for your operator policy.
+    `max_active_circuits`, `handshake_cooldown_millis`) and tune it for your
+    operator policy.
   - Keep `pow.revocation_store_path` on durable storage writable only by the
     relay account. The sample systemd unit creates `/var/lib/soranet-relay`
     automatically. Startup fails closed if this replay ledger cannot be read or
-    parsed; do not delete it while unexpired tickets exist.
+    parsed; do not delete it while unexpired tickets exist. V1 admits at most
+    65,536 active records. Reads require a stable direct regular file and use
+    explicit Norito allocation/depth limits; writes use a unique, bounded
+    temporary file and atomically replace the durable snapshot.
   - When `pow.token.enabled` is true, keep
     `pow.token.replay_store_path` on the same class of durable storage. Active
     token records are never evicted; exhausted capacity rejects new token
-    admissions, and malformed/over-capacity snapshots fail startup.
+    admissions, and malformed/over-capacity snapshots fail startup. The v1
+    capacity ceiling is 65,536; the snapshot reader and atomic writer apply the
+    same stable-file, decoder, and encoded-byte bounds as the ticket ledger.
+    If `pow.token.revocation_list_path` is configured, its Norito JSON document
+    must be a flat array of at most 8,192 unique 32-byte token IDs written as
+    64 decoded hex characters each. The loader admits at most 4 MiB of raw JSON,
+    512 KiB of aggregate decoded string data, and opens only a stable direct
+    regular file (not a symbolic link or reparse point). The
+    `soranet_admission_token revoke` command writes the same sorted, lowercase
+    canonical form and refuses to grow a list beyond the entry cap.
   - For VPN exits, place `vpn.helper_ticket_replay_store_path` on that same
     operator-protected durable volume and size
     `vpn.helper_ticket_replay_store_capacity` for the maximum number of
     simultaneously unexpired leases. Helper-ticket redemption is not accepted
     until this ledger is fsynced; corruption, write failure, lock contention,
-    or capacity exhaustion fails closed. The ledger's persisted clock
+    or capacity exhaustion fails closed. V1 caps it at 65,536 active entries
+    and uses stable direct-file reads, explicit decode limits, and unique
+    bounded atomic replacement. The ledger's persisted clock
     high-water mark also prevents a wall-clock regression from reopening an
     expired redemption. Do not delete or roll back the ledger while any
     recorded helper ticket remains valid.
@@ -296,10 +323,35 @@ requires `Authorization: Bearer <token>` using the secret loaded from
 - `GET /policy/proxy-toggle` returns NDJSON downgrade/proxy-remediation events
   for downstream policy feeds.
 
+First-release privacy telemetry admits at most 16,384 events per in-memory
+queue, 256 simultaneously open or completed buckets, 256 GAR category hashes
+per bucket, and 256 bytes of detail per event. Configuration above those
+ceilings is rejected; bounded JSON/Prometheus rendering drains or fails closed
+without cloning the full retained queues.
+
+Each admission quota tracker retains at most 65,536 remote or descriptor
+entries. Higher base or per-hop `max_entries` settings are rejected at startup;
+once a tracker is full, previously unseen identities fail closed until expired
+entries are reclaimed, without materializing a full key snapshot for eviction.
+Attacker-influenced downgrade and token-outcome metric labels inspect at most
+512 bytes, retain at most 64 bytes per label, and keep 256 distinct series per
+family; excess cardinality is accumulated in one deterministic `other` series.
+The congestion controller defaults to 4,096 globally active circuits and has a
+first-release hard ceiling of 65,536. Global capacity is checked before a new
+remote is retained; releasing a circuit atomically returns both its global slot
+and its per-client tracking state. The circuit registry independently enforces
+the same configured ceiling and uses fallible allocation before retaining a
+negotiated circuit.
+
 Persistence surfaces to wire into your ops pipelines:
 
 - Compliance logs are written to the configured JSONL path and mirrored into
   `compliance.pipeline_spool_dir` for shipper automation.
-- Incentive snapshots can be enabled via `incentive_log.enable` and are written
+- Incentive snapshots can be enabled via `incentives.enable` and are written
   as Norito `.to` payloads under the configured spool directory (defaults to
-  `artifacts/incentives/`).
+  `artifacts/incentives/`). The accumulator defaults to 16 active epochs and
+  4,096 measurement IDs per epoch, with hard ceilings of 256 epochs and 65,536
+  IDs in aggregate; configuration whose product exceeds the aggregate ceiling
+  is rejected. Snapshot encoding is capped at 4 MiB, the digest cache retains
+  only the configured newest epoch window, and Prometheus rendering uses a
+  fallibly reserved response corridor.

@@ -1,5 +1,14 @@
 mod monitor;
-
+use crate::{
+    explorer::ExplorerDurationDto,
+    json_macros::{JsonDeserialize, JsonSerialize},
+};
+use iroha_config::client_api::ConfigGetDTO;
+use iroha_crypto::{KeyPair, PublicKey};
+use iroha_data_model::NetworkId;
+use iroha_logger::prelude::*;
+use monitor::Metrics as PeerMetricsSnapshot;
+pub use monitor::Update;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -8,24 +17,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
-use iroha_config::client_api::ConfigGetDTO;
-use iroha_crypto::{KeyPair, PublicKey};
-use iroha_data_model::NetworkId;
-use iroha_logger::prelude::*;
-use monitor::Metrics as PeerMetricsSnapshot;
-pub use monitor::Update;
 use tokio::sync::RwLock;
 use url::Url;
-
-use crate::{
-    explorer::ExplorerDurationDto,
-    json_macros::{JsonDeserialize, JsonSerialize},
-};
-
 const PROPAGATION_HISTORY_LIMIT: usize = 64;
 const PROPAGATION_SNAPSHOT_LIMIT: usize = 32;
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub struct GeoLocation {
     pub lat: f64,
@@ -33,7 +28,6 @@ pub struct GeoLocation {
     pub country: String,
     pub city: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct PeerConfigDto {
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -49,7 +43,6 @@ pub struct PeerConfigDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub network_tx_gossip_period: Option<ExplorerDurationDto>,
 }
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PeerConfigSnapshot {
     pub public_key: Option<PublicKey>,
@@ -59,7 +52,6 @@ pub(crate) struct PeerConfigSnapshot {
     pub network_tx_gossip_size: Option<u32>,
     pub network_tx_gossip_period_ms: Option<u64>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct PeerInfoDto {
     pub url: String,
@@ -72,7 +64,6 @@ pub struct PeerInfoDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub connected_peers: Option<Vec<String>>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct PeerStatusDto {
     pub url: String,
@@ -92,7 +83,6 @@ pub struct PeerStatusDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub observed_at_ms: Option<u64>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct PeerPropagationDto {
     pub block: u32,
@@ -101,20 +91,17 @@ pub struct PeerPropagationDto {
     pub spread_ms: u64,
     pub peers_reported: u32,
 }
-
 #[derive(Clone, Debug)]
 pub struct PeerTelemetrySnapshot {
     pub peers_info: Vec<PeerInfoDto>,
     pub peers_status: Vec<PeerStatusDto>,
     pub propagation: Vec<PeerPropagationDto>,
 }
-
 #[derive(Clone, Debug)]
 pub struct GeoLookupConfig {
     pub enabled: bool,
     pub endpoint: Option<Url>,
 }
-
 impl GeoLookupConfig {
     pub fn disabled() -> Self {
         Self {
@@ -123,7 +110,6 @@ impl GeoLookupConfig {
         }
     }
 }
-
 impl From<&iroha_config::parameters::actual::ToriiPeerGeo> for GeoLookupConfig {
     fn from(config: &iroha_config::parameters::actual::ToriiPeerGeo) -> Self {
         Self {
@@ -132,7 +118,6 @@ impl From<&iroha_config::parameters::actual::ToriiPeerGeo> for GeoLookupConfig {
         }
     }
 }
-
 pub struct PeerTelemetryService {
     peers: RwLock<BTreeMap<ToriiUrl, PeerState>>,
     propagation: RwLock<PropagationTracker>,
@@ -140,7 +125,6 @@ pub struct PeerTelemetryService {
     network_id: NetworkId,
     operator_signer: Option<KeyPair>,
 }
-
 impl PeerTelemetryService {
     pub fn new(
         peer_urls: Vec<ToriiUrl>,
@@ -160,7 +144,6 @@ impl PeerTelemetryService {
         }
         service
     }
-
     fn spawn_monitor(self: &Arc<Self>, url: ToriiUrl) {
         let service = Arc::clone(self);
         let geo_config = service.geo_config.clone();
@@ -174,7 +157,6 @@ impl PeerTelemetryService {
             }
         });
     }
-
     async fn apply_update(&self, url: ToriiUrl, update: Update) {
         let peer_url = url.as_str().to_owned();
         let mut metrics_update = None;
@@ -210,12 +192,10 @@ impl PeerTelemetryService {
             }
         }
         drop(guard);
-
         if let Some(metrics) = metrics_update {
             self.observe_propagation(&peer_url, metrics).await;
         }
     }
-
     async fn observe_propagation(&self, peer_url: &str, metrics: PeerMetricsSnapshot) {
         let Some(observed_at_ms) = metrics.observed_at_ms else {
             return;
@@ -223,12 +203,10 @@ impl PeerTelemetryService {
         let mut propagation = self.propagation.write().await;
         propagation.observe(peer_url, metrics.block, observed_at_ms);
     }
-
     pub async fn peers_info(&self) -> Vec<PeerInfoDto> {
         let guard = self.peers.read().await;
         guard.values().map(PeerState::info).collect()
     }
-
     pub async fn peers_status(&self) -> Vec<PeerStatusDto> {
         let first_seen_by_block = {
             let propagation = self.propagation.read().await;
@@ -240,12 +218,10 @@ impl PeerTelemetryService {
             .filter_map(|peer| peer.status(&first_seen_by_block))
             .collect()
     }
-
     pub async fn propagation(&self, limit: usize) -> Vec<PeerPropagationDto> {
         let propagation = self.propagation.read().await;
         propagation.snapshot(limit)
     }
-
     pub async fn snapshot(&self) -> PeerTelemetrySnapshot {
         let (first_seen_by_block, propagation) = {
             let propagation = self.propagation.read().await;
@@ -267,48 +243,38 @@ impl PeerTelemetryService {
         }
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ToriiUrl(Url);
-
 impl ToriiUrl {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
-
     pub fn host_str(&self) -> Option<&str> {
         self.0.host_str()
     }
 }
-
 impl fmt::Display for ToriiUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 impl FromStr for ToriiUrl {
     type Err = url::ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Url::parse(s).map(Self)
     }
 }
-
 impl From<Url> for ToriiUrl {
     fn from(url: Url) -> Self {
         Self(url)
     }
 }
-
 impl TryFrom<SocketAddr> for ToriiUrl {
     type Error = url::ParseError;
-
     fn try_from(addr: SocketAddr) -> Result<Self, Self::Error> {
         Url::parse(&format!("http://{}", addr)).map(Self)
     }
 }
-
 struct PeerState {
     url: ToriiUrl,
     connected: bool,
@@ -318,7 +284,6 @@ struct PeerState {
     connected_peers: Option<Vec<String>>,
     metrics: Option<PeerMetricsSnapshot>,
 }
-
 impl PeerState {
     fn new(url: ToriiUrl) -> Self {
         Self {
@@ -331,7 +296,6 @@ impl PeerState {
             metrics: None,
         }
     }
-
     fn info(&self) -> PeerInfoDto {
         PeerInfoDto {
             url: self.url.as_str().to_string(),
@@ -342,7 +306,6 @@ impl PeerState {
             connected_peers: self.connected_peers.clone(),
         }
     }
-
     fn status(&self, first_seen_by_block: &BTreeMap<u32, u64>) -> Option<PeerStatusDto> {
         let metrics = self.metrics?;
         let propagation_time = metrics.observed_at_ms.and_then(|observed_at_ms| {
@@ -378,16 +341,13 @@ impl PeerState {
         })
     }
 }
-
 fn duration_ms_u64(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 #[derive(Default)]
 struct PropagationTracker {
     by_block: BTreeMap<u32, BlockPropagationEntry>,
 }
-
 impl PropagationTracker {
     fn observe(&mut self, peer_url: &str, block: u32, observed_at_ms: u64) {
         match self.by_block.entry(block) {
@@ -398,7 +358,6 @@ impl PropagationTracker {
                 slot.get_mut().observe(peer_url, observed_at_ms);
             }
         }
-
         while self.by_block.len() > PROPAGATION_HISTORY_LIMIT {
             let Some(oldest) = self.by_block.keys().next().copied() else {
                 break;
@@ -406,19 +365,16 @@ impl PropagationTracker {
             self.by_block.remove(&oldest);
         }
     }
-
     fn first_seen_by_block(&self) -> BTreeMap<u32, u64> {
         self.by_block
             .iter()
             .map(|(block, entry)| (*block, entry.first_seen_at_ms))
             .collect()
     }
-
     fn snapshot(&self, limit: usize) -> Vec<PeerPropagationDto> {
         if limit == 0 {
             return Vec::new();
         }
-
         let mut entries = self
             .by_block
             .iter()
@@ -436,14 +392,12 @@ impl PropagationTracker {
         entries
     }
 }
-
 #[derive(Clone, Debug)]
 struct BlockPropagationEntry {
     first_seen_at_ms: u64,
     last_seen_at_ms: u64,
     peers: BTreeSet<String>,
 }
-
 impl BlockPropagationEntry {
     fn new(peer_url: &str, observed_at_ms: u64) -> Self {
         let mut peers = BTreeSet::new();
@@ -454,7 +408,6 @@ impl BlockPropagationEntry {
             peers,
         }
     }
-
     fn observe(&mut self, peer_url: &str, observed_at_ms: u64) {
         if !self.peers.insert(peer_url.to_owned()) {
             return;
@@ -462,16 +415,13 @@ impl BlockPropagationEntry {
         self.first_seen_at_ms = self.first_seen_at_ms.min(observed_at_ms);
         self.last_seen_at_ms = self.last_seen_at_ms.max(observed_at_ms);
     }
-
     fn spread_ms(&self) -> u64 {
         self.last_seen_at_ms.saturating_sub(self.first_seen_at_ms)
     }
-
     fn peers_reported(&self) -> u32 {
         u32::try_from(self.peers.len()).unwrap_or(u32::MAX)
     }
 }
-
 impl PeerConfigDto {
     fn from_config(cfg: &PeerConfigSnapshot) -> Self {
         Self {
@@ -488,7 +438,6 @@ impl PeerConfigDto {
         }
     }
 }
-
 impl From<&ConfigGetDTO> for PeerConfigSnapshot {
     fn from(cfg: &ConfigGetDTO) -> Self {
         Self {
@@ -501,18 +450,15 @@ impl From<&ConfigGetDTO> for PeerConfigSnapshot {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn geo_lookup_config_respects_disable_helper() {
         let config = GeoLookupConfig::disabled();
         assert!(!config.enabled);
         assert!(config.endpoint.is_none());
     }
-
     #[test]
     fn geo_lookup_config_from_actual_copies_values() {
         let endpoint = Url::parse("https://geo.example").expect("valid endpoint");
@@ -527,7 +473,6 @@ mod tests {
             Some(endpoint.as_str())
         );
     }
-
     #[tokio::test]
     async fn peers_status_reflects_metrics_updates() {
         let service = PeerTelemetryService::new(
@@ -553,7 +498,6 @@ mod tests {
                 }),
             )
             .await;
-
         let statuses = service.peers_status().await;
         assert_eq!(statuses.len(), 1);
         let status = &statuses[0];
@@ -581,7 +525,6 @@ mod tests {
         );
         assert_eq!(status.observed_at_ms, Some(100));
     }
-
     #[tokio::test]
     async fn snapshot_returns_info_and_status_views() {
         let service = PeerTelemetryService::new(
@@ -620,7 +563,6 @@ mod tests {
                 }),
             )
             .await;
-
         let snapshot = service.snapshot().await;
         assert_eq!(snapshot.peers_info.len(), 1);
         assert_eq!(snapshot.peers_status.len(), 1);
@@ -631,7 +573,6 @@ mod tests {
         assert_eq!(snapshot.propagation[0].spread_ms, 0);
         assert_eq!(snapshot.propagation[0].peers_reported, 1);
     }
-
     #[tokio::test]
     async fn peers_status_computes_propagation_from_first_seen_timestamp() {
         let service = PeerTelemetryService::new(
@@ -642,7 +583,6 @@ mod tests {
         );
         let url_a: ToriiUrl = "http://peer-a.example:8080".parse().expect("torii url");
         let url_b: ToriiUrl = "http://peer-b.example:8080".parse().expect("torii url");
-
         service
             .apply_update(
                 url_a.clone(),
@@ -675,7 +615,6 @@ mod tests {
                 }),
             )
             .await;
-
         let statuses = service.peers_status().await;
         let status_a = statuses
             .iter()
@@ -699,7 +638,6 @@ mod tests {
                 .map(|duration| duration.ms),
             Some(45)
         );
-
         let propagation = service.propagation(10).await;
         assert_eq!(propagation.len(), 1);
         assert_eq!(propagation[0].block, 20);

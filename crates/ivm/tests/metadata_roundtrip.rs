@@ -1,5 +1,4 @@
 use ivm::{METADATA_MAGIC, ProgramMetadata, VMError};
-
 #[test]
 fn metadata_encode_parse_roundtrip() {
     let cases = vec![
@@ -40,7 +39,6 @@ fn metadata_encode_parse_roundtrip() {
         assert_eq!(parsed2.metadata.max_cycles, m.max_cycles);
     }
 }
-
 #[test]
 fn metadata_parse_rejects_bad_magic_and_short() {
     // Too short
@@ -49,7 +47,6 @@ fn metadata_parse_rejects_bad_magic_and_short() {
         ProgramMetadata::parse(&short),
         Err(VMError::InvalidMetadata)
     ));
-
     // Wrong magic
     let mut m = ProgramMetadata::default().encode();
     let mut bad = m.clone();
@@ -58,7 +55,6 @@ fn metadata_parse_rejects_bad_magic_and_short() {
         ProgramMetadata::parse(&bad),
         Err(VMError::InvalidMetadata)
     ));
-
     // Corrupt vector_length above the ABI maximum and ensure parser rejects it.
     m[7] ^= 0xFF; // vector_length flipped
     assert!(matches!(

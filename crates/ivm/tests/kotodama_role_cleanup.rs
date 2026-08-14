@@ -1,20 +1,16 @@
 //! Adversarial lifecycle tests for canonical role operations.
-
-use std::collections::HashMap;
-
 use ivm::{
     IVM,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
+use std::collections::HashMap;
 mod common;
-
 fn load(vm: &mut IVM, program: &[u8], context: &str) {
     vm.load_program(program)
         .unwrap_or_else(|error| panic!("load {context}: {error:?}"));
     common::select_kotodama_entrypoint(vm, program, "main");
 }
-
 fn compile(body: &str) -> Vec<u8> {
     let src = format!(
         "seiyaku RoleOperation {{ kotoage fn main() authorize(\"ManageRoles\") {{\n{body}\n}} }}"
@@ -22,7 +18,6 @@ fn compile(body: &str) -> Vec<u8> {
     let c = KotodamaCompiler::new();
     c.compile_source(&src).expect("compile")
 }
-
 fn caller_account() -> ivm::mock_wsv::AccountId {
     let _domain: ivm::mock_wsv::DomainId =
         iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -32,7 +27,6 @@ fn caller_account() -> ivm::mock_wsv::AccountId {
             .expect("public key"),
     )
 }
-
 fn literal_account() -> ivm::mock_wsv::AccountId {
     iroha_data_model::account::AccountId::parse_encoded(
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -40,11 +34,9 @@ fn literal_account() -> ivm::mock_wsv::AccountId {
     .expect("parse test account literal")
     .into_account_id()
 }
-
 #[test]
 fn kotodama_revoke_role_denies_mint() {
     let caller: ivm::mock_wsv::AccountId = literal_account();
-
     // VM + host with bootstrap permissions
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
@@ -52,7 +44,6 @@ fn kotodama_revoke_role_denies_mint() {
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // 1) Bootstrap + create+grant role + initial mint (should succeed)
     let prog_ok = compile(
         r#"
@@ -64,7 +55,6 @@ fn kotodama_revoke_role_denies_mint() {
     );
     load(&mut vm, &prog_ok, "bootstrap role program");
     vm.run().expect("initial mint should succeed");
-
     // 2) Revoke role then attempt mint (should fail with PermissionDenied)
     let prog_revoke_then_mint = compile(
         r#"
@@ -76,7 +66,6 @@ fn kotodama_revoke_role_denies_mint() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 }
-
 #[test]
 fn kotodama_delete_role_prevents_grant() {
     let caller: ivm::mock_wsv::AccountId = caller_account();
@@ -89,7 +78,6 @@ fn kotodama_delete_role_prevents_grant() {
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Bootstrap + create role (no grant)
     let prog_boot = compile(
         r#"
@@ -100,7 +88,6 @@ fn kotodama_delete_role_prevents_grant() {
     );
     load(&mut vm, &prog_boot, "bootstrap role program");
     vm.run().expect("boot ok");
-
     // Delete role then try to grant it (should fail)
     let prog_delete_then_grant = compile(
         r#"
@@ -116,7 +103,6 @@ fn kotodama_delete_role_prevents_grant() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::PermissionDenied));
 }
-
 #[test]
 fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let caller: ivm::mock_wsv::AccountId = caller_account();
@@ -129,7 +115,6 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Bootstrap: create role and grant it
     let boot = compile(
         r#"
@@ -141,7 +126,6 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     );
     load(&mut vm, &boot, "bootstrap role program");
     vm.run().expect("boot ok");
-
     // Attempt to delete role while still assigned -> should be denied
     let del = compile(
         r#" ledger::role::delete(Name::parse("minter"));
@@ -150,7 +134,6 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     load(&mut vm, &del, "delete assigned role program");
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::PermissionDenied));
-
     // Revoke then delete -> should succeed
     let revoke_delete = compile(
         r#"
@@ -161,7 +144,6 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     load(&mut vm, &revoke_delete, "revoke and delete role program");
     vm.run().expect("revoke then delete ok");
 }
-
 #[test]
 fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let caller: ivm::mock_wsv::AccountId = caller_account();
@@ -174,7 +156,6 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Bootstrap + create and grant role
     let boot = compile(
         r#"
@@ -186,7 +167,6 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     );
     load(&mut vm, &boot, "bootstrap role program");
     vm.run().expect("boot ok");
-
     // Revoke then delete role
     let revoke_delete = compile(
         r#"
@@ -196,7 +176,6 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     );
     load(&mut vm, &revoke_delete, "revoke and delete role program");
     vm.run().expect("revoke+delete ok");
-
     // Attempt to grant role now fails (role no longer exists)
     let grant_again = compile(
         r#"
@@ -206,7 +185,6 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     load(&mut vm, &grant_again, "grant deleted role program");
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::PermissionDenied));
-
     // Mint is denied without the role
     let mint = compile(
         r#"

@@ -1,9 +1,4 @@
 //! ADDR-2 compliance vector generator shared by the example binary and CLI tooling.
-
-use hex::encode_upper;
-use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-use norito::json::{Map, Value};
-
 use crate::{
     account::{
         AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
@@ -11,7 +6,9 @@ use crate::{
     },
     domain::DomainId,
 };
-
+use hex::encode_upper;
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+use norito::json::{Map, Value};
 macro_rules! json_obj {
     ({ $( $key:literal : $value:expr ),* $(,)? }) => {{
         let mut map = Map::new();
@@ -19,27 +16,22 @@ macro_rules! json_obj {
         Value::Object(map)
     }};
 }
-
 const NETWORK_PREFIX: u16 = 753;
 const I105_CHECKSUM_MUTATION_CANDIDATES: &str = "ｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ";
-
 struct PositiveEncodings {
     canonical_hex: String,
     canonical_bytes: Vec<u8>,
     i105: String,
 }
-
 struct SingleCase {
     value: Value,
     address: AccountAddress,
     encodings: PositiveEncodings,
 }
-
 struct MultisigCase {
     value: Value,
     encodings: PositiveEncodings,
 }
-
 struct MultisigFixture {
     case_id: &'static str,
     note: &'static str,
@@ -47,7 +39,6 @@ struct MultisigFixture {
     members: &'static [(u8, u16)],
     threshold: u16,
 }
-
 const MULTISIG_FIXTURES: &[MultisigFixture] = &[
     MultisigFixture {
         case_id: "addr-multisig-council-threshold3",
@@ -71,7 +62,6 @@ const MULTISIG_FIXTURES: &[MultisigFixture] = &[
         threshold: 3,
     },
 ];
-
 fn ed25519_pk_with(seed_byte: u8) -> PublicKey {
     let seed = vec![seed_byte; 32];
     let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
@@ -79,45 +69,37 @@ fn ed25519_pk_with(seed_byte: u8) -> PublicKey {
         .into_parts();
     public_key
 }
-
 fn domain(label: &str) -> DomainId {
     DomainId::try_new(label, "universal").expect("valid domain id")
 }
-
 fn canonical_hex(address: &AccountAddress) -> String {
     address
         .canonical_hex()
         .expect("canonical encoding must succeed")
 }
-
 fn canonical_bytes(hex_value: &str) -> Vec<u8> {
     let body = hex_value.strip_prefix("0x").unwrap_or(hex_value);
     hex::decode(body).expect("canonical hex should decode")
 }
-
 fn selector_value() -> Value {
     // Canonical I105 payloads are globally scoped and no longer embed domain selectors.
     json_obj!({ "kind": "default" })
 }
-
 fn checked_public_key_bytes(public_key: &PublicKey) -> (Algorithm, &[u8]) {
     public_key
         .try_to_bytes()
         .expect("compliance vector public key must be well-formed")
 }
-
 fn checked_public_key_multihash(public_key: &PublicKey) -> String {
     public_key
         .try_to_multihash_string()
         .expect("compliance vector public key must format as a multihash")
 }
-
 fn checked_public_key_prefixed(public_key: &PublicKey) -> String {
     public_key
         .try_to_prefixed_string()
         .expect("compliance vector public key must format as a prefixed multihash")
 }
-
 fn controller_single_value(public_key: &PublicKey) -> Value {
     let (algorithm, payload) = checked_public_key_bytes(public_key);
     assert_eq!(algorithm, Algorithm::Ed25519, "expected ed25519 key");
@@ -129,7 +111,6 @@ fn controller_single_value(public_key: &PublicKey) -> Value {
         "public_key_prefixed": checked_public_key_prefixed(public_key),
     })
 }
-
 fn controller_multisig_value(policy: &MultisigPolicy) -> Value {
     let members: Vec<Value> = policy
         .members()
@@ -156,21 +137,18 @@ fn controller_multisig_value(policy: &MultisigPolicy) -> Value {
         "digest_blake2b256_hex": format!("0x{}", encode_upper(digest)),
     })
 }
-
 fn encodings(address: &AccountAddress) -> PositiveEncodings {
     let canonical_hex = canonical_hex(address);
     let canonical_bytes = canonical_bytes(&canonical_hex);
     let i105 = address
         .to_i105_for_discriminant(NETWORK_PREFIX)
         .expect("I105 encoding must succeed");
-
     PositiveEncodings {
         canonical_hex,
         canonical_bytes,
         i105,
     }
 }
-
 fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> SingleCase {
     let public_key = ed25519_pk_with(seed);
     let normalized_domain = domain(raw_domain);
@@ -197,14 +175,12 @@ fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> S
             })
         })
     });
-
     SingleCase {
         value,
         address,
         encodings,
     }
 }
-
 fn build_multisig_cases() -> Vec<MultisigCase> {
     MULTISIG_FIXTURES
         .iter()
@@ -224,7 +200,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 AccountAddress::from_account_id(&account).expect("multisig encoding succeeds");
             let encodings = encodings(&address);
             let selector = selector_value();
-
             let member_keys_hex: Vec<String> = policy
                 .members()
                 .iter()
@@ -238,7 +213,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 .iter()
                 .map(MultisigMember::weight)
                 .collect();
-
             let value = json_obj!({
                 "case_id": fixture.case_id,
                 "category": "multisig",
@@ -272,12 +246,10 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                     })
                 })
             });
-
             MultisigCase { value, encodings }
         })
         .collect()
 }
-
 fn error_to_json(err: &AccountAddressError) -> Value {
     match err {
         AccountAddressError::ChecksumMismatch => {
@@ -311,7 +283,6 @@ fn error_to_json(err: &AccountAddressError) -> Value {
         other => panic!("unhandled error variant in generator: {other}"),
     }
 }
-
 fn policy_error_to_string(err: MultisigPolicyError) -> &'static str {
     match err {
         MultisigPolicyError::EmptyMembers => "EmptyMembers",
@@ -324,7 +295,6 @@ fn policy_error_to_string(err: MultisigPolicyError) -> &'static str {
         MultisigPolicyError::MalformedPublicKey => "MalformedPublicKey",
     }
 }
-
 fn mutate_last_char(input: &str, replacement: char) -> String {
     let mut chars: Vec<char> = input.chars().collect();
     let last = chars
@@ -337,7 +307,6 @@ fn mutate_last_char(input: &str, replacement: char) -> String {
     }
     chars.into_iter().collect()
 }
-
 fn find_i105_checksum_mismatch(
     input: &str,
     expected_prefix: Option<u16>,
@@ -352,7 +321,6 @@ fn find_i105_checksum_mismatch(
     }
     panic!("failed to derive deterministic I105 checksum-mismatch vector");
 }
-
 fn find_i105_checksum_mismatch_any(input: &str) -> (String, AccountAddressError) {
     let mut preferred_candidates: Vec<char> = input.chars().collect();
     preferred_candidates.sort_unstable();
@@ -370,7 +338,6 @@ fn find_i105_checksum_mismatch_any(input: &str) -> (String, AccountAddressError)
     }
     panic!("failed to derive deterministic i105 checksum-mismatch vector");
 }
-
 fn find_i105_invalid_char(input: &str) -> (String, AccountAddressError) {
     let candidates = ['0', 'O', 'I', 'l', '+', '/'];
     for candidate in candidates {
@@ -381,11 +348,9 @@ fn find_i105_invalid_char(input: &str) -> (String, AccountAddressError) {
     }
     panic!("failed to derive deterministic I105 invalid-character vector");
 }
-
 fn canonical_with_trailing_zero(encodings: &PositiveEncodings) -> String {
     format!("{}00", encodings.canonical_hex)
 }
-
 fn canonical_invalid_hex(encodings: &PositiveEncodings) -> String {
     let mut chars: Vec<char> = encodings.canonical_hex.chars().collect();
     let last = chars
@@ -394,7 +359,6 @@ fn canonical_invalid_hex(encodings: &PositiveEncodings) -> String {
     *last = 'G';
     chars.into_iter().collect()
 }
-
 /// Build the canonical ADDR-2 JSON bundle consumed by SDK/tests.
 #[allow(clippy::too_many_lines)]
 pub fn compliance_vectors_json() -> Value {
@@ -411,13 +375,10 @@ pub fn compliance_vectors_json() -> Value {
         "Domainless address with treasury fixture context, using a deterministic Ed25519 key derived from seed byte 0x01.",
     );
     let multisig_cases = build_multisig_cases();
-
     let mut positive_cases = vec![single_default.value.clone(), single_treasury.value.clone()];
     positive_cases.extend(multisig_cases.iter().map(|case| case.value.clone()));
-
     let (i105_checksum, err_checksum) =
         find_i105_checksum_mismatch(&single_default.encodings.i105, Some(NETWORK_PREFIX));
-
     let i105_wrong_prefix = single_default
         .address
         .to_i105_for_discriminant(NETWORK_PREFIX + 1)
@@ -425,18 +386,13 @@ pub fn compliance_vectors_json() -> Value {
     let err_prefix =
         AccountAddress::from_i105_for_discriminant(&i105_wrong_prefix, Some(NETWORK_PREFIX))
             .unwrap_err();
-
     let (i105_bad_char, err_bad_char) = find_i105_invalid_char(&single_default.encodings.i105);
-
     let (i105_bad_checksum, err_bad_checksum) =
         find_i105_checksum_mismatch_any(&single_default.encodings.i105);
-
     let canonical_invalid = canonical_invalid_hex(&single_default.encodings);
     let err_invalid_hex = AccountAddress::parse_encoded(&canonical_invalid, None).unwrap_err();
-
     let canonical_trailing = canonical_with_trailing_zero(&single_default.encodings);
     let err_trailing = AccountAddress::parse_encoded(&canonical_trailing, None).unwrap_err();
-
     let primary_multisig = multisig_cases
         .first()
         .expect("multisig fixtures must include at least one case");
@@ -445,7 +401,6 @@ pub fn compliance_vectors_json() -> Value {
     let multisig_truncated_hex = format!("0x{}", encode_upper(&multisig_truncated));
     let err_multisig_truncated =
         AccountAddress::parse_encoded(&multisig_truncated_hex, None).unwrap_err();
-
     let negative_cases = vec![
         json_obj!({
             "case_id": "i105-checksum-mismatch",
@@ -499,7 +454,6 @@ pub fn compliance_vectors_json() -> Value {
             "expected_error": error_to_json(&err_multisig_truncated),
         }),
     ];
-
     json_obj!({
         "format_version": 1,
         "default_network_prefix": NETWORK_PREFIX,
@@ -509,11 +463,9 @@ pub fn compliance_vectors_json() -> Value {
         })
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn ed25519_pk_with_uses_checked_seed_derivation() {
         assert_eq!(
@@ -523,7 +475,6 @@ mod tests {
             Algorithm::Ed25519
         );
     }
-
     #[test]
     fn compliance_vectors_build_with_checked_public_key_payloads() {
         let Value::Object(root) = compliance_vectors_json() else {
@@ -535,7 +486,6 @@ mod tests {
         let Some(Value::Array(positive)) = cases.get("positive") else {
             panic!("compliance vectors must contain positive cases");
         };
-
         assert!(!positive.is_empty());
         let public_key = ed25519_pk_with(0x0C);
         let Some(controller) = positive

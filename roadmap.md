@@ -1,9 +1,33 @@
 # Roadmap
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Workspace review closure
+
+- Freeze the shared worktree after the current optimization integration, then
+  complete the final governed-source/source-budget seal and authoritative full
+  formal proof-ledger checker before preparing a signed merge commit. Do not
+  treat validation from the earlier fifth integration merge as a receipt for
+  the current source tree.
+- After that freeze, use the official workflows to regenerate and check the
+  JavaScript current-Rust-contract fixture and generated-artifact registry.
+  Preserve the green SDK release guard after its end-to-end closure repin and
+  the completed environment-inventory and JavaScript receipt-header repairs.
+- For OpenAPI, first commit the final repaired inputs, regenerate the bundle
+  from that clean exact commit with truthful provenance, and commit the
+  generated outputs in a descendant. Refresh SF1 rows and projections only
+  with an authorized council re-sign over the current manifest digest.
+- Reconcile the merged Cargo manifests with the immutable lock policy before
+  authoritative workspace validation. Keep `Cargo.lock` unchanged unless a
+  reviewed lockfile update is supplied through the release process.
+- Finish borrowed, cache-/scratch-audited admission verification for default
+  w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
+  Extend the source-proven ordinary iterable adapter beyond `FindPeers` only
+  with producer-specific semantic parity and cold-Kura bounds. Then rerun the
+  focused Rust suites and strict all-target Clippy from the frozen candidate.
 
 ## Nexus topology model closure
 
@@ -52,8 +76,8 @@ Completed history lives in [`status.md`](./status.md).
 
 Signed queries, ordinary transactions, peer authentication, core consensus
 preimages, NPoS and IVM VRF proofs, beacon helpers, SoraFS provider PoR VRF
-submissions, and their durable VRF snapshots now use the exact genesis-derived
-`NetworkId`. Signed
+submissions, SoraFS reputation-read authentication, and their durable VRF
+snapshots now use the exact genesis-derived `NetworkId`. Signed
 requests are fresh, fail closed on replay, and use one-shot owned transports;
 genesis transactions have a separate explicit domain and ordinary admission
 rejects it after initialization. Complete DAT-17 by replacing the remaining
@@ -1070,18 +1094,20 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
+its staged grouped and diagnostics suite-source manifests each contain 1,386
+records and hash respectively to
+`57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+and
+`aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 `60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
-remains open under `G-SDK`. Both live tracked source-closure resolvers currently
-pass and enumerate 1,353 grouped records and 1,352 diagnostics records. The
-mutable suite-source SHA-256 values are
-`14ad494409a2d93515037200a8e6bf1c8b60ec621ca88b450eca081dff9c148c`
-and `849735aa813d495fa02b6f083d101a94e0b2d8958c8269bea23fc54d142f8cec`.
-The
+remains open under `G-SDK`. The release receipt must reproduce the exact staged
+record totals and suite-source SHA-256 values above from its immutable
+candidate; the staged values are not execution evidence. The
 diagnostics runner inventories Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
@@ -1140,10 +1166,10 @@ The remaining work is evidence-driven and must stay in order:
   same-roster table rejects without mutation. The responder geometry now
   reserves the current roster plus one complete historical committee, caps
   identities outside the live roster to that separate corridor, and retains a
-  body-eviction-safe compact carrier witness in Kura. Legacy version-2 retained
-  records remain readable and are atomically promoted from an exact local body
-  before eviction; validation must cover both that migration and the combined
-  archive/reference byte ceiling. The focused
+  body-eviction-safe compact carrier witness in Kura. Only the current compact
+  carrier record is accepted; every other version fails closed before mutation.
+  Validation must cover that rejection and the combined archive/reference byte
+  ceiling. The focused
   route and pipeline generation/epoch TLC traces are
   wired and fresh at 7/7/depth 7 and 11/10/depth 10 respectively; the
   fail-atomic capacity-overflow route/pipeline traces are fresh at 5/5/depth 5
@@ -1164,12 +1190,17 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
-  grouped/diagnostics suite-source manifests from the exact immutable
-  candidate, and wire-TSV SHA-256
+  staged grouped/diagnostics suite-source manifests at exactly 1,386 records
+  each with SHA-256 values
+  `57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+  and
+  `aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`,
+  to be regenerated and receipt-bound from the exact immutable candidate, and
+  wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
-  Swift `4`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
-  subset results are not an archived all-surface replay and do not attest this
+  Swift `4`, Kotlin `6`, and Java `5` tests. Earlier direct subset results are
+  not an archived all-surface replay and do not attest this
   corpus; the aggregate source/distribution harness remains required. The
   separate diagnostics harness inventories Rust `14`, Python `121`, JavaScript
   `88`, Swift `33`, Kotlin `42`, and Java `41`; these mutable source counts are

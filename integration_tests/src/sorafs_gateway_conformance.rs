@@ -4,16 +4,7 @@
 //! verification flows described in `specs/sorafs_gateway_profile.md`.
 //! Authenticated proof-stream coverage lives in Torii finalized-state tests, where
 //! finalized ledger state and its cursor are available as genuine trust inputs.
-
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::OnceLock,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
+use crate::sorafs_gateway_capability_refusal::{self, CapabilityRefusalScenario};
 use blake3::Hasher;
 use eyre::{Result as EyreResult, WrapErr, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
@@ -34,9 +25,14 @@ use sorafs_manifest::{
     por::{PorChallengeV1, PorProofV1, derive_challenge_id, derive_challenge_seed},
     validation::{PinPolicyConstraints, validate_manifest},
 };
-
-use crate::sorafs_gateway_capability_refusal::{self, CapabilityRefusalScenario};
-
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::OnceLock,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 /// Describes a single replay scenario (positive or negative).
 #[derive(Debug, Clone)]
 struct ReplayScenario {
@@ -45,7 +41,6 @@ struct ReplayScenario {
     expected_status: u16,
     expected_reason: ScenarioOutcome,
 }
-
 /// Result classification returned after replaying a scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScenarioOutcome {
@@ -56,7 +51,6 @@ pub enum ScenarioOutcome {
     /// Scenario triggered an unexpected transport or runtime error.
     Error,
 }
-
 const MANIFEST_TO_FILE: &str = "manifest_v1.to";
 const MANIFEST_JSON_FILE: &str = "manifest_v1.json";
 const CHALLENGE_TO_FILE: &str = "challenge_v1.to";
@@ -69,19 +63,14 @@ const CAR_BIN_FILE: &str = "gateway.car";
 const CAR_DIGEST_FILE: &str = "gateway_car.blake3";
 const SCENARIOS_JSON_FILE: &str = "scenarios.json";
 const COUNCIL_ENVELOPE_JSON_FILE: &str = "manifest_council_envelope.json";
-
 /// Scenario mix used by the deterministic load harness.
 const LOAD_TEST_SCENARIOS: &[&str] = &["A2", "A4", "A3", "B4", "B5", "B6"];
-
 /// Canonical profile version covered by the conformance harness.
 pub const PROFILE_VERSION: &str = "sf1";
-
 /// Version identifier for the published `SoraFS` gateway fixture bundle.
 pub const FIXTURE_VERSION: &str = "1.0.0";
-
 /// Release timestamp (seconds since UNIX epoch) associated with `FIXTURE_VERSION`.
 pub const FIXTURE_RELEASE_UNIX: u64 = 1_770_854_400;
-
 /// Return the stable report label for a scenario outcome.
 fn outcome_label(outcome: ScenarioOutcome) -> &'static str {
     match outcome {
@@ -90,7 +79,6 @@ fn outcome_label(outcome: ScenarioOutcome) -> &'static str {
         ScenarioOutcome::Error => "error",
     }
 }
-
 /// Aggregate view of a single scenario execution.
 #[derive(Debug, Clone)]
 pub struct ScenarioReport {
@@ -109,14 +97,12 @@ pub struct ScenarioReport {
     /// Structured refusal payload when the scenario produced a deterministic refusal.
     pub refusal: Option<RefusalDetail>,
 }
-
 impl ScenarioReport {
     /// Returns `true` when the replay matched the status code and outcome.
     pub fn passed(&self) -> bool {
         self.expected_status == self.observed_status
             && self.expected_outcome == self.observed_outcome
     }
-
     fn to_json(&self) -> Value {
         let mut map = json::Map::new();
         map.insert("id".into(), Value::from(self.id));
@@ -144,7 +130,6 @@ impl ScenarioReport {
         Value::Object(map)
     }
 }
-
 /// Canonical refusal payload captured during replay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefusalDetail {
@@ -163,7 +148,6 @@ pub struct RefusalDetail {
     /// Canonical gateway mutation payload associated with the refusal, when available.
     pub gateway: Option<Value>,
 }
-
 impl RefusalDetail {
     fn to_json(&self) -> Value {
         let mut map = json::Map::new();
@@ -183,7 +167,6 @@ impl RefusalDetail {
         Value::Object(map)
     }
 }
-
 impl From<&CapabilityRefusalScenario> for RefusalDetail {
     fn from(scenario: &CapabilityRefusalScenario) -> Self {
         Self {
@@ -197,7 +180,6 @@ impl From<&CapabilityRefusalScenario> for RefusalDetail {
         }
     }
 }
-
 /// Summary produced by the deterministic load test.
 #[derive(Debug, Clone)]
 pub struct LoadTestReport {
@@ -208,12 +190,10 @@ pub struct LoadTestReport {
     /// Per-scenario statistics collected from the run.
     pub scenario_stats: BTreeMap<String, ScenarioStats>,
 }
-
 impl LoadTestReport {
     fn all_successful(&self) -> bool {
         self.scenario_stats.values().all(|stats| stats.error == 0)
     }
-
     fn to_json_value(&self) -> Value {
         let mut map = json::Map::new();
         map.insert("total_requests".into(), Value::from(self.total_requests));
@@ -235,7 +215,6 @@ impl LoadTestReport {
         Value::Object(map)
     }
 }
-
 /// Aggregated statistics for a replay scenario gathered during load tests.
 #[derive(Debug, Clone, Default)]
 pub struct ScenarioStats {
@@ -249,7 +228,6 @@ pub struct ScenarioStats {
     pub error: u64,
     durations: Vec<Duration>,
 }
-
 impl ScenarioStats {
     fn record(&mut self, result: &GatewayResult, duration: Duration) {
         self.total += 1;
@@ -260,7 +238,6 @@ impl ScenarioStats {
         }
         self.durations.push(duration);
     }
-
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -283,12 +260,10 @@ impl ScenarioStats {
         let micros = u64::try_from(micros).expect("value bounded to u64::MAX prior to conversion");
         Some(Duration::from_micros(micros))
     }
-
     fn percentile_millis(&self, percentile: f64) -> Option<f64> {
         self.percentile_duration(percentile)
             .map(|duration| duration.as_secs_f64() * 1_000.0)
     }
-
     fn to_json_map(&self) -> json::Map {
         let mut map = json::Map::new();
         map.insert("total".into(), Value::from(self.total));
@@ -313,7 +288,6 @@ impl ScenarioStats {
         map
     }
 }
-
 /// Final report materialised by the conformance harness.
 #[derive(Debug, Clone)]
 pub struct SuiteReport {
@@ -330,23 +304,19 @@ pub struct SuiteReport {
     /// Scenario-level results in the order they were executed.
     pub scenarios: Vec<ScenarioReport>,
 }
-
 impl SuiteReport {
     /// Returns `true` when replay and load tests succeeded with no discrepancies.
     pub fn all_passed(&self) -> bool {
         self.scenarios.iter().all(ScenarioReport::passed) && self.load_report.all_successful()
     }
-
     /// Total number of replay scenarios included in the report.
     pub fn scenario_count(&self) -> usize {
         self.scenarios.len()
     }
-
     /// Look up a scenario report by identifier.
     pub fn scenario(&self, id: &str) -> Option<&ScenarioReport> {
         self.scenarios.iter().find(|scenario| scenario.id == id)
     }
-
     /// Render the report as a Norito JSON value used by the attestation bundle.
     pub fn to_json_value(&self) -> Value {
         let mut map = json::Map::new();
@@ -374,7 +344,6 @@ impl SuiteReport {
         Value::Object(map)
     }
 }
-
 /// Artifact generated after a successful conformance run.
 #[derive(Debug, Clone)]
 pub struct AttestationBundle {
@@ -385,7 +354,6 @@ pub struct AttestationBundle {
     /// Human-readable summary emitted for operators.
     pub summary_text: String,
 }
-
 /// Verified metadata extracted from a SoraFS gateway conformance attestation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedGatewayAttestation {
@@ -404,7 +372,6 @@ pub struct VerifiedGatewayAttestation {
     /// UNIX timestamp recorded in the attestation.
     pub signed_at_unix: u64,
 }
-
 fn load_profile_to_value(profile: LoadProfile) -> Value {
     let mut map = json::Map::new();
     map.insert(
@@ -417,7 +384,6 @@ fn load_profile_to_value(profile: LoadProfile) -> Value {
     );
     Value::Object(map)
 }
-
 /// Parameters controlling load-test execution.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoadProfile {
@@ -426,7 +392,6 @@ pub struct LoadProfile {
     /// Maximum duration of the deterministic load run.
     pub max_duration: Duration,
 }
-
 /// Represents a single wave in the deterministic load schedule.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -435,14 +400,12 @@ struct LoadWave {
     end_offset: Duration,
     concurrency: usize,
 }
-
 /// Deterministic scheduler that converts a [`LoadProfile`] into concrete waves.
 #[derive(Debug, Clone, Copy)]
 struct DeterministicLoadGenerator {
     profile: LoadProfile,
     wave_span: Duration,
 }
-
 impl DeterministicLoadGenerator {
     /// Construct a generator that divides the load window into evenly spaced waves.
     fn from_profile(profile: LoadProfile) -> Self {
@@ -462,7 +425,6 @@ impl DeterministicLoadGenerator {
             wave_span: Duration::from_secs(wave_span_secs),
         }
     }
-
     /// Produce the load schedule. The last wave may be shorter to respect the max duration.
     fn schedule(&self) -> Vec<LoadWave> {
         let mut waves = Vec::new();
@@ -476,7 +438,6 @@ impl DeterministicLoadGenerator {
             });
             return waves;
         }
-
         while start < max_duration {
             let mut end = start + self.wave_span;
             if end > max_duration {
@@ -495,7 +456,6 @@ impl DeterministicLoadGenerator {
         waves
     }
 }
-
 /// Canonical gateway fixture bundle shared across tests.
 #[derive(Debug, Clone)]
 struct FixtureBundle {
@@ -508,7 +468,6 @@ struct FixtureBundle {
     chunk_digest_sha3_256: [u8; 32],
     council_envelope: Vec<u8>,
 }
-
 /// Metadata snapshot describing a generated gateway fixture bundle.
 #[derive(Debug, Clone)]
 pub struct FixtureMetadata {
@@ -531,19 +490,16 @@ pub struct FixtureMetadata {
     /// BLAKE3 digest of the detached council envelope JSON.
     pub council_envelope_blake3_hex: String,
 }
-
 fn generate_fixture_bundle() -> FixtureBundle {
     let payload = sample_payload_bytes();
     let summary = ingest_single_file(&payload).expect("fixture ingestion");
     let plan = summary.plan.clone();
     let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
-
     let mut car_bytes = Vec::new();
     let stats = CarWriter::new(&plan, &payload)
         .expect("fixture car writer")
         .write_to(&mut car_bytes)
         .expect("fixture car write");
-
     let mut car_digest = [0u8; 32];
     car_digest.copy_from_slice(blake3::hash(&car_bytes).as_bytes());
     let root_cid = stats
@@ -551,7 +507,6 @@ fn generate_fixture_bundle() -> FixtureBundle {
         .first()
         .cloned()
         .unwrap_or_else(|| b"bafysorafsmanifest".to_vec());
-
     let mut manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(stats.dag_codec))
@@ -569,7 +524,6 @@ fn generate_fixture_bundle() -> FixtureBundle {
         .governance(GovernanceProofs::default())
         .build()
         .expect("manifest construction");
-
     let descriptor = chunker_registry::default_descriptor();
     let alias_list: Vec<String> = descriptor
         .aliases
@@ -584,7 +538,6 @@ fn generate_fixture_bundle() -> FixtureBundle {
         )
     });
     manifest.chunking.aliases = alias_list;
-
     let mut challenge: PorChallengeV1 = decode_from_bytes(include_bytes!(
         "../../fixtures/sorafs_manifest/por/challenge_v1.to"
     ))
@@ -594,7 +547,6 @@ fn generate_fixture_bundle() -> FixtureBundle {
     ))
     .expect("decode PoR proof");
     challenge.chunking_profile.clone_from(&canonical_alias);
-
     let manifest_digest = manifest.digest().expect("manifest digest");
     let digest_bytes = manifest_digest.as_bytes();
     challenge.manifest_digest.copy_from_slice(digest_bytes);
@@ -625,7 +577,6 @@ fn generate_fixture_bundle() -> FixtureBundle {
     .expect("fixture council envelope");
     verify_council_envelope(&manifest, chunk_digest_sha3_256, &council_envelope)
         .expect("fixture council envelope must verify");
-
     FixtureBundle {
         manifest,
         challenge,
@@ -637,7 +588,6 @@ fn generate_fixture_bundle() -> FixtureBundle {
         council_envelope,
     }
 }
-
 fn metadata_from_bundle(bundle: &FixtureBundle) -> FixtureMetadata {
     let manifest_bytes =
         to_bytes(&bundle.manifest).expect("serialize manifest fixture deterministically");
@@ -646,7 +596,6 @@ fn metadata_from_bundle(bundle: &FixtureBundle) -> FixtureMetadata {
     let payload_digest = blake3::hash(&bundle.payload).to_hex().to_string();
     let car_digest = blake3::hash(&bundle.car_bytes).to_hex().to_string();
     let council_envelope_digest = blake3::hash(&bundle.council_envelope).to_hex().to_string();
-
     FixtureMetadata {
         version: sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_FIXTURE_VERSION.to_string(),
         profile_version: sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_PROFILE_VERSION
@@ -660,7 +609,6 @@ fn metadata_from_bundle(bundle: &FixtureBundle) -> FixtureMetadata {
         council_envelope_blake3_hex: council_envelope_digest,
     }
 }
-
 fn fixtures_digest(bundle: &FixtureBundle) -> blake3::Hash {
     let mut hasher = Hasher::new();
     hasher.update(
@@ -676,7 +624,6 @@ fn fixtures_digest(bundle: &FixtureBundle) -> blake3::Hash {
     hasher.update(&bundle.council_envelope);
     hasher.finalize()
 }
-
 fn build_council_envelope(
     manifest: &ManifestV1,
     chunk_digest_sha3_256: [u8; 32],
@@ -691,7 +638,6 @@ fn build_council_envelope(
     let (_, signer_bytes) = public_key
         .try_to_bytes()
         .wrap_err("export fixture council public key")?;
-
     let mut signature_entry = json::Map::new();
     signature_entry.insert("algorithm".into(), Value::from("ed25519"));
     signature_entry.insert("signer".into(), Value::from(hex::encode(signer_bytes)));
@@ -703,7 +649,6 @@ fn build_council_envelope(
         "signer_multihash".into(),
         Value::from(public_key.to_string()),
     );
-
     let mut envelope = json::Map::new();
     envelope.insert(
         "chunk_digest_sha3_256".into(),
@@ -728,13 +673,11 @@ fn build_council_envelope(
         "signatures".into(),
         Value::Array(vec![Value::Object(signature_entry)]),
     );
-
     let mut encoded = norito::json::to_vec_pretty(&Value::Object(envelope))
         .wrap_err("encode council envelope")?;
     encoded.push(b'\n');
     Ok(encoded)
 }
-
 fn verify_council_envelope(
     manifest: &ManifestV1,
     chunk_digest_sha3_256: [u8; 32],
@@ -814,7 +757,6 @@ fn verify_council_envelope(
     }
     Ok(())
 }
-
 fn verify_council_signature(signature: &Value, payload: &[u8]) -> EyreResult<()> {
     let obj = signature
         .as_object()
@@ -854,19 +796,16 @@ fn verify_council_signature(signature: &Value, payload: &[u8]) -> EyreResult<()>
         .verify(&public_key, payload)
         .wrap_err("council signature did not verify")
 }
-
 fn required_str<'a>(obj: &'a json::Map, field: &str) -> EyreResult<&'a str> {
     obj.get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("council envelope missing `{}`", field))
 }
-
 fn fixture_council_keypair() -> EyreResult<KeyPair> {
     let seed = blake3::hash(b"sorafs-gateway-fixture-council-v1");
     KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
         .wrap_err("derive fixture council keypair")
 }
-
 fn sample_payload_bytes() -> Vec<u8> {
     const LEN: usize = 1_048_576;
     let mut payload = Vec::with_capacity(LEN);
@@ -878,40 +817,33 @@ fn sample_payload_bytes() -> Vec<u8> {
     }
     payload
 }
-
 fn canonical_fixture_bundle() -> &'static FixtureBundle {
     static BUNDLE: OnceLock<FixtureBundle> = OnceLock::new();
     BUNDLE.get_or_init(generate_fixture_bundle)
 }
-
 fn fixture_bundle() -> FixtureBundle {
     canonical_fixture_bundle().clone()
 }
-
 fn canonical_fixtures_digest_hex() -> String {
     fixtures_digest(canonical_fixture_bundle())
         .to_hex()
         .to_string()
 }
-
 /// Exclusive-end byte range used by range streaming scenarios.
 #[derive(Debug, Clone, Copy)]
 struct ByteRange {
     start: u64,
     end: u64,
 }
-
 impl ByteRange {
     fn new(start: u64, end: u64) -> Self {
         assert!(end >= start, "range end must be >= start");
         Self { start, end }
     }
-
     fn len(self) -> u64 {
         self.end.saturating_sub(self.start)
     }
 }
-
 /// Harness state backed by the canonical gateway fixture bundle.
 #[derive(Debug, Clone)]
 pub struct HarnessContext {
@@ -919,13 +851,11 @@ pub struct HarnessContext {
     load_profile: LoadProfile,
     gateway_target: Option<String>,
 }
-
 impl Default for HarnessContext {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl HarnessContext {
     /// Construct a harness context seeded with default scenarios and load profile.
     pub fn new() -> Self {
@@ -938,29 +868,24 @@ impl HarnessContext {
             gateway_target: None,
         }
     }
-
     /// Override the target hostname used for gateway replay requests.
     #[must_use]
     pub fn with_gateway_target(mut self, target: impl Into<String>) -> Self {
         self.gateway_target = Some(target.into());
         self
     }
-
     /// Return the configured gateway target, if explicitly set.
     pub fn gateway_target(&self) -> Option<&str> {
         self.gateway_target.as_deref()
     }
-
     /// Retrieve the load profile assigned to this context.
     pub fn load_profile(&self) -> LoadProfile {
         self.load_profile
     }
-
     fn load_generator(&self) -> DeterministicLoadGenerator {
         DeterministicLoadGenerator::from_profile(self.load_profile)
     }
 }
-
 fn default_scenarios() -> Vec<ReplayScenario> {
     let mut scenarios = vec![
         ReplayScenario {
@@ -1027,7 +952,6 @@ fn default_scenarios() -> Vec<ReplayScenario> {
     scenarios.extend(capability_refusal_replay_scenarios());
     scenarios
 }
-
 fn capability_refusal_replay_scenarios() -> Vec<ReplayScenario> {
     sorafs_gateway_capability_refusal::load_scenarios()
         .expect("load capability refusal scenarios")
@@ -1040,11 +964,9 @@ fn capability_refusal_replay_scenarios() -> Vec<ReplayScenario> {
         })
         .collect()
 }
-
 fn leak_string(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
 }
-
 fn capability_refusal_detail(id: &str) -> Option<RefusalDetail> {
     static DETAIL_MAP: OnceLock<HashMap<String, RefusalDetail>> = OnceLock::new();
     let map = DETAIL_MAP.get_or_init(|| {
@@ -1060,7 +982,6 @@ fn capability_refusal_detail(id: &str) -> Option<RefusalDetail> {
     });
     map.get(id).cloned()
 }
-
 fn scenarios_json_value() -> Value {
     Value::Array(
         default_scenarios()
@@ -1085,7 +1006,6 @@ fn scenarios_json_value() -> Value {
             .collect(),
     )
 }
-
 fn run_deterministic_load_test(context: &HarnessContext) -> LoadTestReport {
     let generator = context.load_generator();
     let schedule = generator.schedule();
@@ -1101,11 +1021,9 @@ fn run_deterministic_load_test(context: &HarnessContext) -> LoadTestReport {
         .cloned()
         .map(|id| (id, ScenarioStats::default()))
         .collect();
-
     let mut request_index: usize = 0;
     let total_planned: u64 = schedule.iter().map(|wave| wave.concurrency as u64).sum();
     let start_instant = Instant::now();
-
     for wave in schedule {
         for offset in 0..wave.concurrency {
             let index = request_index + offset;
@@ -1120,26 +1038,22 @@ fn run_deterministic_load_test(context: &HarnessContext) -> LoadTestReport {
         }
         request_index += wave.concurrency;
     }
-
     let elapsed = start_instant.elapsed();
     let total_requests: u64 = stats_map.values().map(|stats| stats.total).sum();
     debug_assert_eq!(
         total_requests, total_planned,
         "load harness should process the planned number of requests"
     );
-
     LoadTestReport {
         total_requests,
         elapsed,
         scenario_stats: stats_map,
     }
 }
-
 /// Execute the full conformance harness and return the resulting report.
 pub fn run_suite(context: &HarnessContext) -> SuiteReport {
     let policy = PinPolicyConstraints::default();
     let mut scenario_reports = Vec::with_capacity(context.scenarios.len());
-
     for scenario in &context.scenarios {
         let result = run_replay_scenario(scenario.id, &policy);
         scenario_reports.push(ScenarioReport {
@@ -1152,9 +1066,7 @@ pub fn run_suite(context: &HarnessContext) -> SuiteReport {
             refusal: result.refusal.clone(),
         });
     }
-
     let load_report = run_deterministic_load_test(context);
-
     SuiteReport {
         profile_version: PROFILE_VERSION,
         fixtures_digest_hex: canonical_fixtures_digest_hex(),
@@ -1164,12 +1076,10 @@ pub fn run_suite(context: &HarnessContext) -> SuiteReport {
         scenarios: scenario_reports,
     }
 }
-
 /// Convenience helper that runs the harness with the default context.
 pub fn default_suite_report() -> SuiteReport {
     run_suite(&HarnessContext::new())
 }
-
 /// Produce an attestation bundle for a successful suite report.
 ///
 /// # Errors
@@ -1187,7 +1097,6 @@ pub fn generate_attestation(
             "cannot attest failing suite; rerun after resolving scenario failures"
         ));
     }
-
     let report_value = suite.to_json_value();
     let report_json =
         norito::json::to_vec(&report_value).wrap_err("failed to serialize conformance report")?;
@@ -1202,7 +1111,6 @@ pub fn generate_attestation(
         .duration_since(UNIX_EPOCH)
         .map_err(|err| eyre!("system clock is before UNIX_EPOCH: {err}"))?
         .as_secs();
-
     let digest_hex = digest.to_hex().to_string();
     let mut payload_hash = json::Map::new();
     payload_hash.insert("blake3_hex".into(), Value::from(digest_hex.clone()));
@@ -1210,12 +1118,10 @@ pub fn generate_attestation(
         "blake3_multibase".into(),
         Value::from(format!("z{digest_hex}")),
     );
-
     let mut signer_map = json::Map::new();
     signer_map.insert("account_id".into(), Value::from(signer.to_string()));
     signer_map.insert("public_key_hex".into(), Value::from(hex::encode(pk_bytes)));
     signer_map.insert("algorithm".into(), Value::from(pk_alg.as_static_str()));
-
     let mut attestation_map = json::Map::new();
     attestation_map.insert("payload_hash".into(), Value::Object(payload_hash));
     attestation_map.insert("signer".into(), Value::Object(signer_map));
@@ -1224,7 +1130,6 @@ pub fn generate_attestation(
         Value::from(hex::encode(signature.payload())),
     );
     attestation_map.insert("signed_at_unix".into(), Value::from(signed_at_secs));
-
     let attestation_value = Value::Object(attestation_map);
     let mut envelope_map = json::Map::new();
     envelope_map.insert("attestation".into(), attestation_value.clone());
@@ -1232,7 +1137,6 @@ pub fn generate_attestation(
     let envelope = Value::Object(envelope_map);
     let envelope_bytes =
         norito::json::to_vec(&envelope).wrap_err("failed to serialize attestation envelope")?;
-
     let summary_text = format!(
         "SoraFS Gateway Conformance Attestation\nprofile={}\nscenarios_passed={}/{}\ndigest={}\nalgorithm={}\npublic_key={}\nsignature={}\nsigned_at_unix={signed_at_secs}\n",
         suite.profile_version,
@@ -1247,14 +1151,12 @@ pub fn generate_attestation(
         hex::encode(pk_bytes),
         hex::encode(signature.payload()),
     );
-
     Ok(AttestationBundle {
         report_json,
         envelope_bytes,
         summary_text,
     })
 }
-
 /// Verify a SoraFS gateway conformance attestation envelope.
 ///
 /// The verifier recomputes the BLAKE3 digest over the canonical embedded report
@@ -1278,7 +1180,6 @@ pub fn verify_attestation_envelope(
     let report_obj = attestation_object(report, "report")?;
     let payload_hash = attestation_object_field(attestation, "payload_hash")?;
     let signer = attestation_object_field(attestation, "signer")?;
-
     let report_json =
         norito::json::to_vec(report).wrap_err("failed to canonicalize embedded report JSON")?;
     let digest_hex = blake3::hash(&report_json).to_hex().to_string();
@@ -1295,7 +1196,6 @@ pub fn verify_attestation_envelope(
             "attestation multibase hash mismatch: declared {declared_multibase}, computed {expected_multibase}"
         ));
     }
-
     let algorithm_label = attestation_str_field(signer, "algorithm")?;
     let algorithm = Algorithm::from_str(algorithm_label)
         .map_err(|_| eyre!("unsupported attestation signature algorithm `{algorithm_label}`"))?;
@@ -1304,7 +1204,6 @@ pub fn verify_attestation_envelope(
         .map_err(|err| eyre!("invalid attestation public key: {err}"))?;
     let signer_account = attestation_str_field(signer, "account_id")?;
     verify_attestation_signer_account(signer_account)?;
-
     let signature_hex = attestation_str_field(attestation, "signature_hex")?;
     let signature_bytes =
         hex::decode(signature_hex).wrap_err("attestation signature is not valid hex")?;
@@ -1317,7 +1216,6 @@ pub fn verify_attestation_envelope(
     signature
         .verify(&public_key, &report_json)
         .wrap_err("attestation signature did not verify")?;
-
     let profile_version = attestation_str_field(report_obj, "profile_version")?.to_owned();
     let scenario_count = report_obj
         .get("scenarios")
@@ -1325,7 +1223,6 @@ pub fn verify_attestation_envelope(
         .ok_or_else(|| eyre!("attestation report missing `scenarios` array"))?
         .len();
     let signed_at_unix = attestation_u64_field(attestation, "signed_at_unix")?;
-
     Ok(VerifiedGatewayAttestation {
         profile_version,
         scenario_count,
@@ -1336,31 +1233,26 @@ pub fn verify_attestation_envelope(
         signed_at_unix,
     })
 }
-
 fn attestation_object<'a>(value: &'a Value, label: &str) -> EyreResult<&'a json::Map> {
     value
         .as_object()
         .ok_or_else(|| eyre!("attestation {label} must be a JSON object"))
 }
-
 fn attestation_object_field<'a>(obj: &'a json::Map, field: &str) -> EyreResult<&'a json::Map> {
     obj.get(field)
         .and_then(Value::as_object)
         .ok_or_else(|| eyre!("attestation envelope missing object `{field}`"))
 }
-
 fn attestation_str_field<'a>(obj: &'a json::Map, field: &str) -> EyreResult<&'a str> {
     obj.get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("attestation envelope missing string `{field}`"))
 }
-
 fn attestation_u64_field(obj: &json::Map, field: &str) -> EyreResult<u64> {
     obj.get(field)
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre!("attestation envelope missing integer `{field}`"))
 }
-
 fn verify_attestation_signer_account(signer_account: &str) -> EyreResult<()> {
     if let Some(hex) = signer_account
         .strip_prefix("0x")
@@ -1371,7 +1263,6 @@ fn verify_attestation_signer_account(signer_account: &str) -> EyreResult<()> {
             .map_err(|err| eyre!("invalid canonical attestation signer account: {err}"))?;
         return Ok(());
     }
-
     AccountAddress::parse_encoded(
         signer_account,
         Some(iroha_data_model::account::address::chain_discriminant()),
@@ -1379,27 +1270,23 @@ fn verify_attestation_signer_account(signer_account: &str) -> EyreResult<()> {
     .map_err(|err| eyre!("invalid i105 attestation signer account `{signer_account}`: {err}"))?;
     Ok(())
 }
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("integration_tests should have a workspace parent")
         .to_path_buf()
 }
-
 fn fixture_directory() -> PathBuf {
     workspace_root()
         .join("fixtures")
         .join("sorafs_gateway")
         .join(FIXTURE_VERSION)
 }
-
 /// Return the default on-disk directory used by the harness for fixtures.
 #[must_use]
 pub fn default_fixture_dir() -> PathBuf {
     fixture_directory()
 }
-
 /// Write the canonical gateway fixture bundle to the provided directory.
 ///
 /// # Errors
@@ -1408,19 +1295,16 @@ pub fn default_fixture_dir() -> PathBuf {
 /// fails to serialize or write to disk.
 pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
     fs::create_dir_all(output_dir).wrap_err("failed to create gateway fixture output directory")?;
-
     let bundle = generate_fixture_bundle();
     let manifest_bytes =
         to_bytes(&bundle.manifest).wrap_err("failed to serialize manifest fixture")?;
     let metadata = metadata_from_bundle(&bundle);
-
     fs::write(output_dir.join(MANIFEST_TO_FILE), &manifest_bytes)
         .wrap_err("failed to write manifest fixture (.to)")?;
     let manifest_json = norito::json::to_vec(&bundle.manifest)
         .wrap_err("failed to encode manifest fixture as Norito JSON")?;
     fs::write(output_dir.join(MANIFEST_JSON_FILE), manifest_json)
         .wrap_err("failed to write manifest fixture (.json)")?;
-
     let challenge_bytes =
         to_bytes(&bundle.challenge).wrap_err("failed to serialize challenge fixture")?;
     fs::write(output_dir.join(CHALLENGE_TO_FILE), &challenge_bytes)
@@ -1429,7 +1313,6 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         .wrap_err("failed to encode challenge fixture as Norito JSON")?;
     fs::write(output_dir.join(CHALLENGE_JSON_FILE), challenge_json)
         .wrap_err("failed to write challenge fixture (.json)")?;
-
     let proof_bytes = to_bytes(&bundle.proof).wrap_err("failed to serialize proof fixture")?;
     fs::write(output_dir.join(PROOF_TO_FILE), &proof_bytes)
         .wrap_err("failed to write proof fixture (.to)")?;
@@ -1437,7 +1320,6 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         .wrap_err("failed to encode proof fixture as Norito JSON")?;
     fs::write(output_dir.join(PROOF_JSON_FILE), proof_json)
         .wrap_err("failed to write proof fixture (.json)")?;
-
     fs::write(output_dir.join(PAYLOAD_BIN_FILE), &bundle.payload)
         .wrap_err("failed to write payload fixture (.bin)")?;
     fs::write(
@@ -1445,7 +1327,6 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         format!("{}\n", &metadata.payload_blake3_hex),
     )
     .wrap_err("failed to write payload digest fixture")?;
-
     fs::write(output_dir.join(CAR_BIN_FILE), &bundle.car_bytes)
         .wrap_err("failed to write CAR fixture (.car)")?;
     fs::write(
@@ -1458,14 +1339,12 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         &bundle.council_envelope,
     )
     .wrap_err("failed to write council envelope fixture")?;
-
     fs::write(
         output_dir.join(SCENARIOS_JSON_FILE),
         norito::json::to_vec(&scenarios_json_value())
             .wrap_err("failed to encode scenarios as Norito JSON")?,
     )
     .wrap_err("failed to write scenarios fixture (.json)")?;
-
     let mut metadata_map = json::Map::new();
     metadata_map.insert("version".into(), Value::from(metadata.version.clone()));
     metadata_map.insert(
@@ -1504,10 +1383,8 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         .wrap_err("failed to encode metadata as Norito JSON")?;
     fs::write(output_dir.join("metadata.json"), metadata_json)
         .wrap_err("failed to write metadata fixture (.json)")?;
-
     Ok(metadata)
 }
-
 #[test]
 fn sorafs_gateway_replay_matrix() {
     let harness = HarnessContext::new();
@@ -1549,13 +1426,11 @@ fn sorafs_gateway_replay_matrix() {
         ));
     }
 }
-
 #[test]
 fn sorafs_gateway_load_profile() {
     let harness = HarnessContext::new();
     let generator = harness.load_generator();
     let schedule = generator.schedule();
-
     assert!(!schedule.is_empty(), "load generator must produce waves");
     assert_eq!(
         schedule.first().unwrap().start_offset,
@@ -1592,7 +1467,6 @@ fn sorafs_gateway_load_profile() {
         );
     }
 }
-
 #[test]
 fn sorafs_gateway_deterministic_load_harness() {
     let harness = HarnessContext::new();
@@ -1611,7 +1485,6 @@ fn sorafs_gateway_deterministic_load_harness() {
         report.elapsed > Duration::ZERO,
         "load harness should record a non-zero elapsed duration"
     );
-
     let scenario_count = LOAD_TEST_SCENARIOS.len() as u64;
     let base_expected = expected_total / scenario_count;
     for scenario_id in LOAD_TEST_SCENARIOS {
@@ -1630,7 +1503,6 @@ fn sorafs_gateway_deterministic_load_harness() {
         );
     }
 }
-
 #[test]
 fn car_digest_matches_manifest_fixture() {
     let bundle = canonical_fixture_bundle();
@@ -1641,7 +1513,6 @@ fn car_digest_matches_manifest_fixture() {
         "Recomputed archive digest must match stored metadata"
     );
 }
-
 #[test]
 fn council_envelope_signs_manifest_fixture() {
     let bundle = canonical_fixture_bundle();
@@ -1651,7 +1522,6 @@ fn council_envelope_signs_manifest_fixture() {
         &bundle.council_envelope,
     )
     .expect("fixture council envelope must verify");
-
     let mut tampered: Value =
         norito::json::from_slice(&bundle.council_envelope).expect("envelope json");
     let signatures = tampered
@@ -1674,7 +1544,6 @@ fn council_envelope_signs_manifest_fixture() {
         err.to_string().contains("signature"),
         "unexpected error: {err:?}"
     );
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1722,7 +1591,6 @@ fn council_envelope_signs_manifest_fixture() {
             "unexpected {label} signature error: {err:?}"
         );
     }
-
     let mut tampered_aliases: Value =
         norito::json::from_slice(&bundle.council_envelope).expect("envelope json");
     tampered_aliases
@@ -1745,7 +1613,6 @@ fn council_envelope_signs_manifest_fixture() {
         "unexpected error: {err:?}"
     );
 }
-
 #[test]
 fn attestation_envelope_rejects_malformed_ed25519_signature_r() {
     const SMALL_ORDER_R: [u8; 32] = [
@@ -1757,7 +1624,6 @@ fn attestation_envelope_rejects_malformed_ed25519_signature_r() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let key_pair = fixture_council_keypair().expect("fixture signer");
     let signer = AccountAddress::from_account_id(&iroha_data_model::account::AccountId::new(
         key_pair.public_key().clone(),
@@ -1805,7 +1671,6 @@ fn attestation_envelope_rejects_malformed_ed25519_signature_r() {
     )
     .expect("attestation signs");
     verify_attestation_envelope(&bundle.envelope_bytes).expect("valid attestation verifies");
-
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_R),
         ("noncanonical", NONCANONICAL_R),
@@ -1839,7 +1704,6 @@ fn attestation_envelope_rejects_malformed_ed25519_signature_r() {
         );
     }
 }
-
 #[test]
 fn sorafs_gateway_head_metadata_matches_manifest() {
     let client = SuccessGatewayClient::new();
@@ -1867,7 +1731,6 @@ fn sorafs_gateway_head_metadata_matches_manifest() {
         "HEAD must advertise the canonical chunker alias"
     );
 }
-
 /// Trait modelling the minimal HTTP client behaviour required by the harness.
 /// Raw HTTP payload returned by a multi-range request.
 #[derive(Debug, Clone)]
@@ -1877,7 +1740,6 @@ struct MultipartRangeResponse {
     /// Raw multipart payload bytes (exact HTTP body).
     body: Vec<u8>,
 }
-
 /// Metadata returned by a gateway `HEAD /car/{manifest_cid}` probe.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -1891,7 +1753,6 @@ struct HeadResponse {
     /// Canonical chunker handle associated with the manifest.
     chunker_handle: String,
 }
-
 trait GatewayHttpClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError>;
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError>;
@@ -1903,7 +1764,6 @@ trait GatewayHttpClient {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 enum GatewayError {
     DowngradeAttempt,
@@ -1917,13 +1777,11 @@ enum GatewayError {
     RangeSegmentCountMismatch { _expected: usize, _actual: usize },
     MultipartParse,
 }
-
 impl From<ManifestValidationError> for GatewayError {
     fn from(_: ManifestValidationError) -> Self {
         Self::Manifest
     }
 }
-
 impl From<CarVerifyError> for GatewayError {
     fn from(err: CarVerifyError) -> Self {
         match err {
@@ -1978,11 +1836,9 @@ impl From<CarVerifyError> for GatewayError {
         }
     }
 }
-
 struct SuccessGatewayClient {
     bundle: FixtureBundle,
 }
-
 #[allow(dead_code)]
 fn success_head_response(bundle: &FixtureBundle) -> HeadResponse {
     let alias = bundle
@@ -1999,7 +1855,6 @@ fn success_head_response(bundle: &FixtureBundle) -> HeadResponse {
         chunker_handle: alias,
     }
 }
-
 impl SuccessGatewayClient {
     fn new() -> Self {
         Self {
@@ -2007,20 +1862,16 @@ impl SuccessGatewayClient {
         }
     }
 }
-
 impl GatewayHttpClient for SuccessGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
     }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         Ok(self.bundle.car_bytes.clone())
     }
-
     fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError> {
         build_range_car_bytes(&self.bundle, range)
     }
-
     fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError> {
         let mut segments = Vec::with_capacity(ranges.len());
         for range in ranges {
@@ -2032,16 +1883,13 @@ impl GatewayHttpClient for SuccessGatewayClient {
             self.bundle.payload.len() as u64,
         ))
     }
-
     fn head_manifest(&self) -> Result<HeadResponse, GatewayError> {
         Ok(success_head_response(&self.bundle))
     }
 }
-
 struct UnsupportedChunkerGatewayClient {
     bundle: FixtureBundle,
 }
-
 impl UnsupportedChunkerGatewayClient {
     fn new() -> Self {
         let mut bundle = fixture_bundle();
@@ -2051,20 +1899,16 @@ impl UnsupportedChunkerGatewayClient {
         Self { bundle }
     }
 }
-
 impl GatewayHttpClient for UnsupportedChunkerGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
     }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         Ok(self.bundle.car_bytes.clone())
     }
-
     fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError> {
         build_range_car_bytes(&self.bundle, range)
     }
-
     fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError> {
         let mut segments = Vec::with_capacity(ranges.len());
         for range in ranges {
@@ -2076,16 +1920,13 @@ impl GatewayHttpClient for UnsupportedChunkerGatewayClient {
             self.bundle.payload.len() as u64,
         ))
     }
-
     fn head_manifest(&self) -> Result<HeadResponse, GatewayError> {
         Ok(success_head_response(&self.bundle))
     }
 }
-
 struct DowngradeGatewayClient {
     inner: SuccessGatewayClient,
 }
-
 impl DowngradeGatewayClient {
     fn new() -> Self {
         Self {
@@ -2093,37 +1934,29 @@ impl DowngradeGatewayClient {
         }
     }
 }
-
 impl GatewayHttpClient for DowngradeGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         self.inner.fetch_manifest()
     }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         self.inner.stream_car()
     }
-
     fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError> {
         self.inner.stream_range(range)
     }
-
     fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError> {
         self.inner.stream_ranges(ranges)
     }
-
     fn head_manifest(&self) -> Result<HeadResponse, GatewayError> {
         self.inner.head_manifest()
     }
-
     fn ensure_required_headers(&self) -> Result<(), GatewayError> {
         Err(GatewayError::DowngradeAttempt)
     }
 }
-
 struct MisalignedRangeGatewayClient {
     bundle: FixtureBundle,
 }
-
 impl MisalignedRangeGatewayClient {
     fn new() -> Self {
         Self {
@@ -2131,23 +1964,19 @@ impl MisalignedRangeGatewayClient {
         }
     }
 }
-
 impl GatewayHttpClient for MisalignedRangeGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
     }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         Ok(self.bundle.car_bytes.clone())
     }
-
     fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError> {
         if !is_range_aligned(range, &self.bundle.plan) {
             return Err(GatewayError::RangeNotSatisfiable);
         }
         build_range_car_bytes(&self.bundle, range)
     }
-
     fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError> {
         if ranges
             .iter()
@@ -2165,16 +1994,13 @@ impl GatewayHttpClient for MisalignedRangeGatewayClient {
             self.bundle.payload.len() as u64,
         ))
     }
-
     fn head_manifest(&self) -> Result<HeadResponse, GatewayError> {
         Ok(success_head_response(&self.bundle))
     }
 }
-
 struct CorruptedCarGatewayClient {
     bundle: FixtureBundle,
 }
-
 impl CorruptedCarGatewayClient {
     fn new() -> Self {
         let mut bundle = fixture_bundle();
@@ -2184,16 +2010,13 @@ impl CorruptedCarGatewayClient {
         Self { bundle }
     }
 }
-
 impl GatewayHttpClient for CorruptedCarGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
     }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         Ok(self.bundle.car_bytes.clone())
     }
-
     fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError> {
         let mut car = build_range_car_bytes(&self.bundle, range)?;
         if let Some(byte) = car.last_mut() {
@@ -2201,7 +2024,6 @@ impl GatewayHttpClient for CorruptedCarGatewayClient {
         }
         Ok(car)
     }
-
     fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError> {
         let mut segments = Vec::with_capacity(ranges.len());
         for range in ranges {
@@ -2217,19 +2039,16 @@ impl GatewayHttpClient for CorruptedCarGatewayClient {
             self.bundle.payload.len() as u64,
         ))
     }
-
     fn head_manifest(&self) -> Result<HeadResponse, GatewayError> {
         Ok(success_head_response(&self.bundle))
     }
 }
-
 #[derive(Debug, Clone)]
 struct GatewayResult {
     status: u16,
     outcome: ScenarioOutcome,
     refusal: Option<RefusalDetail>,
 }
-
 impl GatewayResult {
     const fn success_with(status: u16) -> Self {
         Self {
@@ -2238,7 +2057,6 @@ impl GatewayResult {
             refusal: None,
         }
     }
-
     const fn refusal(status: u16) -> Self {
         Self {
             status,
@@ -2246,7 +2064,6 @@ impl GatewayResult {
             refusal: None,
         }
     }
-
     const fn error(status: u16) -> Self {
         Self {
             status,
@@ -2254,7 +2071,6 @@ impl GatewayResult {
             refusal: None,
         }
     }
-
     fn capability_refusal(detail: RefusalDetail) -> Self {
         Self {
             status: detail.status,
@@ -2263,7 +2079,6 @@ impl GatewayResult {
         }
     }
 }
-
 fn build_multipart_response(
     ranges: &[ByteRange],
     segments: &[Vec<u8>],
@@ -2274,7 +2089,6 @@ fn build_multipart_response(
         segments.len(),
         "range/segment count mismatch when building multipart payload"
     );
-
     let mut hasher = blake3::Hasher::new();
     for segment in segments {
         hasher.update(segment);
@@ -2282,7 +2096,6 @@ fn build_multipart_response(
     hasher.update(&total_length.to_le_bytes());
     let digest = hasher.finalize();
     let boundary = format!("sorafs-boundary-{}", hex::encode(&digest.as_bytes()[..8]));
-
     let mut body = Vec::new();
     for (range, segment) in ranges.iter().zip(segments.iter()) {
         assert!(
@@ -2303,14 +2116,11 @@ fn build_multipart_response(
         body.extend_from_slice(segment);
         body.extend_from_slice(b"\r\n");
     }
-
     body.extend_from_slice(b"--");
     body.extend_from_slice(boundary.as_bytes());
     body.extend_from_slice(b"--\r\n");
-
     MultipartRangeResponse { boundary, body }
 }
-
 fn parse_multipart_byteranges(
     body: &[u8],
     boundary: &str,
@@ -2319,7 +2129,6 @@ fn parse_multipart_byteranges(
     if boundary.is_empty() {
         return Err(GatewayError::MultipartParse);
     }
-
     let boundary_prefix = format!("--{boundary}");
     let closing_prefix = format!("--{boundary}--");
     let boundary_bytes = boundary_prefix.as_bytes();
@@ -2327,7 +2136,6 @@ fn parse_multipart_byteranges(
     let mut cursor = 0usize;
     let len = body.len();
     let mut segments = Vec::new();
-
     while cursor < len {
         if body[cursor..].starts_with(closing_bytes) {
             cursor += closing_bytes.len();
@@ -2345,7 +2153,6 @@ fn parse_multipart_byteranges(
             }
             return Err(GatewayError::MultipartParse);
         }
-
         if !body[cursor..].starts_with(boundary_bytes) {
             return Err(GatewayError::MultipartParse);
         }
@@ -2354,7 +2161,6 @@ fn parse_multipart_byteranges(
             return Err(GatewayError::MultipartParse);
         }
         cursor += 2;
-
         let mut parsed_range: Option<(u64, u64, u64)> = None;
         loop {
             let Some(line_len) = find_crlf(&body[cursor..]) else {
@@ -2371,12 +2177,10 @@ fn parse_multipart_byteranges(
                 parsed_range = Some(parse_content_range(value.trim())?);
             }
         }
-
         let (start, inclusive_end, total) = parsed_range.ok_or(GatewayError::MultipartParse)?;
         if total != expected_total || start > inclusive_end {
             return Err(GatewayError::MultipartParse);
         }
-
         let delimiter = format!("\r\n--{boundary}");
         let Some(rel_idx) = find_subsequence(&body[cursor..], delimiter.as_bytes()) else {
             return Err(GatewayError::MultipartParse);
@@ -2390,10 +2194,8 @@ fn parse_multipart_byteranges(
         segments.push((range, data));
         cursor = data_end + 2;
     }
-
     Err(GatewayError::MultipartParse)
 }
-
 fn parse_content_range(value: &str) -> Result<(u64, u64, u64), GatewayError> {
     let value = value
         .strip_prefix("bytes ")
@@ -2423,11 +2225,9 @@ fn parse_content_range(value: &str) -> Result<(u64, u64, u64), GatewayError> {
         .map_err(|_| GatewayError::MultipartParse)?;
     Ok((start, inclusive_end, total))
 }
-
 fn find_crlf(buffer: &[u8]) -> Option<usize> {
     buffer.windows(2).position(|window| window == b"\r\n")
 }
-
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
@@ -2436,7 +2236,6 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
 }
-
 fn first_chunk_range(plan: &CarBuildPlan) -> Option<ByteRange> {
     plan.chunks.first().map(|chunk| {
         let start = chunk.offset;
@@ -2444,7 +2243,6 @@ fn first_chunk_range(plan: &CarBuildPlan) -> Option<ByteRange> {
         ByteRange::new(start, end)
     })
 }
-
 fn is_range_aligned(range: ByteRange, plan: &CarBuildPlan) -> bool {
     plan.chunks.iter().any(|chunk| {
         let start = chunk.offset;
@@ -2452,7 +2250,6 @@ fn is_range_aligned(range: ByteRange, plan: &CarBuildPlan) -> bool {
         range.start == start && range.end == end
     })
 }
-
 fn build_range_car_bytes(
     bundle: &FixtureBundle,
     range: ByteRange,
@@ -2460,7 +2257,6 @@ fn build_range_car_bytes(
     if range.start >= range.end {
         return Err(GatewayError::RangeNotSatisfiable);
     }
-
     let payload_len = bundle.payload.len();
     let payload_start = usize::try_from(range.start)
         .ok()
@@ -2473,7 +2269,6 @@ fn build_range_car_bytes(
     if payload_start >= payload_end {
         return Err(GatewayError::RangeNotSatisfiable);
     }
-
     let plan = &bundle.plan;
     let start_idx = plan
         .chunks
@@ -2488,7 +2283,6 @@ fn build_range_car_bytes(
     if end_idx < start_idx {
         return Err(GatewayError::RangeNotSatisfiable);
     }
-
     for idx in start_idx..=end_idx {
         let chunk = &plan.chunks[idx];
         let expected_start = if idx == start_idx {
@@ -2501,9 +2295,7 @@ fn build_range_car_bytes(
             return Err(GatewayError::RangeNotSatisfiable);
         }
     }
-
     let payload_slice = &bundle.payload[payload_start..payload_end];
-
     let mut offset = 0u64;
     let mut chunks = Vec::with_capacity(end_idx - start_idx + 1);
     for chunk in &plan.chunks[start_idx..=end_idx] {
@@ -2515,7 +2307,6 @@ fn build_range_car_bytes(
         });
         offset += u64::from(chunk.length);
     }
-
     let sub_plan = CarBuildPlan {
         chunk_profile: plan.chunk_profile,
         payload_digest: blake3::hash(payload_slice),
@@ -2528,7 +2319,6 @@ fn build_range_car_bytes(
             size: payload_slice.len() as u64,
         }],
     };
-
     let mut car_bytes = Vec::new();
     CarWriter::new(&sub_plan, payload_slice)
         .map_err(|err| map_car_write_error(&err))?
@@ -2536,7 +2326,6 @@ fn build_range_car_bytes(
         .map_err(|err| map_car_write_error(&err))?;
     Ok(car_bytes)
 }
-
 fn map_car_write_error(error: &CarWriteError) -> GatewayError {
     match error {
         CarWriteError::Io(_)
@@ -2553,20 +2342,17 @@ fn map_car_write_error(error: &CarWriteError) -> GatewayError {
         | CarWriteError::InvalidPlan(_) => GatewayError::RangePayloadMismatch,
     }
 }
-
 #[test]
 fn car_verifier_allocation_failure_maps_to_range_payload_mismatch() {
     let error = CarVerifyError::AllocationFailed {
         context: "test verifier allocation",
         requested: 1,
     };
-
     assert!(matches!(
         GatewayError::from(error),
         GatewayError::RangePayloadMismatch
     ));
 }
-
 #[test]
 fn car_writer_structural_failures_map_to_range_payload_mismatch() {
     let errors = [
@@ -2584,7 +2370,6 @@ fn car_writer_structural_failures_map_to_range_payload_mismatch() {
         },
         CarWriteError::InvalidPlan(sorafs_car::CarPlanValidationError::MissingChunks),
     ];
-
     for error in errors {
         assert!(matches!(
             map_car_write_error(&error),
@@ -2592,7 +2377,6 @@ fn car_writer_structural_failures_map_to_range_payload_mismatch() {
         ));
     }
 }
-
 fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult {
     let outcome = match id {
         "A1" => verify_full_replay(&SuccessGatewayClient::new(), policy),
@@ -2612,7 +2396,6 @@ fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult
         "D1" => return GatewayResult::refusal(451),
         other => panic!("unexpected scenario id: {other}"),
     };
-
     match outcome {
         Ok(()) => {
             let status = match id {
@@ -2635,22 +2418,17 @@ fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult
         ) => GatewayResult::refusal(422),
     }
 }
-
 fn verify_full_replay<C: GatewayHttpClient>(
     client: &C,
     policy: &PinPolicyConstraints,
 ) -> Result<(), GatewayError> {
     client.ensure_required_headers()?;
     let manifest = client.fetch_manifest()?;
-
     validate_manifest(&manifest, policy)?;
-
     let car_bytes = client.stream_car()?;
     CarVerifier::verify_full_car(&manifest, &car_bytes)?;
-
     Ok(())
 }
-
 fn verify_aligned_range<C: GatewayHttpClient>(
     client: &C,
     _policy: &PinPolicyConstraints,
@@ -2677,7 +2455,6 @@ fn verify_aligned_range<C: GatewayHttpClient>(
     }
     Ok(())
 }
-
 fn verify_multi_range<C: GatewayHttpClient>(client: &C) -> Result<(), GatewayError> {
     client.ensure_required_headers()?;
     let bundle = canonical_fixture_bundle();
@@ -2692,13 +2469,11 @@ fn verify_multi_range<C: GatewayHttpClient>(client: &C) -> Result<(), GatewayErr
         return Err(GatewayError::RangePayloadMismatch);
     }
     let range_a = ByteRange::new(chunk_start, chunk_end);
-
     let range_b = bundle.plan.chunks.get(1).map_or(range_a, |second_chunk| {
         let start = second_chunk.offset;
         let end = start + u64::from(second_chunk.length);
         ByteRange::new(start, end)
     });
-
     let ranges = [range_a, range_b];
     let response = client.stream_ranges(&ranges)?;
     let parsed = parse_multipart_byteranges(
@@ -2712,7 +2487,6 @@ fn verify_multi_range<C: GatewayHttpClient>(client: &C) -> Result<(), GatewayErr
             _actual: parsed.len(),
         });
     }
-
     for ((parsed_range, segment), expected_range) in parsed.iter().zip(ranges.iter()) {
         if parsed_range.start != expected_range.start || parsed_range.end != expected_range.end {
             return Err(GatewayError::RangePayloadMismatch);
@@ -2727,10 +2501,8 @@ fn verify_multi_range<C: GatewayHttpClient>(client: &C) -> Result<(), GatewayErr
             });
         }
     }
-
     Ok(())
 }
-
 fn verify_misaligned_range<C: GatewayHttpClient>(client: &C) -> Result<(), GatewayError> {
     client.ensure_required_headers()?;
     let bundle = canonical_fixture_bundle();
@@ -2742,7 +2514,6 @@ fn verify_misaligned_range<C: GatewayHttpClient>(client: &C) -> Result<(), Gatew
         Ok(_) => Err(GatewayError::RangeUnexpectedSuccess),
     }
 }
-
 #[test]
 fn multipart_roundtrip_parses_expected_segments() {
     let ranges = [ByteRange::new(0, 8), ByteRange::new(8, 16)];
@@ -2756,7 +2527,6 @@ fn multipart_roundtrip_parses_expected_segments() {
         assert_eq!(data, &segments[idx]);
     }
 }
-
 #[test]
 fn multipart_parser_rejects_truncated_body() {
     let ranges = [ByteRange::new(0, 4)];

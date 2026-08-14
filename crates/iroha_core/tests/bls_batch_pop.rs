@@ -1,8 +1,6 @@
 //! Integration checks for BLS batching + `PoP` gating on transaction admission.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::time::Duration;
-use std::sync::Arc;
-
 use iroha_core::{
     block::{BlockValidationError, ValidBlock},
     da::proof_policy_bundle,
@@ -28,18 +26,16 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
-
+use std::sync::Arc;
 fn checked_random_bls_batch_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked BLS batch keypair")
 }
-
 #[test]
 fn bls_batch_fixture_uses_checked_bls_randomness() {
     let key_pair = checked_random_bls_batch_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
 }
-
 fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -69,7 +65,6 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     state.set_crypto(crypto_cfg);
     (state, network_id, account_id, kp)
 }
-
 fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
     let kp = checked_random_bls_batch_keypair();
     let peer = PeerId::from(kp.public_key().clone());
@@ -89,7 +84,6 @@ fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
     state_block.commit().expect("genesis commit");
     (committed.as_ref().hash(), kp, peer)
 }
-
 fn make_tx(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -115,7 +109,6 @@ fn make_tx(
     builder.set_creation_time(Duration::ZERO);
     builder.sign(kp.private_key())
 }
-
 fn push_single_tx_with_context(
     builder: &mut BlockBuilder,
     tx: SignedTransaction,
@@ -165,7 +158,6 @@ fn push_single_tx_with_context(
     ));
     builder.push_transaction(tx);
 }
-
 #[test]
 fn bls_batch_block_validates_with_pop() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
@@ -178,7 +170,6 @@ fn bls_batch_block_validates_with_pop() {
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
-
     let mut state_block = state.block(block.header());
     let topology = Topology::new(vec![peer]);
     ValidBlock::validate(
@@ -191,7 +182,6 @@ fn bls_batch_block_validates_with_pop() {
     .unpack(|_| {})
     .expect("block validation must succeed with PoP");
 }
-
 #[test]
 fn bls_batch_block_validates_without_pop_fallback() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
@@ -204,7 +194,6 @@ fn bls_batch_block_validates_without_pop_fallback() {
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
-
     let mut state_block = state.block(block.header());
     let topology = Topology::new(vec![peer]);
     // Should still validate via per-signature path when PoP is absent.
@@ -218,7 +207,6 @@ fn bls_batch_block_validates_without_pop_fallback() {
     .unpack(|_| {})
     .expect("block validation must succeed without PoP (per-signature fallback)");
 }
-
 #[test]
 fn bls_batch_block_rejects_missing_proof_policy_hash() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
@@ -229,7 +217,6 @@ fn bls_batch_block_rejects_missing_proof_policy_hash() {
     let mut builder = BlockBuilder::new(header);
     push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
     let block = builder.build_with_signature(0, peer_kp.private_key());
-
     let mut state_block = state.block(block.header());
     let topology = Topology::new(vec![peer]);
     let err = ValidBlock::validate(

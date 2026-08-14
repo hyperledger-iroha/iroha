@@ -1,31 +1,26 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Subscription trigger integration tests.
-
-use std::{
-    collections::BTreeMap,
-    time::{Duration, SystemTime},
-};
-
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
+use iroha::data_model::subscription::{
+    SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
+    SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
+};
 use iroha::{
     client::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use ivm::{ProgramMetadata, encoding, instruction, syscalls};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
-use ivm::{ProgramMetadata, encoding, instruction, syscalls};
-
-use iroha::data_model::subscription::{
-    SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
-    SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
-};
-
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
 where
     F: FnOnce() -> Fut,
@@ -36,13 +31,11 @@ where
     }
     Ok(())
 }
-
 fn current_time() -> Duration {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("system time should be after unix epoch")
 }
-
 fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     let now = current_time();
     let pipeline_time = network.block_cadence();
@@ -54,7 +47,6 @@ fn schedule_start(network: &sandbox::SerializedNetwork) -> (Duration, u64) {
     let start_ms = u64::try_from(start.as_millis()).expect("timestamp should fit in u64");
     (start, start_ms)
 }
-
 fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall should fit in u8");
     let mut code = Vec::new();
@@ -72,7 +64,6 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }
-
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     let assets = client.query(FindAssets::new()).execute_all()?;
     let asset = assets
@@ -81,7 +72,6 @@ fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
         .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
     Ok(asset.value().clone())
 }
-
 fn nft_metadata_value(client: &Client, nft_id: &NftId, key: &Name) -> Result<Option<Json>> {
     let nft = client
         .query(FindNfts::new())
@@ -91,7 +81,6 @@ fn nft_metadata_value(client: &Client, nft_id: &NftId, key: &Name) -> Result<Opt
         .ok_or_else(|| eyre!("nft {nft_id} not found"))?;
     Ok(nft.content().get(key).cloned())
 }
-
 fn subscription_state_for_nft(client: &Client, nft_id: &NftId) -> Result<SubscriptionState> {
     let key: Name = SUBSCRIPTION_METADATA_KEY.parse()?;
     let Some(value) = nft_metadata_value(client, nft_id, &key)? else {
@@ -99,7 +88,6 @@ fn subscription_state_for_nft(client: &Client, nft_id: &NftId) -> Result<Subscri
     };
     Ok(value.try_into_any_norito::<SubscriptionState>()?)
 }
-
 fn subscription_invoice_for_nft(
     client: &Client,
     nft_id: &NftId,
@@ -110,7 +98,6 @@ fn subscription_invoice_for_nft(
     };
     Ok(Some(value.try_into_any_norito::<SubscriptionInvoice>()?))
 }
-
 async fn tick_block(client: &Client) -> Result<()> {
     let client = client.clone();
     spawn_blocking(move || {
@@ -122,7 +109,6 @@ async fn tick_block(client: &Client) -> Result<()> {
     .await??;
     Ok(())
 }
-
 async fn wait_for_invoice_status(
     client: &Client,
     nft_id: &NftId,
@@ -244,7 +230,6 @@ async fn wait_for_invoice_status(
         }
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn subscription_scenarios() -> Result<()> {
@@ -260,14 +245,11 @@ async fn subscription_scenarios() -> Result<()> {
     };
     let client = network.client();
     network.ensure_blocks_with(|h| h.total >= 1).await?;
-
     subscription_usage_arrears_billing_charges_usage_scenario(&network, &client).await?;
     subscription_fixed_advance_billing_charges_future_period_scenario(&network, &client).await?;
     subscription_retry_grace_failure_marks_past_due_scenario(&network, &client).await?;
-
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 async fn subscription_usage_arrears_billing_charges_usage_scenario(
     network: &sandbox::SerializedNetwork,
@@ -294,12 +276,10 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let period_ms = 2_000_u64;
             let retry_backoff_ms = 500_u64;
             let (start_time, start_ms) = schedule_start(&network);
-
             let unit_price = Quantity::from(2_u32);
             let usage_delta = Quantity::from(3_u32);
             let amount = Quantity::from(6_u32);
             let initial_balance = Quantity::from(100_u32);
-
             spawn_blocking({
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
@@ -338,7 +318,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let plan = SubscriptionPlan {
                 provider: provider.clone(),
                 billing: SubscriptionBilling {
@@ -373,7 +352,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
             let mint_amount = initial_balance.clone();
             spawn_blocking({
@@ -413,7 +391,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let subscription_state = SubscriptionState {
                 plan_id: plan_id.clone(),
                 provider: provider.clone(),
@@ -462,7 +439,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let usage_program = ivm_syscall_program(syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE);
             let usage_action = Action::new(
                 Executable::Ivm(usage_program),
@@ -488,7 +464,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let usage_args = SubscriptionUsageDelta {
                 subscription_nft_id: nft_id.clone(),
                 unit_key: unit_key.clone(),
@@ -508,7 +483,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let usage_state = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -519,7 +493,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 usage_state.usage_accumulated.get(&unit_key),
                 Some(&usage_delta)
             );
-
             let billing_program = ivm_syscall_program(syscalls::SYSCALL_SUBSCRIPTION_BILL);
             let mut trigger_metadata = Metadata::default();
             let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse()?;
@@ -553,7 +526,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
@@ -570,13 +542,11 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 poll_delay,
             )
             .await?;
-
             assert_eq!(invoice.subscription_nft_id, nft_id);
             assert_eq!(invoice.amount, amount);
             assert_eq!(invoice.asset_definition, charge_def_id);
             assert_eq!(invoice.period_start_ms, start_ms - period_ms);
             assert_eq!(invoice.period_end_ms, start_ms);
-
             let billed_state = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -589,7 +559,6 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             assert_eq!(billed_state.current_period_start_ms, start_ms);
             assert_eq!(billed_state.current_period_end_ms, start_ms + period_ms);
             assert!(!billed_state.usage_accumulated.contains_key(&unit_key));
-
             let final_balance = spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
@@ -600,13 +569,11 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 .checked_sub(&amount)
                 .expect("balance should cover usage bill");
             assert_eq!(final_balance, expected_balance);
-
             Ok(())
         },
     )
     .await
 }
-
 #[allow(clippy::too_many_lines)]
 async fn subscription_fixed_advance_billing_charges_future_period_scenario(
     network: &sandbox::SerializedNetwork,
@@ -630,10 +597,8 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let nft_id: NftId = "subscription_fixed$wonderland.universal".parse()?;
             let period_ms = 3_000_u64;
             let (start_time, start_ms) = schedule_start(&network);
-
             let amount = Quantity::from(120_u32);
             let initial_balance = Quantity::from(300_u32);
-
             spawn_blocking({
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
@@ -672,7 +637,6 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-
             let plan = SubscriptionPlan {
                 provider: provider.clone(),
                 billing: SubscriptionBilling {
@@ -706,7 +670,6 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
             let mint_amount = initial_balance.clone();
             spawn_blocking({
@@ -746,7 +709,6 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-
             let subscription_state = SubscriptionState {
                 plan_id: plan_id.clone(),
                 provider: provider.clone(),
@@ -795,7 +757,6 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-
             let billing_program = ivm_syscall_program(syscalls::SYSCALL_SUBSCRIPTION_BILL);
             let mut trigger_metadata = Metadata::default();
             let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse()?;
@@ -829,7 +790,6 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
@@ -846,12 +806,10 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 poll_delay,
             )
             .await?;
-
             assert_eq!(invoice.amount, amount);
             assert_eq!(invoice.asset_definition, charge_def_id);
             assert_eq!(invoice.period_start_ms, start_ms);
             assert_eq!(invoice.period_end_ms, start_ms + period_ms);
-
             let billed_state = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -862,7 +820,6 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             assert_eq!(billed_state.current_period_start_ms, start_ms);
             assert_eq!(billed_state.current_period_end_ms, start_ms + period_ms);
             assert_eq!(billed_state.next_charge_ms, start_ms + period_ms);
-
             let final_balance = spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
@@ -873,13 +830,11 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 .checked_sub(&amount)
                 .expect("balance should cover fixed bill");
             assert_eq!(final_balance, expected_balance);
-
             Ok(())
         },
     )
     .await
 }
-
 #[allow(clippy::too_many_lines)]
 async fn subscription_retry_grace_failure_marks_past_due_scenario(
     network: &sandbox::SerializedNetwork,
@@ -904,10 +859,8 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let period_ms = 1_500_u64;
             let retry_backoff_ms = 750_u64;
             let (start_time, start_ms) = schedule_start(&network);
-
             let amount = Quantity::from(120_u32);
             let initial_balance = Quantity::from(50_u32);
-
             spawn_blocking({
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
@@ -946,7 +899,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-
             let plan = SubscriptionPlan {
                 provider: provider.clone(),
                 billing: SubscriptionBilling {
@@ -980,7 +932,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
             let mint_amount = initial_balance.clone();
             spawn_blocking({
@@ -998,7 +949,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-
             let subscription_state = SubscriptionState {
                 plan_id: plan_id.clone(),
                 provider: provider.clone(),
@@ -1047,7 +997,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-
             let billing_program = ivm_syscall_program(syscalls::SYSCALL_SUBSCRIPTION_BILL);
             let mut trigger_metadata = Metadata::default();
             let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse()?;
@@ -1081,7 +1030,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),
                 network
@@ -1098,13 +1046,11 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 poll_delay,
             )
             .await?;
-
             assert_eq!(invoice.subscription_nft_id, nft_id);
             assert_eq!(invoice.amount, amount);
             assert_eq!(invoice.asset_definition, charge_def_id);
             assert_eq!(invoice.period_start_ms, start_ms - period_ms);
             assert_eq!(invoice.period_end_ms, start_ms);
-
             let billed_state = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -1117,7 +1063,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 billed_state.next_charge_ms,
                 invoice.attempted_at_ms.saturating_add(retry_backoff_ms)
             );
-
             let final_balance = spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
@@ -1125,7 +1070,6 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             })
             .await??;
             assert_eq!(final_balance, initial_balance);
-
             Ok(())
         },
     )

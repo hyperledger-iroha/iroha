@@ -1,8 +1,6 @@
 #![cfg(feature = "json")]
 //! UI-like checks for TapeWalker-specific expected-* errors.
-
 use norito::json::{self, Reader, TapeWalker, Token};
-
 #[test]
 fn expect_object_start_message() {
     let mut w = TapeWalker::new("[]");
@@ -10,7 +8,6 @@ fn expect_object_start_message() {
     let msg = err.to_string();
     assert!(msg.contains("expected object start"), "{msg}");
 }
-
 #[test]
 fn expect_object_end_message() {
     let mut w = TapeWalker::new("{]}");
@@ -20,7 +17,6 @@ fn expect_object_end_message() {
     let msg = err.to_string();
     assert!(msg.contains("expected object end"), "{msg}");
 }
-
 #[test]
 fn expect_colon_message() {
     let s = "{\"a\" 1}"; // missing colon
@@ -31,7 +27,6 @@ fn expect_colon_message() {
     let msg = err.to_string();
     assert!(msg.contains("expected ':'"), "{msg}");
 }
-
 #[test]
 fn expect_colon_resync_message() {
     // Missing colon; resync path should still report ExpectedColon
@@ -50,7 +45,6 @@ fn expect_colon_resync_message() {
     let msg = err.to_string();
     assert!(msg.contains("expected ':'"), "{msg}");
 }
-
 #[test]
 fn expect_array_start_message() {
     let mut w = TapeWalker::new("{}");
@@ -58,7 +52,6 @@ fn expect_array_start_message() {
     let msg = err.to_string();
     assert!(msg.contains("expected array start"), "{msg}");
 }
-
 #[test]
 fn expect_array_end_message() {
     let mut w = TapeWalker::new("[}");
@@ -67,7 +60,6 @@ fn expect_array_end_message() {
     let msg = err.to_string();
     assert!(msg.contains("expected array end"), "{msg}");
 }
-
 #[test]
 fn expected_key_string_and_unterminated_key_messages() {
     // Missing key string: use numeric key to trigger ExpectedKeyString at ':'
@@ -76,7 +68,6 @@ fn expected_key_string_and_unterminated_key_messages() {
     let err = w.read_key_hash().unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("expected key quote"), "{msg}");
-
     // Unterminated key: opening quote, no closing quote before colon
     let mut w = TapeWalker::new("{\"a:1}");
     w.expect_object_start().unwrap();
@@ -84,7 +75,6 @@ fn expected_key_string_and_unterminated_key_messages() {
     let msg = err.to_string();
     assert!(msg.contains("unterminated key"), "{msg}");
 }
-
 #[test]
 fn reader_expected_colon_error() {
     // Reader should surface ExpectedColon after a key without ':'
@@ -98,7 +88,6 @@ fn reader_expected_colon_error() {
     let msg = err.to_string();
     assert!(msg.contains("expected ':'"), "{msg}");
 }
-
 #[test]
 fn reader_expected_digits_error() {
     // A lone minus should trigger ExpectedDigits via Reader scalar path
@@ -107,7 +96,6 @@ fn reader_expected_digits_error() {
     let msg = err.to_string();
     assert!(msg.contains("expected digits"), "{msg}");
 }
-
 #[test]
 fn reader_expected_frac_digits_error() {
     // A dot without following digits should trigger ExpectedFracDigits
@@ -116,7 +104,6 @@ fn reader_expected_frac_digits_error() {
     let msg = err.to_string();
     assert!(msg.contains("expected frac digits"), "{msg}");
 }
-
 #[test]
 fn reader_expected_exp_digits_error() {
     // An exponent marker without digits should trigger ExpectedExpDigits
@@ -125,7 +112,6 @@ fn reader_expected_exp_digits_error() {
     let msg = err.to_string();
     assert!(msg.contains("expected exp digits"), "{msg}");
 }
-
 #[test]
 fn reader_unexpected_value_error() {
     // A non-structural, non-scalar starting char should trigger UnexpectedValue
@@ -134,7 +120,6 @@ fn reader_unexpected_value_error() {
     let msg = err.to_string();
     assert!(msg.contains("unexpected value"), "{msg}");
 }
-
 #[test]
 fn reader_unexpected_structurals_top_level() {
     // '}' and ']' at top level should produce Unexpected*End
@@ -168,7 +153,6 @@ fn reader_unexpected_structurals_top_level() {
     let msg = r.next_token().unwrap_err().to_string();
     assert!(msg.contains("unexpected ':'"), "{msg}");
 }
-
 #[test]
 fn reader_unexpected_quote_in_object() {
     // In object context, a quote without key+colon ahead should be flagged
@@ -182,7 +166,6 @@ fn reader_unexpected_quote_in_object() {
     // Now uses a specialized variant
     assert!(msg.contains("unexpected quote"), "{msg}");
 }
-
 #[test]
 fn reader_unexpected_object_end_nested_position() {
     // Nested case: close object properly, then an extra '}' at top level with exact position
@@ -204,7 +187,6 @@ fn reader_unexpected_object_end_nested_position() {
     assert!(msg.contains("unexpected object end"), "{msg}");
     assert!(msg.contains("byte 4 (line 3, col 1)"), "{msg}");
 }
-
 #[test]
 fn reader_unexpected_array_end_nested_position() {
     // Nested: close array properly, then an extra ']' at top level; assert exact position
@@ -226,7 +208,6 @@ fn reader_unexpected_array_end_nested_position() {
     assert!(msg.contains("unexpected array end"), "{msg}");
     assert!(msg.contains("byte 4 (line 3, col 1)"), "{msg}");
 }
-
 #[test]
 fn reader_array_object_mismatch_future_diagnostic() {
     // Mismatch: inside an object, an array end ']' appears prematurely (before the '}').
@@ -247,7 +228,6 @@ fn reader_array_object_mismatch_future_diagnostic() {
         }
     }
 }
-
 #[test]
 fn reader_object_array_mismatch_future_diagnostic() {
     // Mismatch (opposite direction): inside an array, an object end '}' appears prematurely.
@@ -266,7 +246,6 @@ fn reader_object_array_mismatch_future_diagnostic() {
         }
     }
 }
-
 #[test]
 fn tapewalker_bad_escape_reports_position() {
     // \x is not a valid JSON escape
@@ -278,7 +257,6 @@ fn tapewalker_bad_escape_reports_position() {
     let msg = res.err().unwrap().to_string();
     assert!(msg.contains("bad escape"), "{msg}");
 }
-
 #[test]
 fn tapewalker_invalid_low_surrogate_reports_position() {
     // High surrogate followed by non-low surrogate
@@ -290,7 +268,6 @@ fn tapewalker_invalid_low_surrogate_reports_position() {
     let msg = res.err().unwrap().to_string();
     assert!(msg.contains("invalid low surrogate"), "{msg}");
 }
-
 #[test]
 fn tapewalker_unexpected_low_surrogate_reports_position() {
     // Lone low surrogate
@@ -302,7 +279,6 @@ fn tapewalker_unexpected_low_surrogate_reports_position() {
     let msg = res.err().unwrap().to_string();
     assert!(msg.contains("unexpected low surrogate"), "{msg}");
 }
-
 #[test]
 fn tapewalker_eof_escape_reports_position() {
     // Trailing backslash before closing quote
@@ -318,7 +294,6 @@ fn tapewalker_eof_escape_reports_position() {
         "{msg}"
     );
 }
-
 #[test]
 fn tapewalker_string_control_char_error_has_position() {
     // String with an embedded control char 0x01 should error with ControlInString
@@ -330,7 +305,6 @@ fn tapewalker_string_control_char_error_has_position() {
     let msg = res.err().unwrap().to_string();
     assert!(msg.contains("control in string"), "{msg}");
 }
-
 #[test]
 fn tapewalker_string_unterminated_error_has_position() {
     // Unterminated string should surface UnterminatedString with byte offset
@@ -342,7 +316,6 @@ fn tapewalker_string_unterminated_error_has_position() {
     let msg = res.err().unwrap().to_string();
     assert!(msg.contains("unterminated string"), "{msg}");
 }
-
 #[test]
 fn tapewalker_string_eof_hex_error_has_position() {
     // Incomplete \uXXXX sequence should produce EofHex

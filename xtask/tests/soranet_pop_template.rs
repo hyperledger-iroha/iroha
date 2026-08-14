@@ -1,10 +1,8 @@
-use std::{fs, io::Read, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
+use std::{fs, io::Read, path::Path};
 use tempfile::tempdir;
-
 #[test]
 fn soranet_pop_template_renders_fixture() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -19,7 +17,6 @@ fn soranet_pop_template_renders_fixture() {
         "fixture {} missing",
         descriptor.display()
     );
-
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("sjc01.conf");
     let golden = workspace_root
@@ -27,7 +24,6 @@ fn soranet_pop_template_renders_fixture() {
         .join("soranet_pop")
         .join("sjc01.frr.golden");
     assert!(golden.exists(), "golden {} missing", golden.display());
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let result = cmd
         .args([
@@ -40,7 +36,6 @@ fn soranet_pop_template_renders_fixture() {
         .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("run soranet-pop-template");
-
     assert!(
         result.status.success(),
         "command failed: status={:?}\nstdout={}\nstderr={}",
@@ -48,7 +43,6 @@ fn soranet_pop_template_renders_fixture() {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
-
     let rendered = fs::read_to_string(&output_path).expect("read generated config");
     assert!(
         rendered.contains("router bgp 65110"),
@@ -71,7 +65,6 @@ fn soranet_pop_template_renders_fixture() {
         "rendered config diverged from golden fixture"
     );
 }
-
 #[test]
 fn soranet_pop_template_writes_resolver_config() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,10 +79,8 @@ fn soranet_pop_template_writes_resolver_config() {
         "fixture {} missing",
         descriptor.display()
     );
-
     let temp = tempdir().expect("tempdir");
     let resolver_cfg = temp.path().join("resolver.toml");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let result = cmd
         .args([
@@ -102,7 +93,6 @@ fn soranet_pop_template_writes_resolver_config() {
         .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("run soranet-pop-template with resolver");
-
     assert!(
         result.status.success(),
         "command failed: status={:?}\nstdout={}\nstderr={}",
@@ -110,7 +100,6 @@ fn soranet_pop_template_writes_resolver_config() {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
-
     let rendered = fs::read_to_string(&resolver_cfg).expect("read resolver config");
     assert!(
         rendered.contains("pop = \"sjc01\""),
@@ -125,7 +114,6 @@ fn soranet_pop_template_writes_resolver_config() {
         "resolver config missing managed_zones_catalog entry:\n{rendered}"
     );
 }
-
 #[test]
 fn soranet_pop_validate_reports_metadata() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -149,7 +137,6 @@ fn soranet_pop_validate_reports_metadata() {
         "fixture {} missing",
         roa_bundle.display()
     );
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .args([
@@ -164,7 +151,6 @@ fn soranet_pop_validate_reports_metadata() {
         .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("run soranet-pop-validate");
-
     assert!(
         output.status.success(),
         "command failed: status={:?}\nstdout={}\nstderr={}",
@@ -172,7 +158,6 @@ fn soranet_pop_validate_reports_metadata() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let report: json::Value =
         json::from_slice(&output.stdout).expect("parse validation report as JSON");
     assert_eq!(
@@ -196,7 +181,6 @@ fn soranet_pop_validate_reports_metadata() {
         json::Value::Bool(false)
     );
 }
-
 #[test]
 fn soranet_pop_policy_report_emits_monitoring_pack() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -207,7 +191,6 @@ fn soranet_pop_policy_report_emits_monitoring_pack() {
     let temp = tempdir().expect("tempdir");
     let policy_dir = temp.path().join("policy");
     let report_path = policy_dir.join("policy_report.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .args([
@@ -229,7 +212,6 @@ fn soranet_pop_policy_report_emits_monitoring_pack() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let alert_rules =
         fs::read_to_string(policy_dir.join("bgp_alert_rules.yml")).expect("alert rules rendered");
     assert!(
@@ -244,7 +226,6 @@ fn soranet_pop_policy_report_emits_monitoring_pack() {
         alert_rules.contains("SoranetBfdSessionsDown"),
         "alert rules missing BFD coverage:\n{alert_rules}"
     );
-
     let grafana = fs::read_to_string(policy_dir.join("grafana_soranet_bgp.json"))
         .expect("grafana dashboard rendered");
     assert!(
@@ -259,7 +240,6 @@ fn soranet_pop_policy_report_emits_monitoring_pack() {
         grafana.contains("frr_bgp_prefix_bestpath_med"),
         "grafana dashboard missing MED panel:\n{grafana}"
     );
-
     let report_bytes = fs::read(&report_path).expect("policy report rendered");
     let report: Value = json::from_slice(&report_bytes).expect("report parses");
     assert_eq!(
@@ -300,7 +280,6 @@ fn soranet_pop_policy_report_emits_monitoring_pack() {
         "MED targets missing lab-edge-ix: {med_targets:?}"
     );
 }
-
 #[test]
 fn soranet_pop_bundle_embeds_route_health_probe() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -310,7 +289,6 @@ fn soranet_pop_bundle_embeds_route_health_probe() {
     let roa_bundle = workspace_root.join("fixtures/soranet_pop/lab_roas.json");
     let temp = tempdir().expect("tempdir");
     let bundle_dir = temp.path().join("bundle");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .args([
@@ -334,7 +312,6 @@ fn soranet_pop_bundle_embeds_route_health_probe() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let health_probe =
         fs::read_to_string(bundle_dir.join("health_probe.sh")).expect("health probe exists");
     assert!(
@@ -350,7 +327,6 @@ fn soranet_pop_bundle_embeds_route_health_probe() {
         "health probe missing prefix expectation:\n{health_probe}"
     );
 }
-
 #[test]
 fn soranet_pop_bundle_writes_manifest_and_assets() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -369,7 +345,6 @@ fn soranet_pop_bundle_writes_manifest_and_assets() {
         "fixture {} missing",
         descriptor.display()
     );
-
     let temp = tempdir().expect("tempdir");
     let output_dir = temp.path().join("bundle");
     let manifest = run_bundle_command(
@@ -385,7 +360,6 @@ fn soranet_pop_bundle_writes_manifest_and_assets() {
         "manifest {} missing",
         manifest_path.display()
     );
-
     assert_eq!(
         manifest["pop_name"],
         json::Value::String("lab-h3-sjc".to_string())
@@ -493,7 +467,6 @@ fn soranet_pop_bundle_writes_manifest_and_assets() {
         "signoff bundle missing FRR artifact"
     );
 }
-
 #[test]
 fn soranet_popctl_aliases_pop_bundle() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -509,7 +482,6 @@ fn soranet_popctl_aliases_pop_bundle() {
         .join("lab_roas.json");
     let temp = tempdir().expect("tempdir");
     let output_dir = temp.path().join("popctl");
-
     let manifest = run_bundle_command(
         "soranet-popctl",
         &descriptor,
@@ -517,7 +489,6 @@ fn soranet_popctl_aliases_pop_bundle() {
         &output_dir,
         "popctl-img-1",
     );
-
     assert_eq!(
         manifest["pop_name"],
         json::Value::String("lab-h3-sjc".to_string())
@@ -534,7 +505,6 @@ fn soranet_popctl_aliases_pop_bundle() {
         "signoff.json missing for popctl alias"
     );
 }
-
 fn run_bundle_command(
     command: &str,
     descriptor: &Path,
@@ -560,7 +530,6 @@ fn run_bundle_command(
         .env("CARGO_NET_OFFLINE", "true")
         .output()
         .expect("run soranet pop bundle variant");
-
     assert!(
         result.status.success(),
         "command failed: status={:?}\nstdout={}\nstderr={}",
@@ -568,7 +537,6 @@ fn run_bundle_command(
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
-
     let manifest_path = output_dir.join("bundle_manifest.json");
     assert!(
         manifest_path.exists(),
@@ -578,7 +546,6 @@ fn run_bundle_command(
     json::from_slice(&fs::read(&manifest_path).expect("read manifest JSON"))
         .expect("parse manifest JSON")
 }
-
 fn sha256_hex(path: &Path) -> String {
     let mut hasher = Sha256::new();
     let mut file = fs::File::open(path).expect("open file for hashing");

@@ -2,7 +2,6 @@ use super::*;
 use crate::confidential::{
     ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams,
 };
-
 isi! {
     /// Publish a new Pedersen parameter set into the registry.
     pub struct PublishPedersenParams {
@@ -10,7 +9,6 @@ isi! {
         pub params: PedersenParams,
     }
 }
-
 isi! {
     /// Update lifecycle metadata for an existing Pedersen parameter set.
     pub struct SetPedersenParamsLifecycle {
@@ -24,7 +22,6 @@ isi! {
         pub withdraw_height: Option<u64>,
     }
 }
-
 isi! {
     /// Publish a new Poseidon parameter set into the registry.
     pub struct PublishPoseidonParams {
@@ -32,7 +29,6 @@ isi! {
         pub params: PoseidonParams,
     }
 }
-
 isi! {
     /// Update lifecycle metadata for an existing Poseidon parameter set.
     pub struct SetPoseidonParamsLifecycle {
@@ -46,7 +42,6 @@ isi! {
         pub withdraw_height: Option<u64>,
     }
 }
-
 impl crate::seal::Instruction for PublishPedersenParams {}
 impl crate::seal::Instruction for SetPedersenParamsLifecycle {}
 impl crate::seal::Instruction for PublishPoseidonParams {}

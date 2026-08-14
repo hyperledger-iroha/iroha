@@ -5,13 +5,10 @@
 //! provider authorities are derived from the finalized projection, signing is
 //! isolated from submission, and exact signed bytes are durable before they can
 //! be exposed to a submitter.
-
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    sync::{Arc, Mutex},
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
-
 use iroha_data_model::{
     ChainId, NetworkId,
     account::AccountId,
@@ -36,13 +33,12 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, Mutex},
 };
-
+use thiserror::Error;
 /// Durable reserve-transaction checkpoint schema version.
 pub const RESERVE_TRANSACTION_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical reserve-transaction checkpoint file.
@@ -56,7 +52,6 @@ pub const RESERVE_TRANSACTION_FORWARDER_MAX_SCAN_ITEMS_V1: usize = 1_000;
 pub const RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Maximum active chain identifier retained by the V1 forwarder.
 pub const RESERVE_TRANSACTION_MAX_CHAIN_ID_BYTES_V1: usize = 128;
-
 const CHECKPOINT_LOCK_FILE_NAME: &str = "reserve-transaction-forwarder-state.lock";
 const REVISION_IDENTITY_DOMAIN_V1: &[u8] =
     b"sorafs.reserve.transaction-forwarder.revision-identity.v1\0";
@@ -70,7 +65,6 @@ const TRANSACTION_ELEMENT_AMPLIFICATION_LIMIT: usize = 8;
 const TRANSACTION_ALLOCATION_AMPLIFICATION_LIMIT: usize = 20;
 const TRANSACTION_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 512 * 1024;
 const TRANSACTION_MAX_NESTING_DEPTH: usize = 128;
-
 /// Bounded persistence and retry policy for native reserve operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReserveTransactionForwarderPolicyV1 {
@@ -87,7 +81,6 @@ pub struct ReserveTransactionForwarderPolicyV1 {
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
 }
-
 impl ReserveTransactionForwarderPolicyV1 {
     /// Validate all first-release resource bounds.
     pub fn validate(self) -> Result<(), ReserveTransactionForwarderError> {
@@ -104,7 +97,6 @@ impl ReserveTransactionForwarderPolicyV1 {
         Ok(())
     }
 }
-
 /// Exact finalized reserve projection required to validate an operation.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveTransactionProjectionV1 {
@@ -133,7 +125,6 @@ pub enum ReserveTransactionProjectionV1 {
         appeal: ReserveAppealRecordV1,
     },
 }
-
 /// Finalized governance and domain snapshot used to admit one operation.
 ///
 /// The policy and projection must be read from the same immutable state view
@@ -151,7 +142,6 @@ pub struct ReserveTransactionContextV1 {
     /// Finalized block anchor shared by every supplied record.
     pub finalized_cursor: ReserveFinalizedCursorV1,
 }
-
 impl ReserveTransactionContextV1 {
     fn validate(&self) -> Result<(), ReserveTransactionForwarderError> {
         validate_finalized_cursor(self.finalized_cursor)?;
@@ -202,7 +192,6 @@ impl ReserveTransactionContextV1 {
         Ok(())
     }
 }
-
 /// Native reserve instruction kind retained by the forwarder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReserveTransactionKindV1 {
@@ -225,7 +214,6 @@ pub enum ReserveTransactionKindV1 {
     /// Decide one pending appeal.
     DecideAppeal,
 }
-
 /// Validated native reserve operation retained for isolated external signing.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveOperationV1 {
@@ -248,7 +236,6 @@ pub enum ReserveOperationV1 {
     /// Decide one pending appeal.
     DecideAppeal(DecideSorafsReserveAppeal),
 }
-
 impl ReserveOperationV1 {
     /// Return the native reserve instruction kind.
     #[must_use]
@@ -265,7 +252,6 @@ impl ReserveOperationV1 {
             Self::DecideAppeal(_) => ReserveTransactionKindV1::DecideAppeal,
         }
     }
-
     /// Return the active policy digest embedded in the native instruction.
     #[must_use]
     pub fn policy_digest(&self) -> [u8; 32] {
@@ -281,7 +267,6 @@ impl ReserveOperationV1 {
             Self::DecideAppeal(instruction) => *instruction.policy_digest(),
         }
     }
-
     /// Return the provider identifier affected by the operation.
     #[must_use]
     pub fn provider_id(&self) -> Option<ProviderId> {
@@ -296,7 +281,6 @@ impl ReserveOperationV1 {
             Self::SubmitAppeal(instruction) => Some(*instruction.provider_id()),
         }
     }
-
     /// Return the exact provider revision used for compare-and-set admission.
     #[must_use]
     pub fn expected_provider_revision(&self) -> Option<u64> {
@@ -313,7 +297,6 @@ impl ReserveOperationV1 {
         }
     }
 }
-
 impl From<ReserveOperationV1> for InstructionBox {
     fn from(operation: ReserveOperationV1) -> Self {
         match operation {
@@ -329,7 +312,6 @@ impl From<ReserveOperationV1> for InstructionBox {
         }
     }
 }
-
 /// Exact signer work item returned after a durable claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReserveTransactionSigningRequestV1 {
@@ -344,7 +326,6 @@ pub struct ReserveTransactionSigningRequestV1 {
     /// Exact validated native operation.
     pub operation: ReserveOperationV1,
 }
-
 /// Exact material retained for finalized-ledger reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReserveTransactionReconciliationV1 {
@@ -355,7 +336,6 @@ pub struct ReserveTransactionReconciliationV1 {
     /// Full operation-specific finalized projection.
     pub projection: ReserveTransactionProjectionV1,
 }
-
 /// Durable enqueue result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReserveTransactionEnqueueResultV1 {
@@ -370,7 +350,6 @@ pub enum ReserveTransactionEnqueueResultV1 {
         operation_id: [u8; 32],
     },
 }
-
 impl ReserveTransactionEnqueueResultV1 {
     /// Return the stable semantic operation identity.
     #[must_use]
@@ -380,7 +359,6 @@ impl ReserveTransactionEnqueueResultV1 {
         }
     }
 }
-
 /// Runtime-visible crash state for one reserve transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReserveTransactionDeliveryStateV1 {
@@ -395,7 +373,6 @@ pub enum ReserveTransactionDeliveryStateV1 {
     /// Exact bytes are known pending or applied.
     Submitted,
 }
-
 impl From<StoredDeliveryStateV1> for ReserveTransactionDeliveryStateV1 {
     fn from(value: StoredDeliveryStateV1) -> Self {
         match value {
@@ -407,7 +384,6 @@ impl From<StoredDeliveryStateV1> for ReserveTransactionDeliveryStateV1 {
         }
     }
 }
-
 /// Payload-bounded pending reserve-transaction snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReserveTransactionPendingV1 {
@@ -446,7 +422,6 @@ pub struct ReserveTransactionPendingV1 {
     /// Exact signed transaction bytes, present after signing.
     pub signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 /// Validate one payload-bounded pending snapshot exported by the durable forwarder.
 ///
 /// This is the canonical runtime boundary for delivery-state and exact
@@ -495,7 +470,6 @@ pub fn validate_reserve_pending_delivery_v1(
     }
     Ok(())
 }
-
 /// Validate that exported pending and reconciliation snapshots retain one operation.
 ///
 /// Stable identity and semantic digests are recomputed through the forwarder's
@@ -537,7 +511,6 @@ pub fn validate_reserve_reconciliation_material_v1(
     }
     Ok(())
 }
-
 /// Terminal reason retained without private transaction payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReserveTransactionDeadLetterReasonV1 {
@@ -548,7 +521,6 @@ pub enum ReserveTransactionDeadLetterReasonV1 {
     /// The transaction pipeline terminally rejected the envelope.
     TransactionRejected,
 }
-
 /// Payload-free dead-letter snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReserveTransactionDeadLetterV1 {
@@ -579,7 +551,6 @@ pub struct ReserveTransactionDeadLetterV1 {
     /// Finalized block hash at the terminal decision.
     pub observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
@@ -594,7 +565,6 @@ enum StoredReserveIdentityScopeV1 {
     AppealSubmission,
     AppealDecision,
 }
-
 impl StoredReserveIdentityScopeV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -610,14 +580,12 @@ impl StoredReserveIdentityScopeV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterReasonV1 {
     RetryExhausted,
     FinalizedConflict,
     TransactionRejected,
 }
-
 impl From<StoredDeadLetterReasonV1> for ReserveTransactionDeadLetterReasonV1 {
     fn from(value: StoredDeadLetterReasonV1) -> Self {
         match value {
@@ -627,7 +595,6 @@ impl From<StoredDeadLetterReasonV1> for ReserveTransactionDeadLetterReasonV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPendingReserveTransactionV1 {
     sequence: u64,
@@ -647,7 +614,6 @@ struct StoredPendingReserveTransactionV1 {
     baseline_finalized_block_hash: [u8; 32],
     signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 impl StoredPendingReserveTransactionV1 {
     fn snapshot(&self) -> ReserveTransactionPendingV1 {
         ReserveTransactionPendingV1 {
@@ -674,51 +640,39 @@ impl StoredPendingReserveTransactionV1 {
         }
     }
 }
-
 impl DeliveryRecord for StoredPendingReserveTransactionV1 {
     type Transaction = Vec<u8>;
-
     fn delivery_state(&self) -> StoredDeliveryStateV1 {
         self.state
     }
-
     fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
         self.state = state;
     }
-
     fn attempts(&self) -> u32 {
         self.attempts
     }
-
     fn set_attempts(&mut self, attempts: u32) {
         self.attempts = attempts;
     }
-
     fn baseline_finalized_height(&self) -> u64 {
         self.baseline_finalized_height
     }
-
     fn set_baseline_finalized_height(&mut self, height: u64) {
         self.baseline_finalized_height = height;
     }
-
     fn baseline_finalized_block_hash(&self) -> [u8; 32] {
         self.baseline_finalized_block_hash
     }
-
     fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
         self.baseline_finalized_block_hash = block_hash;
     }
-
     fn signed_transaction(&self) -> Option<&Self::Transaction> {
         self.signed_transaction_bytes.as_ref()
     }
-
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
         self.signed_transaction_bytes = transaction;
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedReserveTransactionV1 {
     operation_id: [u8; 32],
@@ -728,7 +682,6 @@ struct StoredCompletedReserveTransactionV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadReserveTransactionV1 {
     operation_id: [u8; 32],
@@ -746,7 +699,6 @@ struct StoredDeadReserveTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReserveTransactionForwarderCheckpointV1 {
     version: u8,
@@ -755,7 +707,6 @@ struct ReserveTransactionForwarderCheckpointV1 {
     completed: Vec<StoredCompletedReserveTransactionV1>,
     dead_letters: Vec<StoredDeadReserveTransactionV1>,
 }
-
 impl Default for ReserveTransactionForwarderCheckpointV1 {
     fn default() -> Self {
         Self {
@@ -767,14 +718,12 @@ impl Default for ReserveTransactionForwarderCheckpointV1 {
         }
     }
 }
-
 #[derive(Debug)]
 struct DurableState {
     checkpoint: ReserveTransactionForwarderCheckpointV1,
     fingerprint: Option<[u8; 32]>,
     durability_failure: bool,
 }
-
 /// Durable bounded native reserve transaction forwarder.
 #[derive(Debug, Clone)]
 pub struct ReserveTransactionForwarder {
@@ -782,7 +731,6 @@ pub struct ReserveTransactionForwarder {
     state: Arc<Mutex<DurableState>>,
     store: Option<Arc<AtomicCheckpointStore>>,
 }
-
 impl ReserveTransactionForwarder {
     /// Construct a non-persistent forwarder for focused composition tests.
     #[cfg(test)]
@@ -800,7 +748,6 @@ impl ReserveTransactionForwarder {
             store: None,
         })
     }
-
     /// Open or create a durable forwarder below `state_dir`.
     pub fn open(
         state_dir: &Path,
@@ -838,7 +785,6 @@ impl ReserveTransactionForwarder {
         }
         Ok(forwarder)
     }
-
     /// Validate and durably accept one unsigned native reserve operation.
     ///
     /// The transaction authority is always derived from the finalized context.
@@ -855,7 +801,6 @@ impl ReserveTransactionForwarder {
         )?;
         self.enqueue_prepared(prepared, None, context.finalized_cursor)
     }
-
     /// Validate and durably accept one exact canonical signed transaction.
     ///
     /// Broader permission ownership cannot substitute for the exact authority
@@ -877,7 +822,6 @@ impl ReserveTransactionForwarder {
             context.finalized_cursor,
         )
     }
-
     fn enqueue_prepared(
         &self,
         prepared: PreparedReserveOperation,
@@ -949,7 +893,6 @@ impl ReserveTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(ReserveTransactionEnqueueResultV1::Inserted { operation_id })
     }
-
     /// Return pending entries in stable sequence order.
     pub fn pending(
         &self,
@@ -957,7 +900,6 @@ impl ReserveTransactionForwarder {
     ) -> Result<Vec<ReserveTransactionPendingV1>, ReserveTransactionForwarderError> {
         self.pending_after(None, limit)
     }
-
     /// Return a circular page after an immutable sequence cursor.
     ///
     /// Newer entries are returned first and the scan then wraps to the oldest
@@ -985,7 +927,6 @@ impl ReserveTransactionForwarder {
             .map(StoredPendingReserveTransactionV1::snapshot)
             .collect())
     }
-
     /// Return exact semantic and finalized binding material for reconciliation.
     pub fn operation_for_reconciliation(
         &self,
@@ -1000,7 +941,6 @@ impl ReserveTransactionForwarder {
             .ok_or(ReserveTransactionForwarderError::UnknownOperation)?;
         Ok(reconciliation_material(entry))
     }
-
     /// Return payload-free dead letters in stable operation order.
     pub fn dead_letters(
         &self,
@@ -1035,7 +975,6 @@ impl ReserveTransactionForwarder {
             })
             .collect())
     }
-
     /// Atomically claim a ready operation for isolated external signing.
     ///
     /// The attempt is consumed before signer material is exposed. Crash
@@ -1075,7 +1014,6 @@ impl ReserveTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(request)
     }
-
     /// Persist exact signed bytes for a claimed authority and operation.
     pub fn store_signed_transaction(
         &self,
@@ -1109,7 +1047,6 @@ impl ReserveTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(digest)
     }
-
     /// Release a signer claim after a failure known to precede submission.
     pub fn release_signing_claim(
         &self,
@@ -1130,7 +1067,6 @@ impl ReserveTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Mark exact bytes ambiguous before exposing them to a submitter.
     pub fn begin_submission(
         &self,
@@ -1143,7 +1079,6 @@ impl ReserveTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(bytes)
     }
-
     /// Record that the exact transaction is known pending or applied.
     pub fn mark_submitted(
         &self,
@@ -1153,7 +1088,6 @@ impl ReserveTransactionForwarder {
             durable::mark_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Record a failure proven to have happened before queue submission.
     pub fn mark_not_submitted(
         &self,
@@ -1163,7 +1097,6 @@ impl ReserveTransactionForwarder {
             durable::mark_not_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Retry the same exact bytes only after finalized absence is proven.
     pub fn mark_finalized_absent(
         &self,
@@ -1188,7 +1121,6 @@ impl ReserveTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Reconcile exact finalized success using the retained transaction digest.
     pub fn mark_finalized(
         &self,
@@ -1214,7 +1146,6 @@ impl ReserveTransactionForwarder {
         }
         self.commit_finalized_operation(&mut state, candidate, position, finalized_cursor)
     }
-
     /// Reconcile exact semantic success committed through another ingress.
     ///
     /// The caller must first compare `operation_for_reconciliation` against one
@@ -1230,7 +1161,6 @@ impl ReserveTransactionForwarder {
         let position = pending_position(&candidate, operation_id)?;
         self.commit_finalized_operation(&mut state, candidate, position, finalized_cursor)
     }
-
     fn commit_finalized_operation(
         &self,
         state: &mut DurableState,
@@ -1264,7 +1194,6 @@ impl ReserveTransactionForwarder {
             .sort_by_key(|completed| completed.operation_id);
         self.commit_candidate(state, candidate)
     }
-
     /// Atomically dead-letter an operation that conflicts with finalized state.
     pub fn mark_finalized_conflict(
         &self,
@@ -1282,7 +1211,6 @@ impl ReserveTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Clear a terminally rejected envelope for bounded replacement signing.
     pub fn mark_transaction_rejected(
         &self,
@@ -1320,7 +1248,6 @@ impl ReserveTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     fn mutate_entry(
         &self,
         operation_id: [u8; 32],
@@ -1333,7 +1260,6 @@ impl ReserveTransactionForwarder {
         mutate(find_pending_mut(&mut candidate, operation_id)?)?;
         self.commit_candidate(&mut state, candidate)
     }
-
     fn move_to_dead_letter(
         &self,
         checkpoint: &mut ReserveTransactionForwarderCheckpointV1,
@@ -1369,7 +1295,6 @@ impl ReserveTransactionForwarder {
             .sort_by_key(|dead| dead.operation_id);
         Ok(())
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, DurableState>, ReserveTransactionForwarderError> {
@@ -1382,7 +1307,6 @@ impl ReserveTransactionForwarder {
         }
         Ok(state)
     }
-
     fn commit_candidate(
         &self,
         state: &mut DurableState,
@@ -1406,7 +1330,6 @@ impl ReserveTransactionForwarder {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct PreparedReserveOperation {
     identity_scope: StoredReserveIdentityScopeV1,
@@ -1419,7 +1342,6 @@ struct PreparedReserveOperation {
     projection: ReserveTransactionProjectionV1,
     operation: ReserveOperationV1,
 }
-
 impl PreparedReserveOperation {
     fn from_unsigned(
         operation: ReserveOperationV1,
@@ -1442,7 +1364,6 @@ impl PreparedReserveOperation {
             max_transaction_bytes,
         )
     }
-
     fn new(
         network_id: NetworkId,
         chain_id: ChainId,
@@ -1481,7 +1402,6 @@ impl PreparedReserveOperation {
             operation,
         })
     }
-
     fn new_bounded(
         network_id: NetworkId,
         chain_id: ChainId,
@@ -1524,7 +1444,6 @@ impl PreparedReserveOperation {
         }
         Ok(prepared)
     }
-
     fn decode_signed_transaction(
         bytes: &[u8],
         context: &ReserveTransactionContextV1,
@@ -1571,7 +1490,6 @@ impl PreparedReserveOperation {
         )
     }
 }
-
 fn decode_native_operation(
     instruction: &InstructionBox,
 ) -> Result<ReserveOperationV1, ReserveTransactionForwarderError> {
@@ -1624,7 +1542,6 @@ fn decode_native_operation(
         Err(ReserveTransactionForwarderError::InvalidSignedTransaction)
     }
 }
-
 fn governed_authority<'a>(
     policy_record: &'a ReserveAuthorityPolicyRecordV1,
     projection: &'a ReserveTransactionProjectionV1,
@@ -1648,7 +1565,6 @@ fn governed_authority<'a>(
         },
     }
 }
-
 fn validate_operation(
     operation: &ReserveOperationV1,
     authority: &AccountId,
@@ -1672,7 +1588,6 @@ fn validate_operation(
     if authority != governed_authority(policy_record, projection, operation.kind())? {
         return Err(ReserveTransactionForwarderError::GovernedAuthorityMismatch);
     }
-
     match (operation, projection) {
         (
             ReserveOperationV1::RegisterProvider(instruction),
@@ -1805,7 +1720,6 @@ fn validate_operation(
     }
     Ok(())
 }
-
 fn validate_provider_binding(
     account: &ReserveProviderAccountV1,
     provider_id: ProviderId,
@@ -1820,7 +1734,6 @@ fn validate_provider_binding(
     }
     Ok(())
 }
-
 fn validate_provider_account(
     account: &ReserveProviderAccountV1,
 ) -> Result<(), ReserveTransactionForwarderError> {
@@ -1841,7 +1754,6 @@ fn validate_provider_account(
     }
     Ok(())
 }
-
 fn validate_movement_record(
     movement: &ReserveMovementRecordV1,
 ) -> Result<(), ReserveTransactionForwarderError> {
@@ -1868,7 +1780,6 @@ fn validate_movement_record(
     }
     Ok(())
 }
-
 fn validate_appeal_record(
     appeal: &ReserveAppealRecordV1,
 ) -> Result<(), ReserveTransactionForwarderError> {
@@ -1895,11 +1806,9 @@ fn validate_appeal_record(
     }
     Ok(())
 }
-
 fn valid_reason(reason: &str) -> bool {
     !reason.is_empty() && reason.len() <= RESERVE_MAX_REASON_BYTES_V1
 }
-
 fn operation_provider_id(
     operation: &ReserveOperationV1,
     projection: &ReserveTransactionProjectionV1,
@@ -1913,7 +1822,6 @@ fn operation_provider_id(
         | ReserveTransactionProjectionV1::Provider { .. } => None,
     })
 }
-
 fn operation_identity(
     operation: &ReserveOperationV1,
     projection: &ReserveTransactionProjectionV1,
@@ -1982,7 +1890,6 @@ fn operation_identity(
         }
     })
 }
-
 fn revision_identity_digest(
     policy_digest: [u8; 32],
     provider_id: ProviderId,
@@ -1995,7 +1902,6 @@ fn revision_identity_digest(
     hasher.update(&expected_provider_revision.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn semantic_digest(
     network_id: &NetworkId,
     chain_id: &ChainId,
@@ -2021,7 +1927,6 @@ fn semantic_digest(
     update_length_prefixed(&mut hasher, &operation)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn update_length_prefixed(
     hasher: &mut blake3::Hasher,
     bytes: &[u8],
@@ -2032,7 +1937,6 @@ fn update_length_prefixed(
     hasher.update(bytes);
     Ok(())
 }
-
 fn operation_id(prepared: &PreparedReserveOperation) -> [u8; 32] {
     operation_id_from_parts(
         prepared.identity_scope,
@@ -2040,7 +1944,6 @@ fn operation_id(prepared: &PreparedReserveOperation) -> [u8; 32] {
         prepared.semantic_digest,
     )
 }
-
 fn operation_id_from_parts(
     identity_scope: StoredReserveIdentityScopeV1,
     identity_digest: [u8; 32],
@@ -2053,11 +1956,9 @@ fn operation_id_from_parts(
     hasher.update(&semantic_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn transaction_digest(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
-
 fn validate_reserve_delivery(entry: &StoredPendingReserveTransactionV1, max_attempts: u32) -> bool {
     let has_baseline =
         entry.baseline_finalized_height != 0 && entry.baseline_finalized_block_hash != [0; 32];
@@ -2074,7 +1975,6 @@ fn validate_reserve_delivery(entry: &StoredPendingReserveTransactionV1, max_atte
     };
     has_baseline && state_is_valid && entry.attempts <= max_attempts
 }
-
 fn recover_interrupted_signing(entry: &mut StoredPendingReserveTransactionV1) -> bool {
     if entry.state != StoredDeliveryStateV1::Signing {
         return false;
@@ -2082,7 +1982,6 @@ fn recover_interrupted_signing(entry: &mut StoredPendingReserveTransactionV1) ->
     entry.state = StoredDeliveryStateV1::Ready;
     true
 }
-
 fn claim_for_signing(
     entry: &mut StoredPendingReserveTransactionV1,
     max_attempts: u32,
@@ -2104,7 +2003,6 @@ fn claim_for_signing(
     entry.state = StoredDeliveryStateV1::Signing;
     Ok(())
 }
-
 fn store_signed_transaction(
     entry: &mut StoredPendingReserveTransactionV1,
     signed_transaction_bytes: Vec<u8>,
@@ -2119,7 +2017,6 @@ fn store_signed_transaction(
     entry.state = StoredDeliveryStateV1::Signed;
     Ok(())
 }
-
 fn release_signing_claim(
     entry: &mut StoredPendingReserveTransactionV1,
 ) -> Result<(), DeliveryTransitionError> {
@@ -2132,7 +2029,6 @@ fn release_signing_claim(
     entry.state = StoredDeliveryStateV1::Ready;
     Ok(())
 }
-
 fn entry_baseline_cursor(
     entry: &StoredPendingReserveTransactionV1,
 ) -> Result<ReserveFinalizedCursorV1, ReserveTransactionForwarderError> {
@@ -2143,7 +2039,6 @@ fn entry_baseline_cursor(
     validate_finalized_cursor(cursor)?;
     Ok(cursor)
 }
-
 fn context_for_stored_entry(
     entry: &StoredPendingReserveTransactionV1,
 ) -> Result<ReserveTransactionContextV1, ReserveTransactionForwarderError> {
@@ -2157,7 +2052,6 @@ fn context_for_stored_entry(
     context.validate()?;
     Ok(context)
 }
-
 fn reconciliation_material(
     entry: &StoredPendingReserveTransactionV1,
 ) -> ReserveTransactionReconciliationV1 {
@@ -2173,7 +2067,6 @@ fn reconciliation_material(
         projection: entry.projection.clone(),
     }
 }
-
 fn find_pending_mut(
     checkpoint: &mut ReserveTransactionForwarderCheckpointV1,
     operation_id: [u8; 32],
@@ -2184,7 +2077,6 @@ fn find_pending_mut(
         .find(|entry| entry.operation_id == operation_id)
         .ok_or(ReserveTransactionForwarderError::UnknownOperation)
 }
-
 fn pending_position(
     checkpoint: &ReserveTransactionForwarderCheckpointV1,
     operation_id: [u8; 32],
@@ -2195,7 +2087,6 @@ fn pending_position(
         .position(|entry| entry.operation_id == operation_id)
         .ok_or(ReserveTransactionForwarderError::UnknownOperation)
 }
-
 fn validate_checkpoint(
     checkpoint: &ReserveTransactionForwarderCheckpointV1,
     policy: ReserveTransactionForwarderPolicyV1,
@@ -2351,7 +2242,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn decode_checkpoint(
     bytes: &[u8],
     policy: ReserveTransactionForwarderPolicyV1,
@@ -2377,20 +2267,17 @@ fn decode_checkpoint(
     validate_checkpoint(&checkpoint, policy)?;
     Ok(checkpoint)
 }
-
 fn validate_finalized_cursor(
     cursor: ReserveFinalizedCursorV1,
 ) -> Result<(), ReserveTransactionForwarderError> {
     durable::validate_finalized_cursor(finalized_cursor(cursor)).map_err(Into::into)
 }
-
 const fn finalized_cursor(cursor: ReserveFinalizedCursorV1) -> FinalizedCursorV1 {
     FinalizedCursorV1 {
         height: cursor.height,
         block_hash: cursor.block_hash,
     }
 }
-
 fn checkpoint_decode_limits(
     encoded_bytes: usize,
 ) -> Result<norito::DecodeLimits, ReserveTransactionForwarderError> {
@@ -2403,7 +2290,6 @@ fn checkpoint_decode_limits(
         CHECKPOINT_MAX_NESTING_DEPTH,
     )
 }
-
 fn transaction_decode_limits(
     encoded_bytes: usize,
     max_transaction_bytes: usize,
@@ -2417,7 +2303,6 @@ fn transaction_decode_limits(
         TRANSACTION_MAX_NESTING_DEPTH,
     )
 }
-
 fn decode_limits(
     encoded_bytes: usize,
     max_bytes: usize,
@@ -2444,7 +2329,6 @@ fn decode_limits(
         max_depth,
     ))
 }
-
 /// Durable native reserve transaction forwarding error.
 #[derive(Debug, Error)]
 pub enum ReserveTransactionForwarderError {
@@ -2545,7 +2429,6 @@ pub enum ReserveTransactionForwarderError {
     #[error("reserve transaction runtime lock is poisoned")]
     RuntimePoisoned,
 }
-
 impl From<DeliveryTransitionError> for ReserveTransactionForwarderError {
     fn from(error: DeliveryTransitionError) -> Self {
         match error {
@@ -2555,7 +2438,6 @@ impl From<DeliveryTransitionError> for ReserveTransactionForwarderError {
         }
     }
 }
-
 impl From<CheckpointStoreError> for ReserveTransactionForwarderError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -2568,11 +2450,9 @@ impl From<CheckpointStoreError> for ReserveTransactionForwarderError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc, thread, time::Duration};
-
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -2591,10 +2471,8 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use sorafs_manifest::deal::XorQuantity;
+    use std::{fs, sync::Arc, thread, time::Duration};
     use tempfile::TempDir;
-
-    use super::*;
-
     fn forwarder_policy() -> ReserveTransactionForwarderPolicyV1 {
         ReserveTransactionForwarderPolicyV1 {
             max_pending: 32,
@@ -2605,36 +2483,29 @@ mod tests {
             checkpoint_max_bytes: 4 * 1024 * 1024,
         }
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
     }
-
     fn account(key: &KeyPair) -> AccountId {
         AccountId::new(key.public_key().clone())
     }
-
     fn provider_id(seed: u8) -> ProviderId {
         ProviderId::new([seed; 32])
     }
-
     fn cursor(height: u64, hash_byte: u8) -> ReserveFinalizedCursorV1 {
         ReserveFinalizedCursorV1 {
             height,
             block_hash: [hash_byte; 32],
         }
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; 32]),
         ))
     }
-
     fn test_network_id() -> NetworkId {
         network_id(0xA1)
     }
-
     fn policy_record(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -2670,7 +2541,6 @@ mod tests {
             activated_at_unix: 1,
         }
     }
-
     fn provider_account(
         provider: &KeyPair,
         policy_digest: [u8; 32],
@@ -2700,7 +2570,6 @@ mod tests {
             updated_at_unix: 100,
         }
     }
-
     fn provider_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -2718,7 +2587,6 @@ mod tests {
             finalized_cursor,
         }
     }
-
     fn movement_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -2751,7 +2619,6 @@ mod tests {
         };
         context
     }
-
     fn appeal_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -2784,7 +2651,6 @@ mod tests {
         };
         context
     }
-
     fn registration_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -2801,7 +2667,6 @@ mod tests {
             finalized_cursor,
         }
     }
-
     fn request_operation(context: &ReserveTransactionContextV1) -> ReserveOperationV1 {
         let ReserveTransactionProjectionV1::Provider { account } = &context.projection else {
             panic!("provider context")
@@ -2815,7 +2680,6 @@ mod tests {
             context.policy_record.policy_digest,
         ))
     }
-
     fn charge_operation(context: &ReserveTransactionContextV1) -> ReserveOperationV1 {
         let ReserveTransactionProjectionV1::Provider { account } = &context.projection else {
             panic!("provider context")
@@ -2827,7 +2691,6 @@ mod tests {
             context.policy_record.policy_digest,
         ))
     }
-
     fn signed_bytes(
         signer: &KeyPair,
         authority: AccountId,
@@ -2842,7 +2705,6 @@ mod tests {
             creation_time_ms,
         )
     }
-
     fn signed_bytes_on_network(
         network_id: NetworkId,
         signer: &KeyPair,
@@ -2860,7 +2722,6 @@ mod tests {
         let transaction = builder.try_sign(signer.private_key()).unwrap();
         norito::to_bytes(&transaction).unwrap()
     }
-
     fn signed_operation(
         signer: &KeyPair,
         operation: ReserveOperationV1,
@@ -2873,7 +2734,6 @@ mod tests {
             creation_time_ms,
         )
     }
-
     #[test]
     fn all_native_kinds_bind_exact_finalized_authorities_and_revisions() {
         let operations = key(1);
@@ -2893,7 +2753,6 @@ mod tests {
         else {
             unreachable!()
         };
-
         let operations_and_contexts = vec![
             (
                 ReserveOperationV1::RegisterProvider(RegisterSorafsReserveAccount::new(
@@ -2997,7 +2856,6 @@ mod tests {
         }
         assert_eq!(forwarder.pending(32).unwrap().len(), 9);
     }
-
     #[test]
     fn registration_owner_policy_rotation_revision_and_signer_substitution_fail_closed() {
         let operations = key(4);
@@ -3014,7 +2872,6 @@ mod tests {
             .unwrap()
             .operation_id();
         assert_eq!(forwarder.begin_submission(operation_id).unwrap(), valid);
-
         let wrong_signer = signed_operation(&attacker, operation.clone(), 2);
         assert!(matches!(
             ReserveTransactionForwarder::in_memory(forwarder_policy())
@@ -3022,14 +2879,12 @@ mod tests {
                 .enqueue_signed_transaction(&wrong_signer, &context),
             Err(ReserveTransactionForwarderError::GovernedAuthorityMismatch)
         ));
-
         assert!("".parse::<ChainId>().is_err());
         assert!(
             "x".repeat(RESERVE_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)
                 .parse::<ChainId>()
                 .is_err()
         );
-
         let mut stale_context = context.clone();
         let ReserveTransactionProjectionV1::Provider {
             account: provider_state,
@@ -3044,7 +2899,6 @@ mod tests {
                 .enqueue_unsigned_operation(operation.clone(), &stale_context),
             Err(ReserveTransactionForwarderError::ProviderRevisionMismatch)
         ));
-
         let mut rotated = context.clone();
         rotated.policy_record.policy.operations_authority = account(&attacker);
         rotated.policy_record.policy.revision = 2;
@@ -3057,7 +2911,6 @@ mod tests {
                 .enqueue_unsigned_operation(operation.clone(), &rotated),
             Err(ReserveTransactionForwarderError::PolicyDigestMismatch)
         ));
-
         let mut custody_rotated = context.clone();
         custody_rotated.policy_record.policy.custody_account = account(&attacker);
         custody_rotated.policy_record.policy.revision = 2;
@@ -3076,7 +2929,6 @@ mod tests {
             custody_forwarder.pending(8).unwrap().is_empty(),
             "custody rotation conflict must not publish a pending operation"
         );
-
         let registration = registration_context(&operations, &decision, &provider, finalized);
         let ReserveTransactionProjectionV1::Registration { provider_owner } =
             &registration.projection
@@ -3103,7 +2955,6 @@ mod tests {
             Err(ReserveTransactionForwarderError::ProviderOwnerMismatch)
         ));
     }
-
     #[test]
     fn signer_output_is_exact_and_multiple_or_foreign_instructions_are_rejected() {
         let operations = key(8);
@@ -3118,7 +2969,6 @@ mod tests {
             .operation_id();
         let request = forwarder.claim_for_signing(operation_id).unwrap();
         assert_eq!(request.chain_id, context.chain_id);
-
         let substituted = signed_operation(
             &operations,
             ReserveOperationV1::ChargeRent(ChargeSorafsReserveRent::new(
@@ -3133,7 +2983,6 @@ mod tests {
             forwarder.store_signed_transaction(operation_id, &substituted),
             Err(ReserveTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let exact = signed_operation(&operations, request.operation, 11);
         assert_eq!(
             forwarder
@@ -3155,7 +3004,6 @@ mod tests {
                 Err(ReserveTransactionForwarderError::InvalidCheckpoint)
             ));
         }
-
         let wrong_network = signed_bytes_on_network(
             network_id(0xF1),
             &operations,
@@ -3169,7 +3017,6 @@ mod tests {
                 .enqueue_signed_transaction(&wrong_network, &context),
             Err(ReserveTransactionForwarderError::NetworkIdMismatch)
         ));
-
         let multiple = signed_bytes(
             &operations,
             account(&operations),
@@ -3195,7 +3042,6 @@ mod tests {
             Err(ReserveTransactionForwarderError::InvalidSignedTransaction)
         ));
     }
-
     #[test]
     fn circular_scan_finalized_replay_conflict_and_absence_are_bounded() {
         let operations = key(11);
@@ -3238,7 +3084,6 @@ mod tests {
             single_item_cursor = Some(sequence);
         }
         assert_eq!(single_item_visits, vec![1, 2, 3, 1, 2, 3]);
-
         let first_page = forwarder.pending_after(Some(2), 3).unwrap();
         assert_eq!(
             first_page
@@ -3247,7 +3092,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![3, 1, 2]
         );
-
         let request = forwarder.claim_for_signing(ids[0]).unwrap();
         let exact = signed_operation(&operations, request.operation, 20);
         let digest = forwarder.store_signed_transaction(ids[0], &exact).unwrap();
@@ -3268,7 +3112,6 @@ mod tests {
                 .unwrap(),
             ReserveTransactionEnqueueResultV1::Existing { .. }
         ));
-
         let request = forwarder.claim_for_signing(ids[1]).unwrap();
         let exact = signed_operation(&operations, request.operation, 21);
         forwarder.store_signed_transaction(ids[1], &exact).unwrap();
@@ -3317,7 +3160,6 @@ mod tests {
             ReserveTransactionDeadLetterReasonV1::RetryExhausted
         );
     }
-
     #[test]
     fn crash_recovery_preserves_ambiguous_bytes_and_resets_only_signing() {
         let operations = key(14);
@@ -3360,7 +3202,6 @@ mod tests {
             Some(exact.as_slice())
         );
     }
-
     #[test]
     fn corrupt_truncated_oversized_and_poisoned_state_fail_closed() {
         let operations = key(17);
@@ -3384,7 +3225,6 @@ mod tests {
             ReserveTransactionForwarder::open(temp.path(), forwarder_policy()),
             Err(ReserveTransactionForwarderError::InvalidCheckpoint)
         ));
-
         let oversized = TempDir::new().unwrap();
         let mut restrictive = forwarder_policy();
         restrictive.checkpoint_max_bytes = 32;
@@ -3399,7 +3239,6 @@ mod tests {
             ReserveTransactionForwarder::open(oversized.path(), restrictive),
             Err(ReserveTransactionForwarderError::CheckpointTooLarge)
         ));
-
         let poisoned = ReserveTransactionForwarder::in_memory(forwarder_policy()).unwrap();
         let state = Arc::clone(&poisoned.state);
         assert!(

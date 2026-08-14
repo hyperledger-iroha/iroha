@@ -7,17 +7,18 @@
 //! surface: a relay becomes proof-eligible only when the exact envelope is also
 //! present in State's finality-authenticated lane-relay store. The worker
 //! constructs proofs; normal ISI execution performs their authoritative
-//! verification before any state mutation.
-
+//! verification before any state mutation. Its retry journal is treated as
+//! untrusted startup input: fixed byte, item, key, and proof budgets are
+//! enforced before decoded state is retained.
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::Duration,
 };
-
 use eyre::{Result, WrapErr};
 use iroha_config::parameters::actual::{
     Fastpq, FastpqExecutionMode, FastpqPoseidonMode, NexusRelayWorker as NexusRelayWorkerConfig,
@@ -42,7 +43,8 @@ use iroha_data_model::{
         AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId, FeeSponsorAssetBudget,
         FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
         FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope,
+        MAX_ACTIVE_EXECUTION_LANES, ProofBlob,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
@@ -57,17 +59,25 @@ use iroha_primitives::{
     numeric::{MAX_DECIMAL_SCALE, Numeric, Quantity, RoundingMode},
 };
 use mv::storage::StorageReadOnly;
-use norito::codec::{Decode, Encode};
-
+use norito::{
+    DecodeLimits,
+    codec::{Decode, Encode},
+};
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
 const FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE: &str = "fee_sponsor_vault_allocation";
-
+const WORKER_STATE_MAX_ITEMS_PER_KIND: usize = MAX_ACTIVE_EXECUTION_LANES;
+const WORKER_STATE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const WORKER_STATE_MAX_RELAY_BYTES: usize = 16 * 1024 * 1024;
+const WORKER_STATE_MAX_PROOF_BYTES: usize = 16 * 1024 * 1024;
+const WORKER_STATE_MAX_TOTAL_PROOF_BYTES: usize = 32 * 1024 * 1024;
+const WORKER_STATE_MAX_KEY_BYTES: usize = 4 * 1024;
+const WORKER_STATE_MAX_DECODE_ALLOCATED_BYTES: usize = 128 * 1024 * 1024;
+const WORKER_STATE_MAX_DECODE_DEPTH: usize = 32;
 #[derive(Clone, Debug, Default, Decode, Encode)]
 struct DurableWorkerState {
     relays: BTreeMap<String, DurableRelayWork>,
     allocations: BTreeMap<String, DurableAllocationWork>,
 }
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableRelayWork {
     envelope: LaneRelayEnvelope,
@@ -75,13 +85,11 @@ struct DurableRelayWork {
     attempts: u32,
     last_height: u64,
 }
-
 enum RelayAttemptDecision {
     Deferred,
     Rejected,
     Ready(Box<LaneRelayEnvelope>),
 }
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableAllocationWork {
     program_id: FeeSponsorProgramId,
@@ -99,7 +107,6 @@ struct DurableAllocationWork {
     attempts: u32,
     last_height: u64,
 }
-
 struct AllocationCandidatePlanV1<'a> {
     program_id: &'a FeeSponsorProgramId,
     program_revision: u64,
@@ -107,7 +114,6 @@ struct AllocationCandidatePlanV1<'a> {
     expiry_height: u64,
     routes: &'a [(DataSpaceId, [u8; 32])],
 }
-
 #[derive(Encode)]
 struct FeeSponsorVaultLeaseBinding {
     version: u8,
@@ -119,7 +125,6 @@ struct FeeSponsorVaultLeaseBinding {
     source_state_root: Hash,
     expires_at_height: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 enum DurableWorkStatus {
     Pending,
@@ -128,7 +133,6 @@ enum DurableWorkStatus {
     Accepted,
     Rejected,
 }
-
 /// Queue-backed DPN/Nexus fee settlement relay worker.
 pub struct NexusFeeRelayWorker {
     config: NexusRelayWorkerConfig,
@@ -142,7 +146,6 @@ pub struct NexusFeeRelayWorker {
     durable: parking_lot::Mutex<DurableWorkerState>,
     announced_relays: parking_lot::Mutex<BTreeSet<String>>,
 }
-
 /// Node-owned dependencies consumed when constructing the Nexus fee relay worker.
 pub struct NexusFeeRelayWorkerContext {
     /// Private durable worker-state directory.
@@ -160,7 +163,6 @@ pub struct NexusFeeRelayWorkerContext {
     /// Configured deterministic proof backend.
     pub fastpq: Fastpq,
 }
-
 impl NexusFeeRelayWorker {
     /// Construct a worker. The optional configured relayer account must match the node key.
     ///
@@ -191,20 +193,21 @@ impl NexusFeeRelayWorker {
                 );
             }
         }
+        validate_worker_item_limit(config.max_pending_relays.get())?;
         let state_path = storage_root.join(WORKER_STATE_FILE);
-        let mut durable = load_durable_state(&state_path).unwrap_or_else(|error| {
-            iroha_logger::warn!(
-                ?error,
-                path = %state_path.display(),
-                "failed to load Nexus fee relay worker state; starting with an empty retry set"
-            );
-            DurableWorkerState::default()
-        });
+        let mut durable = load_durable_state(&state_path, config.max_pending_relays.get())
+            .unwrap_or_else(|error| {
+                iroha_logger::warn!(
+                    ?error,
+                    path = %state_path.display(),
+                    "failed to load Nexus fee relay worker state; starting with an empty retry set"
+                );
+                DurableWorkerState::default()
+            });
         if prune_durable_worker_state(&mut durable, config.max_pending_relays.get()) {
-            persist_durable_state(&state_path, &durable)
+            persist_durable_state(&state_path, &durable, config.max_pending_relays.get())
                 .wrap_err("persist bounded Nexus fee relay worker state after startup pruning")?;
         }
-
         Ok(Self {
             config,
             state_path,
@@ -218,7 +221,6 @@ impl NexusFeeRelayWorker {
             announced_relays: parking_lot::Mutex::new(BTreeSet::new()),
         })
     }
-
     /// Start the worker reconciliation loop.
     pub fn start(self, shutdown_signal: ShutdownSignal) -> Child {
         let worker = Arc::new(self);
@@ -227,7 +229,6 @@ impl NexusFeeRelayWorker {
             async move {
                 let mut interval = tokio::time::interval(worker.config.retry_backoff);
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
@@ -259,12 +260,10 @@ impl NexusFeeRelayWorker {
         });
         Child::new(task, OnShutdown::Wait(Duration::from_secs(2)))
     }
-
     fn reconcile_once(&self) -> Result<()> {
         if !self.config.enabled {
             return Ok(());
         }
-
         self.mark_accepted_allocations()?;
         self.announce_verified_relays()?;
         self.enqueue_status_relays()?;
@@ -272,12 +271,14 @@ impl NexusFeeRelayWorker {
         self.refresh_allocations_if_due()?;
         Ok(())
     }
-
     fn persist_bounded_state(&self, durable: &mut DurableWorkerState) -> Result<()> {
         let _ = prune_durable_worker_state(durable, self.config.max_pending_relays.get());
-        persist_durable_state(&self.state_path, durable)
+        persist_durable_state(
+            &self.state_path,
+            durable,
+            self.config.max_pending_relays.get(),
+        )
     }
-
     fn enqueue_status_relays(&self) -> Result<()> {
         let candidates = sumeragi::status::lane_relay_envelopes_snapshot();
         let envelopes = {
@@ -292,10 +293,10 @@ impl NexusFeeRelayWorker {
         if envelopes.is_empty() {
             return Ok(());
         }
-
         let mut durable = self.durable.lock();
         for envelope in envelopes {
             let key = relay_work_key(&envelope);
+            validate_relay_work_bounds(&key, &envelope)?;
             if durable.relays.len() >= self.config.max_pending_relays.get()
                 && !durable.relays.contains_key(&key)
             {
@@ -307,20 +308,29 @@ impl NexusFeeRelayWorker {
                     continue;
                 }
             }
-
             if self.verified_relay_exists(&envelope)? {
                 continue;
             }
-            durable.relays.entry(key).or_insert(DurableRelayWork {
-                envelope,
-                status: DurableWorkStatus::Pending,
-                attempts: 0,
-                last_height: self.committed_height(),
-            });
+            if !durable.relays.contains_key(&key) {
+                durable.relays.insert(
+                    key.clone(),
+                    DurableRelayWork {
+                        envelope,
+                        status: DurableWorkStatus::Pending,
+                        attempts: 0,
+                        last_height: self.committed_height(),
+                    },
+                );
+                if let Err(error) =
+                    validate_durable_state_bounds(&durable, self.config.max_pending_relays.get())
+                {
+                    durable.relays.remove(&key);
+                    return Err(error);
+                }
+            }
         }
         self.persist_bounded_state(&mut durable)
     }
-
     fn submit_pending_relays(&self) -> Result<()> {
         let keys = {
             let durable = self.durable.lock();
@@ -336,13 +346,11 @@ impl NexusFeeRelayWorker {
                 .take(self.config.max_pending_relays.get())
                 .collect::<Vec<_>>()
         };
-
         for key in keys {
             self.submit_relay_work(&key)?;
         }
         Ok(())
     }
-
     fn submit_relay_work(&self, key: &str) -> Result<()> {
         let Some(mut envelope) = self.relay_work_for_attempt(key)? else {
             return Ok(());
@@ -367,7 +375,6 @@ impl NexusFeeRelayWorker {
             self.reject_relay_attempt(key, envelope, "zero manifest root")?;
             return Ok(());
         }
-
         self.update_relay_status(key, DurableWorkStatus::Proving, Some(envelope.clone()))?;
         let current_height = self.committed_height();
         let expiry_slot =
@@ -410,7 +417,6 @@ impl NexusFeeRelayWorker {
             "/internal/nexus/fee-relay/register-verified-lane-relay",
         )
     }
-
     fn relay_work_for_attempt(&self, key: &str) -> Result<Option<LaneRelayEnvelope>> {
         let current_height = self.committed_height();
         let mut durable = self.durable.lock();
@@ -429,7 +435,6 @@ impl NexusFeeRelayWorker {
             }
         }
     }
-
     fn update_relay_status(
         &self,
         key: &str,
@@ -448,7 +453,6 @@ impl NexusFeeRelayWorker {
         }
         self.persist_bounded_state(&mut durable)
     }
-
     fn reject_relay_attempt(
         &self,
         key: &str,
@@ -464,7 +468,6 @@ impl NexusFeeRelayWorker {
         );
         self.update_relay_status(key, DurableWorkStatus::Rejected, Some(envelope))
     }
-
     fn reject_or_retry_relay(
         &self,
         key: &str,
@@ -494,7 +497,6 @@ impl NexusFeeRelayWorker {
         work.last_height = self.committed_height();
         self.persist_bounded_state(&mut durable)
     }
-
     fn announce_verified_relays(&self) -> Result<()> {
         let records = self.verified_relay_records(self.config.max_pending_relays.get())?;
         let current_keys = records
@@ -511,7 +513,6 @@ impl NexusFeeRelayWorker {
         self.announced_relays
             .lock()
             .retain(|key| current_keys.contains(key));
-
         for (key, record) in records {
             let mut announced = self.announced_relays.lock();
             if announced.contains(&key) {
@@ -526,7 +527,6 @@ impl NexusFeeRelayWorker {
         }
         Ok(())
     }
-
     fn verified_relay_records(
         &self,
         limit: usize,
@@ -553,7 +553,6 @@ impl NexusFeeRelayWorker {
         }
         Ok(newest_records.into_values().collect())
     }
-
     fn verified_relay_exists(&self, envelope: &LaneRelayEnvelope) -> Result<bool> {
         let key = StatePath::from_str(&envelope.relay_ref().relay_state_key())
             .wrap_err("parse verified lane relay state key")?;
@@ -565,13 +564,11 @@ impl NexusFeeRelayWorker {
             .get(key.as_ref())
             .is_some())
     }
-
     fn refresh_allocations_if_due(&self) -> Result<()> {
         let current_height = self.committed_height();
         if current_height == 0 {
             return Ok(());
         }
-
         for candidate in self.allocation_candidates(current_height)? {
             if self
                 .latest_verified_allocation_for(&candidate)?
@@ -582,7 +579,6 @@ impl NexusFeeRelayWorker {
                 // can never authorize the same vault capacity concurrently.
                 continue;
             }
-
             let key = allocation_work_key(&candidate);
             let mut work = self.prepare_allocation_work(&key, candidate);
             if self.verified_allocation_for_work(&work)?.is_some() {
@@ -596,14 +592,12 @@ impl NexusFeeRelayWorker {
                 let _ = self.store_allocation_work(key, work)?;
                 continue;
             }
-
             work.status = DurableWorkStatus::Proving;
             work.attempts = work.attempts.saturating_add(1);
             work.last_height = current_height;
             if !self.store_allocation_work(key.clone(), work.clone())? {
                 continue;
             }
-
             let proof_blob = match prove_fee_sponsor_vault_allocation(&work, &self.fastpq) {
                 Ok(proof) => proof,
                 Err(error) => {
@@ -645,12 +639,10 @@ impl NexusFeeRelayWorker {
         }
         Ok(())
     }
-
     fn allocation_candidates(&self, current_height: u64) -> Result<Vec<DurableAllocationWork>> {
         let view = self.state.view();
         let replay_retention_slots = view.nexus.axt.replay_retention_slots.get();
         let mut candidates = Vec::new();
-
         for (program_id, program) in view.world().fee_sponsor_programs().iter() {
             if program.lifecycle != FeeSponsorProgramLifecycle::Active {
                 continue;
@@ -683,7 +675,6 @@ impl NexusFeeRelayWorker {
                 );
                 continue;
             };
-
             let routes = self.eligible_allocation_routes(&view, program_id, revision.eligibility);
             if routes.is_empty() {
                 iroha_logger::warn!(
@@ -692,7 +683,6 @@ impl NexusFeeRelayWorker {
                 );
                 continue;
             }
-
             let plan = AllocationCandidatePlanV1 {
                 program_id,
                 program_revision,
@@ -708,7 +698,6 @@ impl NexusFeeRelayWorker {
         }
         Ok(candidates)
     }
-
     fn eligible_allocation_routes(
         &self,
         view: &StateView<'_>,
@@ -739,7 +728,6 @@ impl NexusFeeRelayWorker {
         routes.sort_by_key(|(dataspace_id, _)| *dataspace_id);
         routes
     }
-
     fn allocation_candidates_for_budget(
         view: &StateView<'_>,
         plan: &AllocationCandidatePlanV1<'_>,
@@ -806,7 +794,6 @@ impl NexusFeeRelayWorker {
         }
         Ok(candidates)
     }
-
     fn prepare_allocation_work(
         &self,
         key: &str,
@@ -827,8 +814,8 @@ impl NexusFeeRelayWorker {
             .cloned()
             .unwrap_or(candidate)
     }
-
     fn store_allocation_work(&self, key: String, work: DurableAllocationWork) -> Result<bool> {
+        validate_allocation_work_bounds(&key, &work)?;
         let mut durable = self.durable.lock();
         if matches!(
             work.status,
@@ -847,11 +834,23 @@ impl NexusFeeRelayWorker {
             );
             return Ok(false);
         }
-        durable.allocations.insert(key, work);
+        let previous = durable.allocations.insert(key.clone(), work);
+        if let Err(error) =
+            validate_durable_state_bounds(&durable, self.config.max_pending_relays.get())
+        {
+            match previous {
+                Some(previous) => {
+                    durable.allocations.insert(key, previous);
+                }
+                None => {
+                    durable.allocations.remove(&key);
+                }
+            }
+            return Err(error);
+        }
         self.persist_bounded_state(&mut durable)?;
         Ok(true)
     }
-
     fn mark_accepted_allocations(&self) -> Result<()> {
         let works = self.durable.lock().allocations.clone();
         let mut accepted = Vec::new();
@@ -863,14 +862,12 @@ impl NexusFeeRelayWorker {
         if accepted.is_empty() {
             return Ok(());
         }
-
         let mut durable = self.durable.lock();
         for (key, _) in accepted {
             durable.allocations.remove(&key);
         }
         self.persist_bounded_state(&mut durable)
     }
-
     fn verified_allocation_for_work(
         &self,
         work: &DurableAllocationWork,
@@ -887,7 +884,6 @@ impl NexusFeeRelayWorker {
         };
         decode_verified_allocation_record(payload).map(Some)
     }
-
     fn latest_verified_allocation_for(
         &self,
         work: &DurableAllocationWork,
@@ -917,7 +913,6 @@ impl NexusFeeRelayWorker {
         }
         Ok(latest)
     }
-
     fn manifest_root_for(&self, dsid: DataSpaceId) -> Option<[u8; 32]> {
         self.state
             .axt_policy_snapshot()
@@ -927,11 +922,9 @@ impl NexusFeeRelayWorker {
             .map(|entry| entry.policy.manifest_root)
             .filter(|root| root.iter().any(|byte| *byte != 0))
     }
-
     fn committed_height(&self) -> u64 {
         u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX)
     }
-
     fn submit_instruction(
         &self,
         instruction: InstructionBox,
@@ -967,7 +960,6 @@ impl NexusFeeRelayWorker {
             })
     }
 }
-
 fn prepare_relay_attempt(
     work: &mut DurableRelayWork,
     current_height: u64,
@@ -984,7 +976,6 @@ fn prepare_relay_attempt(
     work.last_height = current_height;
     RelayAttemptDecision::Ready(Box::new(work.envelope.clone()))
 }
-
 fn sign_nexus_fee_relay_submission_transaction(
     network_id: iroha_data_model::NetworkId,
     authority: AccountId,
@@ -1003,7 +994,6 @@ fn sign_nexus_fee_relay_submission_transaction(
     .try_sign(key_pair.private_key())
     .wrap_err_with(|| format!("sign internal Nexus fee relay mutation at `{endpoint}`"))
 }
-
 fn prune_durable_worker_state(durable: &mut DurableWorkerState, max_items_per_kind: usize) -> bool {
     let original_relay_count = durable.relays.len();
     let original_allocation_count = durable.allocations.len();
@@ -1016,7 +1006,6 @@ fn prune_durable_worker_state(durable: &mut DurableWorkerState, max_items_per_ki
             DurableWorkStatus::Accepted | DurableWorkStatus::Rejected
         )
     });
-
     let relay_overflow = durable.relays.len().saturating_sub(max_items_per_kind);
     if relay_overflow > 0 {
         let mut eviction_order = durable
@@ -1050,7 +1039,6 @@ fn prune_durable_worker_state(durable: &mut DurableWorkerState, max_items_per_ki
     durable.relays.len() != original_relay_count
         || durable.allocations.len() != original_allocation_count
 }
-
 fn reclaim_oldest_rejected_relay(durable: &mut DurableWorkerState) -> bool {
     let rejected_key = durable
         .relays
@@ -1064,11 +1052,9 @@ fn reclaim_oldest_rejected_relay(durable: &mut DurableWorkerState) -> bool {
         .and_then(|key| durable.relays.remove(&key))
         .is_some()
 }
-
 fn relay_work_key(envelope: &LaneRelayEnvelope) -> String {
     envelope.relay_ref().relay_state_key()
 }
-
 fn authoritative_status_relay<'a>(
     recorded_relays: &'a LaneRelayStore,
     candidate: &LaneRelayEnvelope,
@@ -1081,7 +1067,6 @@ fn authoritative_status_relay<'a>(
     )?;
     (recorded.finality_authority.is_some() && recorded == candidate).then_some(recorded)
 }
-
 fn allocation_work_key(work: &DurableAllocationWork) -> String {
     format!(
         "{}|{}|{}|{}",
@@ -1091,7 +1076,6 @@ fn allocation_work_key(work: &DurableAllocationWork) -> String {
         work.asset_definition_id,
     )
 }
-
 fn fee_sponsor_route_allocation_eligible(
     has_enrollment: bool,
     eligibility: FeeSponsorEligibility,
@@ -1100,7 +1084,6 @@ fn fee_sponsor_route_allocation_eligible(
     has_enrollment
         || (eligibility == FeeSponsorEligibility::EnrolledOrRouteDefault && route_default)
 }
-
 fn fee_sponsor_allocation_expiry_height(
     current_height: u64,
     replay_retention_slots: u64,
@@ -1116,7 +1099,6 @@ fn fee_sponsor_allocation_expiry_height(
     }
     Some(normal_expiry.min(activation_height.checked_sub(1)?))
 }
-
 fn partition_fee_sponsor_vault(
     vault_balance: &Quantity,
     route_count: usize,
@@ -1152,7 +1134,6 @@ fn partition_fee_sponsor_vault(
     debug_assert_eq!(&allocated, vault_balance);
     Ok(allocations)
 }
-
 fn fee_sponsor_vault_lease_id(
     program_id: &FeeSponsorProgramId,
     program_revision: u64,
@@ -1176,38 +1157,235 @@ fn fee_sponsor_vault_lease_id(
         norito::to_bytes(&binding).wrap_err("encode fee sponsor vault spend-lease binding")?;
     Ok(Hash::new(encoded))
 }
-
 fn decode_verified_allocation_record(payload: &[u8]) -> Result<VerifiedFeeSponsorVaultAllocation> {
     let json: Json = norito::decode_from_bytes(payload)
         .wrap_err("decode verified fee sponsor vault allocation JSON payload")?;
     norito::json::from_slice(json.get().as_bytes())
         .wrap_err("decode verified fee sponsor vault allocation")
 }
-
-fn load_durable_state(path: &Path) -> Result<DurableWorkerState> {
-    if !path.exists() {
-        return Ok(DurableWorkerState::default());
+fn validate_worker_item_limit(max_items_per_kind: usize) -> Result<()> {
+    if max_items_per_kind == 0 || max_items_per_kind > WORKER_STATE_MAX_ITEMS_PER_KIND {
+        eyre::bail!(
+            "nexus.relay_worker.max_pending_relays must be within 1..={WORKER_STATE_MAX_ITEMS_PER_KIND}, got {max_items_per_kind}"
+        );
     }
-    let bytes = fs::read(path).wrap_err_with(|| format!("read {}", path.display()))?;
-    norito::decode_from_bytes(&bytes).wrap_err_with(|| format!("decode {}", path.display()))
+    Ok(())
 }
-
-fn persist_durable_state(path: &Path, durable: &DurableWorkerState) -> Result<()> {
+fn validate_relay_work_bounds(key: &str, envelope: &LaneRelayEnvelope) -> Result<()> {
+    validate_relay_resource_lengths(key.len(), envelope.encoded_len())
+}
+fn validate_relay_resource_lengths(key_bytes: usize, envelope_bytes: usize) -> Result<()> {
+    if key_bytes > WORKER_STATE_MAX_KEY_BYTES {
+        eyre::bail!(
+            "Nexus fee relay key is {key_bytes} bytes (maximum {WORKER_STATE_MAX_KEY_BYTES})"
+        );
+    }
+    if envelope_bytes > WORKER_STATE_MAX_RELAY_BYTES {
+        eyre::bail!(
+            "Nexus fee relay envelope is {envelope_bytes} bytes (maximum {WORKER_STATE_MAX_RELAY_BYTES})"
+        );
+    }
+    Ok(())
+}
+fn validate_allocation_work_bounds(key: &str, work: &DurableAllocationWork) -> Result<()> {
+    validate_allocation_resource_lengths(
+        key.len(),
+        work.proof_blob
+            .as_ref()
+            .map_or(0, |proof| proof.payload.len()),
+    )
+}
+fn validate_allocation_resource_lengths(key_bytes: usize, proof_bytes: usize) -> Result<()> {
+    if key_bytes > WORKER_STATE_MAX_KEY_BYTES {
+        eyre::bail!(
+            "Nexus fee relay allocation key is {} bytes (maximum {WORKER_STATE_MAX_KEY_BYTES})",
+            key_bytes
+        );
+    }
+    if proof_bytes > WORKER_STATE_MAX_PROOF_BYTES {
+        eyre::bail!(
+            "Nexus fee relay allocation proof is {} bytes (maximum {WORKER_STATE_MAX_PROOF_BYTES})",
+            proof_bytes
+        );
+    }
+    Ok(())
+}
+fn validate_durable_state_bounds(
+    durable: &DurableWorkerState,
+    max_items_per_kind: usize,
+) -> Result<()> {
+    validate_worker_item_limit(max_items_per_kind)?;
+    if durable.relays.len() > max_items_per_kind {
+        eyre::bail!(
+            "Nexus fee relay journal contains {} relay items (configured maximum {max_items_per_kind})",
+            durable.relays.len()
+        );
+    }
+    if durable.allocations.len() > max_items_per_kind {
+        eyre::bail!(
+            "Nexus fee relay journal contains {} allocation items (configured maximum {max_items_per_kind})",
+            durable.allocations.len()
+        );
+    }
+    for (key, work) in &durable.relays {
+        validate_relay_work_bounds(key, &work.envelope)?;
+    }
+    let mut total_proof_bytes = 0usize;
+    for (key, work) in &durable.allocations {
+        validate_allocation_work_bounds(key, work)?;
+        if let Some(proof) = work.proof_blob.as_ref() {
+            total_proof_bytes = total_proof_bytes
+                .checked_add(proof.payload.len())
+                .ok_or_else(|| eyre::eyre!("Nexus fee relay proof-byte total overflowed"))?;
+        }
+    }
+    if total_proof_bytes > WORKER_STATE_MAX_TOTAL_PROOF_BYTES {
+        eyre::bail!(
+            "Nexus fee relay journal retains {total_proof_bytes} proof bytes (maximum {WORKER_STATE_MAX_TOTAL_PROOF_BYTES})"
+        );
+    }
+    let encoded_bytes = durable.encoded_len();
+    if encoded_bytes > WORKER_STATE_MAX_BYTES {
+        eyre::bail!(
+            "encoded Nexus fee relay worker state is {encoded_bytes} bytes (maximum {WORKER_STATE_MAX_BYTES})"
+        );
+    }
+    Ok(())
+}
+fn worker_state_decode_limits() -> DecodeLimits {
+    DecodeLimits::new(
+        WORKER_STATE_MAX_PROOF_BYTES,
+        WORKER_STATE_MAX_PROOF_BYTES,
+        WORKER_STATE_MAX_BYTES,
+        WORKER_STATE_MAX_DECODE_ALLOCATED_BYTES,
+        WORKER_STATE_MAX_DECODE_DEPTH,
+    )
+}
+fn load_durable_state(path: &Path, max_items_per_kind: usize) -> Result<DurableWorkerState> {
+    validate_worker_item_limit(max_items_per_kind)?;
+    let initial = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DurableWorkerState::default());
+        }
+        Err(error) => return Err(error).wrap_err_with(|| format!("inspect {}", path.display())),
+    };
+    if !initial.file_type().is_file()
+        || initial.len() > u64::try_from(WORKER_STATE_MAX_BYTES).unwrap_or(u64::MAX)
+    {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} is not a regular file within the {WORKER_STATE_MAX_BYTES}-byte limit",
+            path.display()
+        );
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
+            .expect("NOFOLLOW flag bits fit the platform custom-flags type");
+        options.custom_flags(nofollow);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("open {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {}", path.display()))?;
+    if !opened.is_file() || !same_worker_state_snapshot(&initial, &opened) {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} changed while opening",
+            path.display()
+        );
+    }
+    let capacity = usize::try_from(opened.len())
+        .map_err(|_| eyre::eyre!("Nexus fee relay state length is not addressable"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(
+            u64::try_from(WORKER_STATE_MAX_BYTES)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut bytes)
+        .wrap_err_with(|| format!("read {}", path.display()))?;
+    if bytes.len() > WORKER_STATE_MAX_BYTES {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} grew beyond its {WORKER_STATE_MAX_BYTES}-byte limit",
+            path.display()
+        );
+    }
+    let after_read = file
+        .metadata()
+        .wrap_err_with(|| format!("re-inspect opened {}", path.display()))?;
+    let current =
+        fs::symlink_metadata(path).wrap_err_with(|| format!("re-inspect {}", path.display()))?;
+    if !current.file_type().is_file()
+        || bytes.len() != capacity
+        || !same_worker_state_snapshot(&opened, &after_read)
+        || !same_worker_state_snapshot(&after_read, &current)
+    {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} changed while reading",
+            path.display()
+        );
+    }
+    let durable: DurableWorkerState =
+        norito::decode_from_bytes_with_limits(&bytes, worker_state_decode_limits())
+            .wrap_err_with(|| format!("decode {}", path.display()))?;
+    // A configuration decrease is allowed to load an older, still
+    // protocol-bounded journal; the constructor deterministically prunes it to
+    // the configured limit before the worker starts or persists it again.
+    validate_durable_state_bounds(&durable, WORKER_STATE_MAX_ITEMS_PER_KIND)?;
+    Ok(durable)
+}
+fn persist_durable_state(
+    path: &Path,
+    durable: &DurableWorkerState,
+    max_items_per_kind: usize,
+) -> Result<()> {
+    validate_durable_state_bounds(durable, max_items_per_kind)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).wrap_err_with(|| format!("create {}", parent.display()))?;
     }
     let bytes = norito::to_bytes(durable).wrap_err("encode Nexus fee relay worker state")?;
+    if bytes.len() > WORKER_STATE_MAX_BYTES {
+        eyre::bail!(
+            "encoded Nexus fee relay worker state is {} bytes (maximum {WORKER_STATE_MAX_BYTES})",
+            bytes.len()
+        );
+    }
     let tmp = path.with_extension("norito.tmp");
     fs::write(&tmp, bytes).wrap_err_with(|| format!("write {}", tmp.display()))?;
     fs::rename(&tmp, path).wrap_err_with(|| format!("replace {}", path.display()))
 }
-
+#[cfg(unix)]
+fn same_worker_state_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+#[cfg(not(unix))]
+fn same_worker_state_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
 fn parse_canonical_account_id(raw: &str) -> Result<AccountId> {
     AccountId::parse_encoded(raw)
         .map(ParsedAccountId::into_account_id)
         .map_err(|error| eyre::eyre!("{error}"))
 }
-
 fn worker_submission_metadata(endpoint: &'static str) -> Metadata {
     let mut metadata = Metadata::default();
     metadata.insert(
@@ -1220,7 +1398,6 @@ fn worker_submission_metadata(endpoint: &'static str) -> Metadata {
     );
     metadata
 }
-
 fn prove_lane_relay_envelope(
     envelope: &LaneRelayEnvelope,
     parent_state_root: Hash,
@@ -1325,7 +1502,6 @@ fn prove_lane_relay_envelope(
             }));
     Ok((proven_envelope, proof_blob))
 }
-
 fn prove_fee_sponsor_vault_allocation(
     work: &DurableAllocationWork,
     fastpq: &Fastpq,
@@ -1340,7 +1516,6 @@ fn prove_fee_sponsor_vault_allocation(
     {
         eyre::bail!("fee sponsor vault allocation proof inputs are invalid");
     }
-
     let claim = FeeSponsorVaultAllocationClaim {
         program_id: work.program_id.clone(),
         program_revision: work.program_revision,
@@ -1422,7 +1597,6 @@ fn prove_fee_sponsor_vault_allocation(
         expiry_slot: Some(work.expires_at_height),
     })
 }
-
 fn fee_sponsor_vault_allocation_binding(
     work: &DurableAllocationWork,
     program_text: &str,
@@ -1458,7 +1632,6 @@ fn fee_sponsor_vault_allocation_binding(
         }),
     }
 }
-
 fn transition_batch(
     dsid: DataSpaceId,
     slot: u64,
@@ -1481,7 +1654,6 @@ fn transition_batch(
         },
     )
 }
-
 fn prover_from_config(fastpq: &Fastpq) -> Result<fastpq_prover::Prover> {
     fastpq_prover::Prover::canonical_with_modes(
         fastpq_prover::AXT_DEFAULT_PARAMETER,
@@ -1490,21 +1662,18 @@ fn prover_from_config(fastpq: &Fastpq) -> Result<fastpq_prover::Prover> {
     )
     .wrap_err("initialise FastPQ prover")
 }
-
 fn map_execution_mode(mode: FastpqExecutionMode) -> fastpq_prover::ExecutionMode {
     match mode {
         FastpqExecutionMode::Cpu => fastpq_prover::ExecutionMode::Cpu,
         FastpqExecutionMode::Gpu => fastpq_prover::ExecutionMode::Gpu,
     }
 }
-
 fn map_poseidon_mode(mode: FastpqPoseidonMode) -> fastpq_prover::PoseidonExecutionMode {
     match mode {
         FastpqPoseidonMode::Cpu => fastpq_prover::PoseidonExecutionMode::Cpu,
         FastpqPoseidonMode::Gpu => fastpq_prover::PoseidonExecutionMode::Gpu,
     }
 }
-
 fn worker_digest(label: &[u8], parts: &[&[u8]]) -> Hash {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(label);
@@ -1515,7 +1684,6 @@ fn worker_digest(label: &[u8], parts: &[&[u8]]) -> Hash {
     }
     Hash::new(bytes)
 }
-
 fn integer_mantissa(value: &Quantity) -> Option<u128> {
     if value.scale() == 0 {
         value.as_numeric().try_mantissa_u128()
@@ -1523,12 +1691,10 @@ fn integer_mantissa(value: &Quantity) -> Option<u128> {
         None
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, HashOf, MerkleProof};
     use iroha_data_model::{
         Level,
@@ -1538,7 +1704,6 @@ mod tests {
         nexus::{LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
     };
     use iroha_primitives::numeric::Quantity;
-
     fn test_fastpq() -> Fastpq {
         Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,
@@ -1561,11 +1726,9 @@ mod tests {
             metal_debug_fused: false,
         }
     }
-
     fn checked_nexus_fee_relay_key_fixture() -> KeyPair {
         KeyPair::try_random().expect("generate checked Nexus fee relay key fixture")
     }
-
     #[test]
     fn nexus_fee_relay_fixture_uses_checked_random_key_generation() {
         let key_pair = checked_nexus_fee_relay_key_fixture();
@@ -1573,10 +1736,8 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("Nexus fee relay fixture key advertises a valid algorithm");
-
         assert_eq!(algorithm, Algorithm::default());
     }
-
     fn sample_envelope(manifest_root: [u8; 32]) -> LaneRelayEnvelope {
         let header = BlockHeader::new(
             NonZeroU64::new(7).expect("non-zero block height"),
@@ -1608,7 +1769,6 @@ mod tests {
                 b"relay-worker-test-lane-block-descriptor",
             )))
     }
-
     fn sample_allocation_work(
         last_height: u64,
         status: DurableWorkStatus,
@@ -1637,7 +1797,96 @@ mod tests {
             last_height,
         }
     }
-
+    #[test]
+    fn durable_worker_resource_limits_accept_boundaries_and_reject_first_overflow() {
+        assert!(validate_worker_item_limit(1).is_ok());
+        assert!(validate_worker_item_limit(WORKER_STATE_MAX_ITEMS_PER_KIND).is_ok());
+        assert!(validate_worker_item_limit(0).is_err());
+        assert!(validate_worker_item_limit(WORKER_STATE_MAX_ITEMS_PER_KIND + 1).is_err());
+        assert!(
+            validate_relay_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_RELAY_BYTES,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_relay_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES + 1,
+                WORKER_STATE_MAX_RELAY_BYTES,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_relay_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_RELAY_BYTES + 1,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_allocation_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_PROOF_BYTES,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_allocation_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES + 1,
+                WORKER_STATE_MAX_PROOF_BYTES,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_allocation_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_PROOF_BYTES + 1,
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn durable_worker_journal_rejects_sparse_oversize_file_before_decode() {
+        let directory = tempfile::tempdir().expect("create worker-state test directory");
+        let path = directory.path().join(WORKER_STATE_FILE);
+        let file = fs::File::create(&path).expect("create sparse worker-state file");
+        file.set_len(
+            u64::try_from(WORKER_STATE_MAX_BYTES)
+                .expect("worker-state limit fits u64")
+                .saturating_add(1),
+        )
+        .expect("extend sparse worker-state file");
+        let error = load_durable_state(&path, 1).expect_err("oversize journal must fail closed");
+        assert!(
+            error.to_string().contains("not a regular file within"),
+            "unexpected error: {error:?}"
+        );
+    }
+    #[test]
+    fn durable_worker_journal_loads_protocol_bound_before_configured_pruning() {
+        let directory = tempfile::tempdir().expect("create worker-state test directory");
+        let path = directory.path().join(WORKER_STATE_FILE);
+        let envelope = sample_envelope([0x40; 32]);
+        let mut durable = DurableWorkerState::default();
+        for key in ["older", "newer"] {
+            durable.relays.insert(
+                key.to_owned(),
+                DurableRelayWork {
+                    envelope: envelope.clone(),
+                    status: DurableWorkStatus::Pending,
+                    attempts: 0,
+                    last_height: u64::from(key == "newer"),
+                },
+            );
+        }
+        persist_durable_state(&path, &durable, 2).expect("persist bounded worker journal");
+        let mut loaded = load_durable_state(&path, 1).expect("load protocol-bounded older journal");
+        assert_eq!(loaded.relays.len(), 2);
+        assert!(prune_durable_worker_state(&mut loaded, 1));
+        assert_eq!(loaded.relays.len(), 1);
+        assert!(loaded.relays.contains_key("newer"));
+    }
     #[test]
     fn durable_worker_pruning_bounds_both_kinds_and_discards_terminal_payloads_first() {
         let envelope = sample_envelope([0x40; 32]);
@@ -1669,9 +1918,7 @@ mod tests {
                 .allocations
                 .insert(key.to_owned(), sample_allocation_work(last_height, status));
         }
-
         assert!(prune_durable_worker_state(&mut durable, 2));
-
         assert_eq!(
             durable.relays.keys().cloned().collect::<Vec<_>>(),
             vec!["pending-new".to_owned(), "pending-old".to_owned()]
@@ -1685,14 +1932,12 @@ mod tests {
             "already-bounded state must not trigger another checkpoint rewrite"
         );
     }
-
     #[test]
     fn verified_worker_records_use_state_path_keys() {
         let envelope = sample_envelope([0x40; 32]);
         let relay_key_text = envelope.relay_ref().relay_state_key();
         let relay_key = StatePath::from_str(&relay_key_text).expect("valid relay state path");
         assert_eq!(relay_key.as_ref(), relay_key_text);
-
         let allocation = sample_allocation_work(7, DurableWorkStatus::Pending);
         let allocation_key_text = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &allocation.program_id,
@@ -1702,7 +1947,6 @@ mod tests {
         let allocation_key =
             StatePath::from_str(&allocation_key_text).expect("valid allocation state path");
         assert_eq!(allocation_key.as_ref(), allocation_key_text);
-
         let records = BTreeMap::from([
             (relay_key.clone(), vec![0xA5]),
             (allocation_key.clone(), vec![0x5A]),
@@ -1722,7 +1966,6 @@ mod tests {
             &[0x5A]
         );
     }
-
     #[test]
     fn rejected_relay_slot_is_reclaimed_before_active_work() {
         let envelope = sample_envelope([0x41; 32]);
@@ -1742,13 +1985,11 @@ mod tests {
                 },
             );
         }
-
         assert!(reclaim_oldest_rejected_relay(&mut durable));
         assert!(!durable.relays.contains_key("rejected-old"));
         assert!(durable.relays.contains_key("rejected-new"));
         assert!(durable.relays.contains_key("pending"));
     }
-
     fn attach_test_finality_authority(envelope: &mut LaneRelayEnvelope) {
         envelope.finality_authority = Some(LaneFinalityAuthorityV1 {
             version: 1,
@@ -1759,7 +2000,6 @@ mod tests {
             statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         });
     }
-
     #[test]
     fn status_relay_requires_exact_finality_authenticated_state_entry() {
         let pending = sample_envelope([0x40; 32]);
@@ -1768,7 +2008,6 @@ mod tests {
             authoritative_status_relay(&recorded_relays, &pending).is_none(),
             "a pending status snapshot without an authoritative State entry must not trigger proof generation"
         );
-
         let mut finalized = pending.clone();
         attach_test_finality_authority(&mut finalized);
         recorded_relays
@@ -1783,7 +2022,6 @@ mod tests {
             Some(&finalized),
             "the exact finalized State entry is proof-eligible"
         );
-
         let mut altered = finalized;
         altered.rbc_bytes_total = altered.rbc_bytes_total.saturating_add(1);
         assert!(
@@ -1791,7 +2029,6 @@ mod tests {
             "status payloads cannot substitute fields after State authentication"
         );
     }
-
     #[test]
     fn future_relay_deferral_preserves_durable_retry_budget_until_proposal_commits() {
         let envelope = sample_envelope([0x41; 32]);
@@ -1807,7 +2044,6 @@ mod tests {
             },
         );
         let before = norito::to_bytes(&durable).expect("encode durable relay work before deferral");
-
         for committed_height in 0..envelope.block_header.height().get() {
             let decision = prepare_relay_attempt(
                 durable.relays.get_mut(&key).expect("durable relay work"),
@@ -1821,7 +2057,6 @@ mod tests {
                 "a future proposal must not consume attempts or mutate persisted retry state"
             );
         }
-
         let proposal_height = envelope.block_header.height().get();
         let decision = prepare_relay_attempt(
             durable.relays.get_mut(&key).expect("durable relay work"),
@@ -1837,7 +2072,6 @@ mod tests {
         assert_eq!(work.last_height, proposal_height);
         assert_eq!(work.status, DurableWorkStatus::Pending);
     }
-
     #[test]
     fn exhausted_future_relay_is_not_rejected_before_proposal_commits() {
         let envelope = sample_envelope([0x42; 32]);
@@ -1854,7 +2088,6 @@ mod tests {
         );
         let before = norito::to_bytes(&durable).expect("encode exhausted future relay work");
         let proposal_height = envelope.block_header.height().get();
-
         let decision = prepare_relay_attempt(
             durable.relays.get_mut(&key).expect("durable relay work"),
             proposal_height - 1,
@@ -1866,7 +2099,6 @@ mod tests {
             before,
             "retry exhaustion must not reject a relay before its proposal commits"
         );
-
         let decision = prepare_relay_attempt(
             durable.relays.get_mut(&key).expect("durable relay work"),
             proposal_height,
@@ -1878,7 +2110,6 @@ mod tests {
         assert_eq!(work.attempts, 3);
         assert_eq!(work.last_height, 4);
     }
-
     #[test]
     fn fee_relay_submission_transaction_checked_signing_verifies() -> Result<()> {
         let key_pair = checked_nexus_fee_relay_key_fixture();
@@ -1896,18 +2127,15 @@ mod tests {
             &key_pair,
             endpoint,
         )?;
-
         tx.verify_signature()
             .wrap_err("verify checked Nexus fee relay submission signature")?;
         assert_eq!(tx.authority(), &authority);
         Ok(())
     }
-
     #[test]
     fn fee_sponsor_vault_partition_never_duplicates_capacity_across_dataspaces() -> Result<()> {
         let balance: Quantity = "10.000000001".parse()?;
         let allocations = partition_fee_sponsor_vault(&balance, 2, 9)?;
-
         assert_eq!(allocations.len(), 2);
         assert_eq!(
             allocations[0].checked_add(&allocations[1])?,
@@ -1917,7 +2145,6 @@ mod tests {
         assert!(allocations.iter().all(|allocation| allocation < &balance));
         Ok(())
     }
-
     #[test]
     fn enrolled_program_gets_allocation_for_explicit_non_default_route() {
         assert!(fee_sponsor_route_allocation_eligible(
@@ -1936,7 +2163,6 @@ mod tests {
             true,
         ));
     }
-
     #[test]
     fn fee_sponsor_allocation_expiry_respects_scheduled_revision_boundary() {
         assert_eq!(fee_sponsor_allocation_expiry_height(10, 20, None), Some(30));
@@ -1961,7 +2187,6 @@ mod tests {
             "work that cannot execute before activation must not be emitted"
         );
     }
-
     #[test]
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
         let mut envelope = sample_envelope([0x42; 32]);
@@ -1989,7 +2214,6 @@ mod tests {
         assert_ne!(verified.proof_digest, Hash::new(b"test-only-digest"));
         Ok(())
     }
-
     #[test]
     fn fee_sponsor_vault_allocation_worker_proof_verifies() -> Result<()> {
         let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());

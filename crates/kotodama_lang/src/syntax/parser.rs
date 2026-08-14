@@ -1,17 +1,14 @@
 //! Canonical single-scan source parser and lossless CST construction.
-
-use crate::{
-    ast::Program,
-    diagnostic::DiagnosticBundle,
-    source::{FrontendBudget, SourceFile},
-};
-
 use super::{
     cst::{SyntaxOutline, SyntaxOutlineBuilder, SyntaxTree, build_tree_from_outline},
     kind::SyntaxKind,
     lexer::lex,
 };
-
+use crate::{
+    ast::Program,
+    diagnostic::DiagnosticBundle,
+    source::{FrontendBudget, SourceFile},
+};
 /// Result of parsing for lossless editor and formatter consumers.
 #[derive(Clone, Debug)]
 pub struct ParseOutput {
@@ -20,7 +17,6 @@ pub struct ParseOutput {
     /// Deterministically ordered, bounded syntax diagnostics.
     pub diagnostics: DiagnosticBundle,
 }
-
 impl ParseOutput {
     /// Return whether parsing completed without diagnostics.
     #[must_use]
@@ -28,7 +24,6 @@ impl ParseOutput {
         self.diagnostics.diagnostics.is_empty()
     }
 }
-
 /// Canonical compiler parse result.
 ///
 /// `tree` and `program` are derived from the same lossless token stream. A
@@ -56,7 +51,6 @@ pub struct ProgramParseOutput {
     /// Stable CST-derived AST source facts for compiler resolution.
     pub(crate) ast_facts: Option<crate::spanned_ast::AstFacts>,
 }
-
 impl ProgramParseOutput {
     /// Return whether a valid AST was produced without diagnostics.
     #[must_use]
@@ -64,13 +58,11 @@ impl ProgramParseOutput {
         self.program.is_some() && self.diagnostics.diagnostics.is_empty()
     }
 }
-
 /// Parse one source file once, producing both its lossless CST and compiler AST.
 #[must_use]
 pub fn parse_program(source: &SourceFile, budget: FrontendBudget) -> ProgramParseOutput {
     parse_program_internal(source, budget, true)
 }
-
 pub(crate) fn parse_spanned_program(
     source: &SourceFile,
     budget: FrontendBudget,
@@ -84,7 +76,6 @@ pub(crate) fn parse_spanned_program(
         _ => Err(output.diagnostics),
     }
 }
-
 fn parse_program_internal(
     source: &SourceFile,
     budget: FrontendBudget,
@@ -183,7 +174,6 @@ fn parse_program_internal(
         ast_facts,
     }
 }
-
 /// Parse one source file into the canonical lossless CST.
 #[must_use]
 pub fn parse(source: &SourceFile, budget: FrontendBudget) -> ParseOutput {
@@ -193,7 +183,6 @@ pub fn parse(source: &SourceFile, budget: FrontendBudget) -> ParseOutput {
         diagnostics: output.diagnostics,
     }
 }
-
 fn error_outline(source: &SourceFile) -> SyntaxOutline {
     let mut builder = SyntaxOutlineBuilder::default();
     let root = builder.start(SyntaxKind::Root, 0);
@@ -202,14 +191,11 @@ fn error_outline(source: &SourceFile) -> SyntaxOutline {
     builder.finish(root, source.full_range().end);
     builder.into_outline()
 }
-
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write as _;
-
     use super::*;
     use crate::source::SourceId;
-
+    use std::fmt::Write as _;
     fn count_nodes(node: &crate::syntax::GreenNode, kind: SyntaxKind) -> usize {
         let mut count = usize::from(node.kind == kind);
         for child in &node.children {
@@ -219,7 +205,6 @@ mod tests {
         }
         count
     }
-
     fn cst_snapshot(
         node: &crate::syntax::GreenNode,
         source: &SourceFile,
@@ -264,7 +249,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn cst_preserves_decimal_literal_text() {
         let text = "seiyaku Demo { view fn value() -> decimal { return 1.250_0; } }";
@@ -280,7 +264,6 @@ mod tests {
                 .any(|token| token.kind == SyntaxKind::Decimal)
         );
     }
-
     #[test]
     fn compiler_uses_one_direct_cst_lowering_without_a_token_only_reparse() {
         crate::parser::reset_direct_cst_lowering_count();
@@ -298,11 +281,9 @@ mod tests {
         assert_eq!(crate::parser::direct_cst_lowering_count(), 1);
         assert_eq!(output.tree.text(&source), text);
     }
-
     #[test]
     fn public_ast_is_plain_but_internal_ast_retains_direct_node_ids() {
         use crate::ast::{Item, Statement};
-
         let text = "誓約 Direct { 始まり() { let int value = 1; } }";
         let source = SourceFile::new(SourceId(45), "direct-node-ids.ko", text);
         let public = parse_program(&source, FrontendBudget::v1());
@@ -317,7 +298,6 @@ mod tests {
             public_function.body.statements[0],
             Statement::Let { .. }
         ));
-
         let (spanned, _) = parse_spanned_program(&source, FrontendBudget::v1())
             .expect("wrapper-bearing compiler AST");
         let Item::Function(function) = &spanned.program.items[0] else {
@@ -340,7 +320,6 @@ mod tests {
             Some(statement_source.range)
         );
     }
-
     #[test]
     fn structured_missing_tokens_are_independent_of_diagnostic_wording() {
         let text = "seiyaku Broken { fn bad(int) { return; } }";
@@ -366,11 +345,9 @@ mod tests {
                 .any(|token| { token.is_missing() && token.expected == Some(SyntaxKind::Ident) })
         );
     }
-
     #[test]
     fn direct_cst_lowering_preserves_every_branded_declaration_form() {
         use crate::ast::{FunctionKind, Item, SourceUnitKind};
-
         let text = r#"誓約 Branded {
             struct Pair { int left, int right }
             error enum Failure { Bad = 1 }
@@ -407,7 +384,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn direct_cst_lowering_recovers_multiple_malformed_items() {
         let text = r#"seiyaku Broken {
@@ -433,7 +409,6 @@ mod tests {
         }));
         assert!(output.tree.tokens().iter().any(|token| token.is_missing()));
     }
-
     #[test]
     fn japanese_keyword_name_facts_keep_exact_utf8_byte_ranges() {
         let text = "誓約 Demo { 始まり() { let string message = \"雪\"; } }";
@@ -473,7 +448,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn cst_accepts_and_preserves_unsuffixed_fraction_text() {
         let text = "seiyaku Demo { fn valid() { let value = 1.25; } }";
@@ -489,7 +463,6 @@ mod tests {
                 .any(|token| token.kind == SyntaxKind::Decimal)
         );
     }
-
     #[test]
     fn cst_preserves_named_call_and_struct_literal_tokens() {
         let text = "seiyaku Demo { struct Pair { int first, string second } fn build(int first) -> Pair { return Pair { second: \"two\", first, }; } fn call() { build(first: 1,); } }";
@@ -519,7 +492,6 @@ mod tests {
                 >= 4
         );
     }
-
     #[test]
     fn named_source_units_do_not_synthesize_missing_tokens() {
         for text in ["seiyaku Demo {}", "誓約 Demo {}", "module Demo {}"] {
@@ -533,7 +505,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn statement_boundaries_lower_only_source_tokens() {
         let text = r#"seiyaku Statements {
@@ -556,7 +527,6 @@ mod tests {
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
         assert_eq!(output.tree.text(&source), text);
     }
-
     #[test]
     fn cst_terminated_items_do_not_leak_recovery_tokens_into_the_ast_stream() {
         let text = r#"seiyaku Demo {
@@ -572,7 +542,6 @@ mod tests {
         assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 1);
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
-
     #[test]
     fn cst_terminated_items_track_braced_initializers() {
         let text = r#"seiyaku Demo {
@@ -588,7 +557,6 @@ mod tests {
         assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 2);
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
-
     #[test]
     fn cst_missing_semicolon_recovers_before_an_attributed_item() {
         let text = r#"seiyaku Demo {
@@ -607,7 +575,6 @@ mod tests {
             token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::Semicolon)
         }));
     }
-
     #[test]
     fn cst_missing_semicolon_recovers_before_a_plain_item() {
         let text = r#"seiyaku Demo {
@@ -624,7 +591,6 @@ mod tests {
             token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::Semicolon)
         }));
     }
-
     #[test]
     fn pseudo_item_spellings_remain_ordinary_expression_identifiers() {
         let text = r#"seiyaku Demo {
@@ -639,7 +605,6 @@ mod tests {
         assert_eq!(count_nodes(output.tree.root(), SyntaxKind::ConstItem), 2);
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
-
     #[test]
     fn cst_recovery_preserves_mixed_call_arguments() {
         let text = "seiyaku Demo { fn invalid() { target(1, second: 2); } }";
@@ -652,7 +617,6 @@ mod tests {
         );
         assert_eq!(output.tree.text(&source), text);
     }
-
     #[test]
     fn cst_structures_tail_match_arms_and_sum_patterns_losslessly() {
         let text = "seiyaku Demo { fn unwrap(Option<int> value) -> int { match value { Option::some(item) => item, Option::none => 0, } } }";
@@ -667,7 +631,6 @@ mod tests {
         assert_eq!(count_nodes(root, SyntaxKind::SumPattern), 2);
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
-
     #[test]
     fn cst_structures_lists_and_comprehensions_losslessly() {
         let text = "seiyaku Demo { fn lists() -> List<int, 4> { let List<int, 4> source = [1, [2].get(0).unwrap_or(0),]; [value * 2 for value in source if value > 0] } }";
@@ -680,7 +643,6 @@ mod tests {
         assert_eq!(count_nodes(root, SyntaxKind::ListComprehension), 1);
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
-
     #[test]
     fn cst_structures_recursive_native_json_losslessly() {
         let text = r#"seiyaku Demo { fn build(string label) -> Json { json { owner: "alice", labels: json ["primary", label], nested: json { "owner": 1, }, } } }"#;
@@ -694,7 +656,6 @@ mod tests {
         assert_eq!(count_nodes(root, SyntaxKind::JsonArrayExpr), 1);
         assert!(output.tree.tokens().iter().all(|token| !token.is_missing()));
     }
-
     #[test]
     fn cst_native_json_recovery_inserts_the_specific_closing_delimiter() {
         let text = "seiyaku Demo { fn invalid() -> Json { json { labels: json [1, 2; } } }";
@@ -714,7 +675,6 @@ mod tests {
             token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::RBracket)
         }));
     }
-
     #[test]
     fn cst_list_recovery_inserts_a_specific_closing_bracket() {
         let text = "seiyaku Demo { fn invalid() { let values = [1, 2; } }";
@@ -727,7 +687,6 @@ mod tests {
             token.kind == SyntaxKind::Missing && token.expected == Some(SyntaxKind::RBracket)
         }));
     }
-
     #[test]
     fn cst_snapshot_locks_expression_json_list_and_recovery_structure() {
         let text = "seiyaku C { fn f(Option<int> v) { let choice = v? ? 1 : 2; let payload = json { values: json [1, [x for x in [1, 2] if x > 0]; }; } }";

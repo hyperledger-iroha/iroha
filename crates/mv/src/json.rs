@@ -4,54 +4,42 @@
 //! encode/decode MV `Storage`/`Cell` instances using the Norito JSON machinery
 //! without pulling Serde into the dependency graph. The former `mv::serde`
 //! shim has been removed; callers should import these helpers directly.
-
-use core::{fmt, marker::PhantomData};
-use std::{collections::BTreeMap, ops::Deref};
-
-use concread::{
-    bptree::{BptreeMap, BptreeMapReadTxn},
-    ebrcell::EbrCell,
-};
-use norito::json::{self, JsonDeserialize, JsonSerialize};
-
 use crate::{
     Key, Value,
     cell::{Block as CellBlock, Cell},
     storage::{Block as StorageBlock, Storage, StorageReadOnly},
 };
-
+use concread::{
+    bptree::{BptreeMap, BptreeMapReadTxn},
+    ebrcell::EbrCell,
+};
+use core::{fmt, marker::PhantomData};
+use norito::json::{self, JsonDeserialize, JsonSerialize};
+use std::{collections::BTreeMap, ops::Deref};
 /// Helper interface for parsing JSON object keys into typed values.
 pub trait KeySeed: Clone {
     /// Target key type.
     type Key;
-
     /// Convert a borrowed JSON object key into `Self::Key`.
     fn parse_key(&self, key: &str) -> Result<Self::Key, json::Error>;
 }
-
 /// Helper interface for parsing JSON values into typed payloads.
 pub trait ValueSeed: Clone {
     /// Target value type.
     type Value;
-
     /// Convert a Norito JSON `Value` into `Self::Value`.
     fn parse_value(&self, value: json::Value) -> Result<Self::Value, json::Error>;
-
     /// Decode one value directly from the streaming Norito JSON parser.
     fn parse_parser(&self, parser: &mut json::Parser<'_>) -> Result<Self::Value, json::Error>;
 }
-
 /// Helper trait for converting storage keys to and from their JSON string representation.
 pub trait JsonKeyCodec: Sized {
     /// Write the canonical JSON string representation of this key to `out`.
     fn encode_json_key(&self, out: &mut String);
-
     /// Parse a key from a JSON string representation.
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error>;
 }
-
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
-
 fn append_hex_upper(bytes: &[u8], out: &mut String) {
     out.reserve(bytes.len() * 2);
     for &byte in bytes {
@@ -61,7 +49,6 @@ fn append_hex_upper(bytes: &[u8], out: &mut String) {
         out.push(HEX_DIGITS[lo] as char);
     }
 }
-
 fn decode_hex_nibble(byte: u8) -> Result<u8, json::Error> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -73,7 +60,6 @@ fn decode_hex_nibble(byte: u8) -> Result<u8, json::Error> {
         ))),
     }
 }
-
 fn decode_hex_array<const N: usize>(encoded: &str) -> Result<[u8; N], json::Error> {
     if encoded.len() != N * 2 {
         return Err(json::Error::Message(format!(
@@ -91,44 +77,36 @@ fn decode_hex_array<const N: usize>(encoded: &str) -> Result<[u8; N], json::Erro
     }
     Ok(out)
 }
-
 impl JsonKeyCodec for String {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         Ok(encoded.to_owned())
     }
 }
-
 impl JsonKeyCodec for u64 {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse::<u64>()
             .map_err(|err| json::Error::Message(format!("invalid map key `{encoded}`: {err}")))
     }
 }
-
 impl<const N: usize> JsonKeyCodec for [u8; N] {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         append_hex_upper(self, &mut buf);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         decode_hex_array(encoded)
     }
 }
-
 /// Delimiter for tuple keys (chosen outside the ASCII printable range to avoid collisions).
 const TUPLE_KEY_SEPARATOR: char = '\u{1f}';
-
 impl JsonKeyCodec for (String, String) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + self.1.len() + 1);
@@ -137,7 +115,6 @@ impl JsonKeyCodec for (String, String) {
         buf.push_str(&self.1);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .split_once(TUPLE_KEY_SEPARATOR)
@@ -147,7 +124,6 @@ impl JsonKeyCodec for (String, String) {
             })
     }
 }
-
 impl JsonKeyCodec for (String, String, String) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + self.1.len() + self.2.len() + 2);
@@ -158,7 +134,6 @@ impl JsonKeyCodec for (String, String, String) {
         buf.push_str(&self.2);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
         let first = parts.next().ok_or_else(|| {
@@ -173,7 +148,6 @@ impl JsonKeyCodec for (String, String, String) {
         Ok((first.to_owned(), second.to_owned(), third.to_owned()))
     }
 }
-
 impl JsonKeyCodec for (String, u32) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + 11 + 1);
@@ -182,7 +156,6 @@ impl JsonKeyCodec for (String, u32) {
         buf.push_str(&self.1.to_string());
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let (left, right) = encoded.split_once(TUPLE_KEY_SEPARATOR).ok_or_else(|| {
             json::Error::Message("expected circuit tuple key to contain unit separator".into())
@@ -193,7 +166,6 @@ impl JsonKeyCodec for (String, u32) {
         Ok((left.to_owned(), version))
     }
 }
-
 impl JsonKeyCodec for (String, String, u16) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + self.1.len() + 6 + 2);
@@ -204,7 +176,6 @@ impl JsonKeyCodec for (String, String, u16) {
         buf.push_str(&self.2.to_string());
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
         let first = parts.next().ok_or_else(|| {
@@ -228,103 +199,83 @@ impl JsonKeyCodec for (String, String, u16) {
         Ok((first.to_owned(), second.to_owned(), replica_slot))
     }
 }
-
 /// Key seed that relies on `FromStr` with deterministic error reporting.
 #[derive(Debug, Default)]
 pub struct KeyFromStr<T>(PhantomData<T>);
-
 impl<T> KeyFromStr<T> {
     /// Construct a new seed (type inference helper).
     pub const fn new() -> Self {
         Self(PhantomData)
     }
 }
-
 impl<T> Clone for KeyFromStr<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
-
 impl<T> Copy for KeyFromStr<T> {}
-
 impl<T> KeySeed for KeyFromStr<T>
 where
     T: core::str::FromStr,
     T::Err: fmt::Display,
 {
     type Key = T;
-
     fn parse_key(&self, key: &str) -> Result<Self::Key, json::Error> {
         key.parse::<T>()
             .map_err(|err| json::Error::Message(format!("invalid map key `{key}`: {err}")))
     }
 }
-
 /// Key seed that delegates to [`JsonKeyCodec`] implementations.
 #[derive(Debug, Default)]
 pub struct CodecKeySeed<K>(PhantomData<K>);
-
 impl<K> CodecKeySeed<K> {
     /// Construct a new seed (type inference helper).
     pub const fn new() -> Self {
         Self(PhantomData)
     }
 }
-
 impl<K> Clone for CodecKeySeed<K> {
     fn clone(&self) -> Self {
         *self
     }
 }
-
 impl<K> Copy for CodecKeySeed<K> {}
-
 impl<K> KeySeed for CodecKeySeed<K>
 where
     K: JsonKeyCodec,
 {
     type Key = K;
-
     fn parse_key(&self, key: &str) -> Result<Self::Key, json::Error> {
         K::decode_json_key(key)
     }
 }
-
 /// Value seed that delegates directly to `JsonDeserialize`.
 #[derive(Debug, Default)]
 pub struct ValueFromJson<T>(PhantomData<T>);
-
 impl<T> ValueFromJson<T> {
     /// Construct a new seed (type inference helper).
     pub const fn new() -> Self {
         Self(PhantomData)
     }
 }
-
 impl<T> Clone for ValueFromJson<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
-
 impl<T> Copy for ValueFromJson<T> {}
-
 impl<T> ValueSeed for ValueFromJson<T>
 where
     T: JsonDeserialize,
 {
     type Value = T;
-
     fn parse_value(&self, value: json::Value) -> Result<Self::Value, json::Error> {
         json::value::from_value(value)
     }
-
     fn parse_parser(&self, parser: &mut json::Parser<'_>) -> Result<Self::Value, json::Error> {
         T::json_deserialize(parser)
     }
 }
-
 /// Deserialize `Storage<K, V>` using custom key/value seeds.
 #[derive(Debug, Clone)]
 pub struct StorageSeeded<KS, VS> {
@@ -333,7 +284,6 @@ pub struct StorageSeeded<KS, VS> {
     /// Seed used to parse object values.
     pub vseed: VS,
 }
-
 impl<KS, VS> StorageSeeded<KS, VS>
 where
     KS: KeySeed,
@@ -349,7 +299,6 @@ where
         let mut map = json::MapVisitor::new(parser)?;
         let mut revert: Option<BTreeMap<KS::Key, Option<VS::Value>>> = None;
         let mut blocks: Option<BptreeMap<KS::Key, VS::Value>> = None;
-
         while let Some(key) = map.next_key()? {
             match key.as_str() {
                 "revert" => {
@@ -370,16 +319,13 @@ where
             }
         }
         map.finish()?;
-
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
-
         Ok(Storage {
             revert: EbrCell::new(revert),
             blocks,
         })
     }
-
     fn parse_revert(
         &self,
         parser: &mut json::Parser<'_>,
@@ -404,7 +350,6 @@ where
         map.finish()?;
         Ok(out)
     }
-
     fn parse_blocks(
         &self,
         parser: &mut json::Parser<'_>,
@@ -423,14 +368,12 @@ where
         Ok(BptreeMap::from_iter(entries))
     }
 }
-
 /// Deserialize `Cell<V>` using a custom seed.
 #[derive(Debug, Clone)]
 pub struct CellSeeded<S> {
     /// Seed used to parse the inner value.
     pub seed: S,
 }
-
 impl<S> CellSeeded<S>
 where
     S: ValueSeed,
@@ -444,7 +387,6 @@ where
         let mut map = json::MapVisitor::new(parser)?;
         let mut revert: Option<Option<S::Value>> = None;
         let mut blocks: Option<S::Value> = None;
-
         while let Some(key) = map.next_key()? {
             match key.as_str() {
                 "revert" => {
@@ -473,17 +415,14 @@ where
             }
         }
         map.finish()?;
-
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
-
         Ok(Cell {
             revert: EbrCell::new(revert),
             blocks: EbrCell::new(blocks),
         })
     }
 }
-
 impl<K, V> JsonSerialize for Storage<K, V>
 where
     K: JsonKeyCodec + Key,
@@ -492,7 +431,6 @@ where
     fn json_serialize(&self, out: &mut String) {
         let revert = self.revert.read();
         let blocks = self.blocks.read();
-
         out.push('{');
         out.push_str("\"revert\":");
         write_revert(revert.deref(), out);
@@ -502,7 +440,6 @@ where
         out.push('}');
     }
 }
-
 impl<K, V> JsonSerialize for StorageBlock<'_, K, V>
 where
     K: JsonKeyCodec + Key,
@@ -531,7 +468,6 @@ where
         out.push('}');
     }
 }
-
 impl<V> JsonSerialize for Cell<V>
 where
     V: JsonSerialize + Value,
@@ -539,7 +475,6 @@ where
     fn json_serialize(&self, out: &mut String) {
         let revert = self.revert.read();
         let blocks = self.blocks.read();
-
         out.push('{');
         out.push_str("\"revert\":");
         JsonSerialize::json_serialize(revert.deref(), out);
@@ -549,7 +484,6 @@ where
         out.push('}');
     }
 }
-
 impl<V> JsonSerialize for CellBlock<'_, V>
 where
     V: JsonSerialize + Value,
@@ -564,7 +498,6 @@ where
         out.push('}');
     }
 }
-
 impl<K, V> JsonDeserialize for Storage<K, V>
 where
     K: JsonKeyCodec + Key + Ord,
@@ -578,7 +511,6 @@ where
         .deserialize(parser)
     }
 }
-
 impl<V> JsonDeserialize for Cell<V>
 where
     V: JsonSerialize + JsonDeserialize + Value,
@@ -591,7 +523,6 @@ where
         .deserialize(parser)
     }
 }
-
 fn write_revert<K, V>(map: &BTreeMap<K, Option<V>>, out: &mut String)
 where
     K: JsonKeyCodec,
@@ -612,7 +543,6 @@ where
     }
     out.push('}');
 }
-
 fn write_blocks<K, V>(blocks: &BptreeMapReadTxn<'_, K, V>, out: &mut String)
 where
     K: JsonKeyCodec + Clone + Ord + fmt::Debug + Send + Sync + 'static,
@@ -633,14 +563,11 @@ where
     }
     out.push('}');
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::json::{from_json, to_json};
-
     use super::*;
     use crate::storage::StorageReadOnly;
-
+    use norito::json::{from_json, to_json};
     fn sample_storage() -> Storage<String, i32> {
         let storage = Storage::default();
         {
@@ -651,24 +578,19 @@ mod tests {
         }
         storage
     }
-
     #[derive(Clone, Copy)]
     struct StreamingOnlyValueSeed;
-
     impl ValueSeed for StreamingOnlyValueSeed {
         type Value = i32;
-
         fn parse_value(&self, _value: json::Value) -> Result<Self::Value, json::Error> {
             Err(json::Error::Message(
                 "streaming-only test seed received an owned JSON value".to_owned(),
             ))
         }
-
         fn parse_parser(&self, parser: &mut json::Parser<'_>) -> Result<Self::Value, json::Error> {
             i32::json_deserialize(parser)
         }
     }
-
     #[test]
     fn storage_and_cell_seeded_decode_stream_values_directly() {
         let mut parser =
@@ -682,7 +604,6 @@ mod tests {
         parser.skip_ws();
         assert!(parser.eof());
         assert_eq!(storage.view().get("live"), Some(&7));
-
         let mut parser = json::Parser::new(r#"{"revert":1,"blocks":2}"#);
         let cell = CellSeeded {
             seed: StreamingOnlyValueSeed,
@@ -693,7 +614,6 @@ mod tests {
         assert!(parser.eof());
         assert_eq!(*cell.view(), 2);
     }
-
     #[test]
     fn storage_roundtrip() {
         let storage = sample_storage();
@@ -707,7 +627,6 @@ mod tests {
             assert_eq!(decoded_v, v);
         }
     }
-
     #[test]
     fn cell_roundtrip() {
         let cell = Cell::new(42i32);
@@ -715,7 +634,6 @@ mod tests {
         let decoded: Cell<i32> = from_json(&json).expect("deserialize");
         assert_eq!(*decoded.view(), 42);
     }
-
     #[test]
     fn storage_roundtrip_array_key() {
         let storage: Storage<[u8; 4], i32> = Storage::new();
@@ -728,7 +646,6 @@ mod tests {
         let decoded: Storage<[u8; 4], i32> = from_json(&json).expect("deserialize hex key");
         assert_eq!(decoded.view().get(&[0xAA, 0xBB, 0xCC, 0xDD]), Some(&7));
     }
-
     #[test]
     fn storage_roundtrip_tuple_key() {
         let storage: Storage<(String, String), i32> = Storage::new();
@@ -747,7 +664,6 @@ mod tests {
             Some(&11)
         );
     }
-
     #[test]
     fn storage_roundtrip_inrou_replica_tuple_key() {
         let storage: Storage<(String, String, u16), i32> = Storage::new();

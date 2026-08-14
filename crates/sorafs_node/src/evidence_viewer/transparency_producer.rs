@@ -6,30 +6,24 @@
 //! semantics. It has no scheduler, credential loader, network client, private
 //! key, or filesystem fallback. Deployments own those concerns and inject the
 //! publisher at runtime.
-
-use std::{fmt, sync::Arc};
-
-use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-
 use super::{
     EvidenceViewerRuntimeProviderQualificationErrorV1,
     EvidenceViewerRuntimeProviderQualificationV1, EvidenceViewerRuntimeProviderV1,
     EvidenceViewerSignedCheckpointAnchorV1, EvidenceViewerSignedCompactionArchiveHeadV1,
     EvidenceViewerTransparencyProjectionV1, QualifiedEvidenceViewerProviderV1, is_zero_digest,
 };
-
+use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use std::{fmt, sync::Arc};
+use thiserror::Error;
 /// Canonical public transparency-head schema version.
 pub const EVIDENCE_VIEWER_TRANSPARENCY_HEAD_VERSION_V1: u16 = 1;
-
 const TRANSPARENCY_OPERATION_DOMAIN_V1: &[u8] =
     b"sorafs.evidence-viewer.transparency-publication-operation.v1";
 const TRANSPARENCY_SIGNATURE_DOMAIN_V1: &[u8] =
     b"sorafs.evidence-viewer.transparency-publication-signature.v1";
 const TRANSPARENCY_HEAD_DOMAIN_V1: &[u8] =
     b"sorafs.evidence-viewer.transparency-publication-head.v1";
-
 /// Credential-free production pins for one external transparency producer.
 ///
 /// Every field is a stable handle, public key, revision, bound, or public
@@ -62,7 +56,6 @@ pub struct EvidenceViewerTransparencyProducerConfigV1 {
     /// Ed25519 key authenticating the externally published public head.
     pub publisher_public_key: [u8; 32],
 }
-
 impl EvidenceViewerTransparencyProducerConfigV1 {
     fn validate(&self) -> Result<(), EvidenceViewerTransparencyProducerConstructionErrorV1> {
         for handle in [
@@ -89,7 +82,6 @@ impl EvidenceViewerTransparencyProducerConfigV1 {
         Ok(())
     }
 }
-
 /// Exact payload-free body installed under one monotonic public head.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerTransparencyHeadBodyV1 {
@@ -124,7 +116,6 @@ pub struct EvidenceViewerTransparencyHeadBodyV1 {
     /// Ed25519 public key authenticating this public head.
     pub publisher_public_key: [u8; 32],
 }
-
 /// Ed25519-authenticated public transparency head.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedTransparencyHeadV1 {
@@ -135,7 +126,6 @@ pub struct EvidenceViewerSignedTransparencyHeadV1 {
     /// Domain-separated digest of the canonical body and signature.
     pub head_digest: [u8; 32],
 }
-
 impl EvidenceViewerSignedTransparencyHeadV1 {
     /// Verify structure, source signatures, configured public identities, the
     /// deterministic operation id, publisher signature, and head digest.
@@ -201,7 +191,6 @@ impl EvidenceViewerSignedTransparencyHeadV1 {
         Ok(())
     }
 }
-
 /// Fixed payload-free failures returned by the deployment-owned publisher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerTransparencyPublisherExternalErrorV1 {
@@ -218,7 +207,6 @@ pub enum EvidenceViewerTransparencyPublisherExternalErrorV1 {
     #[error("evidence-viewer transparency publication outcome ambiguous")]
     Ambiguous,
 }
-
 /// Deployment-owned monotonic public-head authority.
 ///
 /// `compare_and_publish` must durably install `body` only when the currently
@@ -229,7 +217,6 @@ pub enum EvidenceViewerTransparencyPublisherExternalErrorV1 {
 pub trait EvidenceViewerTransparencyPublisherV1: EvidenceViewerRuntimeProviderV1 {
     /// Return the governed Ed25519 public verification key.
     fn public_key(&self) -> [u8; 32];
-
     /// Load the exact authoritative public head.
     ///
     /// # Errors
@@ -241,7 +228,6 @@ pub trait EvidenceViewerTransparencyPublisherV1: EvidenceViewerRuntimeProviderV1
         Option<EvidenceViewerSignedTransparencyHeadV1>,
         EvidenceViewerTransparencyPublisherExternalErrorV1,
     >;
-
     /// Atomically install one exact public-head body.
     ///
     /// The implementation signs the canonical body and persists the complete
@@ -255,7 +241,6 @@ pub trait EvidenceViewerTransparencyPublisherV1: EvidenceViewerRuntimeProviderV1
         body: &EvidenceViewerTransparencyHeadBodyV1,
     ) -> Result<(), EvidenceViewerTransparencyPublisherExternalErrorV1>;
 }
-
 /// Startup failures for optional producer construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerTransparencyProducerConstructionErrorV1 {
@@ -275,7 +260,6 @@ pub enum EvidenceViewerTransparencyProducerConstructionErrorV1 {
     #[error("evidence-viewer transparency publisher public key does not match configuration")]
     PublisherPublicKeyMismatch,
 }
-
 /// Runtime failures for publication and reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerTransparencyProducerErrorV1 {
@@ -313,7 +297,6 @@ pub enum EvidenceViewerTransparencyProducerErrorV1 {
     #[error("evidence-viewer transparency canonical encoding failed")]
     CanonicalEncoding,
 }
-
 /// Outcome of one exact source-projection publication attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvidenceViewerTransparencyProducerOutcomeV1 {
@@ -322,12 +305,10 @@ pub enum EvidenceViewerTransparencyProducerOutcomeV1 {
     /// The authoritative public head already acknowledges the same exact state.
     AlreadyCurrent(EvidenceViewerSignedTransparencyHeadV1),
 }
-
 struct QualifiedEvidenceViewerTransparencyPublisherV1 {
     inner: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerTransparencyPublisherV1>,
     public_key: [u8; 32],
 }
-
 impl QualifiedEvidenceViewerTransparencyPublisherV1 {
     fn try_new(
         config: &EvidenceViewerTransparencyProducerConfigV1,
@@ -351,7 +332,6 @@ impl QualifiedEvidenceViewerTransparencyPublisherV1 {
             public_key: config.publisher_public_key,
         })
     }
-
     fn read_qualified_public_key(
         inner: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerTransparencyPublisherV1>,
     ) -> Result<[u8; 32], EvidenceViewerRuntimeProviderQualificationErrorV1> {
@@ -360,7 +340,6 @@ impl QualifiedEvidenceViewerTransparencyPublisherV1 {
         inner.revalidate()?;
         Ok(key)
     }
-
     fn revalidate_identity(&self) -> Result<(), EvidenceViewerTransparencyProducerErrorV1> {
         let key = Self::read_qualified_public_key(&self.inner)
             .map_err(|_| EvidenceViewerTransparencyProducerErrorV1::PublisherUnavailable)?;
@@ -369,7 +348,6 @@ impl QualifiedEvidenceViewerTransparencyPublisherV1 {
         }
         Ok(())
     }
-
     fn load_head(
         &self,
     ) -> Result<
@@ -381,7 +359,6 @@ impl QualifiedEvidenceViewerTransparencyPublisherV1 {
         self.revalidate_identity()?;
         result.map_err(map_publisher_external_error)
     }
-
     fn compare_and_publish(
         &self,
         body: &EvidenceViewerTransparencyHeadBodyV1,
@@ -394,7 +371,6 @@ impl QualifiedEvidenceViewerTransparencyPublisherV1 {
         result
     }
 }
-
 impl fmt::Debug for QualifiedEvidenceViewerTransparencyPublisherV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -406,7 +382,6 @@ impl fmt::Debug for QualifiedEvidenceViewerTransparencyPublisherV1 {
             .finish()
     }
 }
-
 /// Stateless producer coordinating one qualified authoritative publisher.
 ///
 /// Durable cursor state lives exclusively in the external signed public head,
@@ -416,7 +391,6 @@ pub struct EvidenceViewerTransparencyProducerV1 {
     config: EvidenceViewerTransparencyProducerConfigV1,
     publisher: QualifiedEvidenceViewerTransparencyPublisherV1,
 }
-
 impl EvidenceViewerTransparencyProducerV1 {
     /// Construct an enabled producer from public configuration and an injected
     /// deployment-owned publisher.
@@ -434,7 +408,6 @@ impl EvidenceViewerTransparencyProducerV1 {
             QualifiedEvidenceViewerTransparencyPublisherV1::try_new(&config, publisher)?;
         Ok(Self { config, publisher })
     }
-
     /// Resolve an optional producer without accepting partial or unrequested
     /// runtime injection.
     ///
@@ -457,7 +430,6 @@ impl EvidenceViewerTransparencyProducerV1 {
             (Some(config), Some(publisher)) => Self::try_new(config, publisher).map(Some),
         }
     }
-
     /// Load and verify the exact authoritative public head.
     ///
     /// # Errors
@@ -476,7 +448,6 @@ impl EvidenceViewerTransparencyProducerV1 {
         }
         Ok(current)
     }
-
     /// Verify and durably publish one exact bounded source projection.
     ///
     /// No source state other than the signed projection is accepted. Success is
@@ -503,7 +474,6 @@ impl EvidenceViewerTransparencyProducerV1 {
             .map_err(|_| EvidenceViewerTransparencyProducerErrorV1::InvalidProjection)?;
         verify_checkpoint_store_binding(&self.config, &projection.checkpoint_anchor)?;
         verify_archive_binding(&self.config, projection.compaction_archive_head.as_ref())?;
-
         let current = self.reconcile()?;
         if let Some(current) = current.as_ref() {
             if public_source_is_current(current, projection) {
@@ -515,7 +485,6 @@ impl EvidenceViewerTransparencyProducerV1 {
         } else if projection.predecessor.is_some() {
             return Err(EvidenceViewerTransparencyProducerErrorV1::SourceLineageConflict);
         }
-
         let mut body = EvidenceViewerTransparencyHeadBodyV1 {
             version: EVIDENCE_VIEWER_TRANSPARENCY_HEAD_VERSION_V1,
             generation: match current.as_ref() {
@@ -541,7 +510,6 @@ impl EvidenceViewerTransparencyProducerV1 {
             publisher_public_key: self.config.publisher_public_key,
         };
         body.operation_id = transparency_operation_id(&body)?;
-
         let publish_result = self.publisher.compare_and_publish(&body);
         let publish_was_rejected = matches!(
             publish_result,
@@ -573,7 +541,6 @@ impl EvidenceViewerTransparencyProducerV1 {
         ))
     }
 }
-
 impl fmt::Debug for EvidenceViewerTransparencyProducerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -583,7 +550,6 @@ impl fmt::Debug for EvidenceViewerTransparencyProducerV1 {
             .finish()
     }
 }
-
 fn validate_source_successor(
     current: &EvidenceViewerSignedTransparencyHeadV1,
     projection: &EvidenceViewerTransparencyProjectionV1,
@@ -607,7 +573,6 @@ fn validate_source_successor(
         projection.compaction_archive_head.as_ref(),
     )
 }
-
 fn validate_archive_successor(
     previous: Option<&EvidenceViewerSignedCompactionArchiveHeadV1>,
     candidate: Option<&EvidenceViewerSignedCompactionArchiveHeadV1>,
@@ -629,7 +594,6 @@ fn validate_archive_successor(
         }
     }
 }
-
 fn public_source_is_current(
     current: &EvidenceViewerSignedTransparencyHeadV1,
     projection: &EvidenceViewerTransparencyProjectionV1,
@@ -642,7 +606,6 @@ fn public_source_is_current(
         && current.body.receipt_cursor == projection.next_cursor
         && current.body.source_projection_digest == projection.projection_digest
 }
-
 fn verify_checkpoint_store_binding(
     config: &EvidenceViewerTransparencyProducerConfigV1,
     anchor: &EvidenceViewerSignedCheckpointAnchorV1,
@@ -655,7 +618,6 @@ fn verify_checkpoint_store_binding(
     }
     Ok(())
 }
-
 fn verify_archive_binding(
     config: &EvidenceViewerTransparencyProducerConfigV1,
     head: Option<&EvidenceViewerSignedCompactionArchiveHeadV1>,
@@ -680,7 +642,6 @@ fn verify_archive_binding(
     }
     Ok(())
 }
-
 fn cursor_is_bounded_by_checkpoint(
     cursor: Option<super::EvidenceViewerReceiptCursorV1>,
     anchor: &EvidenceViewerSignedCheckpointAnchorV1,
@@ -696,7 +657,6 @@ fn cursor_is_bounded_by_checkpoint(
         (None, Some(_)) | (Some(_), None) => false,
     }
 }
-
 fn source_cursor_is_consistent(body: &EvidenceViewerTransparencyHeadBodyV1) -> bool {
     let continuation_is_valid = match (
         body.source_has_more,
@@ -718,7 +678,6 @@ fn source_cursor_is_consistent(body: &EvidenceViewerTransparencyHeadBodyV1) -> b
     };
     continuation_is_valid && predecessor_is_valid
 }
-
 fn transparency_operation_id(
     body: &EvidenceViewerTransparencyHeadBodyV1,
 ) -> Result<[u8; 32], EvidenceViewerTransparencyProducerErrorV1> {
@@ -731,7 +690,6 @@ fn transparency_operation_id(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn transparency_signature_message(
     body: &EvidenceViewerTransparencyHeadBodyV1,
 ) -> Result<Vec<u8>, EvidenceViewerTransparencyProducerErrorV1> {
@@ -742,7 +700,6 @@ fn transparency_signature_message(
     message.extend_from_slice(&bytes);
     Ok(message)
 }
-
 fn transparency_head_digest(
     body: &EvidenceViewerTransparencyHeadBodyV1,
     signature: [u8; 64],
@@ -755,11 +712,9 @@ fn transparency_head_digest(
     hasher.update(&signature);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn is_ed25519_public_key(bytes: [u8; 32]) -> bool {
     !is_zero_digest(bytes) && PublicKey::from_bytes(Algorithm::Ed25519, &bytes).is_ok()
 }
-
 fn map_publisher_external_error(
     error: EvidenceViewerTransparencyPublisherExternalErrorV1,
 ) -> EvidenceViewerTransparencyProducerErrorV1 {
@@ -778,16 +733,8 @@ fn map_publisher_external_error(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    use ed25519_dalek::{Signer as _, SigningKey};
-
     use super::super::{
         EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1, EVIDENCE_VIEWER_COMPACTION_ARCHIVE_VERSION_V1,
         EVIDENCE_VIEWER_RECEIPT_VERSION_V1, EVIDENCE_VIEWER_TRANSPARENCY_PROJECTION_VERSION_V1,
@@ -799,7 +746,11 @@ mod tests {
         transparency_projection_digest,
     };
     use super::*;
-
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
     const RECEIPT_SIGNER_HANDLE: &str = "pkcs11:prod-evidence-receipts";
     const CHECKPOINT_STORE_HANDLE: &str = "sealed:prod-evidence-checkpoints";
     const ARCHIVE_HANDLE: &str = "object-lock:prod-evidence-archive";
@@ -814,13 +765,11 @@ mod tests {
     const RECEIPT_SIGNING_SEED: [u8; 32] = [0x71; 32];
     const ARCHIVE_SIGNING_SEED: [u8; 32] = [0x72; 32];
     const PUBLISHER_SIGNING_SEED: [u8; 32] = [0x73; 32];
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum PublishMode {
         Definite,
         CommitThenAmbiguous,
     }
-
     struct FakePublisher {
         handle: String,
         qualification: EvidenceViewerRuntimeProviderQualificationV1,
@@ -830,7 +779,6 @@ mod tests {
         mode: Mutex<PublishMode>,
         head: Mutex<Option<EvidenceViewerSignedTransparencyHeadV1>>,
     }
-
     impl fmt::Debug for FakePublisher {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -841,7 +789,6 @@ mod tests {
                 .finish()
         }
     }
-
     impl FakePublisher {
         fn new(handle: &str) -> Self {
             Self {
@@ -854,19 +801,15 @@ mod tests {
                 head: Mutex::new(None),
             }
         }
-
         fn set_stale(&self, stale: bool) {
             self.stale.store(stale, Ordering::SeqCst);
         }
-
         fn set_substituted_key(&self, substituted: bool) {
             self.substituted_key.store(substituted, Ordering::SeqCst);
         }
-
         fn set_mode(&self, mode: PublishMode) {
             *self.mode.lock().expect("publisher mode lock") = mode;
         }
-
         fn sign_head(
             &self,
             body: EvidenceViewerTransparencyHeadBodyV1,
@@ -884,12 +827,10 @@ mod tests {
             }
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for FakePublisher {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -903,7 +844,6 @@ mod tests {
             }
         }
     }
-
     impl EvidenceViewerTransparencyPublisherV1 for FakePublisher {
         fn public_key(&self) -> [u8; 32] {
             if self.substituted_key.load(Ordering::SeqCst) {
@@ -914,7 +854,6 @@ mod tests {
                 self.signing_key.verifying_key().to_bytes()
             }
         }
-
         fn load_head(
             &self,
         ) -> Result<
@@ -926,7 +865,6 @@ mod tests {
                 .map(|head| head.clone())
                 .map_err(|_| EvidenceViewerTransparencyPublisherExternalErrorV1::Unavailable)
         }
-
         fn compare_and_publish(
             &self,
             body: &EvidenceViewerTransparencyHeadBodyV1,
@@ -953,15 +891,12 @@ mod tests {
             Ok(())
         }
     }
-
     fn receipt_signing_key() -> SigningKey {
         SigningKey::from_bytes(&RECEIPT_SIGNING_SEED)
     }
-
     fn archive_signing_key() -> SigningKey {
         SigningKey::from_bytes(&ARCHIVE_SIGNING_SEED)
     }
-
     fn config() -> EvidenceViewerTransparencyProducerConfigV1 {
         EvidenceViewerTransparencyProducerConfigV1 {
             receipt_signer_handle: RECEIPT_SIGNER_HANDLE.to_owned(),
@@ -982,7 +917,6 @@ mod tests {
                 .to_bytes(),
         }
     }
-
     fn signed_anchor(
         checkpoint_generation: u64,
         predecessor_checkpoint_digest: Option<[u8; 32]>,
@@ -1016,7 +950,6 @@ mod tests {
             .to_bytes();
         anchor
     }
-
     fn signed_archive_head(
         source_anchor: EvidenceViewerSignedCheckpointAnchorV1,
     ) -> EvidenceViewerSignedCompactionArchiveHeadV1 {
@@ -1062,7 +995,6 @@ mod tests {
         .expect("signed archive head");
         head
     }
-
     fn bind_archive_head(
         mut anchor: EvidenceViewerSignedCheckpointAnchorV1,
         head: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -1073,7 +1005,6 @@ mod tests {
             .to_bytes();
         anchor
     }
-
     fn signed_receipt() -> EvidenceViewerSignedReceiptV1 {
         let signing_key = receipt_signing_key();
         let body = EvidenceViewerReceiptBodyV1 {
@@ -1105,7 +1036,6 @@ mod tests {
                 .to_bytes(),
         }
     }
-
     fn projection(
         anchor: EvidenceViewerSignedCheckpointAnchorV1,
         predecessor: Option<super::super::EvidenceViewerReceiptCursorV1>,
@@ -1113,7 +1043,6 @@ mod tests {
     ) -> EvidenceViewerTransparencyProjectionV1 {
         projection_with_archive(anchor, None, predecessor, receipts)
     }
-
     fn projection_with_archive(
         anchor: EvidenceViewerSignedCheckpointAnchorV1,
         compaction_archive_head: Option<EvidenceViewerSignedCompactionArchiveHeadV1>,
@@ -1150,7 +1079,6 @@ mod tests {
             projection_digest,
         }
     }
-
     #[test]
     fn optional_construction_rejects_partial_unrequested_and_test_marked_bindings() {
         assert!(
@@ -1168,7 +1096,6 @@ mod tests {
             EvidenceViewerTransparencyProducerV1::try_from_optional(None, Some(unrequested)),
             Err(EvidenceViewerTransparencyProducerConstructionErrorV1::UnexpectedPublisher)
         ));
-
         let mut test_marked = config();
         test_marked.publisher_handle = "hsm:test-evidence-transparency".to_owned();
         let test_provider: Arc<dyn EvidenceViewerTransparencyPublisherV1> =
@@ -1181,7 +1108,6 @@ mod tests {
                 )
             )
         ));
-
         let substituted: Arc<dyn EvidenceViewerTransparencyPublisherV1> =
             Arc::new(FakePublisher::new("hsm:prod-substituted-transparency"));
         assert!(matches!(
@@ -1193,7 +1119,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn publishes_exact_cursor_and_reconciles_ambiguous_commit() {
         let publisher = Arc::new(FakePublisher::new(PUBLISHER_HANDLE));
@@ -1218,7 +1143,6 @@ mod tests {
             EvidenceViewerTransparencyProducerOutcomeV1::AlreadyCurrent(ref head)
                 if head == &first_head
         ));
-
         let receipt = signed_receipt();
         let cursor = super::super::EvidenceViewerReceiptCursorV1 {
             sequence: receipt.body.sequence,
@@ -1257,7 +1181,6 @@ mod tests {
                 if head == &second_head
         ));
     }
-
     #[test]
     fn publishes_and_pins_signed_compaction_archive_head() {
         let source_anchor = signed_anchor(1, None, [0xA1; 32], None);
@@ -1268,7 +1191,6 @@ mod tests {
         );
         let projection =
             projection_with_archive(current_anchor, Some(archive_head.clone()), None, Vec::new());
-
         let publisher = Arc::new(FakePublisher::new(PUBLISHER_HANDLE));
         let producer = EvidenceViewerTransparencyProducerV1::try_new(config(), publisher)
             .expect("qualified producer");
@@ -1280,7 +1202,6 @@ mod tests {
             EvidenceViewerTransparencyProducerOutcomeV1::Published(ref head)
                 if head.body.source_compaction_archive_head.as_ref() == Some(&archive_head)
         ));
-
         let mut substituted_config = config();
         substituted_config.compaction_archive_id = [0xFF; 32];
         let substituted = EvidenceViewerTransparencyProducerV1::try_new(
@@ -1295,7 +1216,6 @@ mod tests {
             EvidenceViewerTransparencyProducerErrorV1::ArchiveBindingMismatch
         );
     }
-
     #[test]
     fn source_forks_and_live_provider_drift_fail_closed() {
         let publisher = Arc::new(FakePublisher::new(PUBLISHER_HANDLE));
@@ -1305,7 +1225,6 @@ mod tests {
         producer
             .publish_projection(&first)
             .expect("publish first public head");
-
         let same_generation_substitution =
             projection(signed_anchor(1, None, [0x92; 32], None), None, Vec::new());
         assert_eq!(
@@ -1325,7 +1244,6 @@ mod tests {
                 .expect_err("direct successor with wrong predecessor must fail"),
             EvidenceViewerTransparencyProducerErrorV1::SourceLineageConflict
         );
-
         publisher.set_stale(true);
         assert_eq!(
             producer

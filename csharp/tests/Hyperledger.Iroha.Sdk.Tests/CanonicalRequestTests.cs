@@ -33,6 +33,38 @@ public sealed class CanonicalRequestTests
         Assert.Equal("note=hello+world&slash=%2F", canonical);
     }
 
+    [Fact]
+    public void CanonicalQueryStringUsesApplicationFormUrlEncodedSafeSet()
+    {
+        var canonical = CanonicalRequest.BuildCanonicalQueryString("symbols=*-._~");
+
+        Assert.Equal("symbols=*-._%7E", canonical);
+    }
+
+    [Fact]
+    public void CanonicalQueryStringEnforcesV1PairLimit()
+    {
+        var exact = string.Join("&", Enumerable.Repeat("a=b", CanonicalRequest.MaxQueryPairsV1));
+        var tooMany = $"{exact}&a=b";
+
+        Assert.Equal(exact, CanonicalRequest.BuildCanonicalQueryString(exact));
+        AssertArgumentException(
+            "rawQuery",
+            () => CanonicalRequest.BuildCanonicalQueryString(tooMany));
+    }
+
+    [Fact]
+    public void CanonicalQueryStringEnforcesV1RawUtf8ByteLimit()
+    {
+        var exact = "q=" + new string('\u00E9', (CanonicalRequest.MaxRawQueryBytesV1 - 2) / 2);
+
+        Assert.Equal(CanonicalRequest.MaxRawQueryBytesV1, Encoding.UTF8.GetByteCount(exact));
+        Assert.StartsWith("q=", CanonicalRequest.BuildCanonicalQueryString(exact), StringComparison.Ordinal);
+        AssertArgumentException(
+            "rawQuery",
+            () => CanonicalRequest.BuildCanonicalQueryString(exact + "a"));
+    }
+
     [Theory]
     [InlineData("note=%")]
     [InlineData("note=%2")]
@@ -74,6 +106,63 @@ public sealed class CanonicalRequestTests
     }
 
     [Fact]
+    public void BuildMessageEnforcesV1MethodAndPathByteLimits()
+    {
+        var exactMethod = new string('A', CanonicalRequest.MaxMethodBytesV1);
+        var exactPath = "/" + new string('a', CanonicalRequest.MaxPathBytesV1 - 1);
+
+        var message = Encoding.UTF8.GetString(CanonicalRequest.BuildMessage(exactMethod, exactPath));
+        Assert.StartsWith($"{exactMethod}\n{exactPath}\n", message, StringComparison.Ordinal);
+        AssertArgumentException(
+            "method",
+            () => CanonicalRequest.BuildMessage(exactMethod + "A", "/v1/query"));
+        AssertArgumentException(
+            "path",
+            () => CanonicalRequest.BuildMessage("GET", exactPath + "a"));
+    }
+
+    [Fact]
+    public void CanonicalAccountLiteralEnforcesV1Utf8ByteLimit()
+    {
+        var exact = new string('\uFF72', CanonicalRequest.MaxAccountLiteralBytesV1 / 3);
+        Assert.Equal(CanonicalRequest.MaxAccountLiteralBytesV1, Encoding.UTF8.GetByteCount(exact));
+        var malformedAtLimit = Assert.Throws<ArgumentException>(
+            () => CanonicalRequest.RequireCanonicalAccountId(exact, "accountId"));
+
+        Assert.Contains("canonical I105", malformedAtLimit.Message);
+        var tooLarge = Assert.Throws<ArgumentException>(
+            () => CanonicalRequest.RequireCanonicalAccountId(exact + "a", "accountId"));
+        Assert.Equal("accountId", tooLarge.ParamName);
+        Assert.Contains(CanonicalRequest.MaxAccountLiteralBytesV1.ToString(), tooLarge.Message);
+    }
+
+    [Fact]
+    public void BuildHeadersForExactPathEnforcesV1PathByteLimit()
+    {
+        var exactPath = "/" + new string('a', CanonicalRequest.MaxPathBytesV1 - 1);
+
+        var headers = CanonicalRequest.BuildHeadersForExactPath(
+            FixtureNetworkId,
+            FixtureAccountId,
+            FixturePrivateKeySeed,
+            "GET",
+            exactPath,
+            timestampMs: 1735000000123,
+            nonce: "abcdef0123456789abcdef0123456789");
+        Assert.Equal(FixtureAccountId, headers.AccountId);
+        AssertArgumentException(
+            "path",
+            () => CanonicalRequest.BuildHeadersForExactPath(
+                FixtureNetworkId,
+                FixtureAccountId,
+                FixturePrivateKeySeed,
+                "GET",
+                exactPath + "a",
+                timestampMs: 1735000000123,
+                nonce: "abcdef0123456789abcdef0123456789"));
+    }
+
+    [Fact]
     public void BuildHeadersMatchesDeterministicNodeVector()
     {
         var body = Encoding.UTF8.GetBytes("{\"selector\":\"assets\"}");
@@ -90,6 +179,11 @@ public sealed class CanonicalRequestTests
 
         Assert.Equal(FixtureSignatureBase64, headers.SignatureBase64);
         Assert.Equal(FixtureAccountId, headers.AccountId);
+        var accountHeader = headers.ToDictionary()["X-Iroha-Account"];
+        Assert.Equal(
+            AccountAddress.Parse(FixtureAccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
+            accountHeader);
+        Assert.All(accountHeader, static character => Assert.True(character <= '\u007f'));
         Assert.Equal(1735000000123, headers.TimestampMs);
         Assert.Equal("abcdef0123456789abcdef0123456789", headers.Nonce);
     }
@@ -280,6 +374,10 @@ public sealed class CanonicalRequestTests
 
         Assert.Equal(1, headers.TimestampMs);
         Assert.Contains("\n1\n", Encoding.UTF8.GetString(message), StringComparison.Ordinal);
+        Assert.Equal(FixtureAccountId, manualHeaders.AccountId);
+        Assert.Equal(
+            AccountAddress.Parse(FixtureAccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
+            manualHeaders.ToDictionary()["X-Iroha-Account"]);
         Assert.Equal("1", manualHeaders.ToDictionary()["X-Iroha-Timestamp-Ms"]);
     }
 

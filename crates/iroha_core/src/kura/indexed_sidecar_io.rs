@@ -1,5 +1,4 @@
 // Pipeline recovery metadata and strict indexed-sidecar persistence primitives.
-
 impl Kura {
     /// Enqueue pipeline recovery metadata for asynchronous persistence.
     ///
@@ -35,7 +34,6 @@ impl Kura {
         }
         PipelineSidecarEnqueueResult::Enqueued { queue_depth }
     }
-
     fn flush_pipeline_sidecars(&self) -> usize {
         let sidecars = {
             let mut queue = self.pipeline_sidecar_queue.lock();
@@ -50,7 +48,6 @@ impl Kura {
         }
         count
     }
-
     /// Enqueue a FASTPQ proof attachment for asynchronous persistence in the block sidecar.
     ///
     /// An active or interrupted canonical prune rejects immediately without waiting for disk
@@ -88,7 +85,6 @@ impl Kura {
                 max: max_bytes,
             };
         }
-
         let cap = self
             .fastpq_proof_sidecar_queue_cap
             .load(Ordering::Relaxed)
@@ -117,7 +113,6 @@ impl Kura {
         }
         FastpqProofEnqueueResult::Enqueued { queue_depth }
     }
-
     fn flush_fastpq_proof_snapshots(&self) -> usize {
         let telemetry = FastpqProofSidecarTelemetry;
         let snapshots = {
@@ -141,7 +136,6 @@ impl Kura {
                 groups.push(vec![snapshot]);
             }
         }
-
         let mut written = 0usize;
         let mut retry = VecDeque::new();
         let max_retries = self
@@ -193,7 +187,6 @@ impl Kura {
         telemetry.set_queue_depth(queue_depth);
         written
     }
-
     /// Write per-block pipeline recovery metadata sidecar under the store dir. Best-effort: errors
     /// are logged and ignored.
     pub fn write_pipeline_metadata(&self, sidecar: &PipelineRecoverySidecar) {
@@ -215,7 +208,6 @@ impl Kura {
         }
         self.write_pipeline_metadata_unlocked(sidecar);
     }
-
     fn write_pipeline_metadata_unlocked(&self, sidecar: &PipelineRecoverySidecar) {
         if let Some(mut dir) = self.store_dir() {
             let _guard = self.sidecar_lock.lock();
@@ -264,7 +256,6 @@ impl Kura {
                     false
                 }
             };
-
             if wrote_norito {
                 if json_sidecar_path.exists()
                     && let Err(e) = std::fs::remove_file(&json_sidecar_path)
@@ -296,7 +287,6 @@ impl Kura {
             }
         }
     }
-
     fn write_fastpq_proof_snapshots(
         &self,
         snapshots: &[&FastpqProofSnapshot],
@@ -336,7 +326,7 @@ impl Kura {
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
         let json_sidecar_path = dir.join(format!("block_{height}.json"));
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let Some(mut sidecar) = self.read_indexed_sidecar(
+        let Some(mut sidecar) = self.read_pipeline_sidecar(
             height,
             PIPELINE_SIDECARS_DATA_FILE,
             PIPELINE_SIDECARS_INDEX_FILE,
@@ -445,7 +435,6 @@ impl Kura {
             FastpqProofWriteResult::Retry
         }
     }
-
     /// Write safety-critical per-block roster metadata alongside the block store.
     ///
     /// The prune fence excludes canonical truncation while the payload, index,
@@ -559,7 +548,6 @@ impl Kura {
         }
         wrote_norito
     }
-
     fn truncate_roster_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
         if blocks_dir.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
@@ -582,7 +570,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Decode pipeline recovery metadata without assigning it canonical block authority.
     ///
     /// Callers must validate the returned sidecar against either Kura's canonical block hash or
@@ -597,7 +584,7 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            self.read_indexed_sidecar(
+            self.read_pipeline_sidecar(
                 height,
                 PIPELINE_SIDECARS_DATA_FILE,
                 PIPELINE_SIDECARS_INDEX_FILE,
@@ -615,7 +602,6 @@ impl Kura {
         }
         Some(sidecar)
     }
-
     /// Read per-block pipeline recovery metadata if present. Returns `None` on errors.
     ///
     /// This canonical reader exposes a sidecar only when its block hash agrees with Kura's
@@ -643,7 +629,6 @@ impl Kura {
         }
         Some(sidecar)
     }
-
     /// Read pipeline recovery metadata for an explicitly identified candidate block.
     ///
     /// This is an execution-cache boundary, not a source of canonical block authority. It permits
@@ -669,7 +654,6 @@ impl Kura {
         }
         Some(sidecar)
     }
-
     /// Read persisted FASTPQ proof snapshots for a committed block.
     #[must_use]
     pub fn fastpq_proofs_for_block(&self, height: u64) -> Vec<FastpqProofSnapshot> {
@@ -677,7 +661,6 @@ impl Kura {
             .map(|sidecar| sidecar.fastpq_proofs)
             .unwrap_or_default()
     }
-
     /// Read roster metadata sidecar for `height` if present. Returns `None` on errors or missing
     /// entries. Valid roster metadata is exposed only after reissuing the ordered data, index, and
     /// parent-directory durability barriers. This prevents readable page-cache state left by a
@@ -775,7 +758,6 @@ impl Kura {
             Some(sidecar)
         }
     }
-
     fn bound_progress_index_layout_classified(
         index: &mut std::fs::File,
         index_len: u64,
@@ -783,7 +765,6 @@ impl Kura {
         if index_len < PIPELINE_INDEX_ENTRY_SIZE_U64 {
             return Ok(SidecarIndexLayout::legacy(index_len));
         }
-
         let mut first = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
         index
             .seek(SeekFrom::Start(0))
@@ -800,7 +781,6 @@ impl Kura {
         if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
             return Err(BoundProgressRecoveryFailure::InvalidData);
         }
-
         let mut metadata = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
         index
             .read_exact(&mut metadata)
@@ -812,7 +792,6 @@ impl Kura {
         SidecarIndexLayout::based(metadata.offset, index_len)
             .map_err(|_| BoundProgressRecoveryFailure::InvalidData)
     }
-
     fn bound_sidecar_index_snapshot(
         index: &mut std::fs::File,
         index_path: &Path,
@@ -822,7 +801,6 @@ impl Kura {
     ) -> Option<BoundSidecarIndexSnapshot> {
         Self::bound_sidecar_index_snapshot_classified(index, index_path, data_len, kind, label).ok()
     }
-
     fn bound_sidecar_index_snapshot_classified(
         index: &mut std::fs::File,
         index_path: &Path,
@@ -943,7 +921,6 @@ impl Kura {
             indexed_end,
         })
     }
-
     fn bound_progress_index_is_incomplete_initial_header(
         index: &mut std::fs::File,
         index_len: u64,
@@ -951,7 +928,6 @@ impl Kura {
         Self::bound_progress_index_is_incomplete_initial_header_classified(index, index_len)
             .unwrap_or(false)
     }
-
     fn bound_progress_index_is_incomplete_initial_header_classified(
         index: &mut std::fs::File,
         index_len: u64,
@@ -969,7 +945,6 @@ impl Kura {
         let marker = SidecarIndexEntry::from_bytes(first);
         Ok(marker.offset == u64::MAX && marker.len == u64::MAX)
     }
-
     fn decode_bound_progress_append_intent(
         intent_file: &mut std::fs::File,
         intent_path: &Path,
@@ -1046,7 +1021,6 @@ impl Kura {
         }
         Ok(intent)
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn recover_bound_progress_append_intent(
         &self,
@@ -1069,7 +1043,6 @@ impl Kura {
         ) else {
             return false;
         };
-
         if let Some(build) = build {
             drop(build);
             if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, build_path) {
@@ -1091,7 +1064,6 @@ impl Kura {
                 return false;
             }
         }
-
         let mut data = match self.open_optional_bound_progress_file(namespace, data_path) {
             Ok(data) => data,
             Err(error) => {
@@ -1125,7 +1097,6 @@ impl Kura {
             );
             return false;
         }
-
         let data_len = match data.as_ref() {
             Some(data) => match data.metadata() {
                 Ok(metadata) => metadata.len(),
@@ -1178,7 +1149,6 @@ impl Kura {
         } else {
             false
         };
-
         if let Some(index) = index.as_mut() {
             let index_len = match index.metadata() {
                 Ok(metadata) => metadata.len(),
@@ -1255,7 +1225,6 @@ impl Kura {
                 return false;
             }
         }
-
         if intent.pair_was_present {
             let Some(index) = index.as_mut() else {
                 return false;
@@ -1280,7 +1249,6 @@ impl Kura {
                 return false;
             }
         }
-
         if roll_forward {
             if index.is_none() {
                 index = match Self::open_direct_sidecar_file_in_namespace(
@@ -1403,7 +1371,6 @@ impl Kura {
                 return false;
             }
         }
-
         drop(index);
         drop(data);
         drop(intent_file);
@@ -1427,7 +1394,6 @@ impl Kura {
         }
         Self::progress_mutation_namespace_unchanged(namespace)
     }
-
     #[must_use]
     fn recover_bound_progress_sidecar_artifacts(
         &self,
@@ -1452,7 +1418,6 @@ impl Kura {
             &namespace, data_path, index_path, kind,
         )
     }
-
     fn recover_bound_progress_sidecar_artifacts_in_namespace(
         &self,
         namespace: &BoundProgressNamespace,
@@ -1465,7 +1430,6 @@ impl Kura {
         )
         .is_ok()
     }
-
     /// Recover a descriptor-bound progress pair and distinguish transient
     /// durability failure from malformed or ambiguous protocol state.
     fn recover_bound_progress_sidecar_artifacts_in_namespace_classified(
@@ -1484,7 +1448,6 @@ impl Kura {
                 .classify_bound_progress_recovery_failure(namespace, data_path, index_path, kind))
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn recover_bound_progress_sidecar_artifacts_in_namespace_impl(
         &self,
@@ -1526,7 +1489,6 @@ impl Kura {
         let Some(append_intent) = open_optional(&append_intent_path) else {
             return false;
         };
-
         if append_intent.is_some()
             && (temp_data.is_some() || temp_index.is_some() || prepend_index.is_some())
         {
@@ -1560,7 +1522,6 @@ impl Kura {
                 return false;
             }
         }
-
         if prepend_index.is_some() && (temp_data.is_some() || temp_index.is_some()) {
             warn!(
                 ?data_path,
@@ -1593,7 +1554,6 @@ impl Kura {
             }
             return self.repair_bound_progress_main_tail(namespace, data_path, index_path, kind);
         };
-
         let temp_data_was_present = temp_data.is_some();
         let recovery_data = if let Some(temp_data) = temp_data {
             temp_data
@@ -1731,7 +1691,6 @@ impl Kura {
         }
         Self::sync_indexed_sidecar_bound_mutation(&recovery_data, &temp_index, namespace, kind)
     }
-
     #[allow(clippy::too_many_lines)]
     fn classify_bound_progress_recovery_failure(
         &self,
@@ -1761,7 +1720,6 @@ impl Kura {
             let prepend_index = open(&prepend_index_path)?;
             let _append_build = open(&append_build_path)?;
             let mut append_intent = open(&append_intent_path)?;
-
             if append_intent.is_some()
                 && (temp_data.is_some() || temp_index.is_some() || prepend_index.is_some())
             {
@@ -1813,7 +1771,6 @@ impl Kura {
                     .map_err(|_| BoundProgressRecoveryFailure::InvalidData)?;
                 return Ok(BoundProgressRecoveryFailure::RetryableIo);
             }
-
             if prepend_index.is_some() && (temp_data.is_some() || temp_index.is_some()) {
                 return Err(BoundProgressRecoveryFailure::InvalidData);
             }
@@ -1834,7 +1791,6 @@ impl Kura {
                 )?;
                 return Ok(BoundProgressRecoveryFailure::RetryableIo);
             }
-
             if let Some(temp_index) = temp_index.as_mut() {
                 let main_data = if temp_data.is_none() {
                     Some(open(data_path)?)
@@ -1867,7 +1823,6 @@ impl Kura {
             if temp_data.is_some() {
                 return Ok(BoundProgressRecoveryFailure::RetryableIo);
             }
-
             let data = open(data_path)?;
             let mut index = open(index_path)?;
             match (data, index.as_mut()) {
@@ -1938,7 +1893,6 @@ impl Kura {
             Err(failure) => failure,
         }
     }
-
     fn repair_bound_progress_main_tail(
         &self,
         namespace: &BoundProgressNamespace,
@@ -2124,7 +2078,6 @@ impl Kura {
         }
         Self::sync_indexed_sidecar_bound_mutation(&data, &index, namespace, kind)
     }
-
     fn discard_bound_progress_temps(
         namespace: &BoundProgressNamespace,
         paths: &[&Path],
@@ -2143,7 +2096,6 @@ impl Kura {
         }
         Self::sync_bound_progress_mutation_directories(namespace, kind)
     }
-
     fn rollback_bound_progress_prepend(
         namespace: &BoundProgressNamespace,
         data: &std::fs::File,
@@ -2178,7 +2130,6 @@ impl Kura {
         }
         Self::discard_bound_progress_temps(namespace, &[prepend_index_path], kind)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn recover_bound_progress_prepend_temp(
         &self,
@@ -2256,7 +2207,6 @@ impl Kura {
                 kind,
             );
         }
-
         let prepend_snapshot = Self::bound_sidecar_index_snapshot(
             &mut prepend_index,
             prepend_index_path,
@@ -2357,7 +2307,6 @@ impl Kura {
         }
         Self::sync_indexed_sidecar_bound_mutation(&data, &prepend_index, namespace, kind)
     }
-
     #[must_use]
     fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
@@ -2374,7 +2323,6 @@ impl Kura {
             }
             return true;
         }
-
         // A temp index is the durable commit marker for a prune rewrite. When both files remain,
         // validate them as a pair. When only the index remains, the crash happened after data
         // promotion, so validate it against main data. Never publish an index before the payload
@@ -2404,7 +2352,6 @@ impl Kura {
             );
             return false;
         }
-
         if temp_data_exists && !Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data")
         {
             warn!(
@@ -2423,7 +2370,6 @@ impl Kura {
         }
         true
     }
-
     #[must_use]
     fn promote_sidecar_temp(temp_path: &Path, main_path: &Path, kind: &str, label: &str) -> bool {
         if !temp_path.exists() {
@@ -2478,7 +2424,6 @@ impl Kura {
         }
         true
     }
-
     fn sidecar_index_sane_with_label(
         index_path: &Path,
         data_len: u64,
@@ -2606,7 +2551,6 @@ impl Kura {
         }
         true
     }
-
     fn indexed_sidecar_height_range(
         index_path: &Path,
         kind: &str,
@@ -2649,7 +2593,6 @@ impl Kura {
         }
         layout.height_range()
     }
-
     fn repair_unindexed_sidecar_tail(
         data: &std::fs::File,
         index: &mut std::fs::File,
@@ -2771,7 +2714,6 @@ impl Kura {
         }
         true
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn append_preceding_indexed_sidecar(
         data_path: &Path,
@@ -2786,7 +2728,6 @@ impl Kura {
     ) -> bool {
         debug_assert!(layout.is_based());
         debug_assert!(height < layout.base_height);
-
         let prepend = layout.base_height - height;
         if prepend > MAX_INDEXED_SIDECAR_GAP_ENTRIES {
             iroha_logger::warn!(
@@ -2823,7 +2764,6 @@ impl Kura {
             iroha_logger::warn!(?index_path, kind, "sidecar prepend length overflows");
             return false;
         };
-
         let data_existed = data_path.exists();
         let mut data =
             match Self::open_direct_sidecar_file_in_namespace(data_path, true, false, namespace) {
@@ -2875,7 +2815,6 @@ impl Kura {
             iroha_logger::warn!(data_len, payload_len, kind, "sidecar data length overflows");
             return false;
         };
-
         let temp_index_path = index_path.with_extension("index.prepend.tmp");
         let remove_temp = || match namespace {
             Some(namespace) => {
@@ -2924,7 +2863,6 @@ impl Kura {
                 return false;
             }
         };
-
         let entry = SidecarIndexEntry {
             offset: data_len,
             len: payload_len,
@@ -2981,7 +2919,6 @@ impl Kura {
             return false;
         }
         drop(source_index);
-
         if let Err(err) = data
             .seek(SeekFrom::Start(data_len))
             .and_then(|_| data.write_all(payload))
@@ -3084,7 +3021,6 @@ impl Kura {
         }
         drop(temp_index);
         drop(data);
-
         if let Some(retention) = retention
             && !Self::prune_indexed_sidecars(data_path, index_path, retention, kind)
         {
@@ -3092,7 +3028,6 @@ impl Kura {
         }
         true
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn append_indexed_sidecar(
         data_path: &Path,
@@ -3108,7 +3043,6 @@ impl Kura {
             data_path, index_path, height, payload, kind, fsync_mode, retention, None, origin, None,
         )
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn append_indexed_bound_progress_sidecar(
         data_path: &Path,
@@ -3181,7 +3115,6 @@ impl Kura {
                 }
             }
         }
-
         let opened_data =
             Self::open_direct_sidecar_file_in_namespace(data_path, false, false, Some(namespace));
         let opened_index =
@@ -3206,7 +3139,6 @@ impl Kura {
                 return false;
             }
         };
-
         let old_data_len = match data.as_ref() {
             Some(data) => match data.metadata() {
                 Ok(metadata) => metadata.len(),
@@ -3263,7 +3195,6 @@ impl Kura {
             }
             None => (SidecarIndexLayout::legacy(0), 0),
         };
-
         if let Some(entry_pos) = layout.entry_position(height) {
             let Some(index_file) = index.as_mut() else {
                 return false;
@@ -3329,7 +3260,6 @@ impl Kura {
                     ) && Self::progress_mutation_namespace_unchanged(namespace);
                 }
             }
-
             let Some(new_data_len) = old_data_len.checked_add(payload_len) else {
                 return false;
             };
@@ -3365,7 +3295,6 @@ impl Kura {
                 data_path, index_path, payload, kind, namespace, intent, data, index,
             );
         }
-
         if layout.is_based() && height < layout.base_height {
             drop(index);
             drop(data);
@@ -3381,7 +3310,6 @@ impl Kura {
                 Some(namespace),
             );
         }
-
         let mut new_index_bytes = Vec::new();
         let index_write_offset;
         if layout.aligned_len == 0
@@ -3489,7 +3417,6 @@ impl Kura {
             data_path, index_path, payload, kind, namespace, intent, data, index,
         )
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn execute_bound_progress_append(
         data_path: &Path,
@@ -3689,7 +3616,6 @@ impl Kura {
         }
         Self::progress_mutation_namespace_unchanged(namespace)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn append_indexed_progress_sidecar(
         data_path: &Path,
@@ -3713,11 +3639,9 @@ impl Kura {
         );
         wrote && Self::progress_mutation_namespace_unchanged(namespace)
     }
-
     fn progress_mutation_namespace_unchanged(namespace: &BoundProgressNamespace) -> bool {
         Self::progress_mutation_namespace_classified(namespace).is_ok()
     }
-
     fn progress_mutation_namespace_classified(
         namespace: &BoundProgressNamespace,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
@@ -3739,7 +3663,6 @@ impl Kura {
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     fn append_indexed_sidecar_with_pinned_height(
         data_path: &Path,
@@ -3763,13 +3686,11 @@ impl Kura {
             );
             return false;
         }
-
         if namespace.is_none()
             && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind)
         {
             return false;
         }
-
         let mut index =
             match Self::open_direct_sidecar_file_in_namespace(index_path, true, false, namespace) {
                 Ok(file) => file,
@@ -3816,7 +3737,6 @@ impl Kura {
                 return false;
             }
         }
-
         if layout.aligned_len == 0
             && height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
             && origin == SidecarIndexOrigin::FirstWrite
@@ -3849,7 +3769,6 @@ impl Kura {
                 }
             };
         }
-
         if layout.is_based() && height < layout.base_height {
             drop(index);
             return Self::append_preceding_indexed_sidecar(
@@ -3864,7 +3783,6 @@ impl Kura {
                 namespace,
             );
         }
-
         let mut data =
             match Self::open_direct_sidecar_file_in_namespace(data_path, true, false, namespace) {
                 Ok(file) => file,
@@ -3878,7 +3796,6 @@ impl Kura {
         ) {
             return false;
         }
-
         let expected_height = match layout.next_height() {
             Some(height) => height,
             None => {
@@ -3908,7 +3825,6 @@ impl Kura {
                 return false;
             }
             let entry = SidecarIndexEntry::from_bytes(entry_buf);
-
             let mut matches_existing = false;
             if entry.len > 0 {
                 if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
@@ -3970,7 +3886,6 @@ impl Kura {
                     );
                 }
             }
-
             if matches_existing {
                 iroha_logger::debug!(
                     height,
@@ -4006,7 +3921,6 @@ impl Kura {
                 }
                 return true;
             }
-
             let offset = match data.metadata() {
                 Ok(meta) => meta.len(),
                 Err(err) => {
@@ -4024,7 +3938,6 @@ impl Kura {
                 );
                 return false;
             };
-
             if let Err(err) = data
                 .seek(SeekFrom::Start(offset))
                 .and_then(|_| data.write_all(payload))
@@ -4040,7 +3953,6 @@ impl Kura {
                     return false;
                 }
             }
-
             let new_entry = SidecarIndexEntry {
                 offset,
                 len: len_u64,
@@ -4159,7 +4071,6 @@ impl Kura {
                 return false;
             }
         }
-
         let offset = match data.metadata() {
             Ok(meta) => meta.len(),
             Err(err) => {
@@ -4177,7 +4088,6 @@ impl Kura {
             );
             return false;
         };
-
         if let Err(err) = data
             .seek(SeekFrom::Start(offset))
             .and_then(|_| data.write_all(payload))
@@ -4193,7 +4103,6 @@ impl Kura {
                 return false;
             }
         }
-
         let entry = SidecarIndexEntry {
             offset,
             len: len_u64,
@@ -4241,10 +4150,8 @@ impl Kura {
         {
             return false;
         }
-
         true
     }
-
     fn sync_indexed_sidecar_bound_mutation(
         data: &std::fs::File,
         index: &std::fs::File,
@@ -4265,7 +4172,6 @@ impl Kura {
         }
         Self::sync_bound_progress_mutation_directories(namespace, kind)
     }
-
     fn sync_bound_progress_mutation_directories(
         namespace: &BoundProgressNamespace,
         kind: &str,
@@ -4288,7 +4194,6 @@ impl Kura {
         }
         Self::progress_mutation_namespace_unchanged(namespace)
     }
-
     /// Reissue the complete strict sidecar durability sequence in dependency order.
     ///
     /// Calling this for an exact existing payload is intentional: a prior attempt may have made
@@ -4314,7 +4219,6 @@ impl Kura {
             iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
             return false;
         }
-
         let index = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -4335,7 +4239,6 @@ impl Kura {
             iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
             return false;
         }
-
         if let Some(parent) = data_path.parent()
             && let Err(err) = sync_indexed_sidecar_dir(parent)
         {
@@ -4361,9 +4264,8 @@ impl Kura {
         }
         true
     }
-
     #[allow(clippy::too_many_lines)]
-    fn read_indexed_sidecar<T, F>(
+    fn read_pipeline_sidecar<T, F>(
         &self,
         height: u64,
         data_file: &str,
@@ -4378,10 +4280,18 @@ impl Kura {
         dir.push(PIPELINE_DIR_NAME);
         let data_path = dir.join(data_file);
         let index_path = dir.join(index_file);
-
-        Self::read_indexed_sidecar_from_paths(height, &data_path, &index_path, decoder, kind)
+        let entry_byte_limit =
+            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+        Self::read_indexed_sidecar_from_paths_with_recovery_and_limit(
+            height,
+            &data_path,
+            &index_path,
+            decoder,
+            kind,
+            true,
+            entry_byte_limit,
+        )
     }
-
     #[allow(clippy::too_many_lines)]
     fn read_indexed_sidecar_from_paths<T, F>(
         height: u64,
@@ -4397,7 +4307,6 @@ impl Kura {
             height, data_path, index_path, decoder, kind, true,
         )
     }
-
     #[allow(clippy::too_many_lines)]
     fn read_indexed_sidecar_from_paths_with_recovery<T, F>(
         height: u64,
@@ -4410,21 +4319,48 @@ impl Kura {
     where
         F: Fn(&[u8]) -> Result<T, norito::Error>,
     {
+        Self::read_indexed_sidecar_from_paths_with_recovery_and_limit(
+            height,
+            data_path,
+            index_path,
+            decoder,
+            kind,
+            recover,
+            STRICT_INIT_MAX_BLOCK_BYTES,
+        )
+    }
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_paths_with_recovery_and_limit<T, F>(
+        height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+        recover: bool,
+        entry_byte_limit: u64,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
         if height == 0 {
             return None;
         }
-
         if recover && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
             return None;
         }
-
         let mut index = std::fs::File::open(index_path).ok()?;
         let mut data = std::fs::File::open(data_path).ok()?;
-        Self::read_indexed_sidecar_from_open_files(
-            height, &mut data, &mut index, data_path, index_path, decoder, kind,
+        Self::read_indexed_sidecar_from_open_files_with_limit(
+            height,
+            &mut data,
+            &mut index,
+            data_path,
+            index_path,
+            decoder,
+            kind,
+            entry_byte_limit,
         )
     }
-
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn read_indexed_sidecar_from_open_files<T, F>(
         height: u64,
@@ -4434,6 +4370,31 @@ impl Kura {
         index_path: &Path,
         decoder: F,
         kind: &str,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
+        Self::read_indexed_sidecar_from_open_files_with_limit(
+            height,
+            data,
+            index,
+            data_path,
+            index_path,
+            decoder,
+            kind,
+            STRICT_INIT_MAX_BLOCK_BYTES,
+        )
+    }
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_open_files_with_limit<T, F>(
+        height: u64,
+        data: &mut std::fs::File,
+        index: &mut std::fs::File,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+        entry_byte_limit: u64,
     ) -> Option<T>
     where
         F: Fn(&[u8]) -> Result<T, norito::Error>,
@@ -4477,17 +4438,16 @@ impl Kura {
             );
             return None;
         }
-
         let entry = SidecarIndexEntry::from_bytes(entry_buf);
         if entry.len == 0 {
             iroha_logger::debug!(height, ?index_path, kind, "empty sidecar length; skipping");
             return None;
         }
-        if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+        if entry.len > entry_byte_limit {
             iroha_logger::warn!(
                 height,
                 len = entry.len,
-                limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                limit = entry_byte_limit,
                 ?index_path,
                 kind,
                 "sidecar length exceeds limit; skipping"
@@ -4505,7 +4465,6 @@ impl Kura {
             );
             return None;
         };
-
         let data_len = data.metadata().ok()?.len();
         let entry_end = match entry.offset.checked_add(entry.len) {
             Some(end) => end,
@@ -4587,7 +4546,6 @@ impl Kura {
                 }
             }
         }
-
         let mut payload = vec![0u8; len_usize];
         if data
             .seek(SeekFrom::Start(entry.offset))
@@ -4597,7 +4555,6 @@ impl Kura {
             iroha_logger::warn!(height, ?data_path, kind, "failed to read sidecar payload");
             return None;
         }
-
         match decoder(&payload) {
             Ok(sidecar) => Some(sidecar),
             Err(err) => {

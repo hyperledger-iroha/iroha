@@ -714,7 +714,25 @@ LaneConfigEntry {
   runtime-upgrade allowlist ids after trimming. Duplicate manifest filenames
   that resolve to the same lane alias in one source directory invalidate that
   alias so the governed lane remains locked until the duplicate source is
-  removed.
+  removed. The first-release loader scans directory entries incrementally and
+  retains sources only for aliases in the active `LaneCatalog` (which is itself
+  capped at 1,024 lanes), plus the single cache overlay
+  `governance_catalog.json`. Unknown/future files are ignored before metadata,
+  content, JSON, or canonicalization work; activating such a lane requires an
+  explicit reload against the new active catalog, and an already frozen source
+  set never revives it during rebind. Direct regular files are opened with
+  no-follow semantics and max-plus-one reads. A lane manifest is limited to
+  256 KiB, the overlay to 512 KiB, and all accepted source bytes to 16 MiB per
+  materialization. Before typed JSON allocation, each source is limited to
+  4,096 string literals, 4 KiB per string, 192 KiB of string bytes, 8,192
+  structural/value units, and nesting depth 32; aggregate retained JSON limits
+  are 131,072 strings, 8 MiB of string bytes, and 131,072 structural/value
+  units. Typed manifests additionally cap validators at 256, protected
+  namespaces at 512, hooks at 128, and privacy commitments at 256. The overlay
+  caps modules at 256, parameters per module at 128, and total parameters at
+  4,096. Canonical digest encodings are capped at 512 KiB per manifest and 1
+  MiB for the overlay, and raw bytes are released before canonicalization so
+  startup cannot retain raw, parsed, and canonical copies together.
 - Public-lane staking mutations bind the transaction authority to the economic
   owner they mutate. Validator registration and exit must be submitted by the
   validator account itself, initial registration stake must come from that same

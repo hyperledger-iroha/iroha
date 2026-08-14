@@ -1,9 +1,7 @@
 //! Kotodama integer constant lowering regression tests.
-
 use iroha_primitives::bigint::BigInt;
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn compile_large_positive_constant_executes() {
     let src = r#"
@@ -25,7 +23,6 @@ fn compile_large_positive_constant_executes() {
     vm.run().expect("run large positive constant program");
     assert_eq!(common::decode_i64_register(&vm, 10), 123_456_789_012);
 }
-
 #[test]
 fn compile_large_negative_constant_executes() {
     let src = r#"
@@ -47,7 +44,6 @@ fn compile_large_negative_constant_executes() {
     vm.run().expect("run large negative constant program");
     assert_eq!(common::decode_i64_register(&vm, 10), -987_654_321_098);
 }
-
 #[test]
 fn signed_512_bit_boundary_constants_are_canonical_and_deterministic() {
     let source = r#"
@@ -73,7 +69,6 @@ fn signed_512_bit_boundary_constants_are_canonical_and_deterministic() {
             .compile_source(source)
             .expect("repeat signed-boundary compilation")
     );
-
     for (entrypoint, expected) in [
         (
             "minimum",

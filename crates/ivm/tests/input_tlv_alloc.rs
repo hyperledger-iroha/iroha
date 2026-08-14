@@ -1,7 +1,6 @@
 use iroha_crypto::Hash;
 use ivm::{IVM, Memory, PointerType};
 mod common;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -15,7 +14,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 #[test]
 fn input_tlv_bump_allocator_places_entries_without_overlap() {
     let mut vm = IVM::new(10);
@@ -35,7 +33,6 @@ fn input_tlv_bump_allocator_places_entries_without_overlap() {
     vm.memory.validate_tlv(p1).expect("tlv1 valid");
     vm.memory.validate_tlv(p2).expect("tlv2 valid");
 }
-
 #[test]
 fn input_region_is_cleared_between_vms() {
     let hdr = ivm::ProgramMetadata::default().encode();
@@ -44,7 +41,6 @@ fn input_region_is_cleared_between_vms() {
     let tlv = make_tlv(PointerType::Blob as u16, b"secret-bytes");
     vm1.alloc_input_tlv(&tlv).expect("alloc leak tlv");
     drop(vm1);
-
     let mut vm2 = IVM::new(10);
     vm2.load_program(&hdr).unwrap();
     let snapshot = vm2

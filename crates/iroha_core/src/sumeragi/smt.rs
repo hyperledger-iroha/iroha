@@ -18,12 +18,9 @@
 //!
 //! This is a minimal, internal component. It does not attempt optimizations and
 //! runs in O((R+W) * 256). Avoid using in hot paths beyond prototyping.
-
-use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus_v2 as wire;
-
+use std::collections::{BTreeMap, BTreeSet};
 /// A (key, value) pair for SMT inputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KvPair {
@@ -32,7 +29,6 @@ pub struct KvPair {
     /// Raw value bytes.
     pub value: Vec<u8>,
 }
-
 /// Dedicated execution-witness key tag for a finalized Kagemusha V2 top-up.
 pub(crate) const KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG: u8 = 0xD2;
 /// Execution-witness key tag for one Kagemusha V4 anchor drawdown balance.
@@ -52,7 +48,6 @@ pub(crate) const KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK: usize =
     wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK as usize;
 const KAGEMUSHA_V2_TOPUP_NODE_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-node";
 const KAGEMUSHA_V2_TOPUP_EMPTY_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-empty";
-
 /// Canonical balanced-Merkle path for one block-local Kagemusha top-up leaf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaTopUpMerkleProof {
@@ -63,7 +58,6 @@ pub struct KagemushaTopUpMerkleProof {
     /// Siblings from leaf level to root.
     pub siblings: Vec<Hash>,
 }
-
 /// Deterministic block-local commitment material retained for finality proofs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaTopUpBlockCommitment {
@@ -78,7 +72,6 @@ pub struct KagemushaTopUpBlockCommitment {
     /// One path aligned with each entry in [`Self::leaves`].
     pub proofs: Vec<KagemushaTopUpMerkleProof>,
 }
-
 impl KvPair {
     pub fn new(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -87,7 +80,6 @@ impl KvPair {
         }
     }
 }
-
 /// Compute the deterministic post-state root from read and write sets.
 ///
 /// - `reads`: witnessed key/value pairs read during execution.
@@ -95,40 +87,33 @@ impl KvPair {
 pub fn compute_post_state_root(reads: &[KvPair], writes: &[KvPair]) -> Hash {
     // Default empty hash used for absent children
     let empty = Hash::new([]);
-
     // Build the leaf map at depth 256: key prefix (exact hash bytes) -> leaf hash
     // When writes are present we bind only to them so order-independent write
     // sets produce identical roots. Pure read transactions still bind to reads.
     let mut leaves: BTreeMap<Vec<u8>, Hash> = BTreeMap::new();
-
     let mut insert_leaf = |pair: &KvPair| {
         let k = hash_bytes(&pair.key);
         leaves.insert(k.to_vec(), leaf_hash(pair));
     };
-
     let inputs = if writes.is_empty() { reads } else { writes };
     for pair in inputs {
         insert_leaf(pair);
     }
-
     // Early return: no leaves
     if leaves.is_empty() {
         return empty;
     }
-
     // Iteratively fold leaves up to the root across 256 levels.
     // Each level maps a bit-prefix (length in bits) to a node hash.
     // Represent prefixes as byte vectors with unused tail bits in the last byte masked to 0.
     let mut cur_len_bits: u16 = 256;
     let mut cur: BTreeMap<Vec<u8>, Hash> = leaves;
-
     while cur_len_bits > 0 {
         // Collect parent prefixes to compute at the next level
         let mut parents: BTreeSet<Vec<u8>> = BTreeSet::new();
         for prefix in cur.keys() {
             parents.insert(parent_prefix(prefix, cur_len_bits));
         }
-
         let mut next: BTreeMap<Vec<u8>, Hash> = BTreeMap::new();
         for p in parents {
             let left_id = child_prefix(&p, cur_len_bits, false);
@@ -138,7 +123,6 @@ pub fn compute_post_state_root(reads: &[KvPair], writes: &[KvPair]) -> Hash {
             let parent_hash = node_hash(left, right);
             next.insert(p, parent_hash);
         }
-
         cur = next;
         cur_len_bits -= 1;
         if cur_len_bits == 0 {
@@ -146,7 +130,6 @@ pub fn compute_post_state_root(reads: &[KvPair], writes: &[KvPair]) -> Hash {
             break;
         }
     }
-
     // Root extraction: cur may contain 1+ nodes if inputs were empty at some high level.
     // Fold deterministically by ordering keys and hashing left-to-right.
     if cur.len() == 1 {
@@ -160,7 +143,6 @@ pub fn compute_post_state_root(reads: &[KvPair], writes: &[KvPair]) -> Hash {
         acc
     }
 }
-
 /// Split the canonical last-write-wins witness and build its bounded Kagemusha
 /// commitment, if the block contains at least one top-up anchor.
 ///
@@ -175,7 +157,6 @@ pub fn build_kagemusha_topup_block_commitment(
     for pair in writes {
         canonical.insert(pair.key.clone(), pair.value.clone());
     }
-
     let mut ordinary_writes = Vec::new();
     let mut leaves = Vec::new();
     for (key, value) in canonical {
@@ -193,7 +174,6 @@ pub fn build_kagemusha_topup_block_commitment(
     if leaves.len() > KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK {
         return Err("Kagemusha V2 top-up anchor count exceeds the consensus limit");
     }
-
     let leaf_count = u32::try_from(leaves.len())
         .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u32")?;
     let width = leaves.len().next_power_of_two();
@@ -216,7 +196,6 @@ pub fn build_kagemusha_topup_block_commitment(
         .first()
         .copied()
         .ok_or("Kagemusha V2 top-up tree unexpectedly has no root")?;
-
     let proofs = (0..leaves.len())
         .map(|leaf_index| {
             let mut index = leaf_index;
@@ -233,7 +212,6 @@ pub fn build_kagemusha_topup_block_commitment(
             })
         })
         .collect::<Result<Vec<_>, &'static str>>()?;
-
     let ordinary_writes_root = compute_post_state_root(&[], &ordinary_writes);
     let post_state_root = wire::ExecutionCommitment::topup_post_state_root(
         leaf_count,
@@ -248,7 +226,6 @@ pub fn build_kagemusha_topup_block_commitment(
         proofs,
     }))
 }
-
 /// Return the consensus post-state root, preserving the legacy root byte for
 /// blocks without Kagemusha top-ups.
 pub fn compute_consensus_post_state_root(
@@ -260,7 +237,6 @@ pub fn compute_consensus_post_state_root(
         None => Ok(compute_post_state_root(reads, writes)),
     }
 }
-
 /// Verify one exact top-up leaf against a Commit-QC-authenticated post root.
 #[must_use]
 pub fn verify_kagemusha_topup_write_inclusion(
@@ -288,7 +264,6 @@ pub fn verify_kagemusha_topup_write_inclusion(
     if proof.siblings.len() != expected_depth {
         return false;
     }
-
     let mut current = leaf_hash(target);
     let mut index = match usize::try_from(proof.leaf_index) {
         Ok(index) => index,
@@ -311,7 +286,6 @@ pub fn verify_kagemusha_topup_write_inclusion(
         current,
     ) == expected_post_state_root
 }
-
 fn validate_kagemusha_topup_leaf(pair: &KvPair) -> Result<(), &'static str> {
     if pair.key.len() != KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES
         || pair.key[0] != KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG
@@ -326,11 +300,9 @@ fn validate_kagemusha_topup_leaf(pair: &KvPair) -> Result<(), &'static str> {
     }
     Ok(())
 }
-
 fn kagemusha_topup_empty_hash() -> Hash {
     Hash::new(KAGEMUSHA_V2_TOPUP_EMPTY_DOMAIN)
 }
-
 fn kagemusha_topup_node_hash(level: u16, left: Hash, right: Hash) -> Hash {
     let mut preimage = Vec::with_capacity(
         KAGEMUSHA_V2_TOPUP_NODE_DOMAIN.len() + 1 + core::mem::size_of::<u16>() + 2 * Hash::LENGTH,
@@ -342,12 +314,10 @@ fn kagemusha_topup_node_hash(level: u16, left: Hash, right: Hash) -> Hash {
     preimage.extend_from_slice(right.as_ref());
     Hash::new(preimage)
 }
-
 fn hash_bytes(b: &[u8]) -> [u8; 32] {
     let h = Hash::new(b);
     <[u8; 32]>::from(h)
 }
-
 fn leaf_hash(pair: &KvPair) -> Hash {
     let key_hash = hash_bytes(&pair.key);
     let value_hash = hash_bytes(&pair.value);
@@ -357,7 +327,6 @@ fn leaf_hash(pair: &KvPair) -> Hash {
     preimage.extend_from_slice(&value_hash);
     Hash::new(preimage)
 }
-
 fn node_hash(left: Hash, right: Hash) -> Hash {
     let mut buf = Vec::with_capacity(1 + 32 + 32);
     buf.push(0x01);
@@ -365,13 +334,11 @@ fn node_hash(left: Hash, right: Hash) -> Hash {
     buf.extend_from_slice(right.as_ref());
     Hash::new(buf)
 }
-
 fn parent_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     debug_assert!(len_bits >= 1);
     let new_len = len_bits - 1;
     truncate_prefix(prefix, new_len)
 }
-
 fn child_prefix(parent: &[u8], child_len_bits: u16, right: bool) -> Vec<u8> {
     // child_len_bits is current level length; parent has length-1
     debug_assert!(child_len_bits >= 1);
@@ -393,7 +360,6 @@ fn child_prefix(parent: &[u8], child_len_bits: u16, right: bool) -> Vec<u8> {
     mask_tail_bits(&mut out, child_len_bits);
     out
 }
-
 fn truncate_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     if len_bits == 0 {
         return Vec::new();
@@ -403,7 +369,6 @@ fn truncate_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
     mask_tail_bits(&mut out, len_bits);
     out
 }
-
 fn mask_tail_bits(bytes: &mut Vec<u8>, len_bits: u16) {
     let full_bytes = usize::from(len_bits / 8);
     let rem_bits = (len_bits % 8) as u8;
@@ -423,19 +388,15 @@ fn mask_tail_bits(bytes: &mut Vec<u8>, len_bits: u16) {
     bytes[full_bytes] &= mask;
     bytes.truncate(full_bytes + 1);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn kv(k: &str, v: &str) -> KvPair {
         KvPair::new(k.as_bytes(), v.as_bytes())
     }
-
     fn manual_hash_bytes(bytes: &[u8]) -> [u8; 32] {
         <[u8; 32]>::from(Hash::new(bytes))
     }
-
     fn manual_node_hash(left: Hash, right: Hash) -> Hash {
         let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
         preimage.push(0x01);
@@ -443,7 +404,6 @@ mod tests {
         preimage.extend_from_slice(right.as_ref());
         Hash::new(preimage)
     }
-
     fn manual_leaf_hash(pair: &KvPair) -> Hash {
         let key_hash = manual_hash_bytes(&pair.key);
         let value_hash = manual_hash_bytes(&pair.value);
@@ -453,7 +413,6 @@ mod tests {
         preimage.extend_from_slice(&value_hash);
         Hash::new(preimage)
     }
-
     fn manual_single_leaf_root(pair: &KvPair) -> Hash {
         let empty = Hash::new([]);
         let mut current = manual_leaf_hash(pair);
@@ -472,13 +431,11 @@ mod tests {
         }
         current
     }
-
     #[test]
     fn empty_inputs_yield_empty_hash() {
         let h = compute_post_state_root(&[], &[]);
         assert_eq!(h, Hash::new([]));
     }
-
     #[test]
     fn single_write_matches_order_independence() {
         let w = [kv("a", "1")];
@@ -486,7 +443,6 @@ mod tests {
         let h2 = compute_post_state_root(&[kv("z", "0")], &w); // extra read unrelated
         assert_eq!(h1, h2);
     }
-
     #[test]
     fn pure_reads_bind_root_when_no_writes() {
         let r1 = [kv("alpha", "1")];
@@ -495,7 +451,6 @@ mod tests {
         let h2 = compute_post_state_root(&r2, &[]);
         assert_ne!(h1, h2);
     }
-
     #[test]
     fn writes_override_reads_for_same_key() {
         let r = [kv("k", "old")];
@@ -504,7 +459,6 @@ mod tests {
         let h_only_w = compute_post_state_root(&[], &w);
         assert_eq!(h, h_only_w);
     }
-
     #[test]
     fn multiple_keys_deterministic_fold() {
         let r = [kv("a", "1"), kv("b", "2")];
@@ -513,18 +467,15 @@ mod tests {
         let h2 = compute_post_state_root(&[r[1].clone(), r[0].clone()], &w);
         assert_eq!(h1, h2);
     }
-
     #[test]
     fn smt_hash_preimages_and_missing_children_match_formal_gate() {
         let pair = kv("leaf-key", "leaf-value");
         let root = compute_post_state_root(std::slice::from_ref(&pair), &[]);
         assert_eq!(root, manual_single_leaf_root(&pair));
-
         let key_changed = compute_post_state_root(&[kv("other-key", "leaf-value")], &[]);
         let value_changed = compute_post_state_root(&[kv("leaf-key", "other-value")], &[]);
         assert_ne!(root, key_changed);
         assert_ne!(root, value_changed);
-
         let left = Hash::prehashed([0x11; Hash::LENGTH]);
         let right = Hash::prehashed([0x22; Hash::LENGTH]);
         let mut untagged_node = Vec::with_capacity(2 * Hash::LENGTH);
@@ -534,7 +485,6 @@ mod tests {
         assert_ne!(node_hash(left, right), Hash::new(untagged_node));
         assert_ne!(node_hash(left, right), manual_node_hash(right, left));
     }
-
     #[test]
     fn duplicate_keys_and_canonical_order_match_formal_gate() {
         let duplicate_reads = [kv("same", "old"), kv("same", "new")];
@@ -548,13 +498,11 @@ mod tests {
             compute_post_state_root(&duplicate_reads, &[]),
             compute_post_state_root(&first_read, &[])
         );
-
         let duplicate_writes = [kv("same", "old"), kv("same", "new")];
         assert_eq!(
             compute_post_state_root(&[], &duplicate_writes),
             compute_post_state_root(&[], &last_read)
         );
-
         let ordered = [kv("a", "1"), kv("b", "2"), kv("c", "3")];
         let reordered = [kv("c", "3"), kv("a", "1"), kv("b", "2")];
         assert_eq!(
@@ -566,31 +514,26 @@ mod tests {
             compute_post_state_root(&[], &reordered)
         );
     }
-
     #[test]
     fn prefix_truncation_and_child_bit_order_match_formal_gate() {
         let bytes = [0b1010_1100, 0b1111_0000];
         assert_eq!(truncate_prefix(&bytes, 0), Vec::<u8>::new());
         assert_eq!(truncate_prefix(&bytes, 8), vec![0b1010_1100]);
         assert_eq!(truncate_prefix(&bytes, 5), vec![0b0000_1100]);
-
         assert_eq!(parent_prefix(&[0b1010_1101], 5), vec![0b0000_1101]);
         assert_eq!(child_prefix(&[], 1, false), vec![0b0000_0000]);
         assert_eq!(child_prefix(&[], 1, true), vec![0b0000_0001]);
-
         let parent = [0b0000_1101];
         assert_eq!(child_prefix(&parent, 5, false), vec![0b0000_1101]);
         assert_eq!(child_prefix(&parent, 5, true), vec![0b0001_1101]);
         assert_eq!(child_prefix(&[0xFF, 0xFF], 9, false), vec![0xFF, 0x00]);
         assert_eq!(child_prefix(&[0xFF, 0xFF], 9, true), vec![0xFF, 0x01]);
     }
-
     fn topup_leaf(operation: u8, digest: u8) -> KvPair {
         let mut key = vec![KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         key.extend_from_slice(&[operation; 32]);
         KvPair::new(key, vec![digest; 32])
     }
-
     #[test]
     fn kagemusha_post_root_is_unchanged_without_topup_anchors() {
         let reads = vec![kv("read", "old")];
@@ -605,7 +548,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn kagemusha_balanced_paths_roundtrip_at_every_supported_shape() {
         for count in [1_usize, 2, 3, 4, 8, 16] {
@@ -645,7 +587,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn kagemusha_paths_are_independent_of_unrelated_write_count() {
         let anchors = vec![topup_leaf(1, 0xA1), topup_leaf(2, 0xA2)];
@@ -667,7 +608,6 @@ mod tests {
         assert_ne!(compact.ordinary_writes_root, noisy.ordinary_writes_root);
         assert_ne!(compact.post_state_root, noisy.post_state_root);
     }
-
     #[test]
     fn kagemusha_inclusion_rejects_every_binding_mutation() {
         let writes = vec![
@@ -693,7 +633,6 @@ mod tests {
             commitment.ordinary_writes_root,
             commitment.post_state_root
         ));
-
         let mut wrong_key = target.clone();
         wrong_key.key[1] ^= 0x80;
         assert!(!verifies(
@@ -722,7 +661,6 @@ mod tests {
             commitment.ordinary_writes_root,
             Hash::new(b"wrong post root")
         ));
-
         let mut wrong_index = proof.clone();
         wrong_index.leaf_index = (wrong_index.leaf_index + 1) % wrong_index.leaf_count;
         assert!(!verifies(
@@ -764,21 +702,17 @@ mod tests {
             commitment.post_state_root
         ));
     }
-
     #[test]
     fn kagemusha_commitment_rejects_malformed_zero_and_oversized_sets() {
         let mut malformed_key = topup_leaf(1, 1);
         malformed_key.key.pop();
         assert!(build_kagemusha_topup_block_commitment(&[malformed_key]).is_err());
-
         let mut zero_operation = topup_leaf(1, 1);
         zero_operation.key[1..].fill(0);
         assert!(build_kagemusha_topup_block_commitment(&[zero_operation]).is_err());
-
         let mut zero_digest = topup_leaf(1, 1);
         zero_digest.value.fill(0);
         assert!(build_kagemusha_topup_block_commitment(&[zero_digest]).is_err());
-
         let oversized = (1..=KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK + 1)
             .map(|index| {
                 topup_leaf(
@@ -790,7 +724,6 @@ mod tests {
         assert!(build_kagemusha_topup_block_commitment(&oversized).is_err());
         assert!(compute_consensus_post_state_root(&[], &oversized).is_err());
     }
-
     #[test]
     fn kagemusha_duplicate_operation_uses_only_the_final_digest() {
         let stale = topup_leaf(7, 0xA1);
@@ -806,21 +739,17 @@ mod tests {
             commitment.post_state_root,
         ));
     }
-
     #[test]
     fn mask_tail_bits_handles_byte_boundaries_without_fallible_invariants() {
         let mut empty = vec![0xAA];
         mask_tail_bits(&mut empty, 0);
         assert_eq!(empty, Vec::<u8>::new());
-
         let mut exact = vec![0xAA, 0x55, 0xFF];
         mask_tail_bits(&mut exact, 16);
         assert_eq!(exact, vec![0xAA, 0x55]);
-
         let mut partial = vec![0xAA, 0xFF];
         mask_tail_bits(&mut partial, 9);
         assert_eq!(partial, vec![0xAA, 0x01]);
-
         let mut short = Vec::new();
         mask_tail_bits(&mut short, 15);
         assert_eq!(short, vec![0x00, 0x00]);

@@ -5,9 +5,7 @@
 //! entrypoints (e.g., `echo`) to produce `ComputeReceipt` outputs. It is
 //! intentionally lightweight so CI can replay requests and lock determinism
 //! without running the full node.
-
 #![allow(clippy::too_many_lines)]
-
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env, fs,
@@ -19,10 +17,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 #[path = "../compute_harness.rs"]
 mod compute_harness;
-
 use axum::{
     Router,
     body::Bytes,
@@ -52,7 +48,6 @@ use tokio::{
     task::JoinSet,
 };
 use tower::ServiceExt;
-
 #[cfg(not(test))]
 fn touch_compute_helpers() {
     type BuildCallFn = fn(
@@ -68,7 +63,6 @@ fn touch_compute_helpers() {
     let _ = compute_harness::payload_with_len as fn(usize) -> Vec<u8>;
     let _ = compute_harness::build_call_for_route as BuildCallFn;
 }
-
 #[derive(Clone, JsonDeserialize, JsonSerialize)]
 struct GatewayRequest {
     namespace: Name,
@@ -93,7 +87,6 @@ struct GatewayRequest {
     /// Base64-encoded payload bytes.
     payload_b64: String,
 }
-
 #[derive(JsonSerialize, JsonDeserialize)]
 struct GatewayResponse {
     receipt: iroha_data_model::compute::ComputeReceipt,
@@ -101,7 +94,6 @@ struct GatewayResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     response_b64: Option<String>,
 }
-
 #[derive(Clone, JsonSerialize)]
 struct BenchPercentiles {
     p50_ms: f64,
@@ -109,7 +101,6 @@ struct BenchPercentiles {
     p99_ms: f64,
     max_ms: f64,
 }
-
 #[derive(Clone, JsonSerialize)]
 struct BenchSloTargets {
     max_p50_ms: f64,
@@ -117,7 +108,6 @@ struct BenchSloTargets {
     min_rps: f64,
     max_response_bytes: u64,
 }
-
 #[derive(Clone, JsonSerialize)]
 struct BenchSloReport {
     passed: bool,
@@ -125,7 +115,6 @@ struct BenchSloReport {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     violations: Vec<String>,
 }
-
 #[derive(Clone, JsonSerialize)]
 struct BenchSummary {
     namespace: Name,
@@ -143,13 +132,11 @@ struct BenchSummary {
     #[norito(skip_serializing_if = "Option::is_none")]
     slo: Option<BenchSloReport>,
 }
-
 #[derive(Clone)]
 struct RouteCtx {
     manifest: Arc<ComputeManifest>,
     route_idx: usize,
 }
-
 impl RouteCtx {
     fn route(&self) -> &ComputeRoute {
         self.manifest
@@ -158,14 +145,12 @@ impl RouteCtx {
             .expect("route index should be valid")
     }
 }
-
 #[derive(Clone)]
 struct RouteQueue {
     semaphore: Arc<Semaphore>,
     queued: Arc<AtomicUsize>,
     capacity: usize,
 }
-
 impl RouteQueue {
     fn new(max_inflight: usize, capacity: usize) -> Self {
         Self {
@@ -174,7 +159,6 @@ impl RouteQueue {
             capacity: capacity.max(1),
         }
     }
-
     async fn acquire(self: &Arc<Self>) -> Result<QueueGuard, GatewayError> {
         let prev = self.queued.fetch_add(1, Ordering::SeqCst);
         if prev >= self.capacity {
@@ -193,31 +177,26 @@ impl RouteQueue {
         })
     }
 }
-
 struct QueueGuard {
     queue: Arc<RouteQueue>,
     _permit: OwnedSemaphorePermit,
 }
-
 impl Drop for QueueGuard {
     fn drop(&mut self) {
         self.queue.queued.fetch_sub(1, Ordering::SeqCst);
     }
 }
-
 #[derive(Clone)]
 struct TokenBucketLimiter {
     rate_per_sec: Option<f64>,
     burst: f64,
     buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
 }
-
 #[derive(Clone, Copy)]
 struct TokenBucket {
     tokens: f64,
     last: Instant,
 }
-
 #[derive(Clone, Copy)]
 struct GatewayLimits {
     rate_per_sec: Option<u32>,
@@ -226,7 +205,6 @@ struct GatewayLimits {
     queue_capacity: usize,
     max_inflight: usize,
 }
-
 impl TokenBucketLimiter {
     fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
         let rate = rate_per_sec.and_then(|r| if r == 0 { None } else { Some(r as f64) });
@@ -237,7 +215,6 @@ impl TokenBucketLimiter {
             buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-
     async fn allow(&self, key: &str) -> bool {
         let Some(rate) = self.rate_per_sec else {
             return true;
@@ -261,7 +238,6 @@ impl TokenBucketLimiter {
         }
     }
 }
-
 #[derive(Clone)]
 struct ComputeGateway {
     routes: BTreeMap<ComputeRouteId, RouteCtx>,
@@ -276,7 +252,6 @@ struct ComputeGateway {
     queue_capacity: usize,
     max_inflight: usize,
 }
-
 impl ComputeGateway {
     fn new(
         manifest: ComputeManifest,
@@ -297,7 +272,6 @@ impl ComputeGateway {
                 },
             );
         }
-
         Ok(Self {
             routes,
             namespaces: [manifest.namespace.clone()].into_iter().collect(),
@@ -312,13 +286,11 @@ impl ComputeGateway {
             max_inflight: limits.max_inflight,
         })
     }
-
     async fn router(self: Arc<Self>) -> Router {
         Router::new()
             .route("/v1/compute/{service}/{method}", post(Self::handle_compute))
             .with_state(self)
     }
-
     async fn handle_compute(
         State(gateway): State<Arc<Self>>,
         axum::extract::Path((service, method)): axum::extract::Path<(String, String)>,
@@ -365,7 +337,6 @@ impl ComputeGateway {
             }
         }
     }
-
     async fn process(
         &self,
         route_id: ComputeRouteId,
@@ -375,7 +346,6 @@ impl ComputeGateway {
             .routes
             .get(&route_id)
             .ok_or_else(|| GatewayError::NotFound(route_id.clone()))?;
-
         if !self.namespaces.contains(&req.namespace) {
             return Err(GatewayError::Validation(
                 ComputeValidationError::NamespaceMismatch {
@@ -384,7 +354,6 @@ impl ComputeGateway {
                 },
             ));
         }
-
         let payload = decode_payload(&req.payload_b64)?;
         let request = ComputeRequest {
             headers: req.headers.clone(),
@@ -407,7 +376,6 @@ impl ComputeGateway {
             auth: req.auth,
             request,
         };
-
         ctx.manifest
             .validate_call(&call)
             .map_err(GatewayError::Validation)?;
@@ -421,7 +389,6 @@ impl ComputeGateway {
             enforce_sponsor_policy(&self.economics.sponsor_policy, budget.get(), 0)
                 .map_err(GatewayError::Governance)?;
         }
-
         // Basic rate limiting keyed by auth identity.
         let rate_key = match &call.auth {
             ComputeAuthz::Public => "public".to_string(),
@@ -430,7 +397,6 @@ impl ComputeGateway {
         if !self.limiter.allow(&rate_key).await {
             return Err(GatewayError::RateLimited);
         }
-
         // Replay guard keyed by request hash.
         self.prune_replay().await;
         let request_hash: Hash = call.request_hash().into();
@@ -441,15 +407,12 @@ impl ComputeGateway {
             }
             replay.insert(request_hash, Instant::now());
         }
-
         let queue = self.queue_for(&route_id).await;
         let _guard = queue.acquire().await?;
-
         let (outcome, response_bytes) =
             compute_harness::execute_entrypoint(&ctx.route().entrypoint, &payload, &call)
                 .map_err(|err| GatewayError::Internal(err.to_string()))?;
         let mut metering = compute_harness::meter(ctx.route(), &call, &payload, &response_bytes);
-
         compute_harness::charge_units(
             &self.price_families,
             &self.default_price_family,
@@ -470,20 +433,17 @@ impl ComputeGateway {
                 });
             }
         }
-
         let receipt = iroha_data_model::compute::ComputeReceipt {
             call: ComputeCallSummary::from(&call),
             metering,
             outcome,
         };
-
         Ok(GatewayResponse {
             receipt,
             response_b64: response_bytes
                 .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)),
         })
     }
-
     async fn queue_for(&self, route_id: &ComputeRouteId) -> Arc<RouteQueue> {
         let mut guard = self.queues.lock().await;
         guard
@@ -491,7 +451,6 @@ impl ComputeGateway {
             .or_insert_with(|| Arc::new(RouteQueue::new(self.max_inflight, self.queue_capacity)))
             .clone()
     }
-
     async fn prune_replay(&self) {
         let ttl = self.replay_ttl;
         let mut replay = self.replay.lock().await;
@@ -499,7 +458,6 @@ impl ComputeGateway {
         replay.retain(|_, seen| now.saturating_duration_since(*seen) < ttl);
     }
 }
-
 #[derive(Debug)]
 enum GatewayError {
     Manifest(ComputeManifestError),
@@ -513,7 +471,6 @@ enum GatewayError {
     NotFound(ComputeRouteId),
     Internal(String),
 }
-
 impl IntoResponse for GatewayError {
     fn into_response(self) -> Response {
         match self {
@@ -562,21 +519,17 @@ impl IntoResponse for GatewayError {
         }
     }
 }
-
 impl std::fmt::Display for GatewayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
 }
-
 impl std::error::Error for GatewayError {}
-
 fn decode_payload(b64: &str) -> Result<Vec<u8>, GatewayError> {
     base64::engine::general_purpose::STANDARD
         .decode(b64.as_bytes())
         .map_err(|err| GatewayError::Internal(format!("payload base64 decode failed: {err}")))
 }
-
 fn build_economics(
     price_families: &BTreeMap<Name, iroha_data_model::compute::ComputePriceWeights>,
 ) -> ComputeEconomics {
@@ -591,18 +544,15 @@ fn build_economics(
         price_family_baseline: price_families.clone(),
     }
 }
-
 const DEFAULT_MANIFEST_PATH: &str = "fixtures/compute/manifest_compute_payments.json";
 const DEFAULT_PAYLOAD_PATH: &str = "fixtures/compute/payload_compute_payments.json";
 const DEFAULT_BENCH_OUT_DIR: &str = "artifacts/compute_gateway";
-
 fn load_manifest(path: &str) -> ComputeManifest {
     fs::read_to_string(path)
         .ok()
         .and_then(|contents| json::from_str(&contents).ok())
         .unwrap_or_else(compute_harness::default_manifest)
 }
-
 fn load_payload(path: Option<&str>) -> Vec<u8> {
     if let Some(candidate) = path
         && let Ok(contents) = fs::read_to_string(candidate)
@@ -620,7 +570,6 @@ fn load_payload(path: Option<&str>) -> Vec<u8> {
     }
     br#"{"pair":"XOR/USD"}"#.to_vec()
 }
-
 fn default_bench_slo(route: &ComputeRoute) -> BenchSloTargets {
     BenchSloTargets {
         max_p50_ms: compute_defaults::target_p50_latency_ms().get() as f64,
@@ -629,7 +578,6 @@ fn default_bench_slo(route: &ComputeRoute) -> BenchSloTargets {
         max_response_bytes: route.max_response_bytes.get(),
     }
 }
-
 fn compute_percentiles(samples: &[f64]) -> BenchPercentiles {
     if samples.is_empty() {
         return BenchPercentiles {
@@ -658,7 +606,6 @@ fn compute_percentiles(samples: &[f64]) -> BenchPercentiles {
         max_ms: *sorted.last().unwrap_or(&0.0),
     }
 }
-
 fn evaluate_slo(
     targets: &BenchSloTargets,
     percentiles: &BenchPercentiles,
@@ -694,18 +641,15 @@ fn evaluate_slo(
             response_bytes_max, targets.max_response_bytes
         ));
     }
-
     BenchSloReport {
         passed: violations.is_empty(),
         violations,
     }
 }
-
 struct BenchSample {
     latency_ms: f64,
     response_bytes: usize,
 }
-
 async fn bench_gateway(
     gateway: Arc<ComputeGateway>,
     namespace: Name,
@@ -719,11 +663,9 @@ async fn bench_gateway(
     let iterations = iterations.max(1);
     let concurrency = concurrency.max(1);
     let uri = format!("/v1/compute/{}/{}", route.id.service, route.id.method);
-
     let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
     let mut join_set = JoinSet::new();
     let semaphore = Arc::new(Semaphore::new(concurrency));
-
     let request_template = GatewayRequest {
         namespace,
         codec: route
@@ -745,7 +687,6 @@ async fn bench_gateway(
         headers: BTreeMap::new(),
         payload_b64: String::new(),
     };
-
     let started = Instant::now();
     for seq in 0..iterations {
         let permit = semaphore
@@ -802,13 +743,11 @@ async fn bench_gateway(
             })
         });
     }
-
     let mut successes = 0usize;
     let mut failures = 0usize;
     let mut latencies = Vec::new();
     let mut response_total: usize = 0;
     let mut response_max: u64 = 0;
-
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(Ok(sample)) => {
@@ -822,7 +761,6 @@ async fn bench_gateway(
             }
         }
     }
-
     let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
     let throughput_rps = if elapsed_ms > 0.0 {
         successes as f64 / (elapsed_ms / 1_000.0)
@@ -838,7 +776,6 @@ async fn bench_gateway(
         response_max,
         successes,
     );
-
     Ok(BenchSummary {
         namespace: request_template.namespace,
         route: route.id.clone(),
@@ -858,7 +795,6 @@ async fn bench_gateway(
         slo: Some(slo),
     })
 }
-
 fn write_bench_outputs(out_dir: &PathBuf, summary: &BenchSummary) -> Result<(), String> {
     fs::create_dir_all(out_dir)
         .map_err(|err| format!("failed to create bench output dir {out_dir:?}: {err}"))?;
@@ -866,7 +802,6 @@ fn write_bench_outputs(out_dir: &PathBuf, summary: &BenchSummary) -> Result<(), 
     let json_bytes = json::to_vec_pretty(summary).map_err(|err| err.to_string())?;
     fs::write(&json_path, json_bytes)
         .map_err(|err| format!("failed to write {json_path:?}: {err}"))?;
-
     let slo_status = summary
         .slo
         .as_ref()
@@ -904,7 +839,6 @@ fn write_bench_outputs(out_dir: &PathBuf, summary: &BenchSummary) -> Result<(), 
     fs::write(&md_path, md).map_err(|err| format!("failed to write {md_path:?}: {err}"))?;
     Ok(())
 }
-
 fn route_id_from_parts(service: String, method: String) -> Result<ComputeRouteId, GatewayError> {
     let service_name: Name = service
         .parse()
@@ -914,12 +848,10 @@ fn route_id_from_parts(service: String, method: String) -> Result<ComputeRouteId
         .map_err(|_| GatewayError::Internal("invalid method name".to_string()))?;
     Ok(ComputeRouteId::new(service_name, method_name))
 }
-
 #[cfg(test)]
 fn default_manifest() -> ComputeManifest {
     compute_harness::default_manifest()
 }
-
 enum Mode {
     Serve {
         manifest_path: String,
@@ -933,7 +865,6 @@ enum Mode {
         payload_path: Option<String>,
     },
 }
-
 fn parse_mode(mut args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let first = args.next();
     match first.as_deref() {
@@ -986,7 +917,6 @@ fn parse_mode(mut args: impl Iterator<Item = String>) -> Result<Mode, String> {
         }),
     }
 }
-
 async fn run_server(manifest_path: String, addr: SocketAddr) -> Result<(), String> {
     let manifest = load_manifest(&manifest_path);
     let slo = compute_harness::slo_targets();
@@ -1009,7 +939,6 @@ async fn run_server(manifest_path: String, addr: SocketAddr) -> Result<(), Strin
         .map_err(|err| err.to_string())?,
     );
     let router = gateway.clone().router().await;
-
     println!("compute gateway listening on http://{addr}");
     let listener = TcpListener::bind(addr)
         .await
@@ -1018,7 +947,6 @@ async fn run_server(manifest_path: String, addr: SocketAddr) -> Result<(), Strin
         .await
         .map_err(|err| format!("server error: {err}"))
 }
-
 async fn run_bench_mode(
     manifest_path: String,
     payload_path: Option<String>,
@@ -1071,7 +999,6 @@ async fn run_bench_mode(
     );
     Ok(())
 }
-
 #[tokio::main]
 async fn main() {
     #[cfg(not(test))]
@@ -1107,17 +1034,14 @@ async fn main() {
         std::process::exit(1);
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use axum::{
         body,
         http::{Request, StatusCode},
     };
     use iroha_data_model::compute::ComputeOutcomeKind;
-
-    use super::*;
-
     fn gateway_for_tests() -> Arc<ComputeGateway> {
         let manifest: ComputeManifest = json::from_str(include_str!(
             "../../../fixtures/compute/manifest_compute_payments.json"
@@ -1142,7 +1066,6 @@ mod tests {
             .expect("gateway"),
         )
     }
-
     async fn call(gateway: Arc<ComputeGateway>, payload: &[u8]) -> (StatusCode, Vec<u8>) {
         let router = gateway.router().await;
         let body = GatewayRequest {
@@ -1176,7 +1099,6 @@ mod tests {
             .to_vec();
         (status, body_bytes)
     }
-
     #[tokio::test]
     async fn happy_path_echo() {
         let gw = gateway_for_tests();
@@ -1193,7 +1115,6 @@ mod tests {
         );
         assert!(resp.receipt.metering.charged_units > 0);
     }
-
     #[tokio::test]
     async fn rejects_replay() {
         let gw = gateway_for_tests();
@@ -1203,7 +1124,6 @@ mod tests {
         let (status_dup, _) = call(gw.clone(), payload).await;
         assert_eq!(status_dup, StatusCode::CONFLICT);
     }
-
     #[tokio::test]
     async fn rate_limits_by_auth() {
         let gw = gateway_for_tests();
@@ -1235,7 +1155,6 @@ mod tests {
                 .body(axum::body::Body::from(body_bytes.clone()))
                 .unwrap()
         };
-
         let resp1 = router.clone().oneshot(build_request(1)).await.unwrap();
         assert_eq!(resp1.status(), StatusCode::OK);
         // Second request consumes remaining burst; third should be limited.
@@ -1243,7 +1162,6 @@ mod tests {
         let resp3 = router.oneshot(build_request(3)).await.unwrap();
         assert_eq!(resp3.status(), StatusCode::TOO_MANY_REQUESTS);
     }
-
     #[tokio::test]
     async fn sponsor_budget_is_enforced() {
         let gw = gateway_for_tests();
@@ -1272,11 +1190,9 @@ mod tests {
             .header("content-type", "application/json")
             .body(axum::body::Body::from(json::to_vec(&body).expect("json")))
             .unwrap();
-
         let resp = router.oneshot(request).await.unwrap();
         assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
     }
-
     #[tokio::test]
     async fn bench_summary_runs() {
         let manifest = default_manifest();

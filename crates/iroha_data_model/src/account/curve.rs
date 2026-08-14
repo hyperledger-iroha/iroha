@@ -1,12 +1,9 @@
 //! Shared curve identifier registry for account controllers and address payloads.
-
 use iroha_crypto::Algorithm;
 use thiserror::Error;
-
 /// Stable identifier assigned to a supported signing curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CurveId(u8);
-
 impl CurveId {
     /// Identifier for Ed25519 controllers.
     pub const ED25519: Self = Self(1);
@@ -32,7 +29,6 @@ impl CurveId {
     pub const GOST_512_B: Self = Self(14);
     /// Identifier for SM2 controllers.
     pub const SM2: Self = Self(15);
-
     /// Convert an [`Algorithm`] into the published curve identifier.
     ///
     /// # Errors
@@ -64,12 +60,10 @@ impl CurveId {
             _ => Err(CurveRegistryError::UnsupportedAlgorithm(algorithm)),
         }
     }
-
     /// Export the identifier as its canonical byte.
     pub const fn as_u8(self) -> u8 {
         self.0
     }
-
     /// Convert the identifier back into an [`Algorithm`].
     pub fn algorithm(self) -> Algorithm {
         match self.0 {
@@ -96,10 +90,8 @@ impl CurveId {
         }
     }
 }
-
 impl TryFrom<u8> for CurveId {
     type Error = CurveRegistryError;
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::ED25519),
@@ -125,13 +117,11 @@ impl TryFrom<u8> for CurveId {
         }
     }
 }
-
 impl From<CurveId> for u8 {
     fn from(value: CurveId) -> Self {
         value.0
     }
 }
-
 /// Error raised when a curve identifier lookup fails.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum CurveRegistryError {
@@ -142,18 +132,15 @@ pub enum CurveRegistryError {
     #[error("unknown curve identifier: {0}")]
     UnknownCurveId(u8),
 }
-
 #[cfg(all(test, feature = "bls"))]
 mod tests {
     use super::*;
-
     #[test]
     fn bls_curve_ids_round_trip() {
         let normal = CurveId::try_from_algorithm(Algorithm::BlsNormal)
             .expect("BLS normal should map to a curve id");
         let small = CurveId::try_from_algorithm(Algorithm::BlsSmall)
             .expect("BLS small should map to a curve id");
-
         assert_eq!(normal, CurveId::BLS_NORMAL);
         assert_eq!(small, CurveId::BLS_SMALL);
         assert_eq!(CurveId::try_from(u8::from(normal)).unwrap(), normal);

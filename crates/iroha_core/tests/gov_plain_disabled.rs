@@ -1,8 +1,6 @@
 //! Plain voting disabled policy gate test.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use core::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -13,7 +11,6 @@ use iroha_data_model::{
     events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
 };
 use iroha_test_samples::ALICE_ID;
-
 #[test]
 fn plain_ballot_rejected_when_disabled() {
     let kura = Kura::blank_kura_for_testing();
@@ -24,7 +21,6 @@ fn plain_ballot_rejected_when_disabled() {
     cfg.plain_voting_enabled = false;
     cfg.min_bond_amount = 0_u64.into();
     state.set_gov(cfg);
-
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
         None,
@@ -35,7 +31,6 @@ fn plain_ballot_rejected_when_disabled() {
     );
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let instr = CastPlainBallot {
         referendum_id: "rid-disabled".to_string(),
         owner: ALICE_ID.clone(),

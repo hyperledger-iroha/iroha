@@ -36,6 +36,43 @@ Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
 
+## Node-local core and pipeline reads
+
+Peer addresses, detailed clock state, and pipeline preflight load/policy are
+operator-only. Configure a separate lightweight client with an immutable signer
+bound to the deployment's exact genesis `NetworkId`:
+
+```python
+from iroha_torii_client import ToriiClient, ToriiOperatorSigningContext
+
+operator_context = ToriiOperatorSigningContext(
+    network_id=exact_genesis_network_id,
+    public_key=operator_public_key_multihash,
+    signer=operator_signer.sign,
+)
+operator_client = ToriiClient(
+    "https://torii.example",
+    operator_signing_context=operator_context,
+)
+
+peers = operator_client.list_peers()
+clock = operator_client.get_time_status()
+preflight = operator_client.get_pipeline_preflight()
+
+relays = operator_client.list_kaigi_relays()
+relay = operator_client.get_kaigi_relay(relays.items[0].relay_id) if relays.items else None
+health = operator_client.get_kaigi_relays_health()
+```
+
+Each helper generates a fresh signature over the exact `GET`, path, query, and
+empty body and dispatches once with redirects and retries disabled. Bearer/API
+tokens, canonical-account or witness headers, and precomputed operator headers
+are rejected rather than used as fallbacks. The lightweight client has no
+pipeline-recovery, policy, or proof-retention method; no replacement API is
+invented for those absent surfaces. Kaigi list and health also fail closed at
+Torii's hard relay diagnostic cap rather than materializing an unbounded
+registry; the relay SSE handshake remains a separate streaming protocol.
+
 ## Tenant-scoped ZK attachments
 
 Every attachment upload, list, fetch, and delete is account-authenticated. The
@@ -63,6 +100,30 @@ client.delete_attachment(meta["id"], canonical_auth=auth)
 
 Use a fresh nonce per call (the default). A human chain label, foreign genesis
 hash, unsigned call, redirect replay, or missing canonical auth is rejected.
+
+Space Directory publish/revoke drafts follow the same contract and additionally
+require the exact canonical I105 payload authority to equal `auth.account_id`:
+
+```python
+from iroha_torii_client import ToriiClient, ToriiLocalSigningContext
+
+client = ToriiClient(
+    torii_url,
+    local_signing_context=ToriiLocalSigningContext(exact_network_id),
+)
+draft = client.publish_space_directory_manifest(
+    authority=authority,
+    manifest=manifest,
+    canonical_auth=auth,
+)
+client.revoke_space_directory_manifest(
+    authority=authority,
+    uaid=uaid,
+    dataspace=11,
+    revoked_epoch=42,
+    canonical_auth=auth,
+)
+```
 
 ## Fee quotes and sponsor programs
 

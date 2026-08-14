@@ -3,14 +3,12 @@ fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() 
     struct CountingRouter {
         calls: Arc<AtomicUsize>,
     }
-
     impl LaneRouter for CountingRouter {
         fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             self.calls.fetch_add(1, Ordering::Relaxed);
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         }
     }
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
@@ -23,7 +21,6 @@ fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() 
             calls: Arc::clone(&calls),
         }),
     );
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     let payload = tx.entrypoint_bytes();
@@ -39,7 +36,6 @@ fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() 
         calls.load(Ordering::Relaxed) > 0,
         "precomputed plan admission should validate against current routing"
     );
-
     let routing = queue
         .routing_decisions
         .get(&hash)
@@ -52,14 +48,12 @@ fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() 
         "successful gossip admission should still enqueue the gossip side channel"
     );
 }
-
 struct NativeAmxParticipantDriftFixture {
     state: State,
     tx: AcceptedTransaction<'static>,
     stale_plan: RoutingPlan,
     current_plan: RoutingPlan,
 }
-
 fn native_amx_participant_drift_fixture(
     time_source: &TimeSource,
 ) -> NativeAmxParticipantDriftFixture {
@@ -136,7 +130,6 @@ fn native_amx_participant_drift_fixture(
     crate::state::attach_synthetic_autoscale_committee_for_test(stale_participant_lane);
     let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
         .expect("current lane catalog");
-
     {
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
@@ -146,7 +139,6 @@ fn native_amx_participant_drift_fixture(
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = dataspace_catalog.clone();
     }
-
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     register_test_authority(&mut state, &authority_id);
     let tx = accepted_tx_with(
@@ -173,7 +165,6 @@ fn native_amx_participant_drift_fixture(
     let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
         .try_route_plan(&tx)
         .expect("current Native AMX plan should resolve");
-
     NativeAmxParticipantDriftFixture {
         state,
         tx,
@@ -181,7 +172,6 @@ fn native_amx_participant_drift_fixture(
         current_plan,
     }
 }
-
 #[test]
 fn reconfigure_nexus_with_state_fails_closed_on_corrupt_native_amx_plan_index() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -198,7 +188,6 @@ fn reconfigure_nexus_with_state_fails_closed_on_corrupt_native_amx_plan_index() 
         fixture.current_plan.coordinator_route()
     );
     assert_ne!(fixture.stale_plan, fixture.current_plan);
-
     let queue = Queue::test(config_factory(), &time_source);
     let hash = fixture.tx.hash();
     queue
@@ -218,10 +207,8 @@ fn reconfigure_nexus_with_state_fails_closed_on_corrupt_native_amx_plan_index() 
         fixture.stale_plan.clone(),
         queue.capacity.get(),
     );
-
     let nexus = fixture.state.nexus_snapshot();
     queue.reconfigure_nexus_with_state(&nexus, &fixture.state, None);
-
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 1);
     assert_eq!(
@@ -246,7 +233,6 @@ fn reconfigure_nexus_with_state_fails_closed_on_corrupt_native_amx_plan_index() 
     let _ = crate::queue::routing_ledger::take_plan(&hash);
     let _ = crate::queue::routing_ledger::take(&hash);
 }
-
 #[test]
 fn reconfigure_nexus_with_view_fails_closed_on_corrupt_native_amx_plan_index() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -263,7 +249,6 @@ fn reconfigure_nexus_with_view_fails_closed_on_corrupt_native_amx_plan_index() {
         fixture.current_plan.coordinator_route()
     );
     assert_ne!(fixture.stale_plan, fixture.current_plan);
-
     let queue = Queue::test(config_factory(), &time_source);
     let hash = fixture.tx.hash();
     queue
@@ -283,12 +268,10 @@ fn reconfigure_nexus_with_view_fails_closed_on_corrupt_native_amx_plan_index() {
         fixture.stale_plan.clone(),
         queue.capacity.get(),
     );
-
     let nexus = fixture.state.nexus_snapshot();
     let state_view = fixture.state.view();
     queue.reconfigure_nexus(&nexus, &state_view, None);
     drop(state_view);
-
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.queued_len(), 1);
     assert_eq!(
@@ -313,7 +296,6 @@ fn reconfigure_nexus_with_view_fails_closed_on_corrupt_native_amx_plan_index() {
     let _ = crate::queue::routing_ledger::take_plan(&hash);
     let _ = crate::queue::routing_ledger::take(&hash);
 }
-
 #[test]
 fn proposal_pop_restores_fifo_and_fails_closed_on_corrupt_native_amx_plan_index() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -330,7 +312,6 @@ fn proposal_pop_restores_fifo_and_fails_closed_on_corrupt_native_amx_plan_index(
         fixture.current_plan.coordinator_route()
     );
     assert_ne!(fixture.stale_plan, fixture.current_plan);
-
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let hash = fixture.tx.hash();
     queue
@@ -361,12 +342,10 @@ fn proposal_pop_restores_fifo_and_fails_closed_on_corrupt_native_amx_plan_index(
         fixture.stale_plan.clone(),
         queue.capacity.get(),
     );
-
     let state_view = fixture.state.view();
     let mut expired = Vec::new();
     let guard = queue.pop_from_queue(&state_view, &mut expired);
     drop(state_view);
-
     assert!(expired.is_empty());
     assert!(guard.is_none());
     assert_eq!(queue.active_len(), 2);
@@ -391,7 +370,6 @@ fn proposal_pop_restores_fifo_and_fails_closed_on_corrupt_native_amx_plan_index(
     let _ = crate::queue::routing_ledger::take_plan(&hash);
     let _ = crate::queue::routing_ledger::take(&hash);
 }
-
 #[test]
 fn push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participant_drift() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -401,7 +379,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participan
         fixture.current_plan.coordinator_route()
     );
     assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
-
     let queue = Queue::test(config_factory(), &time_source);
     let hash = fixture.tx.hash();
     let payload = fixture.tx.entrypoint_bytes();
@@ -413,7 +390,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participan
             Some(Arc::clone(&payload)),
         )
         .expect_err("direct admission must reject stale Native AMX participant legs");
-
     assert!(
         matches!(
             &err,
@@ -447,7 +423,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participan
         "rejected direct admission must not publish gossip notifications"
     );
 }
-
 #[test]
 fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autoscale_plan() {
     let NexusRoutingFixture {
@@ -487,7 +462,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     }
     seed_committed_height_for_queue_test(&state, 6);
-
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_with(
@@ -503,7 +477,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
     let hash = tx.hash();
     let forged_plan =
         RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
-
     assert_eq!(
         queue
             .route_plan_with_state(&tx, &state)
@@ -515,7 +488,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
     let err = queue
         .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, forged_plan, None)
         .expect_err("forged future-created autoscale plan must reject");
-
     assert!(
         matches!(
             &err,
@@ -547,7 +519,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
         "rejected direct admission must not publish gossip notifications"
     );
 }
-
 #[test]
 fn batch_push_with_precomputed_routing_rejects_native_amx_participant_drift() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -557,7 +528,6 @@ fn batch_push_with_precomputed_routing_rejects_native_amx_participant_drift() {
         fixture.current_plan.coordinator_route()
     );
     assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
-
     let queue = Queue::test(config_factory(), &time_source);
     let hash = fixture.tx.hash();
     let err = queue
@@ -566,7 +536,6 @@ fn batch_push_with_precomputed_routing_rejects_native_amx_participant_drift() {
             &fixture.state,
         )
         .expect_err("batch admission must reject stale Native AMX participant legs");
-
     assert!(
         matches!(
             &err,
@@ -598,7 +567,6 @@ fn batch_push_with_precomputed_routing_rejects_native_amx_participant_drift() {
         "rejected batch must not publish gossip notifications"
     );
 }
-
 #[test]
 fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_cache() {
     let kura = Kura::blank_kura_for_testing();
@@ -607,7 +575,6 @@ fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_ca
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-
     let first = accepted_tx_by_someone(&time_source);
     let first_hash = first.as_ref().hash();
     let first_payload = first.entrypoint_bytes();
@@ -615,7 +582,6 @@ fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_ca
     let second = accepted_tx_by_someone(&time_source);
     let second_hash = second.as_ref().hash();
     let second_payload = second.entrypoint_bytes();
-
     let accepted = queue
         .push_batch_with_lane_with_state_and_routing_plans(
             vec![
@@ -625,12 +591,10 @@ fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_ca
             &state,
         )
         .expect("batch should be accepted");
-
     assert_eq!(accepted, 2);
     assert_eq!(queue.active_len(), 2);
     assert_eq!(queue.queued_len(), 2);
     assert_eq!(queue.current_backpressure().queued(), 2);
-
     let batch = queue.gossip_batch_with_state(2, &state);
     assert_eq!(batch.len(), 2);
     assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
@@ -642,7 +606,6 @@ fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_ca
     assert!(Arc::ptr_eq(&batch[1].payload, &second_payload));
     assert_eq!(batch[1].routing, routing);
 }
-
 #[test]
 fn batch_push_duplicate_matches_single_push_prefix_semantics() {
     let kura = Kura::blank_kura_for_testing();
@@ -651,7 +614,6 @@ fn batch_push_duplicate_matches_single_push_prefix_semantics() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.as_ref().hash();
     let result = queue.push_batch_with_lane_with_state_and_routing_plans(
@@ -661,7 +623,6 @@ fn batch_push_duplicate_matches_single_push_prefix_semantics() {
         ],
         &state,
     );
-
     assert!(
         matches!(
             result,
@@ -687,7 +648,6 @@ fn batch_push_duplicate_matches_single_push_prefix_semantics() {
     let batch = queue.gossip_batch_with_state(2, &state);
     assert_eq!(batch.len(), 0);
 }
-
 #[test]
 fn batch_push_full_queue_preserves_successful_prefix() {
     let kura = Kura::blank_kura_for_testing();
@@ -698,12 +658,10 @@ fn batch_push_full_queue_preserves_successful_prefix() {
     cfg.capacity = nonzero!(1_usize);
     let queue = Queue::test(cfg, &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-
     let first = accepted_tx_by_someone(&time_source);
     let first_hash = first.as_ref().hash();
     time_handle.advance(Duration::from_millis(1));
     let second = accepted_tx_by_someone(&time_source);
-
     let result = queue.push_batch_with_lane_with_state_and_routing_plans(
         vec![
             (first, RoutingPlan::single(routing)),
@@ -711,7 +669,6 @@ fn batch_push_full_queue_preserves_successful_prefix() {
         ],
         &state,
     );
-
     assert!(
         matches!(
             result,
@@ -729,7 +686,6 @@ fn batch_push_full_queue_preserves_successful_prefix() {
     assert_eq!(batch.len(), 1);
     assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
 }
-
 #[test]
 fn batch_push_per_user_limit_preserves_successful_prefix() {
     let kura = Kura::blank_kura_for_testing();
@@ -741,12 +697,10 @@ fn batch_push_per_user_limit_preserves_successful_prefix() {
     let queue = Queue::test(cfg, &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (account_id, key_pair) = gen_account_in("wonderland");
-
     let first = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
     let first_hash = first.as_ref().hash();
     time_handle.advance(Duration::from_millis(1));
     let second = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
-
     let result = queue.push_batch_with_lane_with_state_and_routing_plans(
         vec![
             (first, RoutingPlan::single(routing)),
@@ -754,7 +708,6 @@ fn batch_push_per_user_limit_preserves_successful_prefix() {
         ],
         &state,
     );
-
     assert!(
         matches!(
             result,

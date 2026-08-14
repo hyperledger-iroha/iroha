@@ -634,37 +634,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiIdentifierResolveResponse> ResolveIdentifierAsync(
-        ToriiIdentifierResolveRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ValidateIdentifierResolveRequest(request);
-        var normalizedRequest = request with
-        {
-            PolicyId = NormalizeIdentifierPolicyId(request.PolicyId, nameof(request.PolicyId)),
-            EncryptedInput = NormalizeOptionalIdentifierCiphertext(
-                request.EncryptedInput,
-                nameof(request.EncryptedInput)),
-        };
-
-        ToriiIdentifierResolveResponse response;
-        try
-        {
-            response = await PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
-                "/v1/identifiers/resolve",
-                normalizedRequest,
-                cancellationToken: cancellationToken);
-        }
-        catch (JsonException exception)
-        {
-            throw RewriteIdentifierResolveJsonException(exception);
-        }
-
-        ValidateIdentifierResolveResponse(response);
-        return response;
-    }
-
     public async Task<ToriiAccountAliasIndexResolution?> ResolveAccountAliasIndexAsync(
         ulong index,
         CancellationToken cancellationToken = default)
@@ -1962,6 +1931,16 @@ public sealed partial class ToriiClient : IDisposable
         IReadOnlyDictionary<string, string>? signedHeaders = null;
         if (Options.CanonicalRequestCredentials is not null)
         {
+            foreach (var headerName in new[]
+                     {
+                         "X-Iroha-Account", "X-Iroha-Nonce", "X-Iroha-Signature", "X-Iroha-Timestamp-Ms",
+                     })
+            {
+                if (HttpClient.DefaultRequestHeaders.Contains(headerName))
+                {
+                    throw new InvalidOperationException("Canonical signing headers must be generated locally and cannot be precomputed.");
+                }
+            }
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
                 Options.LocalSigningContext?.NetworkId
@@ -5284,7 +5263,8 @@ public sealed partial class ToriiClient : IDisposable
     {
         var accountId = ToriiAccountFaucetPow.RequireExactAccountId(
             request.AccountId,
-            nameof(request.AccountId));
+            nameof(request.AccountId),
+            chainDiscriminant: null);
 
         string? nonceHex = null;
         if (request.PowNonceHex is not null)
@@ -5302,27 +5282,21 @@ public sealed partial class ToriiClient : IDisposable
 
         if (request.PowAnchorHeight is null)
         {
-            if (nonceHex is not null)
-            {
-                throw new ArgumentException(
-                    "Faucet PoW nonce requires an anchor height.",
-                    nameof(request.PowNonceHex));
-            }
+            throw new ArgumentException(
+                "Faucet PoW anchor height is required.",
+                nameof(request.PowAnchorHeight));
         }
-        else
+        if (request.PowAnchorHeight.Value == 0)
         {
-            if (request.PowAnchorHeight.Value == 0)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(request.PowAnchorHeight),
-                    "Faucet PoW anchor height must be positive.");
-            }
-            if (nonceHex is null)
-            {
-                throw new ArgumentException(
-                    "Faucet PoW anchor height requires a nonce.",
-                    nameof(request.PowAnchorHeight));
-            }
+            throw new ArgumentOutOfRangeException(
+                nameof(request.PowAnchorHeight),
+                "Faucet PoW anchor height must be positive.");
+        }
+        if (nonceHex is null)
+        {
+            throw new ArgumentException(
+                "Faucet PoW nonce is required.",
+                nameof(request.PowNonceHex));
         }
 
         return new ToriiAccountFaucetRequest

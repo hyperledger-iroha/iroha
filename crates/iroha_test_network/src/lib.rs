@@ -1,41 +1,17 @@
 //! Puppeteer for `irohad`, to create test networks
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 mod config;
 mod consensus_message_control;
 pub mod fslock_ports;
 pub mod genesis_support;
-
+use color_eyre::eyre::{Context, Report, Result, eyre};
+pub use config::chain_id;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
     NativeAmxFaultAck, NativeAmxFaultPhase,
 };
-
 use core::{fmt, future::Future, time::Duration};
-use std::{
-    borrow::Cow,
-    collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
-    ffi::OsString,
-    fs,
-    hash::{Hash as StdHash, Hasher},
-    io::{ErrorKind, Read, Seek, SeekFrom, Write},
-    iter,
-    net::TcpListener,
-    num::NonZero,
-    ops::Deref,
-    path::{Component, Path, PathBuf},
-    process::{ExitStatus, Output, Stdio},
-    sync::{
-        Arc, Mutex as StdMutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    },
-    thread,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
-
-use color_eyre::eyre::{Context, Report, Result, eyre};
-pub use config::chain_id;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
@@ -106,7 +82,30 @@ use iroha_test_samples::{
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
+    ffi::OsString,
+    fs,
+    hash::{Hash as StdHash, Hasher},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
+    iter,
+    net::TcpListener,
+    num::NonZero,
+    ops::Deref,
+    path::{Component, Path, PathBuf},
+    process::{ExitStatus, Output, Stdio},
+    sync::{
+        Arc, Mutex as StdMutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 // no external dependency needed: versioned encoding is a single leading byte (1)
+use crate::config::ensure_genesis_results_with_runtime_config;
+/// Consensus mode frozen into the test network's signed genesis profile.
+pub use iroha_data_model::block::consensus_v2::ConsensusMode;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -119,30 +118,20 @@ use tokio::{
 };
 use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
-
-use crate::config::ensure_genesis_results_with_runtime_config;
-
-/// Consensus mode frozen into the test network's signed genesis profile.
-pub use iroha_data_model::block::consensus_v2::ConsensusMode;
-
 const TEST_SNS_LEASE_PAYMENT: &str = "0.5";
 const TEST_SNS_POLICY_VERSION: u16 = 1;
 const TEST_SNS_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
-
 fn checked_key_pair_from_seed(seed: impl Into<Vec<u8>>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed.into(), algorithm)
         .expect("fixture seed must derive a valid keypair")
 }
-
 const P2P_SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b":p2p-soranet-transport";
-
 fn checked_soranet_transport_key_pair_from_seed(mut seed: Vec<u8>) -> KeyPair {
     seed.extend_from_slice(P2P_SORANET_TRANSPORT_SEED_DOMAIN);
     checked_key_pair_from_seed(seed, Algorithm::Ed25519)
 }
-
 fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPair {
     loop {
         let candidate = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -152,7 +141,6 @@ fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPa
         }
     }
 }
-
 pub use crate::config::genesis as genesis_factory;
 /// Build the default minimal genesis with additional post-topology transactions.
 ///
@@ -172,7 +160,6 @@ pub fn genesis_factory_with_post_topology(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
-
 fn test_domain_dataspace_id(domain: &DomainId) -> Result<DataSpaceId> {
     iroha_core::sns::dataspace_id_for_sns_alias(domain.dataspace().as_ref()).ok_or_else(|| {
         eyre!(
@@ -180,7 +167,6 @@ fn test_domain_dataspace_id(domain: &DomainId) -> Result<DataSpaceId> {
         )
     })
 }
-
 fn test_domain_setup_instruction(
     domain: &DomainId,
     dataspace_id: DataSpaceId,
@@ -202,7 +188,6 @@ fn test_domain_setup_instruction(
         },
     ))
 }
-
 /// Build one declarative instruction that ensures a domain and its lease state.
 pub fn domain_setup_instruction_in_dataspace(
     domain: &DomainId,
@@ -211,12 +196,10 @@ pub fn domain_setup_instruction_in_dataspace(
 ) -> Result<InstructionBox> {
     Ok(test_domain_setup_instruction(domain, dataspace_id, owner)?.into())
 }
-
 /// Build one declarative instruction for a deterministically mapped domain.
 pub fn domain_setup_instruction(domain: &DomainId, owner: &AccountId) -> Result<InstructionBox> {
     domain_setup_instruction_in_dataspace(domain, test_domain_dataspace_id(domain)?, owner)
 }
-
 /// Build one declarative dataspace-alias setup instruction.
 pub fn dataspace_setup_instruction(
     alias: &str,
@@ -243,7 +226,6 @@ pub fn dataspace_setup_instruction(
     )
     .into())
 }
-
 /// Build one declarative account-alias setup instruction with an explicit dataspace mapping.
 pub fn account_alias_setup_instruction_in_dataspace(
     alias_literal: &str,
@@ -274,7 +256,6 @@ pub fn account_alias_setup_instruction_in_dataspace(
     )
     .into())
 }
-
 /// Build one declarative account-alias setup instruction for a deterministically mapped alias.
 pub fn account_alias_setup_instruction(
     alias_literal: &str,
@@ -295,7 +276,6 @@ pub fn account_alias_setup_instruction(
         role,
     )
 }
-
 fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_label = domain.to_string();
     match client
@@ -314,7 +294,6 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
         Err(_) => Ok(false),
     }
 }
-
 fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_exists = match client.query(FindDomains::new()).execute_all() {
         Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
@@ -348,7 +327,6 @@ fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bo
         .transpose()
         .map(|visible| visible.unwrap_or(false))
 }
-
 fn wait_for_domain_setup(client: &Client, domain: &DomainId) -> Result<bool> {
     let deadline = Instant::now() + TEST_SNS_LEASE_VISIBILITY_TIMEOUT;
     while Instant::now() < deadline {
@@ -359,7 +337,6 @@ fn wait_for_domain_setup(client: &Client, domain: &DomainId) -> Result<bool> {
     }
     domain_setup_ready_to_client(client, domain)
 }
-
 /// Ensure a domain and all of its lease-derived state in one ordinary transaction.
 pub fn ensure_domain_setup_in_dataspace(
     client: &Client,
@@ -369,7 +346,6 @@ pub fn ensure_domain_setup_in_dataspace(
     if domain_setup_ready_to_client(client, domain)? {
         return Ok(());
     }
-
     match client.submit_blocking(
         test_domain_setup_instruction(domain, dataspace_id, &client.account)?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -387,12 +363,10 @@ pub fn ensure_domain_setup_in_dataspace(
         Err(err) => Err(err),
     }
 }
-
 /// Ensure a domain whose dataspace uses the deterministic dynamic mapping.
 pub fn ensure_domain_setup(client: &Client, domain: &DomainId) -> Result<()> {
     ensure_domain_setup_in_dataspace(client, domain, test_domain_dataspace_id(domain)?)
 }
-
 /// Ensure a runtime domain registration has the SNS lease required by the executor on every peer
 /// in a test network.
 pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> Result<()> {
@@ -405,7 +379,6 @@ pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> 
     let Some((primary, replicas)) = clients.split_first() else {
         return Ok(());
     };
-
     ensure_domain_setup(primary, domain)?;
     for client in replicas {
         if !wait_for_domain_setup(client, domain)? {
@@ -418,7 +391,6 @@ pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> 
     }
     Ok(())
 }
-
 /// Ensure a runtime domain declaratively.
 pub fn submit_ensure_domain(client: &Client, domain: NewDomain) -> Result<()> {
     if domain.logo.is_some() || !domain.metadata.is_empty() {
@@ -428,7 +400,6 @@ pub fn submit_ensure_domain(client: &Client, domain: NewDomain) -> Result<()> {
     }
     ensure_domain_setup(client, &domain.id)
 }
-
 /// Ensure a runtime domain declaratively and wait for every peer to observe it.
 pub fn submit_ensure_domain_for_network(
     network: &Network,
@@ -447,7 +418,6 @@ pub fn submit_ensure_domain_for_network(
     }
     ensure_domain_setup_for_network(network, &domain.id)
 }
-
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast signed cadence for local test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
@@ -460,7 +430,6 @@ const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const STORAGE_LISTING_LIMIT: usize = 8;
 const SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS: usize = 512;
 const PEER_STARTUP_TIMEOUT_PER_PEER_SECS: u64 = 60;
-
 const NON_OPTIMIZED_IVM_FUEL: NonZero<u64> = nonzero!(1_000_000_000u64);
 /// Minimum signed block cadence accepted by `with_block_cadence` (milliseconds).
 const MIN_BLOCK_CADENCE_MS: u64 = 1;
@@ -496,17 +465,14 @@ const STARTUP_STATUS_WARN_GRACE: Duration = Duration::from_secs(5);
 const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
 /// Low-priority `/status` fallback cadence after startup has already been observed.
 const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
-
 type GenesisBuilderFn = Arc<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
 >;
-
 fn revision4_committee_at_least(min_peers: usize) -> Option<usize> {
     (MIN_VALIDATORS_PER_HEIGHT..=MAX_VALIDATORS_PER_HEIGHT)
         .step_by(3)
         .find(|peers| *peers >= min_peers)
 }
-
 fn assert_genesis_voting_roster_matches_network(genesis: &GenesisBlock, expected_peers: &[PeerId]) {
     let actual = signed_genesis_voting_peers(genesis)
         .unwrap_or_else(|error| {
@@ -520,7 +486,6 @@ fn assert_genesis_voting_roster_matches_network(genesis: &GenesisBlock, expected
         "signed test-network genesis voting roster must exactly match the guarded validator topology"
     );
 }
-
 fn read_env_duration(var: &str, default: Duration) -> Duration {
     if let Ok(val) = std::env::var(var) {
         // Accept seconds or ms suffix (e.g., "45" or "4500ms")
@@ -536,11 +501,9 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
     }
     default
 }
-
 fn build_command_timeout_env() -> Duration {
     read_env_duration(BUILD_COMMAND_TIMEOUT_ENV, BUILD_COMMAND_TIMEOUT_DEFAULT)
 }
-
 fn command_output_with_timeout(
     command: &mut std::process::Command,
     timeout: Duration,
@@ -569,7 +532,6 @@ fn command_output_with_timeout(
         stderr: join_pipe(stderr),
     })
 }
-
 fn read_pipe<R>(mut pipe: R) -> thread::JoinHandle<Vec<u8>>
 where
     R: Read + Send + 'static,
@@ -580,13 +542,11 @@ where
         bytes
     })
 }
-
 fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
     handle
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default()
 }
-
 fn wait_for_child_exit(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -603,14 +563,12 @@ fn wait_for_child_exit(
         thread::sleep(NETWORK_PERMIT_POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
-
 fn unix_timestamp_ms_now() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis()
 }
-
 /// Tracks whether startup warning messages should be emitted or downgraded.
 #[derive(Clone)]
 struct StartupWarnGate {
@@ -619,12 +577,10 @@ struct StartupWarnGate {
     interval: Duration,
     last_warn: Arc<StdMutex<Option<Instant>>>,
 }
-
 impl StartupWarnGate {
     fn new(grace: Duration) -> Self {
         Self::with_interval(grace, STARTUP_STATUS_WARN_INTERVAL)
     }
-
     fn with_interval(grace: Duration, interval: Duration) -> Self {
         Self {
             started_at: Instant::now(),
@@ -633,12 +589,10 @@ impl StartupWarnGate {
             last_warn: Arc::new(StdMutex::new(None)),
         }
     }
-
     fn should_warn(&self) -> bool {
         if self.started_at.elapsed() < self.grace {
             return false;
         }
-
         let now = Instant::now();
         let mut last_warn = self
             .last_warn
@@ -653,7 +607,6 @@ impl StartupWarnGate {
         true
     }
 }
-
 fn log_status_warning(gate: &StartupWarnGate, warn_log: impl FnOnce(), debug_log: impl FnOnce()) {
     if gate.should_warn() {
         warn_log();
@@ -661,7 +614,6 @@ fn log_status_warning(gate: &StartupWarnGate, warn_log: impl FnOnce(), debug_log
         debug_log();
     }
 }
-
 fn status_error_is_connection_refused(err: &Report) -> bool {
     err.chain().any(|cause| {
         cause
@@ -669,7 +621,6 @@ fn status_error_is_connection_refused(err: &Report) -> bool {
             .is_some_and(|io_err| io_err.kind() == ErrorKind::ConnectionRefused)
     })
 }
-
 fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
@@ -677,12 +628,10 @@ fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
             && message.contains("Reached the limit of parallel queries")
     })
 }
-
 fn torii_request_error_is_transient(err: &Report) -> bool {
     if status_error_is_connection_refused(err) || status_error_is_torii_query_backpressure(err) {
         return true;
     }
-
     let mut saw_http_transport = false;
     let mut saw_transient_transport = false;
     for cause in err.chain() {
@@ -698,10 +647,8 @@ fn torii_request_error_is_transient(err: &Report) -> bool {
             || message.contains("connection reset")
             || message.contains("connection closed");
     }
-
     saw_http_transport && saw_transient_transport
 }
-
 /// Try binding to all provided addresses to detect missing socket permissions early.
 fn preflight_bind_addresses(
     addresses: impl IntoIterator<Item = SocketAddr>,
@@ -712,7 +659,6 @@ fn preflight_bind_addresses(
     }
     Ok(())
 }
-
 fn should_run_bind_preflight_for_runs_started(runs_started: usize) -> bool {
     // Only probe sockets before the first start attempt. Restarting a peer or a full
     // network after a partial bootstrap can briefly leave API/P2P ports in a kernel
@@ -720,7 +666,6 @@ fn should_run_bind_preflight_for_runs_started(runs_started: usize) -> bool {
     // than this best-effort preflight probe on those retries.
     runs_started == 0
 }
-
 fn sync_timeout_env() -> Duration {
     // Default 60s; override with IROHA_TEST_SYNC_TIMEOUT_SECS or *_MS
     let secs = read_env_duration("IROHA_TEST_SYNC_TIMEOUT_SECS", Duration::from_secs(0));
@@ -730,7 +675,6 @@ fn sync_timeout_env() -> Duration {
     // Keep override available for slower hosts; default to 180s to tolerate heavier fixtures.
     read_env_duration("IROHA_TEST_SYNC_TIMEOUT_MS", Duration::from_secs(180))
 }
-
 fn peer_start_timeout_env() -> Duration {
     // Default to the sync timeout; override with IROHA_TEST_PEER_START_TIMEOUT_SECS or *_MS.
     let secs = read_env_duration("IROHA_TEST_PEER_START_TIMEOUT_SECS", Duration::from_secs(0));
@@ -740,11 +684,9 @@ fn peer_start_timeout_env() -> Duration {
     // Keep generous but finite default to tolerate heavier genesis without hanging forever.
     read_env_duration("IROHA_TEST_PEER_START_TIMEOUT_MS", sync_timeout_env())
 }
-
 const CLIENT_STATUS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(600);
 const CLIENT_TTL_DEFAULT: Duration = Duration::from_secs(1200);
 const CLIENT_TTL_MIN_SLACK: Duration = Duration::from_secs(120);
-
 fn client_status_timeout_env() -> Duration {
     // Default 600s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
     let secs = read_env_duration(
@@ -760,7 +702,6 @@ fn client_status_timeout_env() -> Duration {
         CLIENT_STATUS_TIMEOUT_DEFAULT,
     )
 }
-
 fn client_request_timeout_env() -> Duration {
     // Keep the integration-client default aligned with the client library's
     // routed Torii budget; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
@@ -776,7 +717,6 @@ fn client_request_timeout_env() -> Duration {
         iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
     )
 }
-
 fn client_ttl_env(status_timeout: Duration) -> Duration {
     let secs = read_env_duration("IROHA_TEST_CLIENT_TTL_SECS", Duration::ZERO);
     let ttl = if secs != Duration::ZERO {
@@ -792,14 +732,12 @@ fn client_ttl_env(status_timeout: Duration) -> Duration {
         ttl
     }
 }
-
 fn post_genesis_liveness_window_env() -> Duration {
     read_env_duration(
         "IROHA_TEST_POST_GENESIS_LIVENESS_MS",
         POST_GENESIS_LIVENESS_WINDOW,
     )
 }
-
 fn hex_lower(bytes: &[u8]) -> String {
     const LUT: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -809,18 +747,15 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 const TEMPDIR_PREFIX: &str = "irohad_test_network_";
 const TEMPDIR_IN_ENV: &str = "TEST_NETWORK_TMP_DIR";
 const TEMPDIR_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
-
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
-
 /// Utility to get the root of the repository
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -828,18 +763,14 @@ pub fn repo_root() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-
 fn default_rans_tables_path() -> PathBuf {
     repo_root().join("codec/rans/tables/rans_seed0.toml")
 }
-
 fn tempdir_in() -> Option<impl AsRef<Path>> {
     static ENV: OnceLock<Option<PathBuf>> = OnceLock::new();
-
     ENV.get_or_init(|| std::env::var(TEMPDIR_IN_ENV).map(PathBuf::from).ok())
         .as_ref()
 }
-
 fn prune_stale_tempdirs() {
     let base = tempdir_in()
         .map(|p| p.as_ref().to_path_buf())
@@ -881,12 +812,9 @@ fn prune_stale_tempdirs() {
         kept += 1;
     }
 }
-
 fn init_logger_once() {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
     static ONCE: OnceLock<()> = OnceLock::new();
-
     ONCE.get_or_init(|| {
         let _ = tracing_subscriber::registry()
             .with(env_filter_from_env_or_default())
@@ -896,7 +824,6 @@ fn init_logger_once() {
             .try_init();
     });
 }
-
 /// Build the `EnvFilter` used for test network logs.
 ///
 /// Honors `RUST_LOG` if it is set; otherwise falls back to a calmer `warn` level
@@ -906,17 +833,14 @@ fn env_filter_from_env_or_default() -> tracing_subscriber::EnvFilter {
     tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
 }
-
 trait CommandEnv {
     fn env_remove(&mut self, key: &str);
 }
-
 impl CommandEnv for tokio::process::Command {
     fn env_remove(&mut self, key: &str) {
         tokio::process::Command::env_remove(self, key);
     }
 }
-
 fn config_env_override_keys() -> &'static [&'static str] {
     static KEYS: OnceLock<Vec<&'static str>> = OnceLock::new();
     KEYS.get_or_init(|| {
@@ -924,7 +848,6 @@ fn config_env_override_keys() -> &'static [&'static str] {
         let mut keys = Vec::new();
         let mut offset = 0;
         const MARKER: &str = "env = \"";
-
         while let Some(pos) = source[offset..].find(MARKER) {
             let start = offset + pos + MARKER.len();
             let Some(end_rel) = source[start..].find('"') else {
@@ -941,20 +864,17 @@ fn config_env_override_keys() -> &'static [&'static str] {
             }
             offset = end + 1;
         }
-
         keys.sort_unstable();
         keys.dedup();
         keys
     })
 }
-
 fn strip_config_env_overrides(cmd: &mut impl CommandEnv) {
     // Prevent developer env overrides from shadowing test network configs.
     for key in config_env_override_keys() {
         cmd.env_remove(key);
     }
 }
-
 fn generate_and_keep_temp_dir() -> PathBuf {
     prune_stale_tempdirs();
     let mut builder = tempfile::Builder::new();
@@ -967,7 +887,6 @@ fn generate_and_keep_temp_dir() -> PathBuf {
     .path()
     .to_path_buf()
 }
-
 /// Environment of a specific test network.
 ///
 /// Configures things such as the temporary directory with all artifacts or the binaries to use.
@@ -978,9 +897,7 @@ pub struct Environment {
     /// Working directory
     dir: PathBuf,
 }
-
 // tests module lives at the end of file
-
 /// Programs to work with.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Program {
@@ -992,7 +909,6 @@ pub enum Program {
     /// Iroha Client CLI
     Iroha,
 }
-
 #[derive(Debug)]
 struct ProgramSpec {
     name: &'static str,
@@ -1001,7 +917,6 @@ struct ProgramSpec {
     build_args: Vec<OsString>,
     isolated_target_subdir: Option<&'static str>,
 }
-
 impl Program {
     const fn release_prebuilt_binary(self) -> ReleasePrebuiltBinary {
         match self {
@@ -1010,7 +925,6 @@ impl Program {
             Self::Iroha => ReleasePrebuiltBinary::Iroha,
         }
     }
-
     fn spec(&self) -> ProgramSpec {
         match self {
             Self::Irohad => ProgramSpec {
@@ -1058,12 +972,10 @@ impl Program {
         }
     }
 }
-
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
-
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
@@ -1085,14 +997,12 @@ const MAX_WORKSPACE_CARGO_LOCK_BYTES: u64 = 16 * 1024 * 1024;
 const RELEASE_BINARY_MODE_OCTAL: &str = "0500";
 const RELEASE_BINARY_MODE: u32 = 0o500;
 const RELEASE_MANIFEST_MODE: u32 = 0o400;
-
 #[derive(Debug, Clone)]
 struct BuildStamp {
     fingerprint: u64,
     profile: String,
     binary: PathBuf,
 }
-
 /// One executable covered by the source-bound release prebuild manifest.
 #[doc(hidden)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1102,7 +1012,6 @@ pub enum ReleasePrebuiltBinary {
     Iroha,
     Kagami,
 }
-
 impl ReleasePrebuiltBinary {
     const ALL: [Self; 4] = [
         Self::Irohad,
@@ -1110,7 +1019,6 @@ impl ReleasePrebuiltBinary {
         Self::Iroha,
         Self::Kagami,
     ];
-
     const fn manifest_prefix(self) -> &'static str {
         match self {
             Self::Irohad => "irohad",
@@ -1119,7 +1027,6 @@ impl ReleasePrebuiltBinary {
             Self::Kagami => "kagami",
         }
     }
-
     const fn relative_path(self) -> &'static str {
         match self {
             Self::Irohad => "release/iroha3d",
@@ -1129,21 +1036,18 @@ impl ReleasePrebuiltBinary {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct ReleaseBinaryAttestation {
     kind: ReleasePrebuiltBinary,
     sha256: String,
     size_bytes: u64,
 }
-
 #[derive(Debug, Clone)]
 struct ReleaseProgramContract {
     configured_target_dir: PathBuf,
     canonical_target_dir: PathBuf,
     binaries: [ReleaseBinaryAttestation; 4],
 }
-
 impl ReleaseProgramContract {
     fn binary(&self, kind: ReleasePrebuiltBinary) -> &ReleaseBinaryAttestation {
         self.binaries
@@ -1152,7 +1056,6 @@ impl ReleaseProgramContract {
             .expect("release manifest contains every fixed binary kind")
     }
 }
-
 fn resolve_target_dir_path(repo: &Path, raw: &str) -> PathBuf {
     let candidate = PathBuf::from(raw);
     if candidate.is_absolute() {
@@ -1161,7 +1064,6 @@ fn resolve_target_dir_path(repo: &Path, raw: &str) -> PathBuf {
         repo.join(candidate)
     }
 }
-
 /// Resolve the target directory for test-network builds and artifact lookup.
 fn resolve_target_dir(repo: &Path) -> PathBuf {
     if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {
@@ -1172,14 +1074,12 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     }
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
-
 fn is_lowercase_sha256(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -1189,7 +1089,6 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     }
     encoded
 }
-
 fn exact_env_value(key: &str) -> color_eyre::Result<Option<String>> {
     match std::env::var(key) {
         Ok(value) => Ok(Some(value)),
@@ -1197,7 +1096,6 @@ fn exact_env_value(key: &str) -> color_eyre::Result<Option<String>> {
         Err(std::env::VarError::NotUnicode(_)) => Err(eyre!("{key} must contain valid Unicode")),
     }
 }
-
 #[cfg(unix)]
 fn validate_published_mode_and_links(
     metadata: &fs::Metadata,
@@ -1205,7 +1103,6 @@ fn validate_published_mode_and_links(
     label: &str,
 ) -> color_eyre::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
-
     if metadata.mode() & 0o7777 != expected_mode {
         return Err(eyre!(
             "{label} must have exact mode {expected_mode:04o}; got {:04o}",
@@ -1220,7 +1117,6 @@ fn validate_published_mode_and_links(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_published_mode_and_links(
     _metadata: &fs::Metadata,
@@ -1229,7 +1125,6 @@ fn validate_published_mode_and_links(
 ) -> color_eyre::Result<()> {
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_published_directory_mode(
     metadata: &fs::Metadata,
@@ -1237,7 +1132,6 @@ fn validate_published_directory_mode(
     label: &str,
 ) -> color_eyre::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
-
     if metadata.mode() & 0o7777 != expected_mode {
         return Err(eyre!(
             "{label} must have exact mode {expected_mode:04o}; got {:04o}",
@@ -1246,7 +1140,6 @@ fn validate_published_directory_mode(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_published_directory_mode(
     _metadata: &fs::Metadata,
@@ -1255,7 +1148,6 @@ fn validate_published_directory_mode(
 ) -> color_eyre::Result<()> {
     Ok(())
 }
-
 fn published_regular_file_metadata(
     path: &Path,
     expected_mode: u32,
@@ -1272,7 +1164,6 @@ fn published_regular_file_metadata(
     validate_published_mode_and_links(&metadata, expected_mode, label)?;
     Ok(metadata)
 }
-
 fn published_directory_metadata(
     path: &Path,
     expected_mode: u32,
@@ -1289,11 +1180,9 @@ fn published_directory_metadata(
     validate_published_directory_mode(&metadata, expected_mode, label)?;
     Ok(metadata)
 }
-
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -1302,12 +1191,10 @@ fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
     let before =
         published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
@@ -1354,7 +1241,6 @@ fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn hash_workspace_cargo_lock(repo: &Path) -> color_eyre::Result<String> {
     let path = repo.join("Cargo.lock");
     let metadata = fs::symlink_metadata(&path)
@@ -1374,7 +1260,6 @@ fn hash_workspace_cargo_lock(repo: &Path) -> color_eyre::Result<String> {
     }
     Ok(lowercase_hex(&digest))
 }
-
 fn parse_canonical_size(value: &str, label: &str) -> color_eyre::Result<u64> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
@@ -1388,7 +1273,6 @@ fn parse_canonical_size(value: &str, label: &str) -> color_eyre::Result<u64> {
         .parse::<u64>()
         .wrap_err_with(|| eyre!("{label} does not fit u64"))
 }
-
 fn validate_target_triple(value: &str, label: &str) -> color_eyre::Result<()> {
     if value.is_empty()
         || value.len() > 128
@@ -1400,7 +1284,6 @@ fn validate_target_triple(value: &str, label: &str) -> color_eyre::Result<()> {
     }
     Ok(())
 }
-
 fn parse_release_prebuilt_manifest(
     bytes: &[u8],
     source_manifest_sha256: &str,
@@ -1436,7 +1319,6 @@ fn parse_release_prebuilt_manifest(
     ];
     const FIELD_COUNT: usize = 25;
     const BASE_FIELD_COUNT: usize = 9;
-
     let text = std::str::from_utf8(bytes)
         .wrap_err("release prebuilt manifest must contain valid UTF-8")?;
     if !text.ends_with('\n') || text.contains('\r') || text.contains('\0') {
@@ -1452,7 +1334,6 @@ fn parse_release_prebuilt_manifest(
             rows.len()
         ));
     }
-
     let mut values = Vec::with_capacity(FIELD_COUNT);
     for (index, (row, expected_key)) in rows.iter().zip(KEYS).enumerate() {
         let mut fields = row.split('\t');
@@ -1469,7 +1350,6 @@ fn parse_release_prebuilt_manifest(
         }
         values.push(value);
     }
-
     if values[0] != SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION {
         return Err(eyre!(
             "unsupported release prebuilt manifest schema version {}",
@@ -1528,7 +1408,6 @@ fn parse_release_prebuilt_manifest(
             "release prebuilt manifest bundle_dir does not match {IROHA_TEST_TARGET_DIR_ENV}"
         ));
     }
-
     let mut binaries = Vec::with_capacity(ReleasePrebuiltBinary::ALL.len());
     for (ordinal, kind) in ReleasePrebuiltBinary::ALL.into_iter().enumerate() {
         let base = BASE_FIELD_COUNT + ordinal * 4;
@@ -1575,7 +1454,6 @@ fn parse_release_prebuilt_manifest(
         eyre!("release prebuilt manifest must contain exactly four executable attestations")
     })
 }
-
 fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleaseProgramContract>> {
     let source_manifest_sha256 = exact_env_value(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV)?;
     let prebuilt_manifest_sha256 = exact_env_value(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV)?;
@@ -1619,7 +1497,6 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             ));
         }
     }
-
     let configured_target_raw = exact_env_value(IROHA_TEST_TARGET_DIR_ENV)?.ok_or_else(|| {
         eyre!(
             "release binary resolution requires {IROHA_TEST_TARGET_DIR_ENV} to select the \
@@ -1698,14 +1575,12 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
         &configured_target,
         repo,
     )?;
-
     Ok(Some(ReleaseProgramContract {
         configured_target_dir: configured_target,
         canonical_target_dir,
         binaries,
     }))
 }
-
 fn validate_release_program_candidate(
     contract: &ReleaseProgramContract,
     kind: ReleasePrebuiltBinary,
@@ -1736,7 +1611,6 @@ fn validate_release_program_candidate(
             candidate.display()
         ));
     }
-
     let mut component_path = contract.configured_target_dir.clone();
     let relative = Path::new(kind.relative_path());
     let component_count = relative.components().count();
@@ -1814,7 +1688,6 @@ fn validate_release_program_candidate(
     }
     Ok(candidate_canonical)
 }
-
 /// Resolve and independently verify one binary from an active release prebuild contract.
 ///
 /// `Ok(None)` means no source-bound release contract is active.
@@ -1832,7 +1705,6 @@ pub fn resolve_release_prebuilt_binary(
     )
     .map(Some)
 }
-
 /// Revalidate a previously resolved release binary against fresh manifest and file evidence.
 ///
 /// `Ok(None)` means no source-bound release contract is active.
@@ -1846,7 +1718,6 @@ pub fn revalidate_release_prebuilt_binary(
     };
     validate_release_program_candidate(&contract, kind, candidate).map(Some)
 }
-
 fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
     let mut dir = current_exe.parent()?;
     if dir.file_name().is_some_and(|value| value == "deps") {
@@ -1859,12 +1730,10 @@ fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
         Some(profile.to_owned())
     }
 }
-
 fn current_exe_profile_hint() -> Option<String> {
     let current_exe = std::env::current_exe().ok()?;
     profile_hint_from_exe_path(&current_exe)
 }
-
 fn default_build_profile() -> String {
     if let Ok(profile) = std::env::var(IROHA_TEST_BUILD_PROFILE_ENV) {
         return profile;
@@ -1874,7 +1743,6 @@ fn default_build_profile() -> String {
     }
     current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
 }
-
 fn first_existing_candidate<'a>(
     candidates: impl IntoIterator<Item = Cow<'a, Path>>,
 ) -> Option<PathBuf> {
@@ -1885,33 +1753,26 @@ fn first_existing_candidate<'a>(
     }
     None
 }
-
 fn colocated_binary_candidate_for(current_exe: &Path, bin: &str) -> Option<PathBuf> {
     let current_dir = current_exe.parent()?;
     current_dir.join(bin).canonicalize().ok()
 }
-
 fn current_exe_colocated_binary(bin: &str) -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok()?;
     colocated_binary_candidate_for(&current_exe, bin)
 }
-
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
     target_dir.join(BUILD_CACHE_DIR)
 }
-
 fn stamp_path(cache_dir: &Path, pkg: &str, profile: &str) -> PathBuf {
     cache_dir.join(format!("{pkg}-{profile}.json"))
 }
-
 fn lock_path(cache_dir: &Path, pkg: &str, profile: &str) -> PathBuf {
     cache_dir.join(format!("{pkg}-{profile}.lock"))
 }
-
 fn global_build_lock_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("cargo-build.lock")
 }
-
 fn is_rustc_metadata_mismatch(output: &str) -> bool {
     // Re-entrant builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
     // toolchain upgrades or interrupted builds). Cleaning the target dir and retrying once is a
@@ -1925,7 +1786,6 @@ fn is_rustc_metadata_mismatch(output: &str) -> bool {
         || output.contains("rustc --explain E0463")
         || output.contains("can't find crate for `")
 }
-
 fn clean_target_dir_preserving_build_cache(target_dir: &Path) -> color_eyre::Result<()> {
     if !target_dir.exists() {
         return Ok(());
@@ -1960,21 +1820,18 @@ fn clean_target_dir_preserving_build_cache(target_dir: &Path) -> color_eyre::Res
     }
     Ok(())
 }
-
 #[derive(Debug, Default)]
 struct IgnoreList {
     dirs: HashSet<PathBuf>,
     files: HashSet<PathBuf>,
     globs: Vec<IgnorePattern>,
 }
-
 #[derive(Debug)]
 struct IgnorePattern {
     pattern: String,
     dir_only: bool,
     match_basename: bool,
 }
-
 fn read_build_stamp(path: &Path) -> color_eyre::Result<Option<BuildStamp>> {
     if !path.exists() {
         return Ok(None);
@@ -2008,7 +1865,6 @@ fn read_build_stamp(path: &Path) -> color_eyre::Result<Option<BuildStamp>> {
         binary,
     }))
 }
-
 fn write_build_stamp(path: &Path, stamp: &BuildStamp) -> color_eyre::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -2036,7 +1892,6 @@ fn write_build_stamp(path: &Path, stamp: &BuildStamp) -> color_eyre::Result<()> 
     fs::write(path, rendered).wrap_err_with(|| eyre!("Failed to write stamp file {path:?}"))?;
     Ok(())
 }
-
 fn load_ignore_list(root: &Path) -> IgnoreList {
     let mut list = IgnoreList::default();
     let gitignore = root.join(".gitignore");
@@ -2076,7 +1931,6 @@ fn load_ignore_list(root: &Path) -> IgnoreList {
     }
     list
 }
-
 fn should_ignore_path(rel: &Path, ignore: &IgnoreList, is_dir: bool) -> bool {
     if rel.as_os_str().is_empty() {
         return false;
@@ -2119,7 +1973,6 @@ fn should_ignore_path(rel: &Path, ignore: &IgnoreList, is_dir: bool) -> bool {
     }
     false
 }
-
 fn normalize_rel_path(rel: &Path) -> String {
     let mut out = String::new();
     for component in rel.components() {
@@ -2133,7 +1986,6 @@ fn normalize_rel_path(rel: &Path) -> String {
     }
     out
 }
-
 fn glob_match(pattern: &str, text: &str) -> bool {
     let pattern = pattern.as_bytes();
     let text = text.as_bytes();
@@ -2162,7 +2014,6 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     }
     pi == pattern.len()
 }
-
 fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
     fn push_dir(root: &Path, ignore: &mut IgnoreList, path: &Path) {
         if let Ok(relative) = path.strip_prefix(root)
@@ -2171,24 +2022,19 @@ fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
             ignore.dirs.insert(relative.to_path_buf());
         }
     }
-
     push_dir(root, ignore, &root.join("target"));
-
     if let Ok(path) = std::env::var("CARGO_TARGET_DIR") {
         let base = resolve_target_dir_path(root, &path);
         push_dir(root, ignore, &base);
         push_dir(root, ignore, &base.join(IROHA_TEST_TARGET_SUBDIR));
     }
-
     if let Ok(path) = std::env::var(IROHA_TEST_TARGET_DIR_ENV) {
         let custom = resolve_target_dir_path(root, &path);
         push_dir(root, ignore, &custom);
     }
-
     let target_dir = resolve_target_dir(root);
     push_dir(root, ignore, &target_dir);
 }
-
 fn workspace_members(root: &Path) -> color_eyre::Result<Vec<PathBuf>> {
     let manifest = root.join("Cargo.toml");
     let contents = fs::read_to_string(&manifest)
@@ -2213,7 +2059,6 @@ fn workspace_members(root: &Path) -> color_eyre::Result<Vec<PathBuf>> {
     out.retain(|path| seen.insert(path.clone()));
     Ok(out)
 }
-
 fn expand_workspace_member(root: &Path, pattern: &str) -> color_eyre::Result<Vec<PathBuf>> {
     if pattern.contains('*') {
         expand_workspace_pattern(root, pattern)
@@ -2221,11 +2066,9 @@ fn expand_workspace_member(root: &Path, pattern: &str) -> color_eyre::Result<Vec
         Ok(vec![root.join(pattern)])
     }
 }
-
 fn expand_workspace_pattern(root: &Path, pattern: &str) -> color_eyre::Result<Vec<PathBuf>> {
     let segments: Vec<&str> = pattern.split('/').collect();
     let mut results = Vec::new();
-
     fn recurse(
         root: &Path,
         current: &Path,
@@ -2264,11 +2107,9 @@ fn expand_workspace_pattern(root: &Path, pattern: &str) -> color_eyre::Result<Ve
         };
         recurse(root, &next, segments, index + 1, results)
     }
-
     recurse(root, root, &segments, 0, &mut results)?;
     Ok(results)
 }
-
 fn hash_file_entry(root: &Path, path: &Path, metadata: &fs::Metadata, hasher: &mut DefaultHasher) {
     let rel = path.strip_prefix(root).unwrap_or(path);
     rel.to_string_lossy().hash(hasher);
@@ -2285,7 +2126,6 @@ fn hash_file_entry(root: &Path, path: &Path, metadata: &fs::Metadata, hasher: &m
         }
     }
 }
-
 fn hash_file_if_exists(
     workspace_root: &Path,
     path: &Path,
@@ -2304,7 +2144,6 @@ fn hash_file_if_exists(
     }
     Ok(())
 }
-
 fn hash_member_dir(
     workspace_root: &Path,
     member_dir: &Path,
@@ -2314,10 +2153,8 @@ fn hash_member_dir(
     if !member_dir.exists() {
         return Ok(());
     }
-
     let mut stack = vec![member_dir.to_path_buf()];
     let mut visited = HashSet::new();
-
     while let Some(dir) = stack.pop() {
         if !dir.exists() {
             continue;
@@ -2331,7 +2168,6 @@ fn hash_member_dir(
         if should_ignore_path(relative_dir, ignore, true) || should_skip_dir(&dir) {
             continue;
         }
-
         let entries = match fs::read_dir(&dir) {
             Ok(iter) => iter,
             Err(err) => {
@@ -2342,7 +2178,6 @@ fn hash_member_dir(
                 continue;
             }
         };
-
         for entry in entries {
             let entry = match entry {
                 Ok(e) => e,
@@ -2374,10 +2209,8 @@ fn hash_member_dir(
             }
         }
     }
-
     Ok(())
 }
-
 fn should_skip_dir(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
         return false;
@@ -2403,25 +2236,21 @@ fn should_skip_dir(path: &Path) -> bool {
             | "tmp"
     )
 }
-
 fn should_skip_file(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
         return false;
     };
     matches!(name, ".DS_Store" | "Thumbs.db")
 }
-
 fn workspace_fingerprint(root: &Path) -> color_eyre::Result<u64> {
     let mut hasher = DefaultHasher::new();
     let mut ignore = load_ignore_list(root);
     add_target_dir_to_ignore(root, &mut ignore);
     let members = workspace_members(root)?;
-
     hash_file_if_exists(root, &root.join("Cargo.toml"), &mut hasher)?;
     hash_file_if_exists(root, &root.join("Cargo.lock"), &mut hasher)?;
     hash_file_if_exists(root, &root.join("rust-toolchain.toml"), &mut hasher)?;
     hash_file_if_exists(root, &root.join("rust-toolchain"), &mut hasher)?;
-
     if members.is_empty() {
         hash_member_dir(root, root, &ignore, &mut hasher)?;
     } else {
@@ -2429,10 +2258,8 @@ fn workspace_fingerprint(root: &Path) -> color_eyre::Result<u64> {
             hash_member_dir(root, &member, &ignore, &mut hasher)?;
         }
     }
-
     Ok(hasher.finish())
 }
-
 fn fingerprint_with_build_args(base: u64, build_args: &[OsString]) -> u64 {
     let mut hasher = DefaultHasher::new();
     base.hash(&mut hasher);
@@ -2441,7 +2268,6 @@ fn fingerprint_with_build_args(base: u64, build_args: &[OsString]) -> u64 {
     }
     hasher.finish()
 }
-
 fn build_env_overrides() -> [(&'static str, &'static str); 2] {
     // Streaming runtime requires bundled rANS tables; compile test binaries with bundles enabled.
     // Developers may work with unsynced Norito bindings locally; skip the workspace-level
@@ -2451,7 +2277,6 @@ fn build_env_overrides() -> [(&'static str, &'static str); 2] {
         ("NORITO_SKIP_BINDINGS_SYNC", "1"),
     ]
 }
-
 fn cargo_or_rustc_processes(process_table: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(process_table)
         .lines()
@@ -2469,7 +2294,6 @@ fn cargo_or_rustc_processes(process_table: &[u8]) -> Vec<String> {
         })
         .collect()
 }
-
 fn ensure_child_cargo_quiescent(cargo_program: &str) -> color_eyre::Result<()> {
     let cargo_program_name = Path::new(cargo_program)
         .file_name()
@@ -2482,7 +2306,6 @@ fn ensure_child_cargo_quiescent(cargo_program: &str) -> color_eyre::Result<()> {
         // Unit tests use a non-Cargo fixture script to validate command construction and retries.
         return Ok(());
     }
-
     let output = std::process::Command::new("ps")
         .args(["-axo", "pid,etime,command"])
         .output()
@@ -2503,7 +2326,6 @@ fn ensure_child_cargo_quiescent(cargo_program: &str) -> color_eyre::Result<()> {
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)] // Helper aggregates build context parameters.
 fn ensure_binary_fresh(
     repo: &Path,
@@ -2524,11 +2346,9 @@ fn ensure_binary_fresh(
         .wrap_err_with(|| eyre!("Failed to open build lock at {lock_path:?}"))?;
     lock.lock()
         .wrap_err_with(|| eyre!("Failed to acquire build lock for {pkg}"))?;
-
     let mut fingerprint = workspace_fingerprint(repo)?;
     fingerprint = fingerprint_with_build_args(fingerprint, build_args);
     let stamp = read_build_stamp(&stamp_path)?;
-
     let mut needs_build = !binary_path.exists();
     if !needs_build {
         match &stamp {
@@ -2538,7 +2358,6 @@ fn ensure_binary_fresh(
             _ => needs_build = true,
         }
     }
-
     if needs_build && !allow_build {
         return Err(eyre!(
             "cannot build `{name}` (pkg `{pkg}`) because automatic child builds are disabled; \
@@ -2548,7 +2367,6 @@ fn ensure_binary_fresh(
             target_dir.display()
         ));
     }
-
     if needs_build {
         tracing::info!(%name, %pkg, %profile, "building `{name}` for tests");
         let build_lock_path = global_build_lock_path(&cache_dir);
@@ -2562,7 +2380,6 @@ fn ensure_binary_fresh(
         let mut attempt = 0_u8;
         loop {
             attempt = attempt.saturating_add(1);
-
             let mut command = std::process::Command::new(&cargo_program);
             command
                 .arg("build")
@@ -2593,7 +2410,6 @@ fn ensure_binary_fresh(
             if output.status.success() {
                 break;
             }
-
             let code = output.status.code();
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2609,7 +2425,6 @@ fn ensure_binary_fresh(
                 clean_target_dir_preserving_build_cache(target_dir)?;
                 continue;
             }
-
             tracing::warn!(?code, build_stdout = %stdout, build_stderr = %stderr, "`cargo build` returned non-zero status");
             let err = eyre!(
                 "failed to build `{name}` (pkg `{pkg}`), cargo status: {code:?}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
@@ -2620,12 +2435,10 @@ fn ensure_binary_fresh(
         // Refresh fingerprint after the successful build to capture generated files.
         fingerprint = workspace_fingerprint(repo)?;
         fingerprint = fingerprint_with_build_args(fingerprint, build_args);
-
         build_lock
             .unlock()
             .wrap_err_with(|| eyre!("Failed to release global build lock for {pkg}"))?;
     }
-
     if binary_path.exists() {
         let stamp = BuildStamp {
             fingerprint,
@@ -2634,12 +2447,10 @@ fn ensure_binary_fresh(
         };
         write_build_stamp(&stamp_path, &stamp)?;
     }
-
     lock.unlock()
         .wrap_err_with(|| eyre!("Failed to release build lock for {pkg}"))?;
     Ok(())
 }
-
 fn allow_reentrant_build(running_under_cargo: bool, release_corridor: bool) -> bool {
     if release_corridor {
         return false;
@@ -2652,7 +2463,6 @@ fn allow_reentrant_build(running_under_cargo: bool, release_corridor: bool) -> b
     // start a child while the outer Cargo/rustc process is active.
     bool_env_override(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV).unwrap_or(false)
 }
-
 const fn must_validate_binary_freshness(
     skip_build: bool,
     running_under_cargo: bool,
@@ -2660,20 +2470,17 @@ const fn must_validate_binary_freshness(
 ) -> bool {
     !skip_build && (!running_under_cargo || allow_reentrant)
 }
-
 fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
     let cached = cache.get()?;
     if cached.exists() {
         return Some(cached.clone());
     }
-
     warn!(
         binary = %cached.display(),
         "cached program path is missing; resolving again"
     );
     None
 }
-
 impl Program {
     /// Resolve program path.
     ///
@@ -2699,7 +2506,6 @@ impl Program {
                 raw.to_owned()
             }
         }
-
         let ProgramSpec {
             name,
             env,
@@ -2710,7 +2516,6 @@ impl Program {
         let repo = repo_root();
         let release_contract = release_program_contract(&repo)?;
         let release_binary = self.release_prebuilt_binary();
-
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
             let raw = PathBuf::from(&path);
@@ -2737,7 +2542,6 @@ impl Program {
                 None => Ok(candidate),
             };
         }
-
         // Fast path via cache (only when no override is present)
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
@@ -2752,9 +2556,7 @@ impl Program {
                 None => Ok(path),
             };
         }
-
         let bin = bin_name(name);
-
         // 2) Prefer paths Cargo already built (`CARGO_BIN_EXE_*`) but still allow rebuilds
         let cargo_bin_env = format!("CARGO_BIN_EXE_{name}");
         let allow_ambient_candidates =
@@ -2769,7 +2571,6 @@ impl Program {
         let colocated_candidate = allow_ambient_candidates
             .then(|| current_exe_colocated_binary(&bin))
             .flatten();
-
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
         let target_dir = isolated_target_subdir.map_or_else(
@@ -2777,7 +2578,6 @@ impl Program {
             |subdir| resolve_target_dir(&repo).join(subdir),
         );
         let primary_binary = target_dir.join(format!("{profile}/{bin}"));
-
         let mut candidates: Vec<PathBuf> = Vec::new();
         let mut push_candidate = |path: PathBuf| {
             if !candidates.contains(&path) {
@@ -2793,17 +2593,14 @@ impl Program {
         push_candidate(primary_binary.clone());
         push_candidate(target_dir.join(format!("debug/{bin}")));
         push_candidate(target_dir.join(format!("release/{bin}")));
-
         if release_contract.is_none() && isolated_target_subdir.is_none() {
             let default_target = repo.join("target");
             push_candidate(default_target.join(format!("{profile}/{bin}")));
             push_candidate(default_target.join(format!("debug/{bin}")));
             push_candidate(default_target.join(format!("release/{bin}")));
         }
-
         let prebuild_candidate =
             first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
-
         // 4) Decide whether to (re)build.
         //    We default to building to avoid using stale binaries across source changes.
         //    Set IROHA_TEST_SKIP_BUILD=1 to skip attempting a build.
@@ -2857,7 +2654,6 @@ impl Program {
                 &build_args,
             )?;
         }
-
         // 5) Return the best candidate after the (optional) build
         let post_build_candidates = if skip_build {
             first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())))
@@ -2887,13 +2683,11 @@ impl Program {
             }
             return Ok(found);
         }
-
         let candidates_txt = candidates
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
             .join(", ");
-
         Err(eyre!(
             "Could not resolve path of `{name}` program. Have you built it?\n\
                Tried: {candidates_txt}\n  \
@@ -2903,11 +2697,9 @@ impl Program {
                2. Provide a different path via `{env}` env var"
         ))
     }
-
     pub fn resolve(&self) -> color_eyre::Result<PathBuf> {
         self.resolve_internal(None)
     }
-
     /// Async variant of [`Self::resolve`].
     ///
     /// Spawns a blocking task so that re-entrant builds and filesystem probing never block
@@ -2918,20 +2710,16 @@ impl Program {
             .await
             .wrap_err("failed to join blocking task while resolving program")?
     }
-
     pub fn resolve_force_build(&self) -> color_eyre::Result<PathBuf> {
         self.resolve_internal(Some(false))
     }
-
     pub fn resolve_skip_build(&self) -> color_eyre::Result<PathBuf> {
         self.resolve_internal(Some(true))
     }
 }
-
 pub fn init_instruction_registry() {
     set_instruction_registry(iroha_data_model::instruction_registry::default());
 }
-
 impl Environment {
     /// Side effects:
     ///
@@ -2944,22 +2732,18 @@ impl Environment {
         Self { dir }
     }
 }
-
 #[derive(Debug)]
 struct FilePermit {
     path: PathBuf,
 }
-
 impl Drop for FilePermit {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
 }
-
 struct NetworkPermit {
     _file_permit: FilePermit,
 }
-
 fn serialize_networks_enabled() -> bool {
     let Ok(raw) = std::env::var(SERIALIZE_NETWORKS_ENV) else {
         return false;
@@ -2969,7 +2753,6 @@ fn serialize_networks_enabled() -> bool {
         "1" | "true" | "yes" | "on"
     )
 }
-
 fn network_parallelism_limit() -> usize {
     if serialize_networks_enabled() {
         return 1;
@@ -2982,7 +2765,6 @@ fn network_parallelism_limit() -> usize {
     }
     DEFAULT_NETWORK_PARALLELISM_LIMIT
 }
-
 fn test_concurrency_threads() -> usize {
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -2997,15 +2779,12 @@ fn test_concurrency_threads() -> usize {
         .saturating_div(total_peers)
         .max(min_threads)
 }
-
 fn permit_dir() -> PathBuf {
     if let Ok(path) = std::env::var(NETWORK_PERMIT_DIR_ENV) {
         return PathBuf::from(path);
     }
-
     default_permit_dir()
 }
-
 fn default_permit_dir() -> PathBuf {
     let mut dir = std::env::temp_dir().join("iroha_test_network_permits");
     if let Some(namespace) = default_permit_namespace() {
@@ -3013,18 +2792,15 @@ fn default_permit_dir() -> PathBuf {
     }
     dir
 }
-
 #[cfg(unix)]
 fn default_permit_namespace() -> Option<String> {
     let parent = nix::unistd::getppid().as_raw();
     (parent > 0).then(|| format!("ppid-{parent}"))
 }
-
 #[cfg(not(unix))]
 fn default_permit_namespace() -> Option<String> {
     None
 }
-
 fn network_permit_wait_timeout() -> Option<Duration> {
     let timeout = read_env_duration(
         NETWORK_PERMIT_WAIT_TIMEOUT_ENV,
@@ -3032,12 +2808,10 @@ fn network_permit_wait_timeout() -> Option<Duration> {
     );
     (!timeout.is_zero()).then_some(timeout)
 }
-
 fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
     let dir = permit_dir();
     try_acquire_file_permit_in(&dir, limit)
 }
-
 fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
@@ -3082,7 +2856,6 @@ fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     }
     None
 }
-
 fn permit_is_stale(path: &Path) -> bool {
     if let Some(pid) = read_permit_pid(path)
         && let Some(alive) = pid_alive(pid)
@@ -3100,7 +2873,6 @@ fn permit_is_stale(path: &Path) -> bool {
     };
     age > NETWORK_PERMIT_STALE_TTL
 }
-
 fn read_permit_pid(path: &Path) -> Option<u32> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
@@ -3114,7 +2886,6 @@ fn read_permit_pid(path: &Path) -> Option<u32> {
     }
     None
 }
-
 fn read_permit_started(path: &Path) -> Option<u64> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
@@ -3128,7 +2899,6 @@ fn read_permit_started(path: &Path) -> Option<u64> {
     }
     None
 }
-
 fn describe_permit_holders(limit: usize) -> String {
     let dir = permit_dir();
     let mut holders = Vec::new();
@@ -3137,7 +2907,6 @@ fn describe_permit_holders(limit: usize) -> String {
         if !path.exists() {
             continue;
         }
-
         let pid = read_permit_pid(&path)
             .map(|value| value.to_string())
             .unwrap_or_else(|| "unknown".to_owned());
@@ -3152,14 +2921,12 @@ fn describe_permit_holders(limit: usize) -> String {
             path.display()
         ));
     }
-
     if holders.is_empty() {
         "none".to_owned()
     } else {
         holders.join("; ")
     }
 }
-
 #[cfg(unix)]
 fn pid_alive(pid: u32) -> Option<bool> {
     let raw_pid = i32::try_from(pid).ok()?;
@@ -3170,12 +2937,10 @@ fn pid_alive(pid: u32) -> Option<bool> {
         Err(_) => None,
     }
 }
-
 #[cfg(not(unix))]
 fn pid_alive(_pid: u32) -> Option<bool> {
     None
 }
-
 fn acquire_network_permit() -> NetworkPermit {
     let mut waited = Duration::ZERO;
     let mut next_log = NETWORK_PERMIT_LOG_INTERVAL;
@@ -3216,7 +2981,6 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
         waited = waited.saturating_add(NETWORK_PERMIT_POLL_INTERVAL);
     }
 }
-
 /// Network of peers
 pub struct Network {
     env: Environment,
@@ -3228,14 +2992,12 @@ pub struct Network {
     observer_advertised_p2p_addresses: HashMap<PeerId, SocketAddr>,
     observer_slow_reader_relays: Option<ObserverSlowReaderRelays>,
     next_peer_index: AtomicUsize,
-
     block_cadence: Duration,
     block_sync_gossip_period: Duration,
     sync_timeout_override: Option<Duration>,
     peer_startup_timeout_override: Option<Duration>,
     consensus_profile: ConsensusBootstrapProfile,
     genesis_key_pair: KeyPair,
-
     genesis_isi: Vec<Vec<InstructionBox>>,
     genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
     // Cache a single, deterministic genesis block per network instance to ensure
@@ -3250,7 +3012,6 @@ pub struct Network {
     auto_populate_trusted_peer_pops: bool,
     _permit: NetworkPermit,
 }
-
 impl Drop for Network {
     fn drop(&mut self) {
         if let Some(relays) = &self.observer_slow_reader_relays {
@@ -3306,13 +3067,11 @@ impl Drop for Network {
         }
     }
 }
-
 async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
     for peer in peers {
         let _ = peer.shutdown_if_started().await;
     }
 }
-
 #[derive(Debug, Clone)]
 struct ConsensusBootstrapProfile {
     params: ConsensusGenesisParams,
@@ -3321,25 +3080,21 @@ struct ConsensusBootstrapProfile {
     chain_id: ChainId,
     wire_protocol_version: u32,
 }
-
 impl ConsensusBootstrapProfile {
     fn fingerprint(&self) -> [u8; 32] {
         compute_consensus_parameters_fingerprint(&self.params)
             .expect("test-network consensus profile must be canonical")
     }
 }
-
 impl Network {
     /// Path to the temporary directory holding configs and logs for this network.
     pub fn env_dir(&self) -> &Path {
         &self.env.dir
     }
-
     #[cfg(test)]
     fn consensus_bootstrap_profile(&self) -> ConsensusBootstrapProfile {
         self.consensus_profile.clone()
     }
-
     fn log_startup_diagnostics(&self) {
         let handshake_fingerprint = self.consensus_profile.fingerprint();
         debug!(
@@ -3349,7 +3104,6 @@ impl Network {
             consensus_block_cadence_ms = self.consensus_profile.params.block_cadence_ms.get(),
             "sumeragi configuration snapshot prior to peer bootstrap"
         );
-
         info!(
             block_cadence = ?self.block_cadence,
             block_sync_gossip_period = ?self.block_sync_gossip_period,
@@ -3361,7 +3115,6 @@ impl Network {
             "consensus bootstrap configuration"
         );
     }
-
     /// Access voting validator peers.
     ///
     /// This preserves the pre-observer meaning of `peers()`: callers may use
@@ -3369,24 +3122,20 @@ impl Network {
     pub fn peers(&self) -> &Vec<NetworkPeer> {
         &self.peers
     }
-
     /// Access voting validator peers explicitly.
     pub fn validators(&self) -> &[NetworkPeer] {
         &self.peers
     }
-
     /// Access signed, non-voting observer replicas.
     pub fn observers(&self) -> &[NetworkPeer] {
         &self.observers
     }
-
     /// Snapshot transparent slow-reader relay activity, when the harness hook is enabled.
     pub fn observer_slow_reader_relay_stats(&self) -> Option<ObserverSlowReaderRelayStats> {
         self.observer_slow_reader_relays
             .as_ref()
             .map(ObserverSlowReaderRelays::stats)
     }
-
     /// Snapshot transparent slow-reader relay activity for one observer.
     pub fn observer_slow_reader_relay_stats_for(
         &self,
@@ -3396,7 +3145,6 @@ impl Network {
             .as_ref()?
             .stats_for(observer)
     }
-
     /// Pause or resume validator-to-observer forwarding on every transparent
     /// slow-reader relay. Returns `false` when this network has no relay hook.
     pub fn set_observer_slow_reader_relays_paused(&self, paused: bool) -> bool {
@@ -3406,19 +3154,16 @@ impl Network {
         relays.set_paused(paused);
         true
     }
-
     /// Iterate over validators followed by observers in stable builder order.
     pub fn all_peers(&self) -> impl Iterator<Item = &NetworkPeer> {
         self.peers.iter().chain(&self.observers)
     }
-
     fn advertised_p2p_address(&self, peer: &NetworkPeer) -> SocketAddr {
         self.observer_advertised_p2p_addresses
             .get(&peer.network_peer_id())
             .cloned()
             .unwrap_or_else(|| peer.p2p_address())
     }
-
     fn observer_start_layer(&self, peer: &NetworkPeer) -> Table {
         let Some(published_address) = self
             .observer_advertised_p2p_addresses
@@ -3437,7 +3182,6 @@ impl Network {
             // bypasses the advertised relay during the bounded integration run.
             .write(["network", "connect_startup_delay_ms"], outbound_delay_ms)
     }
-
     /// Get the next validator in deterministic round-robin order.
     pub fn peer(&self) -> &NetworkPeer {
         let len = self.peers.len();
@@ -3445,12 +3189,10 @@ impl Network {
         let index = self.next_peer_index.fetch_add(1, Ordering::Relaxed) % len;
         &self.peers[index]
     }
-
     /// Access the environment of the network
     pub fn env(&self) -> &Environment {
         &self.env
     }
-
     /// Start all peers, waiting until they are up and have committed genesis (submitted by one of them).
     ///
     /// # Panics
@@ -3460,10 +3202,8 @@ impl Network {
         if self.peers.is_empty() {
             return Ok(self);
         }
-
         self.start_with_genesis_submitters([0]).await
     }
-
     /// Start peers with an explicit list of genesis submitter indices.
     ///
     /// Genesis submitters are started with a slight stagger to avoid overloading the
@@ -3488,7 +3228,6 @@ impl Network {
                 return Err(err).wrap_err("preflight bind failed for network peers");
             }
         }
-
         // Ensure we resolve `iroha3d` once before spawning peers; caches for subsequent calls.
         // This may trigger a re-entrant build, so keep it off the async runtime threads.
         let program = self
@@ -3501,29 +3240,24 @@ impl Network {
             ));
         }
         let _ = program.resolve_async().await?;
-
         let mut submitters: Vec<usize> = genesis_submitters.into_iter().collect();
         submitters.sort_unstable();
         submitters.dedup();
-
         if submitters.is_empty() && !self.peers.is_empty() {
             submitters.push(0);
         }
-
         if let Some(&idx) = submitters.iter().find(|&&idx| idx >= self.peers.len()) {
             return Err(eyre!(
                 "genesis submitter index {idx} out of range for {} peers",
                 self.peers.len()
             ));
         }
-
         // Bind every published observer endpoint before validators start. The
         // relay retains accepted sockets and retries the private upstream until
         // the validators-first bootstrap reaches the observer stage.
         if let Some(relays) = &self.observer_slow_reader_relays {
             relays.start().await?;
         }
-
         let genesis_block = Arc::new(self.genesis());
         let genesis_order = Arc::new(submitters.clone());
         let genesis_lookup = Arc::new(
@@ -3542,11 +3276,8 @@ impl Network {
             ?startup_timeout,
             "bootstrapping test network",
         );
-
         self.log_startup_diagnostics();
-
         let start_instant = Instant::now();
-
         let validator_start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
             let genesis_lookup = genesis_lookup.clone();
             let genesis_order = genesis_order.clone();
@@ -3559,9 +3290,7 @@ impl Network {
                 } else {
                     "replica"
                 };
-
                 info!(index, %mnemonic, role, "starting peer bootstrap");
-
                 if let Some(stage_idx) = stage {
                     info!(
                         index,
@@ -3579,7 +3308,6 @@ impl Network {
                         "providing replica with local genesis copy for bootstrap"
                     );
                 }
-
                 // Start genesis submitters first, then replicas. This reduces startup contention
                 // and makes the genesis submission ordering more deterministic across hosts.
                 let start_stage = stage.unwrap_or_else(|| genesis_order.len());
@@ -3600,7 +3328,6 @@ impl Network {
                         tokio::time::sleep(delay).await;
                     }
                 }
-
                 peer.start_checked(self.config_layers(), Some(genesis_block.as_ref()))
                     .await?;
                 info!(
@@ -3610,14 +3337,11 @@ impl Network {
                     "peer started with genesis; waiting for block 1"
                 );
                 Self::wait_for_block_1_with_watchdog(peer, index, &mnemonic, role).await?;
-
                 Ok::<(), color_eyre::Report>(())
             }
         });
-
         let bootstrap = async {
             futures::future::try_join_all(validator_start_futures).await?;
-
             // Observers are started only after the validator set has committed
             // the one canonical genesis. They receive the same signed block but
             // a node-local role override, so their BLS identities authenticate
@@ -3663,7 +3387,6 @@ impl Network {
             futures::future::try_join_all(observer_start_futures).await?;
             Ok::<(), color_eyre::Report>(())
         };
-
         match timeout(startup_timeout, bootstrap).await {
             Ok(result) => match result {
                 Ok(_) => {
@@ -3695,13 +3418,11 @@ impl Network {
             }
         }
     }
-
     async fn verify_post_genesis_liveness(&self) -> Result<()> {
         let window = post_genesis_liveness_window_env();
         if window == Duration::ZERO || self.all_peers().next().is_none() {
             return Ok(());
         }
-
         let futures = self.all_peers().enumerate().map(|(index, peer)| {
             let mnemonic = peer.mnemonic().to_string();
             let stdout = peer.latest_stdout_log_path();
@@ -3717,11 +3438,9 @@ impl Network {
                 }
             }
         });
-
         futures::future::try_join_all(futures).await?;
         Ok(())
     }
-
     async fn wait_for_block_1_with_watchdog(
         peer: &NetworkPeer,
         index: usize,
@@ -3742,7 +3461,6 @@ impl Network {
         let mut watchdog = tokio::time::interval(GENESIS_BLOCK_LOG_INTERVAL);
         watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut elapsed = Duration::ZERO;
-
         loop {
             if peer.has_observed_block(1) {
                 info!(
@@ -3905,28 +3623,23 @@ impl Network {
             }
         }
     }
-
     /// Signed immutable block cadence of the network.
     pub fn block_cadence(&self) -> Duration {
         self.block_cadence
     }
-
     /// DA commit-quorum timeout used by certified-body waits.
     pub fn da_commit_quorum_timeout(&self) -> Duration {
         // Sumeragi's first-release view-change budget is derived from the
         // signed cadence. Keep integration waits outside that protocol budget.
         self.block_cadence.saturating_mul(13)
     }
-
     /// Block gossip period configured for the network overlay.
     pub fn block_sync_gossip_period(&self) -> Duration {
         self.block_sync_gossip_period
     }
-
     pub fn sync_timeout(&self) -> Duration {
         self.sync_timeout_override.unwrap_or_else(sync_timeout_env)
     }
-
     pub fn peer_startup_timeout(&self) -> Duration {
         let base = self
             .peer_startup_timeout_override
@@ -3935,17 +3648,14 @@ impl Network {
         if peers == 0 {
             return base;
         }
-
         // Allow at least 60 seconds per peer by default to accommodate slower DA startup
         // under host contention (e.g., multiple full peers bootstrapping simultaneously).
         let dynamic_secs = u128::from(PEER_STARTUP_TIMEOUT_PER_PEER_SECS)
             .saturating_mul(peers)
             .min(u128::from(u64::MAX));
         let dynamic = Duration::from_secs(dynamic_secs as u64);
-
         base.max(dynamic)
     }
-
     /// Capture a human-readable snapshot of the current startup state for all peers.
     pub fn startup_snapshot(&self) -> Vec<PeerStartupState> {
         self.all_peers()
@@ -3953,7 +3663,6 @@ impl Network {
             .map(|(index, peer)| peer.startup_state(index))
             .collect()
     }
-
     fn format_startup_snapshot(snapshot: &[PeerStartupState]) -> String {
         snapshot
             .iter()
@@ -3961,7 +3670,6 @@ impl Network {
             .collect::<Vec<_>>()
             .join(", ")
     }
-
     /// Get a client for the first peer in the network.
     pub fn client(&self) -> Client {
         self.peers
@@ -3969,29 +3677,24 @@ impl Network {
             .expect("there is at least one peer")
             .client()
     }
-
     /// Chain ID of the network
     pub fn chain_id(&self) -> ChainId {
         self.consensus_profile.chain_id.clone()
     }
-
     /// Exact network identity derived from this network's signed genesis header.
     pub fn network_id(&self) -> NetworkId {
         NetworkId::from_genesis_hash(self.genesis().0.hash())
     }
-
     /// Torii URLs for all peers in the network.
     pub fn torii_urls(&self) -> Vec<String> {
         self.all_peers().map(NetworkPeer::torii_url).collect()
     }
-
     /// Base configuration of all peers.
     ///
     /// Includes `trusted_peers` parameter, containing all currently present peers.
     pub fn config_layers(&self) -> impl Iterator<Item = Cow<'_, Table>> {
         self.config_layers_with_additional_peers([])
     }
-
     /// Base configuration including the current peers and any additional peers provided.
     ///
     /// Useful for bootstrapping validator peers that were registered after the network was built by
@@ -4005,7 +3708,6 @@ impl Network {
         for peer in &extra {
             let _ = trusted.push(Peer::new(peer.p2p_address(), peer.network_peer_id()));
         }
-
         // Yield `trusted_peers` first so that any caller-provided layers can
         // reliably override it (e.g., relay/proxy topologies). Later layers in
         // `extends` win during config resolution.
@@ -4013,7 +3715,6 @@ impl Network {
             .iter()
             .map(|peer| format!("{}@{}", peer.id(), peer.address().to_literal()))
             .collect();
-
         let mut base_layer = Table::new().write(["trusted_peers"], trusted_peers);
         // Allow local tooling to bypass Torii pre-auth rate limits. Tests poll status
         // endpoints aggressively while waiting for block 1; without this allowlist the
@@ -4022,11 +3723,9 @@ impl Network {
             ["torii", "preauth_allow_cidrs"],
             vec!["127.0.0.1/32", "::1/128"],
         );
-
         if self.auto_populate_trusted_peer_pops {
             let mut trusted_peers_pop: Vec<Value> = Vec::new();
             let mut seen = HashSet::new();
-
             // Only validators carry a PoP into the consensus roster. Observers
             // remain BLS-authenticated trusted peers but deliberately have no
             // `trusted_peers_pop` entry.
@@ -4038,7 +3737,6 @@ impl Network {
                 if !seen.insert(bls_pk.clone()) {
                     continue;
                 }
-
                 let mut pop_entry = Table::new();
                 pop_entry.insert("public_key".into(), Value::String(bls_pk.to_string()));
                 pop_entry.insert(
@@ -4052,12 +3750,10 @@ impl Network {
                     base_layer.write(["trusted_peers_pop"], Value::Array(trusted_peers_pop));
             }
         }
-
         Some(Cow::Owned(base_layer))
             .into_iter()
             .chain(self.config_layers.iter().map(Cow::Borrowed))
     }
-
     /// Network genesis block.
     ///
     /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`],
@@ -4125,7 +3821,6 @@ impl Network {
                 "signed test-network execution policy must match exact genesis pre-execution"
             );
         };
-
         if let Some(cached_genesis) = self.cached_genesis.get() {
             if genesis_has_exactly_one_consensus_handshake(
                 cached_genesis,
@@ -4140,7 +3835,6 @@ impl Network {
                     "custom genesis consensus_handshake_meta is duplicate or mismatches builder profile; normalizing the canonical consensus parameter"
                 );
             }
-
             let mut augmented = normalize_genesis_consensus_handshake(
                 cached_genesis,
                 &self.genesis_isi,
@@ -4149,7 +3843,6 @@ impl Network {
                 &self.genesis_key_pair,
                 &self.chain_id(),
             );
-
             ensure_genesis_results_with_runtime_config(
                 &mut augmented,
                 &genesis_account_id,
@@ -4165,7 +3858,6 @@ impl Network {
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
         }
-
         let (genesis, staged_hash) =
             config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
                 self.genesis_isi.clone(),
@@ -4189,17 +3881,14 @@ impl Network {
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
     }
-
     /// Genesis block instructions grouped by transaction
     pub fn genesis_isi(&self) -> &Vec<Vec<InstructionBox>> {
         &self.genesis_isi
     }
-
     /// BLS Proof-of-Possession entries for the current peer topology.
     pub fn topology_entries(&self) -> &[GenesisTopologyEntry] {
         &self.topology_entries
     }
-
     /// Shutdown running peers
     pub async fn shutdown(&self) -> &Self {
         self.all_peers()
@@ -4212,13 +3901,11 @@ impl Network {
         }
         self
     }
-
     fn trusted_peers(&self) -> UniqueVec<Peer> {
         self.all_peers()
             .map(|peer| Peer::new(self.advertised_p2p_address(peer), peer.network_peer_id()))
             .collect()
     }
-
     /// Resolves when all _running_ peers have at least N blocks (non-empty in current policy)
     /// # Errors
     /// If this doesn't happen within a timeout.
@@ -4233,18 +3920,14 @@ impl Network {
                 self.wait_for_blocks_via_status(height).await?;
             }
         }
-
         info!(%height, "network sync height");
-
         Ok(self)
     }
-
     pub async fn ensure_blocks_with<F: Fn(BlockHeight) -> bool>(&self, f: F) -> Result<&Self> {
         let running_peers: Vec<_> = self.all_peers().filter(|peer| peer.is_running()).collect();
         if running_peers.is_empty() {
             return Ok(self);
         }
-
         // Fast path: if storage already shows the required height for all running peers,
         // skip the async watchers to avoid long waits when status polling lags behind.
         let storage_satisfied = running_peers.iter().all(|peer| {
@@ -4255,7 +3938,6 @@ impl Network {
         if storage_satisfied {
             return Ok(self);
         }
-
         // Storage markers may lag behind or be absent (e.g., layout migration in progress).
         // Probe `/status` once before wiring block watchers to avoid waiting for fresh block events
         // when peers already satisfy the predicate.
@@ -4278,7 +3960,6 @@ impl Network {
         if Self::status_results_satisfy_predicate(status_results.into_iter(), &f) {
             return Ok(self);
         }
-
         let snapshot_on_failure = || self.startup_snapshot();
         timeout(
             self.sync_timeout(),
@@ -4298,10 +3979,8 @@ impl Network {
                 self.env.dir.display()
             )
         })?;
-
         Ok(self)
     }
-
     fn status_results_satisfy_predicate<F, I, E>(results: I, predicate: &F) -> bool
     where
         F: Fn(BlockHeight) -> bool,
@@ -4311,7 +3990,6 @@ impl Network {
             .into_iter()
             .all(|result| result.is_ok_and(predicate))
     }
-
     async fn wait_for_blocks_via_status(&self, height: u64) -> Result<()> {
         let deadline = Instant::now() + self.sync_timeout();
         loop {
@@ -4370,14 +4048,12 @@ impl Network {
         ))
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TerminationKind {
     Terminated,
     Killed,
     EventStreamClosed,
 }
-
 async fn detect_peer_termination(
     mut events: broadcast::Receiver<PeerLifecycleEvent>,
     window: Duration,
@@ -4385,10 +4061,8 @@ async fn detect_peer_termination(
     if window == Duration::ZERO {
         return None;
     }
-
     let timer = tokio::time::sleep(window);
     tokio::pin!(timer);
-
     loop {
         tokio::select! {
             _ = &mut timer => return None,
@@ -4402,7 +4076,6 @@ async fn detect_peer_termination(
         }
     }
 }
-
 /// Determines how [`NetworkBuilder`] configures [`SmartContractParameter::Fuel`] in the genesis.
 #[derive(Clone, Copy, Default)]
 pub enum IvmFuelConfig {
@@ -4418,7 +4091,6 @@ pub enum IvmFuelConfig {
     /// [`IvmFuelConfig::Unset`].
     Auto,
 }
-
 /// Diagnostic snapshot describing the startup state of a peer.
 #[derive(Debug, Clone)]
 pub struct PeerStartupState {
@@ -4447,21 +4119,18 @@ pub struct PeerStartupState {
     /// Snapshot of the peer's Kura storage layout.
     pub storage: PeerStorageSnapshot,
 }
-
 impl PeerStartupState {
     /// Whether the peer reported a status (i.e., the server started).
     pub fn server_started(&self) -> bool {
         self.last_block.is_some()
     }
 }
-
 impl fmt::Display for PeerStartupState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let block = self
             .last_block
             .map(|height| format!("total={} non_empty={}", height.total, height.non_empty))
             .unwrap_or_else(|| "none".to_string());
-
         write!(
             f,
             "peer#{idx}({name}) running={running} server_started={started} last_block={block}",
@@ -4471,7 +4140,6 @@ impl fmt::Display for PeerStartupState {
             started = self.server_started(),
             block = block,
         )?;
-
         let formatted_ts = self
             .status_unix_timestamp_ms
             .map(|ms| format!("{ms}ms"))
@@ -4498,7 +4166,6 @@ impl fmt::Display for PeerStartupState {
         } else {
             write!(f, "; status=unavailable")?;
         }
-
         let formatted_v2_ts = self
             .sumeragi_v2_unix_timestamp_ms
             .map(|ms| format!("{ms}ms"))
@@ -4514,7 +4181,6 @@ impl fmt::Display for PeerStartupState {
         } else {
             write!(f, "; sumeragi_v2=unavailable")?;
         }
-
         let stdout_log = self
             .logs
             .stdout_log
@@ -4527,13 +4193,11 @@ impl fmt::Display for PeerStartupState {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "none".to_string());
-
         write!(
             f,
             "; logs=stdout={stdout_log} stderr={stderr_log} stderr_run={:?}",
             self.logs.stderr_run_id
         )?;
-
         if let Some(preview) = &self.logs.stdout_preview {
             write!(
                 f,
@@ -4543,7 +4207,6 @@ impl fmt::Display for PeerStartupState {
                 self.logs.stdout_truncated
             )?;
         }
-
         if let Some(preview) = &self.logs.stderr_preview {
             write!(
                 f,
@@ -4554,7 +4217,6 @@ impl fmt::Display for PeerStartupState {
                 self.logs.stderr_truncated
             )?;
         }
-
         write!(
             f,
             "; storage=exists={} has_block1={} pipeline={:?} blocks={:?}",
@@ -4565,7 +4227,6 @@ impl fmt::Display for PeerStartupState {
         )
     }
 }
-
 /// Compact progress-oriented projection of `/v1/sumeragi/status` used in startup diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerSumeragiV2Snapshot {
@@ -4610,7 +4271,6 @@ pub struct PeerSumeragiV2Snapshot {
     /// WAL persistence operation currently blocking the reducer, if any.
     pub pending_persistence_id: Option<u64>,
 }
-
 impl From<&SumeragiV2Status> for PeerSumeragiV2Snapshot {
     fn from(status: &SumeragiV2Status) -> Self {
         let liveness = &status.liveness;
@@ -4712,7 +4372,6 @@ impl From<&SumeragiV2Status> for PeerSumeragiV2Snapshot {
         }
     }
 }
-
 impl fmt::Display for PeerSumeragiV2Snapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let lock = self.locked_prepare_qc.as_deref().unwrap_or("-");
@@ -4749,12 +4408,10 @@ impl fmt::Display for PeerSumeragiV2Snapshot {
         )
     }
 }
-
 fn abbreviated_hash(hash: impl fmt::Display) -> String {
     let rendered = hash.to_string();
     rendered.get(..12).unwrap_or(&rendered).to_owned()
 }
-
 fn format_v2_certificate_ref(certificate: QuorumCertificateRef) -> String {
     format!(
         "h{}/v{}<-v{}/{:?}/block={}/exec={}",
@@ -4766,7 +4423,6 @@ fn format_v2_certificate_ref(certificate: QuorumCertificateRef) -> String {
         abbreviated_hash(certificate.execution_commitment.executed_block_wire_hash),
     )
 }
-
 fn format_v2_vote_quorum(
     quorum: &iroha::data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus,
 ) -> String {
@@ -4783,7 +4439,6 @@ fn format_v2_vote_quorum(
         abbreviated_hash(quorum.execution_commitment.executed_block_wire_hash),
     )
 }
-
 fn compact_v2_list(entries: &[String]) -> String {
     if entries.is_empty() {
         "-".to_string()
@@ -4791,7 +4446,6 @@ fn compact_v2_list(entries: &[String]) -> String {
         entries.join("|")
     }
 }
-
 /// Snapshot of a peer's log state.
 #[derive(Debug, Clone, Default)]
 pub struct PeerLogSnapshot {
@@ -4816,7 +4470,6 @@ pub struct PeerLogSnapshot {
     /// Run identifier associated with the stderr preview.
     pub stderr_run_id: Option<usize>,
 }
-
 /// Snapshot of the last `/status` response observed while starting the peer.
 #[derive(Debug, Clone, Default)]
 pub struct PeerStatusSnapshot {
@@ -4830,7 +4483,6 @@ pub struct PeerStatusSnapshot {
     pub txs_rejected: u64,
     pub da_reschedule_total: u64,
 }
-
 impl From<&Status> for PeerStatusSnapshot {
     fn from(value: &Status) -> Self {
         Self {
@@ -4846,7 +4498,6 @@ impl From<&Status> for PeerStatusSnapshot {
         }
     }
 }
-
 /// Snapshot of the peer's Kura directory layout.
 #[derive(Debug, Clone)]
 pub struct PeerStorageSnapshot {
@@ -4856,7 +4507,6 @@ pub struct PeerStorageSnapshot {
     pub pipeline_entries: Vec<String>,
     pub blocks_entries: Vec<String>,
 }
-
 impl PeerStorageSnapshot {
     fn capture(kura_dir: PathBuf, has_block_1_artifact: bool) -> Self {
         let store_exists = kura_dir.exists();
@@ -4875,25 +4525,21 @@ impl PeerStorageSnapshot {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct LiveStderrState {
     run_id: Option<usize>,
     buffer: String,
 }
-
 impl LiveStderrState {
     fn reset(&mut self, run_id: usize) {
         self.run_id = Some(run_id);
         self.buffer.clear();
     }
-
     fn push_line(&mut self, line: &str) {
         self.buffer.push_str(line);
         self.buffer.push('\n');
     }
 }
-
 #[derive(Debug, Clone, Default)]
 struct PeerStartupProbe {
     last_status: Option<PeerStatusSnapshot>,
@@ -4903,23 +4549,19 @@ struct PeerStartupProbe {
     last_sumeragi_v2_error: Option<String>,
     last_sumeragi_v2_unix_ms: Option<u128>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusSource {
     Http,
     Storage,
 }
-
 #[derive(Debug, Default)]
 struct HttpStartGate {
     seen_http: bool,
 }
-
 impl HttpStartGate {
     fn http_seen(&self) -> bool {
         self.seen_http
     }
-
     /// Returns true exactly once, on the first HTTP-derived status observation.
     fn on_status(&mut self, source: StatusSource) -> bool {
         if self.seen_http {
@@ -4932,7 +4574,6 @@ impl HttpStartGate {
         }
     }
 }
-
 fn snapshot_dir_entries(path: &Path, limit: usize) -> Vec<String> {
     let Ok(read_dir) = fs::read_dir(path) else {
         return Vec::new();
@@ -4949,7 +4590,6 @@ fn snapshot_dir_entries(path: &Path, limit: usize) -> Vec<String> {
     }
     names
 }
-
 fn snapshot_snippet(value: &str) -> String {
     let mut buf = String::new();
     for (idx, ch) in value.chars().enumerate() {
@@ -4961,11 +4601,9 @@ fn snapshot_snippet(value: &str) -> String {
     }
     buf
 }
-
 fn sanitize_preview_for_display(value: &str) -> String {
     snapshot_snippet(&value.replace('\n', "\\n"))
 }
-
 async fn drain_log_lines<R, F>(
     output: R,
     mut file: File,
@@ -5023,7 +4661,6 @@ async fn drain_log_lines<R, F>(
         notify.notify_waiters();
     }
 }
-
 /// Bounded recipe for adding signed, non-voting P2P observers to a test network.
 ///
 /// The descriptor contains only a count. Observer identities and all private
@@ -5033,7 +4670,6 @@ async fn drain_log_lines<R, F>(
 pub struct ObserverP2pBootstrap {
     observer_count: NonZero<usize>,
 }
-
 /// Validation error for [`ObserverP2pBootstrap`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObserverP2pBootstrapError {
@@ -5065,7 +4701,6 @@ pub enum ObserverP2pBootstrapError {
         capacity: usize,
     },
 }
-
 impl fmt::Display for ObserverP2pBootstrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -5093,9 +4728,7 @@ impl fmt::Display for ObserverP2pBootstrapError {
         }
     }
 }
-
 impl std::error::Error for ObserverP2pBootstrapError {}
-
 impl ObserverP2pBootstrap {
     /// Construct a bounded observer recipe.
     ///
@@ -5120,17 +4753,14 @@ impl ObserverP2pBootstrap {
         }
         Ok(Self { observer_count })
     }
-
     /// Number of observer replicas requested by this recipe.
     pub const fn observer_count(self) -> usize {
         self.observer_count.get()
     }
-
     /// Production core-profile total-connection capacity used by the harness.
     pub const fn connection_capacity() -> usize {
         iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS
     }
-
     fn validate_for_validators(
         self,
         validators: usize,
@@ -5160,12 +4790,10 @@ impl ObserverP2pBootstrap {
         Ok(participants)
     }
 }
-
 const OBSERVER_SLOW_READER_MAX_CHUNK_BYTES: usize = 64 * 1024;
 const OBSERVER_SLOW_READER_MAX_DELAY: Duration = Duration::from_secs(1);
 const OBSERVER_RELAY_UPSTREAM_RETRY_DELAY: Duration = Duration::from_millis(25);
 const OBSERVER_RELAY_OUTBOUND_DIAL_DELAY: Duration = Duration::from_secs(24 * 60 * 60);
-
 /// Bounded transparent-relay settings for observer slow-reader tests.
 ///
 /// The relay does not decode or alter P2P traffic. It only limits each read
@@ -5176,7 +4804,6 @@ pub struct ObserverSlowReaderRelayConfig {
     read_chunk_bytes: NonZero<usize>,
     read_delay: Duration,
 }
-
 /// Validation error for [`ObserverSlowReaderRelayConfig`] or its builder hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObserverSlowReaderRelayError {
@@ -5201,7 +4828,6 @@ pub enum ObserverSlowReaderRelayError {
         maximum: Duration,
     },
 }
-
 impl fmt::Display for ObserverSlowReaderRelayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -5224,9 +4850,7 @@ impl fmt::Display for ObserverSlowReaderRelayError {
         }
     }
 }
-
 impl std::error::Error for ObserverSlowReaderRelayError {}
-
 impl ObserverSlowReaderRelayConfig {
     /// Construct bounded transparent-relay settings.
     ///
@@ -5259,28 +4883,23 @@ impl ObserverSlowReaderRelayConfig {
             read_delay,
         })
     }
-
     /// Maximum read-chunk allocation accepted by the harness.
     pub const fn maximum_read_chunk_bytes() -> usize {
         OBSERVER_SLOW_READER_MAX_CHUNK_BYTES
     }
-
     /// Maximum per-read delay accepted by the harness.
     pub const fn maximum_read_delay() -> Duration {
         OBSERVER_SLOW_READER_MAX_DELAY
     }
-
     /// Bytes read from the validator-facing socket per delayed operation.
     pub const fn read_chunk_bytes(self) -> usize {
         self.read_chunk_bytes.get()
     }
-
     /// Delay applied to each non-empty validator-to-observer read.
     pub const fn read_delay(self) -> Duration {
         self.read_delay
     }
 }
-
 /// Snapshot of transparent observer-relay activity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObserverSlowReaderRelayStats {
@@ -5295,7 +4914,6 @@ pub struct ObserverSlowReaderRelayStats {
     /// Unmodified validator-to-observer ciphertext bytes forwarded upstream.
     pub forwarded_to_observers_bytes: u64,
 }
-
 #[derive(Debug, Default)]
 struct ObserverSlowReaderRelayCounters {
     accepted_connections: AtomicU64,
@@ -5304,7 +4922,6 @@ struct ObserverSlowReaderRelayCounters {
     delayed_reads: AtomicU64,
     forwarded_to_observers_bytes: AtomicU64,
 }
-
 impl ObserverSlowReaderRelayCounters {
     fn snapshot(&self) -> ObserverSlowReaderRelayStats {
         ObserverSlowReaderRelayStats {
@@ -5316,7 +4933,6 @@ impl ObserverSlowReaderRelayCounters {
         }
     }
 }
-
 #[derive(Debug)]
 struct ObserverSlowReaderRelayRoute {
     peer_id: PeerId,
@@ -5325,13 +4941,11 @@ struct ObserverSlowReaderRelayRoute {
     counters: Arc<ObserverSlowReaderRelayCounters>,
     _published_port: AllocatedPort,
 }
-
 #[derive(Debug, Default)]
 struct ObserverSlowReaderRelayRuntime {
     shutdown: Option<watch::Sender<bool>>,
     listeners: Vec<JoinHandle<()>>,
 }
-
 #[derive(Debug)]
 struct ObserverSlowReaderRelays {
     config: ObserverSlowReaderRelayConfig,
@@ -5341,7 +4955,6 @@ struct ObserverSlowReaderRelays {
     paused: watch::Sender<bool>,
     runtime: StdMutex<ObserverSlowReaderRelayRuntime>,
 }
-
 impl ObserverSlowReaderRelays {
     fn new(observers: &[NetworkPeer], config: ObserverSlowReaderRelayConfig) -> Self {
         let routes = observers
@@ -5372,11 +4985,9 @@ impl ObserverSlowReaderRelays {
             runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
         }
     }
-
     fn published_addresses(&self) -> HashMap<PeerId, SocketAddr> {
         self.published_addresses.clone()
     }
-
     fn stats(&self) -> ObserverSlowReaderRelayStats {
         self.routes.iter().fold(
             ObserverSlowReaderRelayStats::default(),
@@ -5400,18 +5011,15 @@ impl ObserverSlowReaderRelays {
             },
         )
     }
-
     fn stats_for(&self, peer_id: &PeerId) -> Option<ObserverSlowReaderRelayStats> {
         self.routes
             .iter()
             .find(|route| &route.peer_id == peer_id)
             .map(|route| route.counters.snapshot())
     }
-
     fn set_paused(&self, paused: bool) {
         self.paused.send_replace(paused);
     }
-
     async fn start(&self) -> Result<()> {
         let mut runtime = self
             .runtime
@@ -5420,7 +5028,6 @@ impl ObserverSlowReaderRelays {
         if self.running.load(Ordering::Acquire) {
             return Ok(());
         }
-
         let mut bound = Vec::with_capacity(self.routes.len());
         for route in &self.routes {
             match TcpListener::bind(route.published_address.to_string()).and_then(|listener| {
@@ -5438,7 +5045,6 @@ impl ObserverSlowReaderRelays {
                 }
             }
         }
-
         let (shutdown, shutdown_rx) = watch::channel(false);
         let listeners = bound
             .into_iter()
@@ -5470,20 +5076,17 @@ impl ObserverSlowReaderRelays {
         self.running.store(true, Ordering::Release);
         Ok(())
     }
-
     async fn shutdown(&self) {
         let listeners = self.signal_shutdown_and_take_listeners();
         for listener in listeners {
             let _ = listener.await;
         }
     }
-
     fn abort(&self) {
         for listener in self.signal_shutdown_and_take_listeners() {
             listener.abort();
         }
     }
-
     fn signal_shutdown_and_take_listeners(&self) -> Vec<JoinHandle<()>> {
         let mut runtime = self
             .runtime
@@ -5496,13 +5099,11 @@ impl ObserverSlowReaderRelays {
         std::mem::take(&mut runtime.listeners)
     }
 }
-
 impl Drop for ObserverSlowReaderRelays {
     fn drop(&mut self) {
         self.abort();
     }
 }
-
 async fn run_observer_slow_reader_listener(
     listener: TokioTcpListener,
     peer_id: PeerId,
@@ -5560,7 +5161,6 @@ async fn run_observer_slow_reader_listener(
     }
     connections.shutdown().await;
 }
-
 async fn run_observer_slow_reader_connection(
     client: TcpStream,
     peer_id: PeerId,
@@ -5600,7 +5200,6 @@ async fn run_observer_slow_reader_connection(
     counters
         .upstream_connections
         .fetch_add(1, Ordering::Relaxed);
-
     let (client_read, mut client_write) = client.into_split();
     let (mut upstream_read, upstream_write) = upstream.into_split();
     let delayed = slow_copy_observer_ciphertext(
@@ -5630,7 +5229,6 @@ async fn run_observer_slow_reader_connection(
         }
     }
 }
-
 async fn slow_copy_observer_ciphertext<R, W>(
     mut reader: R,
     mut writer: W,
@@ -5697,7 +5295,6 @@ where
             .fetch_add(u64::try_from(read).unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 }
-
 /// Builder of [`Network`].
 ///
 /// Cloning copies only the deterministic network recipe. Every call to
@@ -5725,16 +5322,13 @@ pub struct NetworkBuilder {
     consensus_message_control: bool,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
 }
-
 type InitialConsensusMessageControlFactory =
     dyn Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync;
-
 #[derive(Clone)]
 struct InitialConsensusMessageControl {
     queue_capacity: usize,
     factory: Arc<InitialConsensusMessageControlFactory>,
 }
-
 fn bool_env_override(key: &str) -> Option<bool> {
     match std::env::var(key) {
         Ok(value) => {
@@ -5759,7 +5353,6 @@ fn bool_env_override(key: &str) -> Option<bool> {
         }
     }
 }
-
 fn merge_tables(dst: &mut Table, src: &Table) {
     for (key, value) in src {
         match value {
@@ -5781,7 +5374,6 @@ fn merge_tables(dst: &mut Table, src: &Table) {
         }
     }
 }
-
 #[cfg(test)]
 fn trusted_peers_layer_for_parse(
     peers: &[NetworkPeer],
@@ -5789,7 +5381,6 @@ fn trusted_peers_layer_for_parse(
 ) -> Table {
     trusted_peers_layer_for_parse_with_observers(peers, &[], auto_populate_trusted_peer_pops)
 }
-
 #[cfg(test)]
 fn trusted_peers_layer_for_parse_with_observers(
     validators: &[NetworkPeer],
@@ -5803,7 +5394,6 @@ fn trusted_peers_layer_for_parse_with_observers(
         auto_populate_trusted_peer_pops,
     )
 }
-
 fn trusted_peers_layer_for_parse_with_observer_addresses(
     validators: &[NetworkPeer],
     observers: &[NetworkPeer],
@@ -5822,11 +5412,9 @@ fn trusted_peers_layer_for_parse_with_observer_addresses(
         })
         .collect();
     let mut base_layer = Table::new().write(["trusted_peers"], trusted_peers);
-
     if auto_populate_trusted_peer_pops {
         let mut trusted_peers_pop: Vec<Value> = Vec::new();
         let mut seen = HashSet::new();
-
         for peer in validators {
             let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop()) else {
                 continue;
@@ -5834,7 +5422,6 @@ fn trusted_peers_layer_for_parse_with_observer_addresses(
             if !seen.insert(bls_pk.clone()) {
                 continue;
             }
-
             let mut pop_entry = Table::new();
             pop_entry.insert("public_key".into(), Value::String(bls_pk.to_string()));
             pop_entry.insert(
@@ -5843,19 +5430,15 @@ fn trusted_peers_layer_for_parse_with_observer_addresses(
             );
             trusted_peers_pop.push(Value::Table(pop_entry));
         }
-
         if !trusted_peers_pop.is_empty() {
             base_layer = base_layer.write(["trusted_peers_pop"], Value::Array(trusted_peers_pop));
         }
     }
-
     base_layer
 }
-
 fn observer_role_layer() -> Table {
     Table::new().write(["sumeragi", "role"], "observer")
 }
-
 // Deterministic BLS keypair/PoP so consensus validation doesn't reject profile detection defaults.
 const SORA_PROFILE_BLS_PUBLIC_KEY: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
 const SORA_PROFILE_BLS_PRIVATE_KEY: &str =
@@ -5868,17 +5451,14 @@ const SORA_PROFILE_STREAM_PRIVATE_KEY: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 static SORA_PROFILE_STREAM_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
 static SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
-
 // Schema-completion sentinel used only while projecting genesis-dependent
 // runtime configuration before the signed genesis block exists. It is never
 // emitted into a peer run config and must not be treated as a trust anchor.
 const NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION: &str =
     "0000000000000000000000000000000000000000000000000000000000000001";
-
 fn genesis_expected_hash_config_literal(hash_body: &str) -> String {
     norito::literal::format("hash", &hash_body.to_ascii_uppercase())
 }
-
 fn ensure_non_runtime_genesis_expected_hash_for_config_projection(table: &mut Table) {
     let genesis = table
         .entry("genesis".to_owned())
@@ -5895,7 +5475,6 @@ fn ensure_non_runtime_genesis_expected_hash_for_config_projection(table: &mut Ta
             ))
         });
 }
-
 fn sora_profile_bls_pop_hex() -> &'static str {
     SORA_PROFILE_BLS_POP_HEX.get_or_init(|| {
         let bls_keypair = SORA_PROFILE_BLS_KEYPAIR.get_or_init(|| {
@@ -5912,7 +5491,6 @@ fn sora_profile_bls_pop_hex() -> &'static str {
         format!("0x{}", hex_lower(&pop))
     })
 }
-
 fn ensure_sora_profile_trusted_peer_pop(table: &mut Table) {
     let mut pop_entry = Table::new();
     pop_entry.insert(
@@ -5924,7 +5502,6 @@ fn ensure_sora_profile_trusted_peer_pop(table: &mut Table) {
         Value::String(sora_profile_bls_pop_hex().to_string()),
     );
     let entry = Value::Table(pop_entry);
-
     match table.get_mut("trusted_peers_pop") {
         Some(Value::Array(entries)) => {
             let has_entry = entries.iter().any(|entry| {
@@ -5944,7 +5521,6 @@ fn ensure_sora_profile_trusted_peer_pop(table: &mut Table) {
         Some(_) => {}
     }
 }
-
 fn sora_profile_detection_defaults() -> Table {
     let bls_keypair = SORA_PROFILE_BLS_KEYPAIR.get_or_init(|| {
         let public_key: PublicKey = SORA_PROFILE_BLS_PUBLIC_KEY
@@ -6002,7 +5578,6 @@ fn sora_profile_detection_defaults() -> Table {
     ensure_sora_profile_trusted_peer_pop(&mut table);
     table
 }
-
 fn apply_identity_defaults_for_detection(merged: &mut Table) {
     // Profile detection does not depend on the streaming or SoraNet transport identities, but
     // config parsing does. Force distinct deterministic Ed25519 keys so the BLS node identity
@@ -6020,7 +5595,6 @@ fn apply_identity_defaults_for_detection(merged: &mut Table) {
         Value::String(SORA_PROFILE_STREAM_PRIVATE_KEY.to_string()),
     );
     merged.insert("streaming".into(), Value::Table(streaming));
-
     let soranet_transport_keypair = SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR
         .get_or_init(|| checked_soranet_transport_key_pair_from_seed(b"sora-profile".to_vec()));
     merged.insert(
@@ -6034,7 +5608,6 @@ fn apply_identity_defaults_for_detection(merged: &mut Table) {
         ),
     );
 }
-
 fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     let mut merged = sora_profile_detection_defaults();
     for layer in config_layers {
@@ -6044,7 +5617,6 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
-
 fn raw_nexus_overrides(table: &Table) -> bool {
     let Some(nexus) = table.get("nexus").and_then(Value::as_table) else {
         return false;
@@ -6081,7 +5653,6 @@ fn raw_nexus_overrides(table: &Table) -> bool {
         .and_then(Value::as_integer)
         .is_some_and(|value| value > 1)
 }
-
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
     // Inject required fields so profile detection can parse without the base layer.
     let merged = merged_sora_profile_detection_config(config_layers);
@@ -6143,7 +5714,6 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
             || raw_nexus_overrides(&merged)
     }
 }
-
 fn resolve_actual_config(
     peer: &NetworkPeer,
     config_layers: &[Table],
@@ -6154,7 +5724,6 @@ fn resolve_actual_config(
     }
     parse_actual_config_for_genesis(merged, config_layers)
 }
-
 fn resolve_kura_store_dir(
     peer: &NetworkPeer,
     config_layers: &[Table],
@@ -6180,7 +5749,6 @@ fn resolve_kura_store_dir(
         },
     )
 }
-
 fn parse_actual_config_for_genesis(
     mut merged: Table,
     config_layers: &[Table],
@@ -6210,7 +5778,6 @@ fn parse_actual_config_for_genesis(
         }
     }
 }
-
 #[cfg(test)]
 fn resolve_da_proof_policies(
     peer: &NetworkPeer,
@@ -6219,7 +5786,6 @@ fn resolve_da_proof_policies(
     resolve_actual_config(peer, config_layers)
         .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config))
 }
-
 fn get_nested_value<'a>(table: &'a Table, path: &[&str]) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -6230,11 +5796,9 @@ fn get_nested_value<'a>(table: &'a Table, path: &[&str]) -> Option<&'a Value> {
     }
     Some(current)
 }
-
 fn read_bool(table: &Table, path: &[&str]) -> Option<bool> {
     get_nested_value(table, path).and_then(Value::as_bool)
 }
-
 fn replace_consensus_handshake_meta(genesis_isi: &mut Vec<Vec<InstructionBox>>) -> bool {
     let mut was_replaced = false;
     genesis_isi.iter_mut().for_each(|instructions| {
@@ -6261,7 +5825,6 @@ fn replace_consensus_handshake_meta(genesis_isi: &mut Vec<Vec<InstructionBox>>) 
     });
     was_replaced
 }
-
 fn consensus_parameters_from_genesis(
     genesis: &GenesisBlock,
 ) -> iroha_data_model::parameter::Parameters {
@@ -6277,7 +5840,6 @@ fn consensus_parameters_from_genesis(
     }
     parameter_state
 }
-
 fn consensus_parameters_from_genesis_with_overrides(
     genesis: &GenesisBlock,
     genesis_isi: &[Vec<InstructionBox>],
@@ -6303,7 +5865,6 @@ fn consensus_parameters_from_genesis_with_overrides(
     }
     parameters
 }
-
 fn genesis_instructions_contain_consensus_handshake_meta(
     genesis_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
@@ -6314,7 +5875,6 @@ fn genesis_instructions_contain_consensus_handshake_meta(
         }
         _ => return false,
     };
-
     genesis_isi
         .iter()
         .flat_map(|tx| tx.iter())
@@ -6328,7 +5888,6 @@ fn genesis_instructions_contain_consensus_handshake_meta(
                 })
         })
 }
-
 fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
     let expected_meta = match expected {
         Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id() => {
@@ -6336,7 +5895,6 @@ fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &
         }
         _ => return false,
     };
-
     let mut handshakes = block
         .0
         .transactions_vec()
@@ -6358,7 +5916,6 @@ fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &
     matches!(handshakes.next(), Some(actual) if actual == expected_meta)
         && handshakes.next().is_none()
 }
-
 fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
     block
         .0
@@ -6380,7 +5937,6 @@ fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
             _ => false,
         })
 }
-
 fn normalize_genesis_consensus_handshake(
     source: &GenesisBlock,
     genesis_isi: &[Vec<InstructionBox>],
@@ -6416,7 +5972,6 @@ fn normalize_genesis_consensus_handshake(
     param_instructions.push(InstructionBox::from(SetParameter::new(
         consensus_handshake_meta.clone(),
     )));
-
     let authority = AccountId::new(genesis_key_pair.public_key().clone());
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
     let param_tx = iroha_data_model::transaction::TransactionBuilder::new_genesis_with_time_source(
@@ -6427,13 +5982,11 @@ fn normalize_genesis_consensus_handshake(
     .with_instructions(param_instructions)
     .try_sign(genesis_key_pair.private_key())
     .expect("sign normalized genesis consensus metadata transaction");
-
     let mut transactions = transactions_without_consensus_handshake_metadata(
         source.0.transactions_vec(),
         genesis_key_pair,
     );
     transactions.push(param_tx);
-
     let external_merkle: iroha_crypto::MerkleTree<
         iroha_data_model::transaction::TransactionEntrypoint,
     > = transactions
@@ -6443,7 +5996,6 @@ fn normalize_genesis_consensus_handshake(
     let mut header = source.0.header();
     header.merkle_root = external_merkle.root();
     header.result_merkle_root = None;
-
     let signer_index = source
         .0
         .signatures()
@@ -6475,7 +6027,6 @@ fn normalize_genesis_consensus_handshake(
         .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
         .expect("normalized genesis placeholder hashes must match payload");
     working.set_committed_fragment_count(0);
-
     let signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
         iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
@@ -6495,68 +6046,7 @@ fn normalize_genesis_consensus_handshake(
     rebuilt.set_committed_fragment_count(0);
     GenesisBlock(rebuilt)
 }
-
-fn transactions_without_consensus_handshake_metadata(
-    transactions: &[iroha_data_model::transaction::SignedTransaction],
-    genesis_key_pair: &KeyPair,
-) -> Vec<iroha_data_model::transaction::SignedTransaction> {
-    transactions
-        .iter()
-        .filter_map(|transaction| {
-            let Executable::Instructions(instructions) = transaction.instructions() else {
-                return Some(transaction.clone());
-            };
-            let filtered = instructions
-                .iter()
-                .filter(|instruction| {
-                    !instruction
-                        .as_any()
-                        .downcast_ref::<SetParameter>()
-                        .is_some_and(|set_param| {
-                            matches!(
-                                set_param.inner(),
-                                Parameter::Custom(custom)
-                                    if custom.id() == &consensus_metadata::handshake_meta_id()
-                            )
-                        })
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if filtered.len() == instructions.len() {
-                return Some(transaction.clone());
-            }
-            if filtered.is_empty() {
-                return None;
-            }
-
-            assert_eq!(
-                transaction.authority().try_signatory(),
-                Some(genesis_key_pair.public_key()),
-                "cannot normalize handshake metadata in a genesis transaction signed by another authority"
-            );
-            assert!(
-                transaction.attachments().is_none(),
-                "cannot normalize handshake metadata inside a proof-attached genesis transaction"
-            );
-            assert!(
-                transaction.multisig_signatures().is_none(),
-                "cannot normalize handshake metadata inside a multisig genesis transaction"
-            );
-            let canonical_payload = norito::codec::encode_adaptive(transaction.payload());
-            let builder = iroha_data_model::transaction::TransactionBuilder::decode_payload(
-                &canonical_payload,
-            )
-            .expect("cached genesis transaction payload must decode canonically")
-            .with_instructions(filtered);
-            Some(
-                builder
-                    .try_sign(genesis_key_pair.private_key())
-                    .expect("re-sign cached genesis transaction after handshake normalization"),
-            )
-        })
-        .collect()
-}
-
+include!("lib/genesis_handshake_normalization.rs");
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
     let mode = match consensus_profile.params.mode {
         ConsensusGenesisModeParams::Permissioned => SumeragiConsensusMode::Permissioned,
@@ -6581,7 +6071,6 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         handshake_payload,
     ))
 }
-
 fn npos_params_from_genesis(
     genesis_isi: &[Vec<InstructionBox>],
     genesis_post_topology_isi: &[Vec<InstructionBox>],
@@ -6608,7 +6097,6 @@ fn npos_params_from_genesis(
         .map(Some)
         .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
 }
-
 fn resolve_npos_bootstrap_stake(
     genesis_isi: &[Vec<InstructionBox>],
     genesis_post_topology_isi: &[Vec<InstructionBox>],
@@ -6621,13 +6109,11 @@ fn resolve_npos_bootstrap_stake(
         .clone();
     requested.max(min_self_bond)
 }
-
 impl Default for NetworkBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Test network builder
 impl NetworkBuilder {
     /// Constructor
@@ -6681,7 +6167,6 @@ impl NetworkBuilder {
         builder.config_layers.push(default_layer);
         builder
     }
-
     /// Set the exact revision-4 `3f + 1` validator count for the network.
     ///
     /// Four by default. Invalid or out-of-range committee sizes panic before
@@ -6701,7 +6186,6 @@ impl NetworkBuilder {
         self.n_peers = n_peers;
         self
     }
-
     /// Add a bounded set of signed, non-voting observer replicas.
     ///
     /// Observers become trusted P2P participants but are excluded from genesis
@@ -6720,7 +6204,6 @@ impl NetworkBuilder {
         self.observer_p2p_bootstrap = Some(bootstrap);
         Ok(self)
     }
-
     /// Route every signed observer through a bounded transparent slow-reader relay.
     ///
     /// The hook is intended for P2P backpressure integration tests. Relay
@@ -6740,14 +6223,12 @@ impl NetworkBuilder {
         self.observer_slow_reader_relays = Some(config);
         Ok(self)
     }
-
     /// Use a separately built, feature-isolated daemon with receiver-local
     /// authenticated Sumeragi v2 message control for adversarial network tests.
     pub fn with_consensus_message_control(mut self) -> Self {
         self.consensus_message_control = true;
         self
     }
-
     /// Stage receiver-local authenticated consensus rules before controlled
     /// daemon processes start.
     ///
@@ -6769,7 +6250,6 @@ impl NetworkBuilder {
         });
         self
     }
-
     /// Ensure the network has the smallest revision-4 committee with at least `min_peers` peers.
     ///
     /// Values between valid committee sizes round up. A zero minimum or a
@@ -6796,7 +6276,6 @@ impl NetworkBuilder {
         }
         self
     }
-
     /// Override the peer startup timeout for this network instance.
     ///
     /// Use this for slow hosts or heavy fixtures when peer bootstrap may exceed environment-level
@@ -6806,7 +6285,6 @@ impl NetworkBuilder {
         self.peer_startup_timeout = Some(timeout);
         self
     }
-
     /// Override the block-sync / height-convergence timeout for this network instance.
     ///
     /// Use this for heavier fixtures whose end-to-end block convergence may exceed the
@@ -6816,7 +6294,6 @@ impl NetworkBuilder {
         self.sync_timeout = Some(timeout);
         self
     }
-
     /// Set the signed immutable consensus block cadence.
     ///
     /// # Panics
@@ -6836,18 +6313,15 @@ impl NetworkBuilder {
         self.block_cadence = Some(duration);
         self
     }
-
     /// Use the protocol's default signed block cadence.
     pub fn with_default_block_cadence(mut self) -> Self {
         self.block_cadence = None;
         self
     }
-
     /// Return the explicit signed block cadence, if configured.
     pub fn configured_block_cadence(&self) -> Option<Duration> {
         self.block_cadence
     }
-
     /// Override the block gossip period used by block sync and gossip topics.
     ///
     /// Increasing the period introduces additional message delay between peers,
@@ -6861,7 +6335,6 @@ impl NetworkBuilder {
         self.block_sync_gossip_period = period;
         self
     }
-
     /// Select the consensus mode committed by the signed genesis block.
     ///
     /// Consensus mode is protocol state, not a mutable node-local setting. All
@@ -6871,17 +6344,14 @@ impl NetworkBuilder {
         self.consensus_mode = mode;
         self
     }
-
     /// Select permissioned consensus in the signed genesis block.
     pub fn with_permissioned_consensus(self) -> Self {
         self.with_consensus_mode(ConsensusMode::Permissioned)
     }
-
     /// Select NPoS consensus in the signed genesis block.
     pub fn with_npos_consensus(self) -> Self {
         self.with_consensus_mode(ConsensusMode::Npos)
     }
-
     /// Automatically generate BLS key material and PoP records for trusted peers.
     ///
     /// Enabled by default; calling this method is only necessary when chaining builder combinators.
@@ -6891,7 +6361,6 @@ impl NetworkBuilder {
         self.auto_populate_trusted_peer_pops = true;
         self
     }
-
     /// Override the NPoS bootstrap stake amount injected into genesis.
     ///
     /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
@@ -6903,7 +6372,6 @@ impl NetworkBuilder {
         self.npos_genesis_bootstrap_stake = Some(stake_amount);
         self
     }
-
     /// Disable the NPoS bootstrap transaction injected into genesis.
     ///
     /// Use this when the caller already provides equivalent validator bootstrap instructions.
@@ -6911,18 +6379,15 @@ impl NetworkBuilder {
         self.npos_genesis_bootstrap_stake = None;
         self
     }
-
     /// Override the genesis signing key pair used to sign the manifest.
     pub fn with_genesis_keypair(mut self, key_pair: KeyPair) -> Self {
         self.genesis_key_pair = key_pair;
         self
     }
-
     /// Use the deterministic “real” genesis key material shared with the localnet fixtures.
     pub fn with_real_genesis_keypair(self) -> Self {
         self.with_genesis_keypair(REAL_GENESIS_ACCOUNT_KEYPAIR.clone())
     }
-
     /// Disable automatic trusted peer PoP entries.
     ///
     /// This is only useful for negative tests that explicitly exercise missing PoP scenarios.
@@ -6930,7 +6395,6 @@ impl NetworkBuilder {
         self.auto_populate_trusted_peer_pops = false;
         self
     }
-
     /// Add a new TOML configuration _layer_, using [`TomlWriter`] helper.
     ///
     /// Layers are composed using `extends` field in the final config file:
@@ -6960,13 +6424,11 @@ impl NetworkBuilder {
         self.config_layers.push(table);
         self
     }
-
     /// Push a pre-built TOML configuration layer.
     pub fn with_config_table(mut self, table: Table) -> Self {
         self.config_layers.push(table);
         self
     }
-
     /// Append an instruction to the last genesis transaction.
     pub fn with_genesis_instruction(mut self, isi: impl Into<InstructionBox>) -> Self {
         self.genesis_isi
@@ -6975,7 +6437,6 @@ impl NetworkBuilder {
             .push(isi.into());
         self
     }
-
     /// Append a post-topology genesis transaction.
     ///
     /// The provided instructions run after peers/topology are registered.
@@ -6985,13 +6446,11 @@ impl NetworkBuilder {
         }
         self
     }
-
     /// Start a new empty transaction in the genesis block.
     pub fn next_genesis_transaction(mut self) -> Self {
         self.genesis_isi.push(Vec::new());
         self
     }
-
     /// Override the genesis instructions using a custom block builder.
     ///
     /// The provided closure receives the network topology (as peer IDs) and the
@@ -7011,12 +6470,10 @@ impl NetworkBuilder {
         self.genesis_isi = vec![Vec::new()];
         self
     }
-
     pub fn with_base_seed(mut self, seed: impl ToString) -> Self {
         self.seed = Some(seed.to_string());
         self
     }
-
     /// Set the base seed only when the builder does not already have one.
     ///
     /// This is useful for harness helpers that want deterministic peer identities by default,
@@ -7027,7 +6484,6 @@ impl NetworkBuilder {
         }
         self
     }
-
     /// Set [`IvmFuelConfig`].
     ///
     /// The builder defaults to [`IvmFuelConfig::Auto`], ensuring non-optimized IVM builds receive
@@ -7036,13 +6492,11 @@ impl NetworkBuilder {
         self.ivm_fuel = config;
         self
     }
-
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
         let permit = acquire_network_permit();
         self.build_with_permit(permit)
     }
-
     /// Build the [`Network`] using permit files rooted under `dir`.
     ///
     /// This is useful for tests that need an isolated permit namespace while unrelated
@@ -7060,7 +6514,6 @@ impl NetworkBuilder {
             _file_permit: file_permit,
         })
     }
-
     fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
             n_peers,
@@ -7096,7 +6549,6 @@ impl NetworkBuilder {
         // when the recipe is built so retrying a cloned recipe cannot inherit a
         // previous attempt's peer directories, Kura state, logs, or ports.
         let env = Environment::new();
-
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
         // when callers don't provide explicit nexus account overrides.
         let genesis_account_literal = ALICE_ID.to_string();
@@ -7131,7 +6583,6 @@ impl NetworkBuilder {
             }
             config_layers.push(nexus_accounts_layer);
         }
-
         let mut peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
@@ -7147,7 +6598,6 @@ impl NetworkBuilder {
                     )
             })
             .collect();
-
         let mut observers: Vec<_> = (0..observer_count)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-observer-{i}"));
@@ -7163,14 +6613,12 @@ impl NetworkBuilder {
                     )
             })
             .collect();
-
         let observer_slow_reader_relays = observer_slow_reader_relays
             .map(|config| ObserverSlowReaderRelays::new(&observers, config));
         let observer_advertised_p2p_addresses = observer_slow_reader_relays
             .as_ref()
             .map(ObserverSlowReaderRelays::published_addresses)
             .unwrap_or_default();
-
         let peer_ids: UniqueVec<PeerId> = peers.iter().map(NetworkPeer::id).collect();
         let collected_entries: Vec<GenesisTopologyEntry> =
             peers.iter().filter_map(NetworkPeer::genesis_pop).collect();
@@ -7179,9 +6627,7 @@ impl NetworkBuilder {
             peers.len(),
             "every network peer must provide a BLS PoP"
         );
-
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
-
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
         if let Some(initial) = initial_consensus_message_control {
             for (receiver_index, peer) in peers.iter_mut().enumerate() {
@@ -7233,9 +6679,7 @@ impl NetworkBuilder {
         }
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
-
         let block_cadence = block_cadence.unwrap_or(DEFAULT_BLOCK_CADENCE);
-
         let set_ivm_fuel = match ivm_fuel {
             IvmFuelConfig::Unset => None,
             IvmFuelConfig::Value(value) => Some(value),
@@ -7254,12 +6698,10 @@ impl NetworkBuilder {
             .as_ref()
             .map(|config| config.common.chain.clone())
             .unwrap_or_else(chain_id);
-
         let mut parameter_prefix: Vec<InstructionBox> = Vec::new();
         if let Some(fuel) = set_ivm_fuel {
             parameter_prefix.push(fuel);
         }
-
         let npos_snapshot = npos_params_from_genesis(&genesis_isi, &genesis_post_topology_isi)
             .unwrap_or_else(|error| panic!("{error}"));
         match (consensus_mode, npos_snapshot) {
@@ -7282,14 +6724,12 @@ impl NetworkBuilder {
                 panic!("permissioned genesis must omit `sumeragi_npos_parameters`");
             }
         }
-
         {
             let first_tx = genesis_isi
                 .first_mut()
                 .expect("at least one genesis transaction exists");
             first_tx.splice(0..0, parameter_prefix);
         }
-
         let npos_bootstrap =
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap.clone() {
@@ -7317,7 +6757,6 @@ impl NetworkBuilder {
             );
             let gas_account_id = AccountId::new(bootstrap_gas_keypair.public_key().clone());
             let gas_account_str = gas_account_id.to_string();
-
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
             writer
@@ -7336,7 +6775,6 @@ impl NetworkBuilder {
                     gas_account_str,
                 );
             config_layers.push(bootstrap_layer);
-
             let definition = AssetDefinition::new(
                 stake_asset_id.clone(),
                 "NPOS Stake".to_owned(),
@@ -7354,7 +6792,6 @@ impl NetworkBuilder {
             )
             .with_metadata(Metadata::default());
             let fee_seed_amount = 1_000_000_u32;
-
             let mut bootstrap_tx = vec![
                 Register::domain(Domain::new(nexus_domain.clone())).into(),
                 Register::domain(Domain::new(ivm_domain.clone())).into(),
@@ -7363,7 +6800,6 @@ impl NetworkBuilder {
                 Register::asset_definition(definition).into(),
                 Register::asset_definition(fee_definition).into(),
             ];
-
             for peer in &peers {
                 let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -7397,7 +6833,6 @@ impl NetworkBuilder {
                 );
             }
             genesis_post_topology_isi.push(bootstrap_tx);
-
             let mut validator_tx = Vec::new();
             for peer in &peers {
                 let validator_id = peer.account_id();
@@ -7422,7 +6857,6 @@ impl NetworkBuilder {
             }
             genesis_post_topology_isi.push(validator_tx);
         }
-
         if custom_genesis.is_none() {
             let agent_wallet_asset_definition =
                 AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
@@ -7433,7 +6867,6 @@ impl NetworkBuilder {
             let mut soracloud_validator_bootstrap = Vec::new();
             let mut seeded_accounts = BTreeSet::new();
             let register_validator_accounts = npos_bootstrap.is_none();
-
             for peer in &peers {
                 let account_id = peer.account_id();
                 if !seeded_accounts.insert(account_id.clone()) {
@@ -7465,12 +6898,10 @@ impl NetworkBuilder {
                     .into(),
                 );
             }
-
             if !soracloud_validator_bootstrap.is_empty() {
                 genesis_post_topology_isi.push(soracloud_validator_bootstrap);
             }
         }
-
         let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
             .expect("block gossip period fits in i64 milliseconds");
         let participant_fanout = i64::try_from(participant_count)
@@ -7497,7 +6928,6 @@ impl NetworkBuilder {
             // Enable Norito-RPC for test networks so client-based flows keep working out of the box.
             .write(["torii", "transport", "norito_rpc", "stage"], "ga")
             .write(["torii", "transport", "norito_rpc", "enabled"], true);
-
         // Resolve the same ordered layers that peers will consume. The provisional
         // genesis commitment must include the exact runtime pipeline and Nexus
         // projection, including config layers injected for NPoS bootstrap.
@@ -7525,7 +6955,6 @@ impl NetworkBuilder {
                     panic!("observer P2P fanout exceeds effective network capacity: {error}")
                 });
         }
-
         // Build consensus parameters from the effective genesis instructions (base + post-topology),
         // so consensus metadata is consistent with the final submitted genesis layout.
         let da_proof_policies = resolved_genesis_config
@@ -7639,7 +7068,6 @@ impl NetworkBuilder {
             None => preview_staged_policy_hashes
                 .expect("normal genesis preview must provide staged execution-policy hashes"),
         };
-
         let mut signed_v2_context = provisional_v2_context;
         signed_v2_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
         signed_v2_context.execution_policy_hash = staged_policy_hashes.execution_policy.into();
@@ -7657,14 +7085,12 @@ impl NetworkBuilder {
             chain_id: consensus_chain_id.clone(),
             wire_protocol_version: PROTO_VERSION,
         };
-
         debug!(
             profile_block_cadence_ms = consensus_profile.params.block_cadence_ms.get(),
             profile_block_max_transactions = consensus_profile.params.block_max_transactions.get(),
             profile_fingerprint = %format!("0x{}", hex_lower(&consensus_profile.fingerprint())),
             "resolved consensus profile for genesis"
         );
-
         let replaced_in_genesis = replace_consensus_handshake_meta(&mut genesis_isi);
         let replaced_in_post_topology =
             replace_consensus_handshake_meta(&mut genesis_post_topology_isi);
@@ -7694,7 +7120,6 @@ impl NetworkBuilder {
                 "inserted computed consensus_handshake_meta into genesis instructions"
             );
         }
-
         if let Some(custom) = custom_genesis_block.as_ref() {
             let mut final_custom = normalize_genesis_consensus_handshake(
                 custom,
@@ -7731,7 +7156,6 @@ impl NetworkBuilder {
                 .set(final_custom)
                 .expect("final custom genesis should be cached exactly once");
         }
-
         let mut network = Network {
             env,
             peers,
@@ -7754,7 +7178,6 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             _permit: permit,
         };
-
         let exact_genesis_hash = network.genesis().0.hash();
         let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
         for peer in network.all_peers() {
@@ -7762,7 +7185,6 @@ impl NetworkBuilder {
                 .set(network_id)
                 .expect("test-network peer lineage must be initialized exactly once");
         }
-
         // The test-network generator is the operator provisioning both the
         // signed in-memory genesis and its independent runtime trust anchor.
         // Insert this generated layer before caller layers so deliberate
@@ -7778,7 +7200,6 @@ impl NetworkBuilder {
         network.config_layers.insert(1, expected_hash_layer);
         network
     }
-
     /// Same as [`Self::build`], but also creates a [`Runtime`].
     ///
     /// This method exists for convenience in non-async tests.
@@ -7791,7 +7212,6 @@ impl NetworkBuilder {
         let network = self.build();
         (network, rt)
     }
-
     /// Build and start the network.
     ///
     /// Resolves when all peers are running and have committed genesis block.
@@ -7801,7 +7221,6 @@ impl NetworkBuilder {
         network.start_all().await?;
         Ok(network)
     }
-
     /// Combination of [`Self::build_blocking`] and [`Self::start`].
     pub fn start_blocking(self) -> Result<(Network, Runtime)> {
         let (network, rt) = self.build_blocking();
@@ -7809,7 +7228,6 @@ impl NetworkBuilder {
         Ok((network, rt))
     }
 }
-
 /// A common signatory in the test network.
 ///
 /// # Example
@@ -7824,7 +7242,6 @@ pub enum Signatory {
     Genesis,
     Alice,
 }
-
 impl Signatory {
     /// Get the associated key pair
     pub fn key_pair(&self) -> &KeyPair {
@@ -7836,7 +7253,6 @@ impl Signatory {
         .deref()
     }
 }
-
 /// Running Iroha peer.
 ///
 /// Aborts peer forcefully when dropped
@@ -7847,7 +7263,6 @@ struct PeerRun {
     fatal_tx: watch::Sender<bool>,
     pid: Option<u32>,
 }
-
 /// Lifecycle events of a peer
 #[derive(Copy, Clone, Debug)]
 pub enum PeerLifecycleEvent {
@@ -7862,7 +7277,6 @@ pub enum PeerLifecycleEvent {
     /// Caught a related pipeline event
     BlockApplied { height: u64 },
 }
-
 #[derive(Debug, Clone)]
 struct PeerStartContext {
     run_num: usize,
@@ -7874,7 +7288,6 @@ struct PeerStartContext {
     kura_store_dir: PathBuf,
     kura_store_dir_value: String,
 }
-
 fn parameter_origin_to_string(origin: &ParameterOrigin) -> String {
     match origin {
         ParameterOrigin::File { id, path } => format!("{id} from file `{}`", path.display()),
@@ -7883,7 +7296,6 @@ fn parameter_origin_to_string(origin: &ParameterOrigin) -> String {
         ParameterOrigin::Custom { message } => format!("custom: {message}"),
     }
 }
-
 impl PeerStartContext {
     fn summary(&self) -> String {
         format!(
@@ -7901,7 +7313,6 @@ impl PeerStartContext {
         )
     }
 }
-
 #[cfg(test)]
 async fn wait_for_start_event(
     mut rx: broadcast::Receiver<PeerLifecycleEvent>,
@@ -7917,10 +7328,8 @@ async fn wait_for_start_event(
         }
     }
 }
-
 const START_CHECKED_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const START_CHECKED_STORAGE_FALLBACK_GRACE: Duration = Duration::from_secs(30);
-
 fn start_checked_storage_fallback_ready(
     has_genesis: bool,
     elapsed: Duration,
@@ -7929,7 +7338,6 @@ fn start_checked_storage_fallback_ready(
 ) -> bool {
     has_genesis && elapsed >= START_CHECKED_STORAGE_FALLBACK_GRACE && is_running && has_block_1
 }
-
 /// Controls execution of an `iroha3d` child process.
 ///
 /// While exists, allocates socket ports and a temporary directory (not cleared automatically).
@@ -7963,12 +7371,10 @@ pub struct NetworkPeer {
     port_p2p: Arc<AllocatedPort>,
     port_api: Arc<AllocatedPort>,
 }
-
 impl NetworkPeer {
     fn should_run_bind_preflight(&self) -> bool {
         should_run_bind_preflight_for_runs_started(self.runs_count.load(Ordering::Relaxed))
     }
-
     fn record_probe_status(
         probe: &Arc<StdMutex<PeerStartupProbe>>,
         status: &Status,
@@ -7980,13 +7386,11 @@ impl NetworkPeer {
         probe.last_status_unix_ms = Some(unix_timestamp_ms_now());
         Some(snapshot)
     }
-
     fn record_probe_error(probe: &Arc<StdMutex<PeerStartupProbe>>, error: &Report) {
         let mut probe = probe.lock().expect("startup probe should not be poisoned");
         probe.last_status_error = Some(snapshot_snippet(&format!("{error:?}")));
         probe.last_status_unix_ms = Some(unix_timestamp_ms_now());
     }
-
     fn record_probe_sumeragi_v2_status(
         probe: &Arc<StdMutex<PeerStartupProbe>>,
         status: &SumeragiV2Status,
@@ -7998,13 +7402,11 @@ impl NetworkPeer {
         probe.last_sumeragi_v2_unix_ms = Some(unix_timestamp_ms_now());
         snapshot
     }
-
     fn record_probe_sumeragi_v2_error(probe: &Arc<StdMutex<PeerStartupProbe>>, error: &str) {
         let mut probe = probe.lock().expect("startup probe should not be poisoned");
         probe.last_sumeragi_v2_error = Some(snapshot_snippet(error));
         probe.last_sumeragi_v2_unix_ms = Some(unix_timestamp_ms_now());
     }
-
     fn last_status_peers(probe: &Arc<StdMutex<PeerStartupProbe>>) -> Option<u64> {
         probe
             .lock()
@@ -8020,12 +7422,10 @@ impl NetworkPeer {
     pub fn builder() -> NetworkPeerBuilder {
         NetworkPeerBuilder::new()
     }
-
     /// Return this peer's feature-isolated consensus controller, when requested by the builder.
     pub fn consensus_message_control(&self) -> Option<&ConsensusMessageControl> {
         self.consensus_message_control.as_deref()
     }
-
     /// Spawn the child process.
     ///
     /// Passed configuration must contain network topology in the `trusted_peers` parameter.
@@ -8048,25 +7448,20 @@ impl NetworkPeer {
                 return Err(err).wrap_err("preflight bind failed for peer");
             }
         }
-
         let mut run_guard = self.run.lock().await;
         assert!(run_guard.is_none(), "already running");
-
         let run_num = self.runs_count.fetch_add(1, Ordering::Relaxed) + 1;
         let span = info_span!(parent: &self.span, "peer_run", run_num);
         let has_genesis = genesis.is_some();
         span.in_scope(|| info!(has_genesis, "Starting"));
-
         let storage_layers: Vec<Table> =
             config_layers.map(|layer| layer.as_ref().clone()).collect();
         let (storage_dir, storage_dir_key, storage_dir_value) =
             resolve_kura_store_dir(self, &storage_layers);
-
         let reset_for_bootstrap =
             Self::should_reset_kura_for_bootstrap(has_genesis, run_num as usize);
         self.prepare_kura_storage_dir(&storage_dir, reset_for_bootstrap)?;
         let existing_genesis_path = self.restart_genesis_file(has_genesis);
-
         {
             let mut live = self
                 .stderr_live
@@ -8081,7 +7476,6 @@ impl NetworkPeer {
                 .expect("startup probe should not be poisoned");
             *probe = PeerStartupProbe::default();
         }
-
         let config_layers: Vec<Table> = storage_layers;
         let config_path = self
             .write_run_config(
@@ -8115,7 +7509,6 @@ impl NetworkPeer {
             });
         }
         let use_sora_profile = config_requires_sora_profile(&config_layers);
-
         let irohad = self.program.resolve_async().await?;
         let irohad =
             revalidate_release_prebuilt_binary(self.program.release_prebuilt_binary(), &irohad)?
@@ -8173,9 +7566,7 @@ impl NetworkPeer {
         let (fatal_tx, fatal_rx) = watch::channel(false);
         self.is_running.store(true, Ordering::Relaxed);
         let _ = self.events.send(PeerLifecycleEvent::Spawned);
-
         let mut tasks = JoinSet::<()>::new();
-
         {
             let tasks = &mut tasks;
             let fatal_rx = fatal_rx.clone();
@@ -8214,7 +7605,6 @@ impl NetworkPeer {
                         return;
                     }
                 };
-
                 drain_log_lines(
                     output,
                     file,
@@ -8227,7 +7617,6 @@ impl NetworkPeer {
                 .await;
             });
         }
-
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let is_normal_shutdown_started = Arc::new(AtomicBool::new(false));
         let peer_exit = PeerExit {
@@ -8252,7 +7641,6 @@ impl NetworkPeer {
                 .instrument(span.clone()),
             );
         }
-
         {
             let tasks = &mut tasks;
             let client = self.client();
@@ -8476,7 +7864,6 @@ impl NetworkPeer {
                         );
                     }
                     let _ = block_height_tx.send_replace(Some(block_height));
-
                     if block_height.total >= 1 {
                         info!(
                             snapshot = ?block_height,
@@ -8484,15 +7871,12 @@ impl NetworkPeer {
                         );
                         // Keep this task running so once_block* observers see future blocks.
                     }
-
                     // Avoid submitting synthetic transactions right after startup.
                     // Early side-effects here can cause racey counters in tests that fetch
                     // status via different codecs back-to-back.
-
                     loop {
                         let mut fallback_interval = tokio::time::interval(STATUS_FALLBACK_INTERVAL);
                         let poll_client = client.clone();
-
                         loop {
                             tokio::select! {
                                 _ = fallback_interval.tick() => {
@@ -8652,7 +8036,6 @@ impl NetworkPeer {
                 .instrument(span),
             );
         }
-
         *run_guard = Some(PeerRun {
             tasks,
             shutdown: shutdown_tx,
@@ -8661,7 +8044,6 @@ impl NetworkPeer {
         });
         Ok(())
     }
-
     /// Forcefully kills the running peer if it was started.
     ///
     /// Returns `true` if a running peer was found and shutdown logic was executed.
@@ -8722,7 +8104,6 @@ impl NetworkPeer {
         }
         true
     }
-
     /// Forcefully kills the running peer
     ///
     /// # Panics
@@ -8733,7 +8114,6 @@ impl NetworkPeer {
             "peer is not running, nothing to shut down"
         );
     }
-
     /// Like [`Self::start`], but also ensures that startup progresses far enough for tests.
     ///
     /// By default it waits for a `ServerStarted` lifecycle event (driven by `/status` success).
@@ -8757,7 +8137,6 @@ impl NetworkPeer {
         let started_at = Instant::now();
         let mut fallback_poll = tokio::time::interval(START_CHECKED_FALLBACK_POLL_INTERVAL);
         fallback_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
         loop {
             tokio::select! {
                 event = events.recv() => match event {
@@ -8805,12 +8184,10 @@ impl NetworkPeer {
             }
         }
     }
-
     /// Subscribe on peer lifecycle events.
     pub fn events(&self) -> broadcast::Receiver<PeerLifecycleEvent> {
         self.events.subscribe()
     }
-
     /// Wait _once_ an event matches a predicate.
     ///
     /// ```ignore
@@ -8842,7 +8219,6 @@ impl NetworkPeer {
             }
         }
     }
-
     /// Wait until peer's block height reaches N (total blocks, including genesis).
     ///
     /// Resolves immediately if peer is already running _and_ has at least N blocks committed. This
@@ -8851,29 +8227,24 @@ impl NetworkPeer {
     pub async fn once_block(&self, n: u64) {
         self.once_block_with(|height| height.total >= n).await
     }
-
     /// Wait until peer's block height passes the given predicate.
     ///
     /// Resolves immediately if peer is running _and_ the predicate passes.
     pub async fn once_block_with<F: Fn(BlockHeight) -> bool>(&self, f: F) {
         let mut recv = self.block_height.subscribe();
-
         if recv.borrow().map(&f).unwrap_or(false) {
             return;
         }
-
         if let Some(snapshot) = self.best_effort_block_height()
             && f(snapshot)
         {
             return;
         }
-
         let mut storage_poll = tokio::time::interval(Duration::from_millis(250));
         loop {
             tokio::select! {
                 changed = recv.changed() => {
                     changed.expect("could fail only if the peer is dropped");
-
                     if recv.borrow_and_update().map(&f).unwrap_or(false) {
                         break;
                     }
@@ -8899,12 +8270,10 @@ impl NetworkPeer {
             }
         }
     }
-
     /// Generated mnemonic string, useful for logs
     pub fn mnemonic(&self) -> &str {
         &self.mnemonic
     }
-
     fn has_committed_block(&self, height: u64) -> bool {
         if height == 0 {
             return false;
@@ -8914,14 +8283,12 @@ impl NetworkPeer {
             .into_iter()
             .any(|dir| self.has_indexed_pipeline_sidecar(&dir, height))
     }
-
     fn has_observed_block(&self, height: u64) -> bool {
         height > 0
             && self
                 .best_effort_block_height()
                 .is_some_and(|snapshot| snapshot.total >= height)
     }
-
     fn has_indexed_pipeline_sidecar(&self, pipeline_dir: &Path, height: u64) -> bool {
         if height == 0 {
             return false;
@@ -8942,7 +8309,6 @@ impl NetworkPeer {
         if entries < height {
             return false;
         }
-
         let mut index = match std::fs::File::open(&index_path) {
             Ok(file) => file,
             Err(_) => return false,
@@ -8959,7 +8325,6 @@ impl NetworkPeer {
         let len = u64::from_le_bytes(buf[8..].try_into().expect("len slice"));
         len != 0
     }
-
     fn pipeline_height_from_index(pipeline_dir: &Path) -> Option<u64> {
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
         let index_meta = fs::metadata(&index_path).ok()?;
@@ -8967,7 +8332,6 @@ impl NetworkPeer {
         if len < PIPELINE_INDEX_ENTRY_SIZE_U64 || len % PIPELINE_INDEX_ENTRY_SIZE_U64 != 0 {
             return None;
         }
-
         let mut index = fs::File::open(&index_path).ok()?;
         let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         let offset = len.saturating_sub(PIPELINE_INDEX_ENTRY_SIZE_U64);
@@ -8982,79 +8346,62 @@ impl NetworkPeer {
         if last_len == 0 {
             return None;
         }
-
         Some(len / PIPELINE_INDEX_ENTRY_SIZE_U64)
     }
-
     pub fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
     }
-
     pub fn account_id(&self) -> AccountId {
         AccountId::new(self.streaming_public_key().clone())
     }
-
     pub fn streaming_key_pair(&self) -> &KeyPair {
         &self.streaming_key_pair
     }
-
     pub fn streaming_public_key(&self) -> &PublicKey {
         self.streaming_key_pair.public_key()
     }
-
     /// Return the dedicated Ed25519 key pair used by this peer's SoraNet transport.
     pub fn soranet_transport_key_pair(&self) -> &KeyPair {
         &self.soranet_transport_key_pair
     }
-
     /// Return the dedicated SoraNet transport public key.
     pub fn soranet_transport_public_key(&self) -> &PublicKey {
         self.soranet_transport_key_pair.public_key()
     }
-
     pub fn bls_key_pair(&self) -> Option<&KeyPair> {
         self.bls_key_pair.as_ref()
     }
-
     pub fn bls_public_key(&self) -> Option<&PublicKey> {
         self.bls_key_pair.as_ref().map(KeyPair::public_key)
     }
-
     pub fn bls_pop(&self) -> Option<&[u8]> {
         self.bls_pop.as_deref()
     }
-
     pub fn genesis_pop(&self) -> Option<GenesisTopologyEntry> {
         self.bls_public_key().and_then(|pk| {
             self.bls_pop()
                 .map(|pop| GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.to_vec()))
         })
     }
-
     /// Generated [`PeerId`]
     pub fn id(&self) -> PeerId {
         self.network_peer_id()
     }
-
     /// [`PeerId`] representing the BLS peer identity used in topology and PoP validation.
     pub fn network_peer_id(&self) -> PeerId {
         PeerId::new(self.key_pair.public_key().clone())
     }
-
     pub fn p2p_address(&self) -> SocketAddr {
         socket_addr!(127.0.0.1:**self.port_p2p)
     }
-
     /// Torii HTTP API socket address (host + port).
     pub fn api_address(&self) -> SocketAddr {
         socket_addr!(127.0.0.1:**self.port_api)
     }
-
     /// Torii HTTP URL for this peer, e.g. `http://127.0.0.1:8080`.
     pub fn torii_url(&self) -> String {
         format!("http://{}", self.api_address())
     }
-
     /// Path to this peer's Kura store directory.
     ///
     /// By default tests configure Kura with `store_dir = "./storage"` relative to the peer run dir.
@@ -9067,14 +8414,12 @@ impl NetworkPeer {
         }
         self.dir.join("storage")
     }
-
     fn should_reset_kura_for_bootstrap(has_genesis: bool, run_num: usize) -> bool {
         // A genesis file on the initial start indicates a bootstrap run that should start from
         // empty storage. Subsequent starts for the same peer are restarts and must preserve any
         // existing state even if a genesis payload is provided.
         has_genesis && run_num == 1
     }
-
     fn prepare_kura_storage_dir(
         &self,
         storage_dir: &Path,
@@ -9111,7 +8456,6 @@ impl NetworkPeer {
                 Err(_) => {}
             }
         }
-
         match fs::symlink_metadata(storage_dir) {
             Ok(meta) => {
                 if !meta.is_dir() {
@@ -9138,7 +8482,6 @@ impl NetworkPeer {
             }
             Err(_) => {}
         }
-
         fs::create_dir_all(storage_dir).wrap_err_with(|| {
             format!(
                 "failed to prepare Kura storage directory at {}",
@@ -9146,18 +8489,15 @@ impl NetworkPeer {
             )
         })
     }
-
     fn storage_snapshot(&self) -> PeerStorageSnapshot {
         let kura_dir = self.kura_store_dir();
         let has_block_1 = self.has_committed_block(1);
         PeerStorageSnapshot::capture(kura_dir, has_block_1)
     }
-
     /// Check whether the peer is running
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Relaxed)
     }
-
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
         tracing::debug!(
@@ -9220,17 +8560,14 @@ impl NetworkPeer {
             .expect("peer client config should be valid")
             .parse()
             .expect("peer client config should be valid");
-
         let mut client = Client::new(config);
         client.set_operator_key_pair(self.key_pair.clone());
         client
     }
-
     /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
     pub fn client(&self) -> Client {
         self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
     }
-
     pub async fn status(&self) -> Result<Status> {
         let client = self.client();
         let result = spawn_blocking(move || client.get_status())
@@ -9242,7 +8579,6 @@ impl NetworkPeer {
         }
         result
     }
-
     async fn sumeragi_v2_startup_snapshot(&self) -> Result<PeerSumeragiV2Snapshot> {
         let client = self.client();
         let result = spawn_blocking(move || client.get_sumeragi_status())
@@ -9259,15 +8595,12 @@ impl NetworkPeer {
             }
         }
     }
-
     fn record_status_success(&self, status: &Status) {
         let _ = Self::record_probe_status(&self.startup_probe, status);
     }
-
     fn record_status_failure(&self, error: &Report) {
         Self::record_probe_error(&self.startup_probe, error);
     }
-
     /// Best-effort block height based on the latest in-memory observation and disk layout.
     ///
     /// Prefer in-memory updates from the block watcher, then committed block hashes on disk.
@@ -9286,7 +8619,6 @@ impl NetworkPeer {
             (None, None) => None,
         }
     }
-
     /// Last observed peer count from `/status`, if any.
     pub fn last_known_peers(&self) -> Option<u64> {
         self.startup_probe
@@ -9294,17 +8626,14 @@ impl NetworkPeer {
             .ok()
             .and_then(|probe| probe.last_status.as_ref().map(|snapshot| snapshot.peers))
     }
-
     /// Path to the most recent stdout log file for this peer run, if any.
     pub fn latest_stdout_log_path(&self) -> Option<PathBuf> {
         self.latest_run_log_path_suffix("stdout")
     }
-
     /// Path to the most recent stderr log file for this peer run, if any.
     pub fn latest_stderr_log_path(&self) -> Option<PathBuf> {
         self.latest_run_log_path_suffix("stderr")
     }
-
     fn latest_run_log_path_suffix(&self, which: &str) -> Option<PathBuf> {
         // Files are named as run-<n>-stdout.log or run-<n>-stderr.log
         let mut best: Option<(usize, PathBuf)> = None;
@@ -9329,7 +8658,6 @@ impl NetworkPeer {
         }
         best.map(|(_, p)| p)
     }
-
     /// Snapshot the most recent stderr output captured for this peer run.
     ///
     /// Returns a short preview (last few lines) to avoid flooding logs.
@@ -9340,7 +8668,6 @@ impl NetworkPeer {
             .expect("stderr live buffer should not be poisoned");
         summarize_peer_stderr(&guard.buffer).map(|summary| summary.preview)
     }
-
     fn log_snapshot(&self) -> PeerLogSnapshot {
         let stdout_log = self.latest_stdout_log_path();
         let stdout_summary = stdout_log.as_deref().and_then(summarize_peer_stdout_file);
@@ -9372,11 +8699,9 @@ impl NetworkPeer {
             stderr_run_id,
         }
     }
-
     pub fn blocks(&self) -> watch::Receiver<Option<BlockHeight>> {
         self.block_height.subscribe()
     }
-
     fn startup_state(&self, index: usize) -> PeerStartupState {
         let receiver = self.blocks();
         let last_block = *receiver.borrow();
@@ -9400,7 +8725,6 @@ impl NetworkPeer {
             storage: self.storage_snapshot(),
         }
     }
-
     fn write_base_config(&self) {
         let cfg = self.base_config_table();
         std::fs::write(
@@ -9410,7 +8734,6 @@ impl NetworkPeer {
         .unwrap();
         self.ensure_rans_tables();
     }
-
     fn base_config_table(&self) -> Table {
         let p2p_literal = self.p2p_address().to_literal();
         let torii_literal = self.api_address().to_literal();
@@ -9446,7 +8769,6 @@ impl NetworkPeer {
                 toml::Value::Integer(16 * 1024 * 1024),
             )
     }
-
     fn ensure_rans_tables(&self) {
         let src = default_rans_tables_path();
         assert!(
@@ -9465,7 +8787,6 @@ impl NetworkPeer {
         }
         std::fs::copy(src, dst).expect("copy deterministic rANS tables into peer dir");
     }
-
     fn canonical_genesis_bytes(block: &GenesisBlock) -> Result<Vec<u8>> {
         let framed = block
             .0
@@ -9480,7 +8801,6 @@ impl NetworkPeer {
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
         Ok(framed)
     }
-
     fn restart_genesis_file(&self, has_genesis: bool) -> Option<PathBuf> {
         if has_genesis {
             return None;
@@ -9504,7 +8824,6 @@ impl NetworkPeer {
             .max_by_key(|(run, _)| *run)
             .map(|(_, path)| path)
     }
-
     async fn write_run_config<T: AsRef<Table>>(
         &self,
         cfg_extra_layers: impl Iterator<Item = T>,
@@ -9515,7 +8834,6 @@ impl NetworkPeer {
         // Recreate the base layer for every run to avoid stale/missing configs
         // when previous runs left the directory partially populated.
         self.write_base_config();
-
         let extra_layers: Vec<_> = cfg_extra_layers
             .enumerate()
             .map(|(i, table)| {
@@ -9525,11 +8843,9 @@ impl NetworkPeer {
                 )
             })
             .collect();
-
         for (path, table) in &extra_layers {
             tokio::fs::write(self.dir.join(path), toml::to_string(table)?).await?;
         }
-
         let mut final_config = Table::new().write(
             "extends",
             // should be written on peer's initialisation
@@ -9551,11 +8867,9 @@ impl NetworkPeer {
         }
         let path = self.dir.join(format!("run-{run}-config.toml"));
         tokio::fs::write(&path, toml::to_string(&final_config)?).await?;
-
         Ok(path)
     }
 }
-
 /// Retry an async operation with exponential backoff.
 ///
 /// - Starts at 50ms and doubles up to a 1s cap.
@@ -9570,7 +8884,6 @@ where
 {
     timeout(duration, retry_with_backoff(op)).await
 }
-
 async fn retry_with_backoff<F, Fut, T, E>(mut op: F) -> T
 where
     F: FnMut() -> Fut,
@@ -9587,19 +8900,16 @@ where
         }
     }
 }
-
 /// Compare by ID
 impl PartialEq for NetworkPeer {
     fn eq(&self, other: &Self) -> bool {
         self.key_pair.eq(&other.key_pair)
     }
 }
-
 pub struct NetworkPeerBuilder {
     mnemonic: String,
     seed: Option<Vec<u8>>,
 }
-
 impl NetworkPeerBuilder {
     #[allow(clippy::new_without_default)] // has side effects
     pub fn new() -> Self {
@@ -9614,19 +8924,15 @@ impl NetworkPeerBuilder {
             seed: None,
         }
     }
-
     pub fn with_seed(mut self, seed: Option<impl Into<Vec<u8>>>) -> Self {
         self.seed = seed.map(Into::into);
         self
     }
-
     pub fn build(self, env: &Environment) -> NetworkPeer {
         self.build_with_program(env, Program::Irohad)
     }
-
     fn build_with_program(self, env: &Environment, program: Program) -> NetworkPeer {
         let NetworkPeerBuilder { mnemonic, seed } = self;
-
         let streaming_key_pair = seed
             .as_ref()
             .map(|seed_bytes| checked_key_pair_from_seed(seed_bytes.clone(), Algorithm::Ed25519))
@@ -9647,7 +8953,6 @@ impl NetworkPeerBuilder {
                 pair
             },
         );
-
         let bls_key = if let Some(mut seed_bytes) = seed.clone() {
             seed_bytes.extend_from_slice(b":bls");
             checked_key_pair_from_seed(seed_bytes, Algorithm::BlsNormal)
@@ -9662,7 +8967,6 @@ impl NetworkPeerBuilder {
         let bls_pop = Some(pop);
         let port_p2p = AllocatedPort::new();
         let port_api = AllocatedPort::new();
-
         let dir = env.dir.join(&mnemonic);
         std::fs::create_dir_all(&dir).unwrap();
         let consensus_message_control = matches!(program, Program::IrohadMessageControl)
@@ -9672,10 +8976,8 @@ impl NetworkPeerBuilder {
             })
             .map(Arc::new);
         println!("TEST_NETWORK peer dir {} -> {}", mnemonic, dir.display());
-
         let (events, _rx) = broadcast::channel(32);
         let (block_height, _rx) = watch::channel(None);
-
         let span = info_span!("peer", mnemonic);
         span.in_scope(|| {
             info!(
@@ -9685,7 +8987,6 @@ impl NetworkPeerBuilder {
                 "Build peer",
             )
         });
-
         let peer = NetworkPeer {
             mnemonic,
             span,
@@ -9713,7 +9014,6 @@ impl NetworkPeerBuilder {
         peer
     }
 }
-
 /// Prints collected STDERR on drop.
 ///
 /// Used to avoid loss of useful data in case of task abortion before it is printed directly.
@@ -9722,33 +9022,27 @@ struct PeerStderrBuffer {
     buffer: Arc<StdMutex<LiveStderrState>>,
     log_path: PathBuf,
 }
-
 const PEER_STDERR_PREVIEW_MAX_LINES: usize = 25;
 const PEER_STDERR_PREVIEW_MAX_CHARS: usize = 3_072;
 const PEER_STDOUT_PREVIEW_READ_BYTES: u64 = 64 * 1_024;
-
 struct StderrSummary {
     preview: String,
     truncated: bool,
     total_lines: usize,
 }
-
 fn summarize_peer_stderr(buffer: &str) -> Option<StderrSummary> {
     let trimmed = buffer.trim_end_matches('\n');
     if trimmed.is_empty() {
         return None;
     }
-
     let total_lines = trimmed.lines().count();
     let start_line = total_lines.saturating_sub(PEER_STDERR_PREVIEW_MAX_LINES);
     let mut truncated = start_line > 0;
-
     let mut preview = trimmed
         .lines()
         .skip(start_line)
         .collect::<Vec<_>>()
         .join("\n");
-
     let preview_char_count = preview.chars().count();
     if preview_char_count > PEER_STDERR_PREVIEW_MAX_CHARS {
         truncated = true;
@@ -9760,14 +9054,12 @@ fn summarize_peer_stderr(buffer: &str) -> Option<StderrSummary> {
         tail.reverse();
         preview = tail.into_iter().collect();
     }
-
     Some(StderrSummary {
         preview,
         truncated,
         total_lines,
     })
 }
-
 fn summarize_peer_stdout_file(path: &Path) -> Option<StderrSummary> {
     let mut file = fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
@@ -9788,7 +9080,6 @@ fn summarize_peer_stdout_file(path: &Path) -> Option<StderrSummary> {
     summary.truncated |= start > 0;
     Some(summary)
 }
-
 fn decisive_peer_stdout_excerpt(tail: &str) -> Option<String> {
     let lines = tail.lines().collect::<Vec<_>>();
     let failure_index = lines.iter().rposition(|line| {
@@ -9805,13 +9096,11 @@ fn decisive_peer_stdout_excerpt(tail: &str) -> Option<String> {
     if trailing_start <= failure_end {
         return None;
     }
-
     let mut excerpt = lines[trailing_start..].join("\n");
     excerpt.push_str("\n... decisive peer failure ...\n");
     excerpt.push_str(&lines[failure_start..failure_end].join("\n"));
     Some(excerpt)
 }
-
 impl PeerStderrBuffer {
     fn new(span: tracing::Span, log_path: PathBuf, buffer: Arc<StdMutex<LiveStderrState>>) -> Self {
         Self {
@@ -9820,14 +9109,12 @@ impl PeerStderrBuffer {
             log_path,
         }
     }
-
     fn push_line(&self, line: &str) {
         if let Ok(mut guard) = self.buffer.lock() {
             guard.push_line(line);
         }
     }
 }
-
 impl Drop for PeerStderrBuffer {
     fn drop(&mut self) {
         if let Ok(guard) = self.buffer.lock()
@@ -9854,10 +9141,8 @@ impl Drop for PeerStderrBuffer {
         }
     }
 }
-
 #[cfg(test)]
 include!("lib/peer_runtime_tests.rs");
-
 struct PeerExit {
     child: Child,
     span: tracing::Span,
@@ -9869,7 +9154,6 @@ struct PeerExit {
     stderr_log_ready: Arc<Notify>,
     stderr_live: Arc<StdMutex<LiveStderrState>>,
 }
-
 impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
         let status = if *self.fatal_rx.borrow() {
@@ -9888,23 +9172,18 @@ impl PeerExit {
                 }
             }
         };
-
         self.await_log_flushes().await;
         println!("TEST_NETWORK peer exited with status {status:?}");
         self.dump_last_stderr();
-
         self.span.in_scope(|| info!(%status, "Peer terminated"));
         let _ = self.events.send(PeerLifecycleEvent::Terminated { status });
         self.is_running.store(false, Ordering::Relaxed);
         self.block_height.send_modify(|x| *x = None);
-
         Ok(())
     }
-
     async fn await_log_flushes(&self) {
         self.wait_log(&self.stderr_log_ready, "stderr").await;
     }
-
     async fn wait_log(&self, notify: &Arc<Notify>, label: &'static str) {
         if (timeout(LOG_FLUSH_TIMEOUT, notify.notified()).await).is_err() {
             let fatal_shutdown = *self.fatal_rx.borrow();
@@ -9924,15 +9203,12 @@ impl PeerExit {
             }
         }
     }
-
     async fn shutdown_or_kill(&mut self) -> Result<ExitStatus> {
         use nix::{sys::signal, unistd::Pid};
         const TIMEOUT: Duration = Duration::from_secs(5);
         const QUIT_GRACE: Duration = Duration::from_secs(1);
-
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
-
         if let Some(status) = self
             .child
             .try_wait()
@@ -9943,26 +9219,22 @@ impl PeerExit {
             );
             return Ok(status);
         }
-
         if self.child.id().is_none() {
             self.span.in_scope(|| {
                 info!("child already exited before shutdown signal could be delivered")
             });
             return self.child.wait().await.wrap_err("wait failure");
         }
-
         self.span.in_scope(|| info!("sending SIGTERM"));
         signal::kill(
             Pid::from_raw(self.child.id().expect("checked child id above") as i32),
             signal::Signal::SIGTERM,
         )
         .wrap_err("failed to send SIGTERM")?;
-
         if let Ok(status) = timeout(TIMEOUT, self.child.wait()).await {
             self.span.in_scope(|| info!("exited gracefully"));
             return status.wrap_err("wait failure");
         };
-
         // If graceful shutdown stalls, attempt to capture a backtrace (where supported).
         #[cfg(target_family = "unix")]
         if let Some(pid) = self.child.id() {
@@ -9980,7 +9252,6 @@ impl PeerExit {
                 }
             }
         }
-
         self.span
             .in_scope(|| warn!("process didn't terminate after {TIMEOUT:?}, killing"));
         timeout(TIMEOUT, async move {
@@ -9991,7 +9262,6 @@ impl PeerExit {
         .wrap_err("didn't terminate after SIGKILL")?
         .wrap_err("wait failure")
     }
-
     fn dump_last_stderr(&self) {
         let guard = self
             .stderr_live
@@ -10007,7 +9277,6 @@ impl PeerExit {
         eprintln!("TEST_NETWORK peer stderr tail:\n{preview}");
     }
 }
-
 fn pipeline_dirs(storage_dir: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(entries) = fs::read_dir(storage_dir.join("blocks")) {
@@ -10020,10 +9289,8 @@ fn pipeline_dirs(storage_dir: &Path) -> Vec<PathBuf> {
     }
     dirs
 }
-
 #[cfg(test)]
 include!("lib/block_height_test_support.rs");
-
 /// Composite block height representation
 #[derive(Debug, Copy, Clone)]
 pub struct BlockHeight {
@@ -10032,7 +9299,6 @@ pub struct BlockHeight {
     /// Non-empty blocks
     pub non_empty: u64,
 }
-
 impl From<Status> for BlockHeight {
     fn from(value: Status) -> Self {
         Self {
@@ -10041,30 +9307,25 @@ impl From<Status> for BlockHeight {
         }
     }
 }
-
 impl BlockHeight {
     /// Shorthand to use with e.g. [`once_blocks_sync`].
     pub fn predicate_non_empty(non_empty_height: u64) -> impl Fn(BlockHeight) -> bool + Clone {
         move |value| value.non_empty >= non_empty_height
     }
-
     /// Predicate that waits for the overall block height, regardless of whether
     /// the blocks were empty.
     pub fn predicate_total(total_height: u64) -> impl Fn(BlockHeight) -> bool + Clone {
         move |value| value.total >= total_height
     }
 }
-
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
     let mut pipeline_height: Option<u64> = None;
-
     // Pipeline markers can advance ahead of committed blocks; only trust them if no hashes exist.
     for pipeline_dir in pipeline_dirs(storage_dir) {
         if let Some(height) = NetworkPeer::pipeline_height_from_index(&pipeline_dir) {
             pipeline_height = Some(pipeline_height.map_or(height, |prev| prev.max(height)));
         }
     }
-
     let mut hashes_height: Option<u64> = None;
     let mut saw_hashes = false;
     if let Ok(entries) = fs::read_dir(storage_dir.join("blocks")) {
@@ -10077,13 +9338,11 @@ fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> O
             }
         }
     }
-
     let max_height = if saw_hashes {
         hashes_height.unwrap_or(0)
     } else {
         pipeline_height.unwrap_or(0)
     };
-
     if max_height > current_total {
         Some(BlockHeight {
             total: max_height,
@@ -10093,7 +9352,6 @@ fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> O
         None
     }
 }
-
 /// Wait until [`NetworkPeer::once_block`] resolves for all peers.
 ///
 /// Fails early if some peer terminates.
@@ -10126,7 +9384,6 @@ pub async fn once_blocks_sync(
             }
         })
         .collect::<FuturesUnordered<_>>();
-
     loop {
         match futures.next().await {
             Some(Ok(())) => {}
@@ -10135,9 +9392,22 @@ pub async fn once_blocks_sync(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_config::parameters::defaults;
+    use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::{
+        block::{
+            decode_framed_signed_block, decode_versioned_signed_block,
+            deframe_versioned_signed_block_bytes,
+        },
+        isi::{Instruction, SetParameter},
+        parameter::{Parameter, system::consensus_metadata},
+        transaction::{Executable, ExecutableBatchItem},
+    };
+    use iroha_version::{Version, codec::EncodeVersioned};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
@@ -10152,26 +9422,9 @@ mod tests {
         thread,
         time::Duration,
     };
-
-    use iroha_config::parameters::defaults;
-    use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::{
-        block::{
-            decode_framed_signed_block, decode_versioned_signed_block,
-            deframe_versioned_signed_block_bytes,
-        },
-        isi::{Instruction, SetParameter},
-        parameter::{Parameter, system::consensus_metadata},
-        transaction::{Executable, ExecutableBatchItem},
-    };
-    use iroha_version::{Version, codec::EncodeVersioned};
     use tempfile::tempdir;
     use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
     use toml::Value as TomlValue;
-
-    use super::*;
-
     static LOG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes async tests that override `TEST_NETWORK_BIN_*` variables so they
     /// cannot leak into concurrently running cases.
@@ -10184,15 +9437,12 @@ mod tests {
     ///
     /// Tests needing both guards must acquire `CONFIG_ENV_GUARD` first.
     static NETWORK_PERMIT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
-
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.blocking_lock()
     }
-
     async fn lock_env_guard_async(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.lock().await
     }
-
     fn skip_network_tests(test_name: &str) -> bool {
         static LOOPBACK_BIND_ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let can_bind = *LOOPBACK_BIND_ALLOWED
@@ -10204,7 +9454,6 @@ mod tests {
             true
         }
     }
-
     fn set_env_var<K, V>(key: K, value: V)
     where
         K: AsRef<OsStr>,
@@ -10212,19 +9461,16 @@ mod tests {
     {
         unsafe { std::env::set_var(key, value) }
     }
-
     fn remove_env_var<K>(key: K)
     where
         K: AsRef<OsStr>,
     {
         unsafe { std::env::remove_var(key) }
     }
-
     struct EnvVarRestore {
         key: &'static str,
         previous: Option<OsString>,
     }
-
     impl EnvVarRestore {
         fn set<K: AsRef<OsStr>>(key: &'static str, value: K) -> Self {
             let previous = env::var_os(key);
@@ -10232,7 +9478,6 @@ mod tests {
             Self { key, previous }
         }
     }
-
     impl Drop for EnvVarRestore {
         fn drop(&mut self) {
             if let Some(value) = self.previous.take() {
@@ -10242,7 +9487,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn config_env_override_keys_include_core_settings() {
         let keys = config_env_override_keys();
@@ -10251,19 +9495,16 @@ mod tests {
         assert!(keys.contains(&"CHAIN"));
         assert!(!keys.is_empty());
     }
-
     #[test]
     fn strip_config_env_overrides_marks_keys_for_removal() {
         struct DummyCommand {
             removed: Vec<String>,
         }
-
         impl CommandEnv for DummyCommand {
             fn env_remove(&mut self, key: &str) {
                 self.removed.push(key.to_string());
             }
         }
-
         let mut cmd = DummyCommand {
             removed: Vec::new(),
         };
@@ -10273,7 +9514,6 @@ mod tests {
         assert!(removed.contains("P2P_ADDRESS"));
         assert!(removed.contains("CHAIN"));
     }
-
     #[test]
     fn network_parallelism_env_override_applies() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
@@ -10281,7 +9521,6 @@ mod tests {
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         assert_eq!(network_parallelism_limit(), 2);
     }
-
     #[test]
     fn network_parallelism_defaults_to_serial_networks() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
@@ -10292,7 +9531,6 @@ mod tests {
             DEFAULT_NETWORK_PARALLELISM_LIMIT
         );
     }
-
     #[test]
     fn serialization_overrides_parallelism_limit() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
@@ -10300,11 +9538,9 @@ mod tests {
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "1");
         assert_eq!(network_parallelism_limit(), 1);
     }
-
     #[test]
     fn status_results_satisfy_predicate_requires_all_successes() {
         let predicate = BlockHeight::predicate_total(2);
-
         assert!(Network::status_results_satisfy_predicate(
             vec![
                 Ok::<BlockHeight, ()>(BlockHeight {
@@ -10330,51 +9566,41 @@ mod tests {
             &predicate
         ));
     }
-
     #[test]
     fn network_permit_wait_timeout_env_override_applies() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
-
         remove_env_var(NETWORK_PERMIT_WAIT_TIMEOUT_ENV);
         assert_eq!(
             network_permit_wait_timeout(),
             Some(NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT)
         );
-
         let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "250ms");
         assert_eq!(
             network_permit_wait_timeout(),
             Some(Duration::from_millis(250))
         );
-
         drop(_timeout_guard);
-
         let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "0");
         assert_eq!(network_permit_wait_timeout(), None);
     }
-
     #[test]
     fn permit_dir_env_override_wins() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let dir = tempdir().expect("permit dir");
         let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
-
         assert_eq!(permit_dir(), dir.path());
     }
-
     #[cfg(unix)]
     #[test]
     fn default_permit_dir_is_namespaced_by_parent_pid() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         remove_env_var(NETWORK_PERMIT_DIR_ENV);
-
         let dir = permit_dir();
         let expected_prefix = std::env::temp_dir().join("iroha_test_network_permits");
         assert!(
             dir.starts_with(&expected_prefix),
             "default permit dir should use temp root {expected_prefix:?}, got {dir:?}"
         );
-
         let expected_namespace = format!("ppid-{}", nix::unistd::getppid().as_raw());
         assert_eq!(
             dir.file_name().and_then(OsStr::to_str),
@@ -10382,18 +9608,15 @@ mod tests {
             "default permit dir should be namespaced by parent pid"
         );
     }
-
     #[test]
     fn describe_permit_holders_reports_lock_owner() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let dir = tempdir().expect("permit dir");
         let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
-
         let path = dir.path().join("permit-0.lock");
         let mut file = fs::File::create(&path).expect("create permit lock");
         writeln!(file, "pid={}", std::process::id()).expect("write pid");
         writeln!(file, "started=1").expect("write started");
-
         let holders = describe_permit_holders(1);
         assert!(
             holders.contains("slot=0"),
@@ -10409,7 +9632,6 @@ mod tests {
             "expected liveness details in holder summary: {holders}"
         );
     }
-
     #[test]
     fn acquire_network_permit_panics_after_wait_timeout() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
@@ -10418,12 +9640,10 @@ mod tests {
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         let _timeout_guard = EnvVarRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
-
         let path = dir.path().join("permit-0.lock");
         let mut file = fs::File::create(&path).expect("create permit lock");
         writeln!(file, "pid={}", std::process::id()).expect("write pid");
         writeln!(file, "started=1").expect("write started");
-
         let started = std::time::Instant::now();
         let panic = match std::panic::catch_unwind(acquire_network_permit) {
             Ok(_) => panic!("acquire_network_permit should panic when wait timeout elapses"),
@@ -10443,7 +9663,6 @@ mod tests {
             "permit wait should not panic before timeout elapsed"
         );
     }
-
     #[test]
     fn peer_startup_timeout_override_is_applied() {
         if skip_network_tests("peer_startup_timeout_override_is_applied") {
@@ -10456,7 +9675,6 @@ mod tests {
         );
         assert_eq!(network.peer_startup_timeout(), Duration::from_secs(300));
     }
-
     #[test]
     fn sync_timeout_override_is_applied() {
         if skip_network_tests("sync_timeout_override_is_applied") {
@@ -10469,30 +9687,25 @@ mod tests {
         );
         assert_eq!(network.sync_timeout(), Duration::from_secs(300));
     }
-
     #[test]
     fn with_base_seed_if_unset_sets_only_when_missing() {
         let builder = NetworkBuilder::new().with_base_seed_if_unset("seed-a");
         assert_eq!(builder.seed.as_deref(), Some("seed-a"));
-
         let builder = NetworkBuilder::new()
             .with_base_seed("seed-b")
             .with_base_seed_if_unset("seed-c");
         assert_eq!(builder.seed.as_deref(), Some("seed-b"));
     }
-
     #[test]
     fn cloned_builder_recipe_allocates_an_isolated_network_environment() {
         if skip_network_tests("cloned_builder_recipe_allocates_an_isolated_network_environment") {
             return;
         }
-
         let recipe = NetworkBuilder::new()
             .with_peers(4)
             .with_base_seed("fresh-network-retry-recipe");
         let first = build_with_isolated_permit(recipe.clone());
         let second = build_with_isolated_permit(recipe);
-
         assert_ne!(
             first.env_dir(),
             second.env_dir(),
@@ -10517,7 +9730,6 @@ mod tests {
             assert_ne!(first_peer.api_address(), second_peer.api_address());
         }
     }
-
     #[test]
     fn peer_startup_timeout_applies_per_peer_floor() {
         if skip_network_tests("peer_startup_timeout_applies_per_peer_floor") {
@@ -10530,7 +9742,6 @@ mod tests {
         );
         assert_eq!(network.peer_startup_timeout(), expected);
     }
-
     #[test]
     fn network_permit_creates_and_clears_lock_file() {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
@@ -10538,20 +9749,17 @@ mod tests {
         let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
-
         let permit = acquire_network_permit();
         let file_count = fs::read_dir(dir.path())
             .expect("permit dir listing")
             .count();
         assert_eq!(file_count, 1, "expected a single permit file");
         drop(permit);
-
         let file_count = fs::read_dir(dir.path())
             .expect("permit dir listing")
             .count();
         assert_eq!(file_count, 0, "permit file should be removed");
     }
-
     #[cfg(unix)]
     #[test]
     fn stale_permit_file_is_reclaimed() {
@@ -10563,18 +9771,15 @@ mod tests {
         let path = dir.path().join("permit-0.lock");
         let mut file = fs::File::create(&path).expect("stale permit file");
         writeln!(file, "pid={}", i32::MAX).expect("write pid");
-
         let permit = try_acquire_file_permit(1).expect("expected reclaimed permit");
         drop(permit);
     }
-
     #[cfg(unix)]
     #[test]
     fn pid_alive_detects_current_and_dead_processes() {
         assert_eq!(pid_alive(std::process::id()), Some(true));
         assert_eq!(pid_alive(i32::MAX as u32), Some(false));
     }
-
     #[test]
     fn config_requires_sora_profile_ignores_env_overrides() {
         let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
@@ -10582,21 +9787,18 @@ mod tests {
             key: &'static str,
             previous: Option<OsString>,
         }
-
         impl EnvRestore {
             fn set(key: &'static str, value: OsString) -> Self {
                 let previous = env::var_os(key);
                 set_env_var(key, value);
                 Self { key, previous }
             }
-
             fn clear(key: &'static str) -> Self {
                 let previous = env::var_os(key);
                 remove_env_var(key);
                 Self { key, previous }
             }
         }
-
         impl Drop for EnvRestore {
             fn drop(&mut self) {
                 if let Some(value) = self.previous.take() {
@@ -10606,26 +9808,22 @@ mod tests {
                 }
             }
         }
-
         let _public_key_guard = EnvRestore::set(
             "PUBLIC_KEY",
             OsString::from(ALICE_KEYPAIR.public_key().to_string()),
         );
         let _private_key_guard = EnvRestore::clear("PRIVATE_KEY");
-
         let layer = Table::new().write(["torii", "sorafs", "storage", "enabled"], true);
         assert!(
             config_requires_sora_profile(&[layer]),
             "profile detection should not be influenced by host env overrides"
         );
     }
-
     #[tokio::test]
     async fn once_block_falls_back_to_storage_snapshot() {
         let dir = tempdir().expect("tempdir");
         let pipeline_dir = dir.path().join("storage/blocks/lane_000_default/pipeline");
         fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
-
         let mut index =
             fs::File::create(pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE)).expect("index file");
         for height in 1u64..=2 {
@@ -10634,16 +9832,13 @@ mod tests {
                 .expect("height entry");
             index.write_all(&1u64.to_le_bytes()).expect("len entry");
         }
-
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
         let (block_height, _rx) = tokio::sync::watch::channel(None);
-
         let storage_root = dir.path().to_path_buf();
         let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate once-block fallback streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-
         let peer = NetworkPeer {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
@@ -10667,30 +9862,25 @@ mod tests {
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
-
         let result = tokio::time::timeout(Duration::from_secs(1), peer.once_block(2)).await;
         assert!(
             result.is_ok(),
             "once_block should observe storage height via fallback"
         );
     }
-
     #[tokio::test]
     async fn wait_for_block_1_with_watchdog_uses_storage_on_status_failure() {
         let dir = tempdir().expect("tempdir");
         let pipeline_dir = dir.path().join("storage/blocks/lane_000_default/pipeline");
         fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
         write_sidecar_index(&pipeline_dir, 1);
-
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
         let (block_height, _rx) = tokio::sync::watch::channel(None);
-
         let storage_root = dir.path().to_path_buf();
         let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate wait-block watchdog streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-
         let peer = NetworkPeer {
             mnemonic: "wait-block-watchdog".to_string(),
             span: tracing::Span::none(),
@@ -10714,7 +9904,6 @@ mod tests {
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
-
         let mnemonic = peer.mnemonic().to_string();
         let result = tokio::time::timeout(
             Duration::from_secs(1),
@@ -10726,7 +9915,6 @@ mod tests {
             "wait_for_block_1_with_watchdog should return when storage has block 1"
         );
     }
-
     #[tokio::test]
     async fn wait_for_block_1_with_watchdog_uses_best_effort_height_without_storage() {
         let dir = tempdir().expect("tempdir");
@@ -10739,7 +9927,6 @@ mod tests {
             .expect("generate wait-block best-effort streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-
         let peer = NetworkPeer {
             mnemonic: "wait-block-best-effort".to_string(),
             span: tracing::Span::none(),
@@ -10763,7 +9950,6 @@ mod tests {
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
-
         let mnemonic = peer.mnemonic().to_string();
         let result = tokio::time::timeout(
             Duration::from_secs(1),
@@ -10775,7 +9961,6 @@ mod tests {
             "wait_for_block_1_with_watchdog should return when best-effort height already reached block 1"
         );
     }
-
     #[test]
     fn startup_snapshot_formats_compact_sumeragi_v2_progress_state() {
         let dir = tempdir().expect("tempdir");
@@ -10803,7 +9988,6 @@ mod tests {
             restart_required: false,
             pending_persistence_id: None,
         };
-
         let rendered = PeerStartupState {
             index: 3,
             mnemonic: "diagnostic-peer".to_string(),
@@ -10822,7 +10006,6 @@ mod tests {
             storage: PeerStorageSnapshot::capture(dir.path().join("storage"), false),
         }
         .to_string();
-
         for expected in [
             "sumeragi_v2=ok(h1/v13/g17",
             "phase=Commit body=Validated leader=2",
@@ -10842,13 +10025,11 @@ mod tests {
             );
         }
     }
-
     /// Restores environment variable to its previous value when dropped.
     struct EnvVarGuard {
         key: &'static str,
         original: Option<OsString>,
     }
-
     impl EnvVarGuard {
         fn cleared(key: &'static str) -> Self {
             let original = env::var_os(key);
@@ -10856,7 +10037,6 @@ mod tests {
             Self { key, original }
         }
     }
-
     #[test]
     fn cargo_build_enables_bundled_rans() {
         assert!(
@@ -10865,7 +10045,6 @@ mod tests {
                 .any(|(key, value)| *key == "ENABLE_RANS_BUNDLES" && *value == "1")
         );
     }
-
     #[test]
     fn preflight_bind_detects_in_use_port() {
         let listener = match std::net::TcpListener::bind(("127.0.0.1", 0)) {
@@ -10882,7 +10061,6 @@ mod tests {
             .local_addr()
             .expect("listener should expose local address");
         let addr = SocketAddr::from(addr);
-
         let result = preflight_bind_addresses([addr]);
         match result {
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {}
@@ -10893,14 +10071,12 @@ mod tests {
             Ok(()) => panic!("preflight should fail when port is already in use"),
         }
     }
-
     #[test]
     fn bind_preflight_runs_only_before_first_start_attempt() {
         assert!(should_run_bind_preflight_for_runs_started(0));
         assert!(!should_run_bind_preflight_for_runs_started(1));
         assert!(!should_run_bind_preflight_for_runs_started(2));
     }
-
     #[test]
     fn startup_warn_gate_waits_for_grace() {
         let grace = Duration::from_millis(25);
@@ -10913,14 +10089,12 @@ mod tests {
         thread::sleep(STARTUP_STATUS_WARN_INTERVAL);
         assert!(gate.should_warn());
     }
-
     #[test]
     fn status_error_is_connection_refused_detects_io_error() {
         let err = std::io::Error::new(ErrorKind::ConnectionRefused, "refused");
         let report = Report::from(err);
         assert!(status_error_is_connection_refused(&report));
     }
-
     #[test]
     fn status_error_is_connection_refused_detects_nested_io_error() {
         let report = Err::<(), Report>(Report::from(std::io::Error::new(
@@ -10929,17 +10103,14 @@ mod tests {
         )))
         .wrap_err("client status probe failed")
         .unwrap_err();
-
         assert!(status_error_is_connection_refused(&report));
     }
-
     #[test]
     fn status_error_is_connection_refused_ignores_other_errors() {
         let err = std::io::Error::other("other");
         let report = Report::from(err);
         assert!(!status_error_is_connection_refused(&report));
     }
-
     #[test]
     fn status_error_is_connection_refused_ignores_nested_non_refusal_io_errors() {
         let report = Err::<(), Report>(Report::from(std::io::Error::new(
@@ -10948,19 +10119,15 @@ mod tests {
         )))
         .wrap_err("client status probe failed")
         .unwrap_err();
-
         assert!(!status_error_is_connection_refused(&report));
     }
-
     #[test]
     fn status_error_is_torii_query_backpressure_detects_status_throttle() {
         let report = eyre!(
             "Norito decode failed: Unexpected status response; status: 429 Too Many Requests; response body: Reached the limit of parallel queries"
         );
-
         assert!(status_error_is_torii_query_backpressure(&report));
     }
-
     #[test]
     fn status_error_is_torii_query_backpressure_detects_nested_status_throttle() {
         let report = Err::<(), Report>(eyre!(
@@ -10968,135 +10135,105 @@ mod tests {
         ))
         .wrap_err("client status probe failed")
         .unwrap_err();
-
         assert!(status_error_is_torii_query_backpressure(&report));
     }
-
     #[test]
     fn status_error_is_torii_query_backpressure_ignores_other_throttles() {
         let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
-
         assert!(!status_error_is_torii_query_backpressure(&report));
     }
-
     #[test]
     fn status_error_is_torii_query_backpressure_ignores_limit_phrase_without_429() {
         let report = eyre!("Reached the limit of parallel queries while validating locally");
-
         assert!(!status_error_is_torii_query_backpressure(&report));
     }
-
     #[test]
     fn status_error_is_torii_query_backpressure_ignores_split_status_and_limit_causes() {
         let report = Err::<(), Report>(eyre!("Reached the limit of parallel queries"))
             .wrap_err("Unexpected status response; status: 429 Too Many Requests")
             .unwrap_err();
-
         assert!(!status_error_is_torii_query_backpressure(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_detects_query_timeout() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: operation timed out"
         );
-
         assert!(torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_detects_connection_reset_transport() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: error sending request for url\n   1: connection reset"
         );
-
         assert!(torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_detects_connect_error_phrase() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: client error (Connect)\n   1: Connection refused"
         );
-
         assert!(torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_detects_raw_connection_refused_io_error() {
         let report = Report::from(std::io::Error::new(
             ErrorKind::ConnectionRefused,
             "connection refused",
         ));
-
         assert!(torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_requires_http_transport_context() {
         let report = eyre!("connection reset while applying local validation");
-
         assert!(!torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_ignores_plain_timeout_without_http_context() {
         let report = eyre!("operation timed out while applying local validation");
-
         assert!(!torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_ignores_http_context_without_transport_failure() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: validation rejected duplicate domain"
         );
-
         assert!(!torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_ignores_backpressure_phrase_without_status() {
         let report = eyre!(
             "Failed to send http POST request to http://127.0.0.1:47173/v1/query\n\nCaused by:\n   0: Reached the limit of parallel queries"
         );
-
         assert!(!torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn torii_request_error_is_transient_ignores_validation_errors() {
         let report = eyre!("Validation failed: domain already exists");
-
         assert!(!torii_request_error_is_transient(&report));
     }
-
     #[test]
     fn client_status_timeout_defaults_are_generous() {
         let _guard = lock_env_guard(&CLIENT_ENV_GUARD);
         let _secs_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS");
         let _ms_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_STATUS_TIMEOUT_MS");
-
         assert_eq!(
             client_status_timeout_env(),
             CLIENT_STATUS_TIMEOUT_DEFAULT,
             "default client status timeout should tolerate slow integration runs",
         );
     }
-
     #[test]
     fn client_request_timeout_defaults_match_client_config_default() {
         let _guard = lock_env_guard(&CLIENT_ENV_GUARD);
         let _secs_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS");
         let _ms_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS");
-
         assert_eq!(
             client_request_timeout_env(),
             iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             "test-network clients should inherit the same routed request budget as normal clients",
         );
     }
-
     #[test]
     fn client_ttl_exceeds_status_timeout_by_default() {
         let _guard = lock_env_guard(&CLIENT_ENV_GUARD);
@@ -11104,7 +10241,6 @@ mod tests {
         let _status_ms_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_STATUS_TIMEOUT_MS");
         let _ttl_secs_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_TTL_SECS");
         let _ttl_ms_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_TTL_MS");
-
         let status_timeout = client_status_timeout_env();
         let ttl = client_ttl_env(status_timeout);
         assert_eq!(
@@ -11112,16 +10248,13 @@ mod tests {
             "default TTL should stay above the status timeout cushion"
         );
     }
-
     #[tokio::test]
     async fn shutdown_resets_running_flag_even_if_monitor_is_absent() {
         if skip_network_tests("shutdown_resets_running_flag_even_if_monitor_is_absent") {
             return;
         }
-
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
-
         let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
         let tasks = tokio::task::JoinSet::new();
         let (fatal_tx, mut fatal_rx) = watch::channel(false);
@@ -11135,11 +10268,9 @@ mod tests {
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
-
         let notify_wait = fatal_rx.changed();
         tokio::pin!(notify_wait);
         peer.shutdown().await;
-
         assert!(!peer.is_running());
         assert!(peer.run.lock().await.is_none());
         tokio::time::timeout(Duration::from_secs(1), &mut notify_wait)
@@ -11147,13 +10278,11 @@ mod tests {
             .expect("shutdown should notify fatal listeners")
             .expect("fatal signal should be delivered");
     }
-
     #[tokio::test]
     async fn shutdown_if_started_returns_false_when_peer_is_not_running() {
         if skip_network_tests("shutdown_if_started_returns_false_when_peer_is_not_running") {
             return;
         }
-
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
         assert!(
@@ -11161,17 +10290,14 @@ mod tests {
             "shutdown_if_started should be a no-op when the peer never started"
         );
     }
-
     #[tokio::test]
     async fn network_drop_cleanup_tolerates_peer_that_already_stopped() {
         if skip_network_tests("network_drop_cleanup_tolerates_peer_that_already_stopped") {
             return;
         }
-
         let env = Environment::new();
         let running_peer = NetworkPeer::builder().build(&env);
         let stopped_peer = NetworkPeer::builder().build(&env);
-
         let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
         let tasks = tokio::task::JoinSet::new();
         let (fatal_tx, _fatal_rx) = watch::channel(false);
@@ -11185,15 +10311,12 @@ mod tests {
             });
         }
         running_peer.is_running.store(true, Ordering::Relaxed);
-
         shutdown_peers_for_drop(vec![running_peer.clone(), stopped_peer.clone()]).await;
-
         assert!(!running_peer.is_running());
         assert!(running_peer.run.lock().await.is_none());
         assert!(!stopped_peer.is_running());
         assert!(stopped_peer.run.lock().await.is_none());
     }
-
     #[tokio::test]
     async fn network_shutdown_clears_stale_peer_runs_even_when_not_marked_running() {
         if skip_network_tests(
@@ -11201,14 +10324,12 @@ mod tests {
         ) {
             return;
         }
-
         let network = NetworkBuilder::new().build();
         let peer = network
             .peers()
             .first()
             .expect("network builder creates at least one peer")
             .clone();
-
         let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
         let tasks = tokio::task::JoinSet::new();
         let (fatal_tx, _fatal_rx) = watch::channel(false);
@@ -11222,15 +10343,12 @@ mod tests {
             });
         }
         peer.is_running.store(false, Ordering::Relaxed);
-
         network.shutdown().await;
-
         assert!(
             peer.run.lock().await.is_none(),
             "network shutdown should clear stale peer run handles"
         );
     }
-
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(value) = self.original.as_ref() {
@@ -11240,7 +10358,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn write_base_config_uses_addr_literals() {
         let env = Environment::new();
@@ -11249,7 +10366,6 @@ mod tests {
         let base_path = peer.dir.join("config.base.toml");
         let contents = fs::read_to_string(&base_path).expect("read base config");
         let parsed: TomlValue = toml::from_str(&contents).expect("parse config.toml");
-
         let network = parsed
             .get("network")
             .and_then(TomlValue::as_table)
@@ -11258,7 +10374,6 @@ mod tests {
             .get("torii")
             .and_then(TomlValue::as_table)
             .expect("torii table exists");
-
         for key in ["address", "public_address"] {
             let value = network
                 .get(key)
@@ -11275,7 +10390,6 @@ mod tests {
                 "{key} literal body should contain peer port"
             );
         }
-
         let torii_addr = torii
             .get("address")
             .and_then(TomlValue::as_str)
@@ -11292,12 +10406,10 @@ mod tests {
             "torii literal body should contain API port"
         );
     }
-
     #[test]
     fn has_committed_block_detects_indexed_pipeline_layouts() {
         let env = Environment::new();
         let modern_peer = NetworkPeer::builder().build(&env);
-
         let modern_dir = modern_peer
             .dir
             .join("storage")
@@ -11309,7 +10421,6 @@ mod tests {
         assert!(modern_peer.has_committed_block(1));
         assert!(!modern_peer.has_committed_block(2));
     }
-
     #[test]
     fn has_committed_block_uses_resolved_kura_store_dir() {
         let env = Environment::new();
@@ -11321,7 +10432,6 @@ mod tests {
             .join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create custom pipeline dir");
         write_sidecar_index(&pipeline_dir, 1);
-
         {
             let mut context = peer
                 .start_context
@@ -11338,11 +10448,9 @@ mod tests {
                 kura_store_dir_value: custom_storage_dir.display().to_string(),
             });
         }
-
         assert!(peer.has_committed_block(1));
         assert!(!peer.has_committed_block(2));
     }
-
     #[test]
     fn detect_block_height_reads_lane_pipeline_index() {
         let env = Environment::new();
@@ -11355,13 +10463,11 @@ mod tests {
             .join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
-
         let height =
             detect_block_height_from_storage(&peer.dir.join("storage"), 0).expect("detect height");
         assert_eq!(height.total, 3);
         assert_eq!(height.non_empty, 3);
     }
-
     #[test]
     fn detect_block_height_prefers_block_hashes_over_pipeline() {
         let env = Environment::new();
@@ -11375,13 +10481,11 @@ mod tests {
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32]).expect("write blocks hash file");
-
         let height =
             detect_block_height_from_storage(&peer.dir.join("storage"), 0).expect("detect height");
         assert_eq!(height.total, 1);
         assert_eq!(height.non_empty, 1);
     }
-
     #[test]
     fn best_effort_block_height_uses_storage_without_status() {
         let env = Environment::new();
@@ -11394,12 +10498,10 @@ mod tests {
             .join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
         write_sidecar_index(&pipeline_dir, 2);
-
         let height = peer.best_effort_block_height().expect("best-effort height");
         assert_eq!(height.total, 2);
         assert_eq!(height.non_empty, 2);
     }
-
     #[test]
     fn last_known_peers_reflects_recorded_status() {
         let env = Environment::new();
@@ -11411,10 +10513,8 @@ mod tests {
             ..Status::default()
         };
         let _ = NetworkPeer::record_probe_status(&peer.startup_probe, &status);
-
         assert_eq!(peer.last_known_peers(), Some(5));
     }
-
     #[cfg(test)]
     fn write_sidecar_index(pipeline_dir: &Path, entries: u64) {
         let mut index_bytes = Vec::new();
@@ -11430,7 +10530,6 @@ mod tests {
         )
         .expect("write sidecar index");
     }
-
     #[test]
     fn write_base_config_copies_rans_tables() {
         let env = Environment::new();
@@ -11448,7 +10547,6 @@ mod tests {
             tables_path.display()
         );
     }
-
     #[test]
     fn trusted_peers_use_addr_literals() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
@@ -11465,7 +10563,6 @@ mod tests {
             !trusted_peers.is_empty(),
             "trusted_peers should contain entries"
         );
-
         for entry in trusted_peers {
             let peer_literal = entry
                 .as_str()
@@ -11481,20 +10578,16 @@ mod tests {
                 norito::literal::parse("addr", addr_literal).expect("parse trusted peer literal");
         }
     }
-
     #[test]
     fn with_min_peers_rounds_up_to_revision4_committee() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(2));
         assert_eq!(network.peers().len(), 4);
-
         let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(5));
         assert_eq!(network.peers().len(), 7);
-
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(7).with_min_peers(4));
         assert_eq!(network.peers().len(), 7);
     }
-
     #[test]
     fn revision4_committee_rounding_covers_protocol_bounds() {
         for (minimum, expected) in [
@@ -11510,7 +10603,6 @@ mod tests {
         ] {
             assert_eq!(revision4_committee_at_least(minimum), expected);
         }
-
         for minimum in [0, MAX_VALIDATORS_PER_HEIGHT + 1, usize::MAX] {
             assert!(
                 std::panic::catch_unwind(|| NetworkBuilder::new().with_min_peers(minimum)).is_err(),
@@ -11518,7 +10610,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn with_peers_rejects_non_revision4_validator_counts() {
         for peers in [0, 1, 2, 3, 5, 6, 8, 30, 32, usize::MAX] {
@@ -11528,7 +10619,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn signed_genesis_roster_must_match_guarded_network_topology() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
@@ -11538,9 +10628,7 @@ mod tests {
             .iter()
             .map(NetworkPeer::id)
             .collect::<Vec<_>>();
-
         assert_genesis_voting_roster_matches_network(&genesis, &expected);
-
         let incomplete = expected[..expected.len() - 1].to_vec();
         assert!(
             std::panic::catch_unwind(|| {
@@ -11550,13 +10638,11 @@ mod tests {
             "a custom signed roster that differs from the guarded topology must fail closed"
         );
     }
-
     #[test]
     fn network_builder_defaults_to_four_peers() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
         assert_eq!(network.peers().len(), DEFAULT_NETWORK_PEERS);
     }
-
     #[test]
     fn enables_norito_rpc_ga_stage_for_test_networks() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
@@ -11572,7 +10658,6 @@ mod tests {
             })
             .expect("base config layer present")
             .into_owned();
-
         let torii_table = base_layer
             .get("torii")
             .and_then(TomlValue::as_table)
@@ -11585,7 +10670,6 @@ mod tests {
             .get("norito_rpc")
             .and_then(TomlValue::as_table)
             .expect("torii.transport.norito_rpc table present");
-
         let stage = norito_rpc_table
             .get("stage")
             .and_then(TomlValue::as_str)
@@ -11603,7 +10687,6 @@ mod tests {
             "Norito-RPC must stay enabled for auto-built test networks"
         );
     }
-
     #[test]
     fn workspace_fingerprint_detects_source_modifications() {
         let temp = tempdir().expect("temporary workspace");
@@ -11616,15 +10699,12 @@ mod tests {
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         let file = root.join("member/src/lib.rs");
         fs::write(&file, b"pub fn greet() {}\n").expect("write source file");
-
         let initial = workspace_fingerprint(root).expect("initial fingerprint");
         thread::sleep(Duration::from_millis(20));
         fs::write(&file, b"pub fn greet() { println!(\"hi\"); }\n").expect("update source file");
         let updated = workspace_fingerprint(root).expect("updated fingerprint");
-
         assert_ne!(initial, updated);
     }
-
     #[test]
     fn workspace_fingerprint_ignores_target_directory() {
         let temp = tempdir().expect("temporary workspace");
@@ -11637,26 +10717,20 @@ mod tests {
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         fs::create_dir_all(root.join("member/target")).expect("create target directory");
         let artifact = root.join("member/target").join("artifact");
         fs::write(&artifact, b"one").expect("write artifact");
-
         let before = workspace_fingerprint(root).expect("initial fingerprint");
         thread::sleep(Duration::from_millis(20));
         fs::write(&artifact, b"two").expect("update artifact");
         let after = workspace_fingerprint(root).expect("post-artifact fingerprint");
-
         assert_eq!(before, after);
-
         thread::sleep(Duration::from_millis(20));
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 1 }\n")
             .expect("update source file");
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
-
         assert_ne!(after, final_fp);
     }
-
     #[test]
     fn workspace_fingerprint_respects_gitignore_directories() {
         let temp = tempdir().expect("temporary workspace");
@@ -11673,21 +10747,16 @@ mod tests {
             .expect("write source file");
         let ignored_file = root.join("member/ignored/data.bin");
         fs::write(&ignored_file, b"a").expect("write ignored file");
-
         let before = workspace_fingerprint(root).expect("initial fingerprint");
         thread::sleep(Duration::from_millis(20));
         fs::write(&ignored_file, b"b").expect("update ignored file");
         let after = workspace_fingerprint(root).expect("post-ignore fingerprint");
-
         assert_eq!(before, after);
-
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 2 }\n")
             .expect("update source file");
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
-
         assert_ne!(after, final_fp);
     }
-
     #[test]
     fn workspace_fingerprint_respects_gitignore_globs() {
         let temp = tempdir().expect("temporary workspace");
@@ -11701,31 +10770,24 @@ mod tests {
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let target_dir = root.join("member/target-codex");
         fs::create_dir_all(&target_dir).expect("create target-codex directory");
         let target_artifact = target_dir.join("artifact");
         fs::write(&target_artifact, b"one").expect("write target artifact");
-
         let log_path = root.join("member/build.log");
         fs::write(&log_path, b"initial").expect("write log file");
-
         let before = workspace_fingerprint(root).expect("initial fingerprint");
         thread::sleep(Duration::from_millis(20));
         fs::write(&target_artifact, b"two").expect("update target artifact");
         fs::write(&log_path, b"updated").expect("update log file");
         let after = workspace_fingerprint(root).expect("post-ignore fingerprint");
-
         assert_eq!(before, after);
-
         thread::sleep(Duration::from_millis(20));
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 3 }\n")
             .expect("update source file");
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
-
         assert_ne!(after, final_fp);
     }
-
     #[test]
     fn fingerprint_with_build_args_changes_on_arg_differences() {
         let base = 42_u64;
@@ -11737,13 +10799,11 @@ mod tests {
             OsString::from("--features"),
             OsString::from("other-feature"),
         ];
-
         let fingerprint_a = fingerprint_with_build_args(base, &args_a);
         let fingerprint_b = fingerprint_with_build_args(base, &args_b);
         assert_ne!(fingerprint_a, fingerprint_b);
         assert_eq!(fingerprint_a, fingerprint_with_build_args(base, &args_a));
     }
-
     #[test]
     fn workspace_fingerprint_ignores_custom_target_dir_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -11757,29 +10817,23 @@ mod tests {
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let _override_guard = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
         let _target_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "member/build-output");
         let target_dir = root.join("member/build-output");
         fs::create_dir_all(&target_dir).expect("create target directory");
         let artifact = target_dir.join("artifact");
         fs::write(&artifact, b"one").expect("write target artifact");
-
         let before = workspace_fingerprint(root).expect("initial fingerprint");
         thread::sleep(Duration::from_millis(20));
         fs::write(&artifact, b"two").expect("update target artifact");
         let after = workspace_fingerprint(root).expect("post-artifact fingerprint");
-
         assert_eq!(before, after);
-
         thread::sleep(Duration::from_millis(20));
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 4 }\n")
             .expect("update source file");
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
-
         assert_ne!(after, final_fp);
     }
-
     #[test]
     fn workspace_fingerprint_ignores_test_target_dir_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -11793,35 +10847,28 @@ mod tests {
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let _cargo_guard = EnvVarGuard::cleared("CARGO_TARGET_DIR");
         let _target_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "member/test-output");
         let target_dir = root.join("member/test-output");
         fs::create_dir_all(&target_dir).expect("create test target directory");
         let artifact = target_dir.join("artifact");
         fs::write(&artifact, b"one").expect("write target artifact");
-
         let before = workspace_fingerprint(root).expect("initial fingerprint");
         thread::sleep(Duration::from_millis(20));
         fs::write(&artifact, b"two").expect("update target artifact");
         let after = workspace_fingerprint(root).expect("post-artifact fingerprint");
-
         assert_eq!(before, after);
-
         thread::sleep(Duration::from_millis(20));
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 5 }\n")
             .expect("update source file");
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
-
         assert_ne!(after, final_fp);
     }
-
     #[test]
     fn resolve_target_dir_prefers_test_override_and_namespaces_cargo() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let temp = tempdir().expect("temporary workspace");
         let root = temp.path();
-
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
         let _clear_test = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
@@ -11830,17 +10877,14 @@ mod tests {
             resolve_target_dir(root),
             root.join("target").join(IROHA_TEST_TARGET_SUBDIR)
         );
-
         let _cargo_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "cargo-target");
         assert_eq!(
             resolve_target_dir(root),
             root.join("cargo-target").join(IROHA_TEST_TARGET_SUBDIR)
         );
-
         let _test_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "test-target");
         assert_eq!(resolve_target_dir(root), root.join("test-target"));
     }
-
     struct ReleasePrebuiltFixture {
         _temp: tempfile::TempDir,
         repo: PathBuf,
@@ -11850,7 +10894,6 @@ mod tests {
         manifest: PathBuf,
         manifest_sha256: String,
     }
-
     impl Drop for ReleasePrebuiltFixture {
         fn drop(&mut self) {
             for directory in [
@@ -11863,16 +10906,13 @@ mod tests {
             }
         }
     }
-
     #[cfg(unix)]
     fn set_mode(path: &Path, mode: u32) {
         fs::set_permissions(path, fs::Permissions::from_mode(mode))
             .unwrap_or_else(|err| panic!("set mode {mode:04o} on {}: {err}", path.display()));
     }
-
     #[cfg(not(unix))]
     fn set_mode(_path: &Path, _mode: u32) {}
-
     fn release_manifest_text(
         source_manifest_sha256: &str,
         cargo_lock_sha256: &str,
@@ -11924,7 +10964,6 @@ mod tests {
         }
         text
     }
-
     fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
         let temp = tempdir().expect("temporary release workspace");
         let repo = temp.path().join("repo");
@@ -11974,7 +11013,6 @@ mod tests {
             manifest_sha256,
         }
     }
-
     fn release_prebuilt_env(
         fixture: &ReleasePrebuiltFixture,
         manifest_sha256: &str,
@@ -11997,7 +11035,6 @@ mod tests {
             EnvVarRestore::set("PROFILE", "release"),
         ]
     }
-
     fn rewrite_release_manifest(fixture: &ReleasePrebuiltFixture, from: &str, to: &str) -> String {
         let text = fs::read_to_string(&fixture.manifest).expect("read release manifest");
         let updated = text.replacen(from, to, 1);
@@ -12007,7 +11044,6 @@ mod tests {
         set_mode(&fixture.manifest, RELEASE_MANIFEST_MODE);
         lowercase_hex(&sha256(updated.as_bytes()))
     }
-
     #[test]
     fn release_prebuilt_manifest_and_all_program_paths_validate_exactly() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -12016,7 +11052,6 @@ mod tests {
         let contract = release_program_contract(&fixture.repo)
             .expect("validate release contract")
             .expect("release contract active");
-
         for kind in ReleasePrebuiltBinary::ALL {
             let expected = fixture.target.join(kind.relative_path());
             assert_eq!(
@@ -12033,18 +11068,15 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn release_prebuilt_manifest_rejects_forged_external_digest() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let fixture = create_release_prebuilt_fixture();
         let _env = release_prebuilt_env(&fixture, &"f".repeat(64), "0");
-
         let err =
             release_program_contract(&fixture.repo).expect_err("forged manifest digest must fail");
         assert!(err.to_string().contains("manifest digest"));
     }
-
     #[test]
     fn release_source_contract_requires_inherited_prebuilt_manifest_digest() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -12054,7 +11086,6 @@ mod tests {
             &fixture.source_manifest_sha256,
         );
         let _prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
-
         let err = release_program_contract(&fixture.repo)
             .expect_err("source-bound release contract requires manifest anchor");
         assert!(
@@ -12062,11 +11093,9 @@ mod tests {
                 .contains(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV)
         );
     }
-
     #[test]
     fn release_prebuilt_manifest_rejects_wrong_binary_path_and_hash() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-
         let path_fixture = create_release_prebuilt_fixture();
         let path_manifest_sha256 = rewrite_release_manifest(
             &path_fixture,
@@ -12080,7 +11109,6 @@ mod tests {
                 "non-exact binary path must fail manifest parsing"
             );
         }
-
         let hash_fixture = create_release_prebuilt_fixture();
         let original = fs::read_to_string(&hash_fixture.manifest).expect("read manifest");
         let irohad_hash = original
@@ -12106,12 +11134,10 @@ mod tests {
             "forged binary digest must fail independent hashing"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn release_prebuilt_binary_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let fixture = create_release_prebuilt_fixture();
         let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
@@ -12127,13 +11153,11 @@ mod tests {
         fs::remove_file(&binary).expect("remove original binary");
         symlink(&replacement, &binary).expect("install symlink");
         set_mode(parent, RELEASE_BINARY_MODE);
-
         assert!(
             validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
                 .is_err()
         );
     }
-
     #[test]
     fn release_prebuilt_binary_revalidates_mutation_after_initial_resolution() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -12145,7 +11169,6 @@ mod tests {
         let binary = fixture.target.join("release/iroha3d");
         validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
             .expect("initial resolution");
-
         set_mode(&binary, 0o700);
         fs::write(&binary, b"mutated release executable\n").expect("mutate cached binary");
         set_mode(&binary, RELEASE_BINARY_MODE);
@@ -12155,12 +11178,10 @@ mod tests {
             "fresh verification must reject mutation after an earlier cached resolution"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn release_prebuilt_binary_rejects_mode_drift_and_hard_links() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-
         let mode_fixture = create_release_prebuilt_fixture();
         let binary = mode_fixture.target.join("release/iroha3d");
         set_mode(&binary, 0o700);
@@ -12179,7 +11200,6 @@ mod tests {
                 "mode drift must fail"
             );
         }
-
         let link_fixture = create_release_prebuilt_fixture();
         let binary = link_fixture.target.join("release/iroha3d");
         let extra_link = link_fixture.repo.join("iroha3d-hard-link");
@@ -12194,13 +11214,11 @@ mod tests {
             "multiple hard links must fail"
         );
     }
-
     #[test]
     fn release_prebuilt_contract_rejects_reentrant_one() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let fixture = create_release_prebuilt_fixture();
         let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "1");
-
         let err =
             release_program_contract(&fixture.repo).expect_err("reentrant=1 must be rejected");
         assert!(
@@ -12208,7 +11226,6 @@ mod tests {
                 .contains(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV)
         );
     }
-
     #[test]
     fn default_build_profile_respects_env_override() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -12219,14 +11236,11 @@ mod tests {
             default_profile,
             current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
         );
-
         let _override_guard = EnvVarRestore::set("PROFILE", "release");
         assert_eq!(default_build_profile(), "release");
-
         let _override_guard = EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "debug");
         assert_eq!(default_build_profile(), "debug");
     }
-
     #[test]
     fn profile_hint_from_exe_path_detects_profile_before_deps_dir() {
         let hint = profile_hint_from_exe_path(Path::new(
@@ -12234,13 +11248,11 @@ mod tests {
         ));
         assert_eq!(hint.as_deref(), Some("debug"));
     }
-
     #[test]
     fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
         let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
         assert_eq!(hint.as_deref(), Some("ci"));
     }
-
     #[test]
     fn build_stamp_version_does_not_wrap_to_supported_u32() {
         let temp = tempdir().expect("temporary directory");
@@ -12253,14 +11265,12 @@ mod tests {
             ),
         )
         .expect("write wrapped-version stamp");
-
         assert!(
             read_build_stamp(&stamp_path)
                 .expect("read wrapped-version stamp")
                 .is_none(),
             "a u64 version that truncates to the supported u32 must be rejected"
         );
-
         fs::write(
             &stamp_path,
             format!(
@@ -12275,7 +11285,6 @@ mod tests {
         assert_eq!(stamp.profile, "debug");
         assert_eq!(stamp.binary, PathBuf::from("iroha3d"));
     }
-
     #[cfg(unix)]
     #[test]
     fn ensure_binary_fresh_skips_redundant_builds() {
@@ -12290,12 +11299,10 @@ mod tests {
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let target_dir = root.join("target");
         fs::create_dir_all(target_dir.join("debug")).expect("create target debug directory");
         let binary_path = target_dir.join("debug/dummy");
         fs::write(&binary_path, b"binary").expect("create dummy binary");
-
         let script = root.join("fake-cargo.sh");
         let script_contents = r#"#!/bin/sh
 set -eu
@@ -12307,7 +11314,6 @@ exit 0
         fs::write(&script, script_contents).expect("write fake cargo script");
         fs::set_permissions(&script, PermissionsExt::from_mode(0o755))
             .expect("make script executable");
-
         let log_path = root.join("build.log");
         struct EnvRestore {
             key: &'static str,
@@ -12333,7 +11339,6 @@ exit 0
         let log_env = log_path.to_string_lossy().into_owned();
         let _cargo_guard = EnvRestore::set("TEST_NETWORK_CARGO", &script_env);
         let _log_guard = EnvRestore::set("TEST_NETWORK_CARGO_LOG", &log_env);
-
         ensure_binary_fresh(
             root,
             "dummy_pkg",
@@ -12345,7 +11350,6 @@ exit 0
             &[],
         )
         .expect("initial build invocation");
-
         let first_log = fs::read_to_string(&log_path).expect("read build log after first run");
         assert!(
             !first_log.is_empty(),
@@ -12356,7 +11360,6 @@ exit 0
             "build --locked --offline -p dummy_pkg",
             "test-network child builds must preserve the workspace lockfile and stay offline"
         );
-
         ensure_binary_fresh(
             root,
             "dummy_pkg",
@@ -12368,7 +11371,6 @@ exit 0
             &[],
         )
         .expect("second build invocation should be skipped");
-
         let second_log = fs::read_to_string(&log_path).expect("read build log after second run");
         assert_eq!(
             first_log.lines().count(),
@@ -12376,7 +11378,6 @@ exit 0
             "second resolve should not trigger an extra cargo invocation"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn ensure_binary_fresh_retries_after_e0460_by_cleaning_target_dir() {
@@ -12391,15 +11392,12 @@ exit 0
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let target_dir = root.join("target");
         let binary_path = target_dir.join("debug/dummy");
-
         let stale_path = target_dir.join("debug/deps/stale");
         fs::create_dir_all(stale_path.parent().expect("stale deps dir"))
             .expect("create stale deps directory");
         fs::write(&stale_path, b"stale").expect("write stale artifact");
-
         let script = root.join("fake-cargo-e0460.sh");
         let script_contents = r#"#!/bin/sh
 set -eu
@@ -12426,9 +11424,7 @@ exit 0
         fs::write(&script, script_contents).expect("write fake cargo script");
         fs::set_permissions(&script, PermissionsExt::from_mode(0o755))
             .expect("make script executable");
-
         let count_path = root.join("build-count.txt");
-
         struct EnvRestore {
             key: &'static str,
             previous: Option<String>,
@@ -12449,14 +11445,12 @@ exit 0
                 }
             }
         }
-
         let script_env = script.to_string_lossy().into_owned();
         let count_env = count_path.to_string_lossy().into_owned();
         let bin_env = binary_path.to_string_lossy().into_owned();
         let _cargo_guard = EnvRestore::set("TEST_NETWORK_CARGO", &script_env);
         let _count_guard = EnvRestore::set("TEST_NETWORK_CARGO_COUNT_FILE", &count_env);
         let _bin_guard = EnvRestore::set("TEST_NETWORK_DUMMY_BIN", &bin_env);
-
         ensure_binary_fresh(
             root,
             "dummy_pkg",
@@ -12468,13 +11462,11 @@ exit 0
             &[],
         )
         .expect("retry build after E0460 should succeed");
-
         assert!(binary_path.exists(), "dummy binary should be created");
         assert!(
             !stale_path.exists(),
             "cleanup should remove stale build artifacts"
         );
-
         let count: u32 = fs::read_to_string(&count_path)
             .expect("read build count")
             .trim()
@@ -12485,7 +11477,6 @@ exit 0
             "fake cargo should be invoked twice (fail then retry)"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn ensure_binary_fresh_retries_after_e0463_by_cleaning_target_dir() {
@@ -12500,15 +11491,12 @@ exit 0
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let target_dir = root.join("target");
         let binary_path = target_dir.join("debug/dummy");
-
         let stale_path = target_dir.join("release/deps/stale");
         fs::create_dir_all(stale_path.parent().expect("stale deps dir"))
             .expect("create stale deps directory");
         fs::write(&stale_path, b"stale").expect("write stale artifact");
-
         let script = root.join("fake-cargo-e0463.sh");
         let script_contents = r#"#!/bin/sh
 set -eu
@@ -12535,9 +11523,7 @@ exit 0
         fs::write(&script, script_contents).expect("write fake cargo script");
         fs::set_permissions(&script, PermissionsExt::from_mode(0o755))
             .expect("make script executable");
-
         let count_path = root.join("build-count.txt");
-
         struct EnvRestore {
             key: &'static str,
             previous: Option<String>,
@@ -12558,14 +11544,12 @@ exit 0
                 }
             }
         }
-
         let script_env = script.to_string_lossy().into_owned();
         let count_env = count_path.to_string_lossy().into_owned();
         let bin_env = binary_path.to_string_lossy().into_owned();
         let _cargo_guard = EnvRestore::set("TEST_NETWORK_CARGO", &script_env);
         let _count_guard = EnvRestore::set("TEST_NETWORK_CARGO_COUNT_FILE", &count_env);
         let _bin_guard = EnvRestore::set("TEST_NETWORK_DUMMY_BIN", &bin_env);
-
         ensure_binary_fresh(
             root,
             "dummy_pkg",
@@ -12577,13 +11561,11 @@ exit 0
             &[],
         )
         .expect("retry build after E0463 should succeed");
-
         assert!(binary_path.exists(), "dummy binary should be created");
         assert!(
             !stale_path.exists(),
             "cleanup should remove stale build artifacts"
         );
-
         let count: u32 = fs::read_to_string(&count_path)
             .expect("read build count")
             .trim()
@@ -12594,7 +11576,6 @@ exit 0
             "fake cargo should be invoked twice (fail then retry)"
         );
     }
-
     #[test]
     fn ensure_binary_fresh_refuses_reentrant_builds() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -12608,10 +11589,8 @@ exit 0
         fs::create_dir_all(root.join("member/src")).expect("create member src directory");
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
             .expect("write source file");
-
         let target_dir = root.join("target");
         let binary_path = target_dir.join("debug/dummy");
-
         let err = ensure_binary_fresh(
             root,
             "dummy_pkg",
@@ -12623,7 +11602,6 @@ exit 0
             &[],
         )
         .expect_err("re-entrant build should be rejected when building is disallowed");
-
         assert!(
             err.to_string().contains("cannot build `dummy`"),
             "unexpected error: {err}"
@@ -12639,7 +11617,6 @@ exit 0
             ]
         );
     }
-
     #[test]
     fn first_existing_candidate_prefers_earlier_existing_path() {
         let temp = tempdir().expect("temporary workspace");
@@ -12647,35 +11624,29 @@ exit 0
         let fallback = temp.path().join("fallback-bin");
         fs::write(&primary, b"primary").expect("write primary candidate");
         fs::write(&fallback, b"fallback").expect("write fallback candidate");
-
         let resolved = first_existing_candidate([
             Cow::Borrowed(primary.as_path()),
             Cow::Borrowed(fallback.as_path()),
         ])
         .expect("first existing candidate should resolve");
-
         assert_eq!(resolved, primary.canonicalize().expect("canonical primary"));
     }
-
     #[test]
     fn first_existing_candidate_skips_missing_paths() {
         let temp = tempdir().expect("temporary workspace");
         let missing = temp.path().join("missing-bin");
         let fallback = temp.path().join("fallback-bin");
         fs::write(&fallback, b"fallback").expect("write fallback candidate");
-
         let resolved = first_existing_candidate([
             Cow::Borrowed(missing.as_path()),
             Cow::Borrowed(fallback.as_path()),
         ])
         .expect("fallback candidate should resolve");
-
         assert_eq!(
             resolved,
             fallback.canonicalize().expect("canonical fallback")
         );
     }
-
     #[test]
     fn colocated_binary_candidate_for_resolves_sibling_binary() {
         let temp = tempdir().expect("temporary workspace");
@@ -12685,13 +11656,10 @@ exit 0
             .expect("create release dir");
         fs::write(&current_exe, b"izanami").expect("write current exe");
         fs::write(&sibling, b"iroha3d").expect("write sibling binary");
-
         let resolved = colocated_binary_candidate_for(&current_exe, "iroha3d")
             .expect("sibling binary should resolve");
-
         assert_eq!(resolved, sibling.canonicalize().expect("canonical sibling"));
     }
-
     #[test]
     fn colocated_binary_candidate_for_ignores_missing_sibling_binary() {
         let temp = tempdir().expect("temporary workspace");
@@ -12699,24 +11667,20 @@ exit 0
         fs::create_dir_all(current_exe.parent().expect("current exe parent"))
             .expect("create release dir");
         fs::write(&current_exe, b"izanami").expect("write current exe");
-
         assert!(
             colocated_binary_candidate_for(&current_exe, "iroha3d").is_none(),
             "missing sibling binary should not resolve"
         );
     }
-
     #[test]
     fn reentrant_builds_disabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
-
         assert!(!allow_reentrant_build(true, false));
         assert!(allow_reentrant_build(false, false));
         assert!(!allow_reentrant_build(true, true));
         assert!(!allow_reentrant_build(false, true));
     }
-
     #[test]
     fn freshness_validation_cannot_be_bypassed_by_existing_candidates() {
         assert!(must_validate_binary_freshness(false, false, false));
@@ -12724,104 +11688,82 @@ exit 0
         assert!(!must_validate_binary_freshness(true, false, true));
         assert!(!must_validate_binary_freshness(false, true, false));
     }
-
     #[test]
     fn reentrant_builds_can_be_enabled_via_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
         set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "true");
-
         assert!(allow_reentrant_build(true, false));
         assert!(!allow_reentrant_build(true, true));
     }
-
     #[test]
     fn reentrant_builds_can_be_enabled_via_numeric_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
         set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "1");
-
         assert!(allow_reentrant_build(true, false));
         assert!(!allow_reentrant_build(true, true));
     }
-
     #[test]
     fn reentrant_builds_can_be_disabled_via_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
         set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "false");
-
         assert!(!allow_reentrant_build(true, false));
     }
-
     #[test]
     fn env_filter_defaults_to_warn() {
         let _guard = lock_env_guard(&LOG_ENV_GUARD);
         let original = env::var("RUST_LOG").ok();
         remove_env_var("RUST_LOG");
-
         let filter = env_filter_from_env_or_default();
-
         if let Some(value) = original {
             set_env_var("RUST_LOG", value);
         } else {
             remove_env_var("RUST_LOG");
         }
-
         assert_eq!(filter.to_string(), "warn");
     }
-
     #[test]
     fn env_filter_honors_rust_log_override() {
         let _guard = lock_env_guard(&LOG_ENV_GUARD);
         let original = env::var("RUST_LOG").ok();
         set_env_var("RUST_LOG", "warn");
-
         let filter = env_filter_from_env_or_default();
-
         if let Some(value) = original {
             set_env_var("RUST_LOG", value);
         } else {
             remove_env_var("RUST_LOG");
         }
-
         assert_eq!(filter.to_string(), "warn");
     }
-
     #[test]
     fn summarize_peer_stderr_ignores_empty_input() {
         assert!(summarize_peer_stderr("").is_none());
         assert!(summarize_peer_stderr("\n\n").is_none());
     }
-
     #[test]
     fn summarize_peer_stderr_truncates_to_tail_lines() {
         let input = (0..100)
             .map(|idx| format!("line {idx}"))
             .collect::<Vec<_>>()
             .join("\n");
-
         let summary = summarize_peer_stderr(&input).expect("summary should exist");
-
         assert!(summary.truncated);
         assert_eq!(summary.total_lines, 100);
         assert!(summary.preview.lines().count() <= PEER_STDERR_PREVIEW_MAX_LINES);
         assert!(summary.preview.ends_with("line 99"));
     }
-
     #[test]
     fn summarize_peer_stderr_limits_character_count() {
         let long_line = "x".repeat(PEER_STDERR_PREVIEW_MAX_CHARS + 10);
         let input = format!("first\n{long_line}");
-
         let summary = summarize_peer_stderr(&input).expect("summary should exist");
-
         assert!(summary.truncated);
         assert_eq!(summary.total_lines, 2);
         assert!(summary.preview.len() <= PEER_STDERR_PREVIEW_MAX_CHARS);
         assert!(summary.preview.ends_with('x'));
     }
-
     #[test]
     fn summarize_peer_stdout_file_retains_bounded_failure_tail() {
         let directory = tempfile::tempdir().expect("temporary peer log directory");
@@ -12835,9 +11777,7 @@ exit 0
             input.push_str(&format!("ordinary shutdown detail {index}\n"));
         }
         fs::write(&path, input).expect("write synthetic peer stdout");
-
         let summary = summarize_peer_stdout_file(&path).expect("stdout summary should exist");
-
         assert!(summary.truncated);
         assert!(summary.preview.len() <= PEER_STDERR_PREVIEW_MAX_CHARS);
         assert!(
@@ -12847,13 +11787,11 @@ exit 0
         );
         assert!(summary.preview.contains("... decisive peer failure ..."));
     }
-
     #[test]
     fn canonical_genesis_bytes_roundtrip_signed_block() {
         init_instruction_registry();
         let network = NetworkBuilder::new().build();
         let genesis = network.genesis();
-
         println!(
             "GENESIS contains {} transactions",
             network.genesis_isi().len()
@@ -12872,7 +11810,6 @@ exit 0
                     });
             }
         }
-
         let wire =
             NetworkPeer::canonical_genesis_bytes(&genesis).expect("canonical genesis encoding");
         println!(
@@ -12885,10 +11822,8 @@ exit 0
             "payload prefix {:?}",
             &wire[header_size..(header_size + 32).min(wire.len())]
         );
-
         decode_framed_signed_block(&wire).expect("decode framed genesis block");
     }
-
     fn collect_set_parameters(block: &GenesisBlock) -> Vec<Parameter> {
         block
             .0
@@ -12920,12 +11855,10 @@ exit 0
             })
             .collect()
     }
-
     fn consensus_fingerprint_from_block(block: &GenesisBlock) -> Option<String> {
         consensus_handshake_metadata(block)
             .map(|metadata| metadata.consensus_fingerprint.to_string())
     }
-
     fn consensus_handshake_metadata(block: &GenesisBlock) -> Option<ConsensusHandshakeMetadata> {
         let mut last = None;
         for parameter in collect_set_parameters(block) {
@@ -12938,7 +11871,6 @@ exit 0
         }
         last
     }
-
     fn assert_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &Parameter) {
         let handshakes = collect_set_parameters(block)
             .into_iter()
@@ -12956,7 +11888,6 @@ exit 0
             "genesis must contain exactly one handshake metadata entry equal to the runtime profile"
         );
     }
-
     fn collect_non_handshake_instructions(block: &GenesisBlock) -> Vec<InstructionBox> {
         block
             .0
@@ -12984,7 +11915,6 @@ exit 0
             })
             .collect()
     }
-
     fn reconstructed_consensus_params(block: &GenesisBlock) -> ConsensusGenesisParams {
         let mut state = iroha_data_model::parameter::Parameters::default();
         for parameter in collect_set_parameters(block) {
@@ -13004,7 +11934,6 @@ exit 0
         )
         .expect("genesis must reconstruct one canonical consensus carrier")
     }
-
     fn assert_signed_nexus_amx_context_matches_preexecution(
         network: &Network,
         genesis: &GenesisBlock,
@@ -13050,7 +11979,6 @@ exit 0
             "signed execution-policy commitment must equal the independently staged projection"
         );
     }
-
     #[test]
     fn genesis_consensus_metadata_matches_runtime_profile() {
         init_instruction_registry();
@@ -13080,7 +12008,6 @@ exit 0
             "consensus fingerprint mismatch: expected {expected}, got {actual}"
         );
     }
-
     #[test]
     fn genesis_consensus_metadata_tracks_npos_mode() {
         init_instruction_registry();
@@ -13103,7 +12030,6 @@ exit 0
             defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
             "epoch length should follow config defaults when unspecified"
         );
-
         let genesis = network.genesis();
         assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
         assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
@@ -13129,7 +12055,6 @@ exit 0
             "NPoS fingerprint must match runtime profile"
         );
     }
-
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
         init_instruction_registry();
@@ -13163,12 +12088,10 @@ exit 0
                 metadata.sumeragi_v2,
             )
             .expect("shared runtime derivation must accept the canonical carrier");
-
         assert_eq!(
             profile.params, shared_params,
             "test-network genesis metadata must use the same NPoS fingerprint inputs as runtime validation"
         );
-
         let actual_fingerprint = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
@@ -13181,7 +12104,6 @@ exit 0
         );
         assert_eq!(actual_fingerprint, expected);
     }
-
     #[test]
     fn genesis_consensus_metadata_includes_post_topology_parameters() {
         init_instruction_registry();
@@ -13194,7 +12116,6 @@ exit 0
                     ),
                 ))),
             ]));
-
         let genesis = network.genesis();
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
@@ -13204,7 +12125,6 @@ exit 0
             .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         let reconstructed = reconstructed_consensus_params(&genesis);
-
         assert_eq!(
             actual, expected,
             "post-topology consensus params should affect fingerprint"
@@ -13215,7 +12135,6 @@ exit 0
             "post-topology block bound should be visible in final genesis consensus params"
         );
     }
-
     #[test]
     fn genesis_embeds_da_proof_policies_from_config_layers() {
         init_instruction_registry();
@@ -13237,7 +12156,6 @@ exit 0
                         .write(["nexus", "lane_catalog"], lane_catalog);
                 },
             ));
-
         let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let peer = network.peers().first().expect("network should have peers");
         let mut merged = peer.base_config_table();
@@ -13258,7 +12176,6 @@ exit 0
             Some(2),
             "config should retain the overridden lane_count"
         );
-
         let policies = resolve_da_proof_policies(peer, &config_layers)
             .expect("should resolve da proof policies");
         assert_eq!(policies.policies.len(), 2);
@@ -13269,7 +12186,6 @@ exit 0
             2,
             "resolved lane config should preserve the lane catalog"
         );
-
         let genesis = network.genesis();
         assert_eq!(
             genesis.0.da_proof_policies(),
@@ -13281,7 +12197,6 @@ exit 0
             Some(HashOf::new(&policies))
         );
     }
-
     #[test]
     fn genesis_embeds_confidential_policy_hash_from_config_layers() {
         init_instruction_registry();
@@ -13291,13 +12206,11 @@ exit 0
                     layer.write(["zk", "halo2", "enabled"], true);
                 },
             ));
-
         let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let peer = network.peers().first().expect("network should have peers");
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
         let expected = iroha_core::state::compute_genesis_confidential_policy_hash(&actual.zk);
-
         let genesis = network.genesis();
         assert_eq!(
             genesis
@@ -13309,23 +12222,19 @@ exit 0
             "genesis should commit to the confidential policy resolved from config layers"
         );
     }
-
     #[test]
     fn resolve_actual_config_applies_sora_profile_non_consensus_settings() {
         let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
-
         assert!(
             config_requires_sora_profile(&config_layers),
             "SoraFS-enabled configs should trigger --sora profile detection"
         );
-
         let mut merged = sora_profile_detection_defaults();
         for layer in &config_layers {
             merge_tables(&mut merged, layer);
         }
         apply_identity_defaults_for_detection(&mut merged);
         ensure_sora_profile_trusted_peer_pop(&mut merged);
-
         let actual = parse_actual_config_for_genesis(merged, &config_layers)
             .expect("should resolve runtime-equivalent config");
         assert!(
@@ -13337,7 +12246,6 @@ exit 0
             "Sora profile should expand lane catalog beyond single-lane defaults"
         );
     }
-
     #[test]
     fn sora_profile_does_not_override_signed_genesis_mode() {
         init_instruction_registry();
@@ -13349,22 +12257,18 @@ exit 0
                     layer.write(["sorafs", "storage", "enabled"], true);
                 }),
         );
-
         assert_eq!(
             network.consensus_bootstrap_profile().mode_tag,
             PERMISSIONED_TAG,
             "local Sora profile selection must not override the signed genesis mode",
         );
     }
-
     #[test]
     fn config_layers_include_trusted_peer_pop_and_bls() {
         use std::collections::{BTreeMap, BTreeSet};
-
         fn assert_trusted_entries(network: &Network) {
             let mut layers = network.config_layers();
             let base = layers.next().expect("base config layer").into_owned();
-
             let mut expected_pop = BTreeMap::new();
             for peer in network.peers() {
                 expected_pop.insert(
@@ -13380,7 +12284,6 @@ exit 0
                     ),
                 );
             }
-
             let expected_trusted: BTreeSet<String> = network
                 .peers()
                 .iter()
@@ -13392,7 +12295,6 @@ exit 0
                     )
                 })
                 .collect();
-
             let trusted_entries = base
                 .get("trusted_peers")
                 .and_then(toml::Value::as_array)
@@ -13407,7 +12309,6 @@ exit 0
                 })
                 .collect();
             assert_eq!(actual_trusted, expected_trusted);
-
             let pop_entries = base
                 .get("trusted_peers_pop")
                 .and_then(toml::Value::as_array)
@@ -13427,10 +12328,8 @@ exit 0
                 assert_eq!(expected.as_str(), pop_hex);
             }
         }
-
         let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         assert_trusted_entries(&default_network);
-
         let explicit_network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -13438,15 +12337,12 @@ exit 0
         );
         assert_trusted_entries(&explicit_network);
     }
-
     #[test]
     fn config_layers_with_additional_peers_include_pop() {
         let network = NetworkBuilder::new().with_peers(4).build();
         let extra_peer = NetworkPeerBuilder::new().build(network.env());
-
         let mut layers = network.config_layers_with_additional_peers([&extra_peer]);
         let base = layers.next().expect("base config layer").into_owned();
-
         let pop_entries = base
             .get("trusted_peers_pop")
             .and_then(toml::Value::as_array)
@@ -13466,7 +12362,6 @@ exit 0
             "additional peer PoP should be threaded into trusted_peers_pop"
         );
     }
-
     #[test]
     fn trusted_peers_layer_for_parse_includes_pop_entries() {
         let env = Environment::new();
@@ -13474,20 +12369,17 @@ exit 0
             NetworkPeerBuilder::new().build(&env),
             NetworkPeerBuilder::new().build(&env),
         ];
-
         let layer = trusted_peers_layer_for_parse(&peers, true);
         let trusted_entries = layer
             .get("trusted_peers")
             .and_then(toml::Value::as_array)
             .expect("trusted_peers array");
         assert_eq!(trusted_entries.len(), peers.len());
-
         let pop_entries = layer
             .get("trusted_peers_pop")
             .and_then(toml::Value::as_array)
             .expect("trusted_peers_pop array");
         assert_eq!(pop_entries.len(), peers.len());
-
         for peer in &peers {
             let pk = peer
                 .bls_public_key()
@@ -13503,14 +12395,12 @@ exit 0
                 "trusted_peers_pop should include {pk}"
             );
         }
-
         let layer_without_pop = trusted_peers_layer_for_parse(&peers, false);
         assert!(
             layer_without_pop.get("trusted_peers_pop").is_none(),
             "trusted_peers_pop should be omitted when auto-populate is disabled"
         );
     }
-
     #[test]
     fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster() {
         let bootstrap = ObserverP2pBootstrap::new(5).expect("five observers fit the core profile");
@@ -13523,13 +12413,11 @@ exit 0
                 .with_observer_p2p_bootstrap(bootstrap)
                 .expect("four validators and five observers fit the P2P cap"),
         );
-
         assert_eq!(network.peers().len(), 4);
         assert_eq!(network.validators().len(), 4);
         assert_eq!(network.observers().len(), 5);
         assert_eq!(network.all_peers().count(), 9);
         assert_eq!(network.topology_entries().len(), 4);
-
         let validator_keys = network
             .validators()
             .iter()
@@ -13555,7 +12443,6 @@ exit 0
             .collect::<BTreeSet<_>>();
         assert_eq!(topology_keys, validator_keys);
         assert!(topology_keys.is_disjoint(&observer_keys));
-
         let trusted_layer = network
             .config_layers()
             .next()
@@ -13578,7 +12465,6 @@ exit 0
                     .any(|entry| entry.as_str() == Some(&expected))
             );
         }
-
         let pop_keys = trusted_layer
             .get("trusted_peers_pop")
             .and_then(Value::as_array)
@@ -13594,7 +12480,6 @@ exit 0
             .collect::<BTreeSet<_>>();
         assert_eq!(pop_keys, validator_keys);
         assert!(pop_keys.is_disjoint(&observer_keys));
-
         let resolved_layers = network
             .config_layers()
             .map(Cow::into_owned)
@@ -13604,14 +12489,12 @@ exit 0
         let resolved_trusted = resolved.common.trusted_peers.value();
         assert_eq!(resolved_trusted.others.len(), 8);
         assert_eq!(resolved_trusted.pops.len(), 4);
-
         let role = observer_role_layer();
         assert_eq!(
             get_nested_value(&role, &["sumeragi", "role"]).and_then(Value::as_str),
             Some("observer")
         );
     }
-
     #[test]
     fn observer_bootstrap_identities_are_stable_and_shared_layers_have_no_secrets() {
         let seed =
@@ -13623,7 +12506,6 @@ exit 0
                 ObserverP2pBootstrap::new(5).expect("bounded observer recipe"),
             )
             .expect("bounded participant fanout");
-
         let first = build_with_isolated_permit(recipe.clone());
         let first_validators = first
             .validators()
@@ -13657,7 +12539,6 @@ exit 0
             assert!(!serialized.contains(&soranet_transport_secret));
         }
         drop(first);
-
         let second = build_with_isolated_permit(recipe);
         assert_eq!(
             second
@@ -13675,14 +12556,12 @@ exit 0
                 .collect::<Vec<_>>(),
             first_observers
         );
-
         let descriptor = ObserverP2pBootstrap::new(5).expect("bounded observer recipe");
         assert_eq!(
             format!("{descriptor:?}"),
             "ObserverP2pBootstrap { observer_count: 5 }"
         );
     }
-
     #[test]
     fn observer_bootstrap_bounds_fail_closed() {
         assert_eq!(
@@ -13700,7 +12579,6 @@ exit 0
                 }
             )
         );
-
         let bootstrap = ObserverP2pBootstrap::new(1).expect("one observer is valid alone");
         assert_eq!(
             bootstrap.validate_for_validators(usize::MAX, capacity),
@@ -13730,7 +12608,6 @@ exit 0
                 .is_ok(),
             "maximum revision-4 committee plus exact-cap observers remains valid"
         );
-
         let over_cap_bootstrap = ObserverP2pBootstrap::new(exact_cap_observers + 1)
             .expect("one-over-fanout observer count remains below the raw observer cap");
         assert!(
@@ -13741,7 +12618,6 @@ exit 0
             "one participant above the full-fanout cap must be rejected"
         );
     }
-
     #[test]
     fn observer_slow_reader_relay_rewrites_only_observer_addresses_without_leaking_targets() {
         let config = ObserverSlowReaderRelayConfig::new(1_024, Duration::from_millis(2))
@@ -13759,7 +12635,6 @@ exit 0
                 .with_observer_slow_reader_relays(config)
                 .expect("observer bootstrap precedes relay config"),
         );
-
         let relays = network
             .observer_slow_reader_relays
             .as_ref()
@@ -13783,7 +12658,6 @@ exit 0
             network.observer_slow_reader_relay_stats_for(&network.validators()[0].id()),
             None
         );
-
         let trusted_layer = network
             .config_layers()
             .next()
@@ -13794,7 +12668,6 @@ exit 0
             .and_then(Value::as_array)
             .expect("trusted peer array");
         assert_eq!(trusted.len(), network.all_peers().count());
-
         for (index, peer) in network.all_peers().enumerate() {
             let advertised = network.advertised_p2p_address(peer);
             let advertised_literal = advertised.to_literal();
@@ -13811,7 +12684,6 @@ exit 0
                     }),
                     "real observer listener {real} leaked into trusted peers"
                 );
-
                 let observer_layer = network.observer_start_layer(peer);
                 assert_eq!(
                     get_nested_value(&observer_layer, &["network", "public_address"])
@@ -13831,7 +12703,6 @@ exit 0
             }
         }
     }
-
     #[test]
     fn observer_slow_reader_relay_config_is_bounded_and_requires_observers() {
         assert_eq!(
@@ -13862,7 +12733,6 @@ exit 0
                 maximum: ObserverSlowReaderRelayConfig::maximum_read_delay(),
             })
         );
-
         let valid = ObserverSlowReaderRelayConfig::new(1, Duration::from_millis(1))
             .expect("minimum bounded config");
         assert!(matches!(
@@ -13870,7 +12740,6 @@ exit 0
             Err(ObserverSlowReaderRelayError::MissingObserverBootstrap)
         ));
     }
-
     #[tokio::test]
     async fn observer_slow_reader_relay_is_byte_transparent_and_joins_active_connection() {
         if skip_network_tests(
@@ -13878,7 +12747,6 @@ exit 0
         ) {
             return;
         }
-
         let upstream_listener = TokioTcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind mock observer listener");
@@ -13910,7 +12778,6 @@ exit 0
         };
         relays.start().await.expect("start transparent relay");
         relays.start().await.expect("repeated start is idempotent");
-
         let payload = (0_u32..4_096)
             .map(|index| index.wrapping_mul(73).wrapping_add(19).to_le_bytes()[0])
             .collect::<Vec<_>>();
@@ -13942,7 +12809,6 @@ exit 0
                 "relay shutdown must close its active upstream connection",
             );
         });
-
         let mut client = TcpStream::connect(published_address.to_string())
             .await
             .expect("connect validator side to relay");
@@ -13978,7 +12844,6 @@ exit 0
         .expect("relay response stayed within the test bound")
         .expect("receive complete opaque observer response");
         assert_eq!(received_reply, reply);
-
         timeout(Duration::from_secs(2), relays.shutdown())
             .await
             .expect("relay listener and active child joined within the shutdown bound");
@@ -13993,7 +12858,6 @@ exit 0
                 .is_err(),
             "shutdown must release the published listener"
         );
-
         let stats = counters.snapshot();
         assert_eq!(stats.accepted_connections, 1);
         assert_eq!(stats.upstream_connections, 1);
@@ -14004,7 +12868,6 @@ exit 0
         );
         assert_eq!(relays.stats_for(&peer_id), Some(stats));
     }
-
     #[test]
     fn legacy_builder_has_no_observers_and_preserves_validator_peer_semantics() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
@@ -14038,7 +12901,6 @@ exit 0
             );
         }
     }
-
     #[test]
     fn config_layers_allow_local_preauth_bypass() {
         let network = NetworkBuilder::new().build();
@@ -14064,7 +12926,6 @@ exit 0
             "IPv6 loopback should bypass pre-auth gating"
         );
     }
-
     #[test]
     fn default_builder_disables_nexus() {
         let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
@@ -14076,7 +12937,6 @@ exit 0
             "default NetworkBuilder must set nexus.enabled=false"
         );
     }
-
     #[test]
     fn default_builder_scales_concurrency_defaults() {
         let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
@@ -14117,7 +12977,6 @@ exit 0
             Some(expected)
         );
     }
-
     #[test]
     fn builder_config_layers_parse_with_required_genesis_fields() {
         let env = Environment::new();
@@ -14152,7 +13011,6 @@ exit 0
                 .write(["trusted_peers_pop"], trusted_peers_pop),
         );
         layers.extend(config_layers);
-
         let actual = resolve_actual_config(&peer, &layers)
             .expect("builder config layers should parse once chain/genesis are provided");
         assert_eq!(
@@ -14161,7 +13019,6 @@ exit 0
             "pre-genesis projection must receive only the non-runtime schema sentinel"
         );
     }
-
     fn assert_network_config_binds_exact_signed_genesis_hash(network: &Network) {
         let layers = network
             .config_layers()
@@ -14190,7 +13047,6 @@ exit 0
             "no emitted network config layer may contain the projection sentinel"
         );
     }
-
     #[test]
     fn network_config_layers_bind_default_and_custom_signed_genesis_expected_hashes() {
         init_instruction_registry();
@@ -14198,7 +13054,6 @@ exit 0
             let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(1));
             assert_network_config_binds_exact_signed_genesis_hash(&network);
         }
-
         let custom =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(1).with_genesis_block(
                 |topology, topology_entries| {
@@ -14207,7 +13062,6 @@ exit 0
             ));
         assert_network_config_binds_exact_signed_genesis_hash(&custom);
     }
-
     #[test]
     fn caller_wrong_genesis_expected_hash_remains_effective_for_adversarial_startup() {
         // Iroha hashes carry an odd final-byte marker; keep this wrong anchor
@@ -14239,7 +13093,6 @@ exit 0
             [exact_hash_literal.as_str(), wrong_hash_literal.as_str()],
             "the generated anchor must precede a caller override"
         );
-
         let actual = resolve_actual_config(&network.peers()[0], &layers)
             .expect("a canonical wrong hash must remain syntactically valid");
         assert_eq!(actual.genesis.expected_hash.to_string(), WRONG_HASH_BODY);
@@ -14249,7 +13102,6 @@ exit 0
             "the harness must not repair an adversarial caller override"
         );
     }
-
     #[test]
     fn config_layers_without_pop_excludes_bls_entries() {
         let network = build_with_isolated_permit(
@@ -14260,15 +13112,12 @@ exit 0
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
         let base = layers.next().expect("base config layer").into_owned();
-
         assert!(base.get("trusted_peers_bls").is_none());
         assert!(base.get("trusted_peers_pop").is_none());
     }
-
     #[test]
     fn default_network_has_no_da_toggle() {
         let network = NetworkBuilder::new().build();
-
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
         let base = layers.next().expect("base config layer").into_owned();
@@ -14285,13 +13134,11 @@ exit 0
             "mandatory DA must not be represented by a local boolean toggle"
         );
     }
-
     #[test]
     fn base_config_increases_body_queue_capacity() {
         let _config_guard = lock_env_guard(&CONFIG_ENV_GUARD);
         let _permit_guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let network = NetworkBuilder::new().build();
-
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
         let base = layers.next().expect("base config layer").into_owned();
@@ -14306,7 +13153,6 @@ exit 0
             "test network should raise certified-body queue capacity to avoid dropped sync updates"
         );
     }
-
     #[tokio::test]
     async fn can_start_networks() {
         if skip_network_tests("can_start_networks") {
@@ -14356,7 +13202,6 @@ exit 0
         .await
         .expect("second network shutdown should complete within timeout");
     }
-
     #[tokio::test]
     async fn start_fails_with_missing_binary() {
         if skip_network_tests("start_fails_with_missing_binary") {
@@ -14377,7 +13222,6 @@ exit 0
             remove_env_var(ENV);
         }
     }
-
     #[tokio::test]
     async fn starts_single_peer_with_minimal_genesis_fallback() {
         if skip_network_tests("starts_single_peer_with_minimal_genesis_fallback") {
@@ -14417,12 +13261,10 @@ exit 0
             .expect("fallback startup should complete within timeout");
         assert!(net.is_ok(), "network should start with fallback genesis");
     }
-
     #[test]
     fn ivm_fuel_config_defaults_to_unset() {
         assert!(matches!(IvmFuelConfig::default(), IvmFuelConfig::Unset));
     }
-
     #[test]
     fn default_builder_omits_retired_da_parameter() {
         let network = NetworkBuilder::new().build();
@@ -14437,7 +13279,6 @@ exit 0
             "mandatory DA must not be encoded as a mutable Sumeragi parameter"
         );
     }
-
     #[test]
     fn npos_genesis_snapshot_parser_rejects_invalid_payload() {
         let mut invalid = SumeragiNposParameters::default();
@@ -14445,12 +13286,10 @@ exit 0
         let genesis = vec![vec![InstructionBox::from(SetParameter::new(
             Parameter::Custom(invalid.into_custom_parameter()),
         ))]];
-
         let error = npos_params_from_genesis(&genesis, &[])
             .expect_err("an all-zero NPoS seed must be rejected");
         assert_eq!(error, "genesis contains invalid `sumeragi_npos_parameters`");
     }
-
     #[test]
     fn npos_genesis_snapshot_parser_rejects_duplicates_across_sections() {
         let instruction = InstructionBox::from(SetParameter::new(Parameter::Custom(
@@ -14458,7 +13297,6 @@ exit 0
         )));
         let genesis = vec![vec![instruction.clone()]];
         let post_topology = vec![vec![instruction]];
-
         let error = npos_params_from_genesis(&genesis, &post_topology)
             .expect_err("multiple NPoS snapshots must be rejected");
         assert_eq!(
@@ -14466,7 +13304,6 @@ exit 0
             "genesis must contain exactly one `sumeragi_npos_parameters` snapshot"
         );
     }
-
     #[test]
     #[should_panic(expected = "permissioned genesis must omit `sumeragi_npos_parameters`")]
     fn permissioned_builder_rejects_npos_snapshot() {
@@ -14477,7 +13314,6 @@ exit 0
             .with_genesis_instruction(SetParameter::new(parameter))
             .build();
     }
-
     #[test]
     fn npos_bootstrap_adds_validator_instructions() {
         init_instruction_registry();
@@ -14520,7 +13356,6 @@ exit 0
             "npos bootstrap should register and activate validators in genesis"
         );
     }
-
     #[test]
     fn default_npos_builder_bootstraps_validators() {
         init_instruction_registry();
@@ -14558,7 +13393,6 @@ exit 0
             "default NPoS builder should bootstrap validators in genesis"
         );
     }
-
     #[test]
     fn without_npos_genesis_bootstrap_skips_validator_instructions() {
         init_instruction_registry();
@@ -14597,7 +13431,6 @@ exit 0
             "disabling NPoS bootstrap should not inject validator registration"
         );
     }
-
     #[test]
     fn post_topology_instructions_are_included_in_genesis() {
         init_instruction_registry();
@@ -14633,7 +13466,6 @@ exit 0
             "post-topology instructions should be present in genesis"
         );
     }
-
     #[test]
     fn npos_bootstrap_clamps_to_min_self_bond() {
         init_instruction_registry();
@@ -14672,7 +13504,6 @@ exit 0
         }
         assert!(seen, "expected bootstrap validator registration in genesis");
     }
-
     #[test]
     fn npos_bootstrap_uses_post_topology_snapshot_min_self_bond() {
         init_instruction_registry();
@@ -14692,7 +13523,6 @@ exit 0
                 ])
                 .with_npos_consensus(),
         );
-
         let profile = network.consensus_bootstrap_profile();
         assert_eq!(
             profile.mode_tag, NPOS_TAG,
@@ -14705,7 +13535,6 @@ exit 0
             npos_profile.min_self_bond, expected,
             "signed profile must use the post-topology NPoS snapshot"
         );
-
         let expected_validator_count = network.peers().len();
         let genesis = network.genesis();
         let mut validator_count = 0;
@@ -14730,7 +13559,6 @@ exit 0
             "bootstrap must register every network peer as a validator"
         );
     }
-
     #[test]
     fn npos_bootstrap_overrides_stake_accounts_in_config() {
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
@@ -14739,12 +13567,10 @@ exit 0
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
             .build();
-
         let mut merged = Table::new();
         for layer in network.config_layers() {
             merge_tables(&mut merged, layer.as_ref());
         }
-
         let stake_escrow =
             get_nested_value(&merged, &["nexus", "staking", "stake_escrow_account_id"])
                 .and_then(Value::as_str)
@@ -14752,7 +13578,6 @@ exit 0
         let slash_sink = get_nested_value(&merged, &["nexus", "staking", "slash_sink_account_id"])
             .and_then(Value::as_str)
             .expect("slash_sink_account_id should be present");
-
         assert!(
             AccountId::parse_encoded(stake_escrow).is_ok(),
             "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
@@ -14762,7 +13587,6 @@ exit 0
             "slash_sink_account_id must parse as AccountId; got {slash_sink}"
         );
     }
-
     #[test]
     fn npos_bootstrap_seeds_default_fee_asset_for_runtime_signers() {
         init_instruction_registry();
@@ -14783,7 +13607,6 @@ exit 0
         let mut saw_definition = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
-
         for tx in genesis.0.transactions_vec() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
@@ -14812,7 +13635,6 @@ exit 0
                 }
             }
         }
-
         assert!(
             saw_definition,
             "npos bootstrap should register the default nexus fee asset definition"
@@ -14826,7 +13648,6 @@ exit 0
             "npos bootstrap should fund validators with the default nexus fee asset"
         );
     }
-
     #[test]
     fn default_builder_grants_soracloud_management_to_validator_runtime_signers() {
         init_instruction_registry();
@@ -14842,7 +13663,6 @@ exit 0
             .map(NetworkPeer::account_id)
             .collect::<BTreeSet<_>>();
         let mut granted = BTreeSet::new();
-
         for tx in genesis.0.transactions_vec() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instruction in instructions {
@@ -14863,22 +13683,18 @@ exit 0
                 }
             }
         }
-
         assert_eq!(
             granted, validator_ids,
             "default test-network genesis should grant CanManageSoracloud to validator runtime signers"
         );
     }
-
     #[test]
     fn default_builder_sets_parseable_nexus_account_literals() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
-
         let mut merged = Table::new();
         for layer in network.config_layers() {
             merge_tables(&mut merged, layer.as_ref());
         }
-
         let fee_sink = get_nested_value(&merged, &["nexus", "fees", "fee_sink_account_id"])
             .and_then(Value::as_str)
             .expect("fee_sink_account_id should be present");
@@ -14889,7 +13705,6 @@ exit 0
         let slash_sink = get_nested_value(&merged, &["nexus", "staking", "slash_sink_account_id"])
             .and_then(Value::as_str)
             .expect("slash_sink_account_id should be present");
-
         assert!(
             AccountId::parse_encoded(fee_sink).is_ok(),
             "fee_sink_account_id must parse as AccountId; got {fee_sink}"
@@ -14903,11 +13718,9 @@ exit 0
             "slash_sink_account_id must parse as AccountId; got {slash_sink}"
         );
     }
-
     #[test]
     fn default_builder_uses_localnet_block_cadence() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
-
         assert_eq!(network.block_cadence(), LOCALNET_BLOCK_CADENCE);
         assert_eq!(
             network
@@ -14919,7 +13732,6 @@ exit 0
             "the localnet cadence must be carried by signed consensus metadata"
         );
     }
-
     #[test]
     fn default_block_cadence_matches_protocol_default() {
         init_instruction_registry();
@@ -14928,7 +13740,6 @@ exit 0
         let expected = Duration::from_millis(expected_ms);
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_default_block_cadence());
-
         assert_eq!(network.block_cadence(), expected);
         assert_eq!(
             network
@@ -14947,7 +13758,6 @@ exit 0
             "handshake metadata must advertise the protocol cadence"
         );
     }
-
     #[test]
     fn explicit_block_cadence_sets_signed_metadata() {
         init_instruction_registry();
@@ -14956,7 +13766,6 @@ exit 0
             build_with_isolated_permit(NetworkBuilder::new().with_block_cadence(duration));
         let genesis = network.genesis();
         let profile = network.consensus_bootstrap_profile();
-
         assert_eq!(network.block_cadence(), duration);
         assert_eq!(profile.params.block_cadence_ms.get(), 3_000);
         assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
@@ -14969,42 +13778,35 @@ exit 0
             "signed handshake metadata must carry the explicit cadence"
         );
     }
-
     #[test]
     fn configured_block_cadence_reports_explicit_override() {
         let duration = Duration::from_secs(3);
         let builder = NetworkBuilder::new().with_block_cadence(duration);
         assert_eq!(builder.configured_block_cadence(), Some(duration));
-
         let default_builder = NetworkBuilder::new().with_default_block_cadence();
         assert_eq!(default_builder.configured_block_cadence(), None);
     }
-
     #[test]
     #[should_panic(expected = "block cadence must be at least 1 ms")]
     fn block_cadence_rejects_sub_millisecond_values() {
         let _ = NetworkBuilder::new().with_block_cadence(Duration::from_nanos(999_999));
     }
-
     #[test]
     #[should_panic(expected = "block cadence must not exceed")]
     fn block_cadence_rejects_values_that_do_not_fit_genesis() {
         let _ = NetworkBuilder::new().with_block_cadence(Duration::from_secs(u64::MAX));
     }
-
     #[test]
     fn block_sync_gossip_period_override_is_applied() {
         let period = Duration::from_millis(750);
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_block_sync_gossip_period(period));
-
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer present");
         let base_layer = layers
             .next()
             .expect("base config layer present")
             .into_owned();
-
         let network_section = base_layer
             .get("network")
             .and_then(|value| value.as_table())
@@ -15013,23 +13815,19 @@ exit 0
             .get("block_gossip_period_ms")
             .and_then(|value| value.as_integer())
             .expect("block gossip period as integer");
-
         let expected = i64::try_from(period.as_millis()).expect("fits in i64");
         assert_eq!(period_value, expected);
     }
-
     #[test]
     fn builder_sets_ivm_fuel() {
         let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Unset);
         assert!(matches!(builder.ivm_fuel, IvmFuelConfig::Unset));
     }
-
     #[test]
     fn peer_builder_mnemonic_has_no_whitespace() {
         let builder = NetworkPeerBuilder::new();
         assert!(builder.mnemonic.chars().all(|c| !c.is_whitespace()));
     }
-
     #[test]
     fn checked_key_pair_from_seed_uses_checked_derivation() {
         assert_eq!(
@@ -15041,7 +13839,6 @@ exit 0
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn peer_id_uses_bls() {
         let env = Environment::new();
@@ -15082,7 +13879,6 @@ exit 0
             "expected BLS key material to remain available"
         );
     }
-
     #[test]
     fn base_config_sets_streaming_identity_keys() {
         let env = Environment::new();
@@ -15112,7 +13908,6 @@ exit 0
             identity_private.starts_with("8026"),
             "private key should be hex-like multihash"
         );
-
         let transport_public = table
             .get("soranet_transport_public_key")
             .and_then(toml::Value::as_str)
@@ -15138,7 +13933,6 @@ exit 0
             .expect("base config SoraNet transport key pair must match");
         assert_eq!(&transport_pair, peer.soranet_transport_key_pair());
     }
-
     #[test]
     fn seeded_peer_derives_domain_separated_soranet_transport_identity() {
         let seed = b"deterministic-peer-identity".to_vec();
@@ -15152,7 +13946,6 @@ exit 0
         let second = NetworkPeerBuilder::new()
             .with_seed(Some(seed))
             .build(&second_env);
-
         assert_eq!(first.soranet_transport_key_pair(), &expected);
         assert_eq!(second.soranet_transport_key_pair(), &expected);
         assert_ne!(
@@ -15162,11 +13955,9 @@ exit 0
         );
         assert_eq!(P2P_SORANET_TRANSPORT_SEED_DOMAIN, b":p2p-soranet-transport");
     }
-
     #[test]
     fn uses_shared_instruction_registry() {
         init_instruction_registry();
-
         let instruction = RegisterBox::Domain(Register::domain(Domain::new(
             DomainId::try_new("test", "universal").unwrap(),
         )));
@@ -15175,7 +13966,6 @@ exit 0
         let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, instruction_box);
     }
-
     #[test]
     fn program_resolve_uses_env_override_without_build() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -15187,16 +13977,13 @@ exit 0
         let abs = repo.join(&rel);
         std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
         std::fs::write(&abs, b"dummy").unwrap();
-
         let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
         set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
-
         // Should resolve to the dummy file via env override
         let resolved = Program::Iroha
             .resolve_skip_build()
             .expect("resolve via env");
         assert_eq!(resolved, abs.canonicalize().unwrap());
-
         // Cleanup and restore environment
         if let Some(v) = old_env {
             set_env_var(super::PROGRAM_IROHA_ENV, v);
@@ -15206,7 +13993,6 @@ exit 0
         // Do not remove the dummy file to avoid races if other tests concurrently resolve;
         // it's under target/ and harmless.
     }
-
     #[tokio::test]
     async fn program_resolve_async_honors_env_override() {
         let _guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
@@ -15217,23 +14003,19 @@ exit 0
         let abs = repo.join(&rel);
         std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
         std::fs::write(&abs, b"dummy").unwrap();
-
         let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
         set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
-
         let resolved = Program::Iroha
             .resolve_async()
             .await
             .expect("resolve via env");
         assert_eq!(resolved, abs.canonicalize().unwrap());
-
         if let Some(v) = old_env {
             set_env_var(super::PROGRAM_IROHA_ENV, v);
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
     }
-
     #[test]
     fn cached_binary_if_present_returns_existing_path() {
         let cache = OnceLock::new();
@@ -15241,20 +14023,16 @@ exit 0
         cache
             .set(current_exe.clone())
             .expect("cache should be empty for test");
-
         assert_eq!(cached_binary_if_present(&cache), Some(current_exe));
     }
-
     #[test]
     fn cached_binary_if_present_ignores_missing_path() {
         let cache = OnceLock::new();
         let missing = repo_root().join("target/test-bin-dummy/missing-iroha3d");
         let _ = fs::remove_file(&missing);
         cache.set(missing).expect("cache should be empty for test");
-
         assert!(cached_binary_if_present(&cache).is_none());
     }
-
     #[test]
     fn program_spec_irohad_uses_default_features() {
         let spec = Program::Irohad.spec();
@@ -15269,7 +14047,6 @@ exit 0
         assert!(spec.isolated_target_subdir.is_none());
         assert_ne!(spec.env, PROGRAM_IROHAD_MESSAGE_CONTROL_ENV);
     }
-
     #[test]
     fn message_control_daemon_is_feature_and_target_isolated() {
         let spec = Program::IrohadMessageControl.spec();
@@ -15285,7 +14062,6 @@ exit 0
                 .any(|pair| { pair == ["--features", "test-network-message-control"] })
         );
     }
-
     #[test]
     fn program_spec_irohad_includes_features_from_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
@@ -15305,7 +14081,6 @@ exit 0
             remove_env_var(super::PROGRAM_IROHAD_FEATURES_ENV);
         }
     }
-
     fn build_with_isolated_permit(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let dir = tempdir().expect("permit dir");
@@ -15314,7 +14089,6 @@ exit 0
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         builder.build()
     }
-
     #[test]
     fn builder_stages_receiver_specific_initial_message_control_rules() {
         let network = build_with_isolated_permit(
@@ -15338,7 +14112,6 @@ exit 0
             .iter()
             .map(NetworkPeer::id)
             .collect::<Vec<_>>();
-
         for (receiver_index, peer) in network.peers().iter().enumerate() {
             let control = peer
                 .consensus_message_control()
@@ -15368,7 +14141,6 @@ exit 0
             );
         }
     }
-
     async fn build_with_isolated_permit_async(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard_async(&NETWORK_PERMIT_ENV_GUARD).await;
         let dir = tempdir().expect("permit dir");
@@ -15377,7 +14149,6 @@ exit 0
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         builder.build()
     }
-
     #[test]
     fn torii_url_uses_api_port() {
         let network = build_with_isolated_permit(NetworkBuilder::new());
@@ -15388,7 +14159,6 @@ exit 0
         let port: u16 = port_str.parse().expect("port is u16");
         assert_eq!(port, peer.api_address().port());
     }
-
     #[test]
     fn network_torii_urls_match_peers() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
@@ -15401,7 +14171,6 @@ exit 0
             assert_eq!(port, peer.api_address().port());
         }
     }
-
     #[test]
     fn network_peer_round_robins_deterministically() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
@@ -15418,10 +14187,8 @@ exit 0
             network.peer().api_address(),
             network.peer().api_address(),
         ];
-
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn network_client_uses_first_peer() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
@@ -15438,7 +14205,6 @@ exit 0
             Some(expected.port())
         );
     }
-
     #[test]
     fn http_start_gate_requires_http_source() {
         let mut gate = HttpStartGate::default();
@@ -15452,7 +14218,6 @@ exit 0
             "subsequent HTTP statuses should not retrigger"
         );
     }
-
     #[test]
     fn genesis_is_cached_and_deterministic() {
         // Repeated calls to `Network::genesis()` must return the exact same block
@@ -15460,24 +14225,19 @@ exit 0
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let g1 = network.genesis();
         let g2 = network.genesis();
-
         // Compare encoded bytes to be strict about byte-for-byte equality
         let b1 = g1.0.encode_versioned();
         let b2 = g2.0.encode_versioned();
         assert_eq!(b1, b2, "genesis must be identical across calls");
-
         let f1 = g1.0.encode_wire().expect("encode genesis wire");
         let f2 = g2.0.encode_wire().expect("encode genesis wire");
         assert_eq!(f1, f2, "framed genesis must be identical across calls");
     }
-
     #[test]
     fn genesis_roundtrip_decodes() {
         init_instruction_registry();
-
         let network = NetworkBuilder::new().build();
         let block = network.genesis();
-
         let versioned = block.0.encode_versioned();
         let framed = block.0.encode_wire().expect("encode versioned genesis");
         if let Ok(dump_path) = env::var("IROHA_TEST_DUMP_GENESIS") {
@@ -15491,7 +14251,6 @@ exit 0
             !framed.is_empty(),
             "versioned encoding includes at least a version byte"
         );
-
         let (_, payload) = framed
             .split_first()
             .expect("versioned payload has a prefix");
@@ -15499,7 +14258,6 @@ exit 0
             payload.starts_with(norito::core::MAGIC.as_slice()),
             "payload must start with Norito magic header"
         );
-
         let header_index = 1 + norito::core::Header::SIZE - 1;
         assert_eq!(
             framed[header_index],
@@ -15510,7 +14268,6 @@ exit 0
             deframe_versioned_signed_block_bytes(&framed).expect("deframe framed genesis");
         assert_eq!(deframed.bytes.as_ref(), framed.as_slice());
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
-
         let decoded =
             decode_versioned_signed_block(framed.as_slice()).expect("decode framed genesis");
         assert_eq!(
@@ -15529,16 +14286,13 @@ exit 0
             "canonical genesis wire must preserve the configured trust-anchor hash",
         );
     }
-
     #[test]
     fn with_genesis_block_uses_custom_builder() {
         init_instruction_registry();
-
         let seen_topology: Arc<Mutex<Option<UniqueVec<PeerId>>>> = Arc::new(Mutex::new(None));
         let seen_pops: Arc<Mutex<Option<Vec<GenesisTopologyEntry>>>> = Arc::new(Mutex::new(None));
         let callback_topology = Arc::clone(&seen_topology);
         let callback_pops = Arc::clone(&seen_pops);
-
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_genesis_block(
                 move |topology, pops| {
@@ -15550,7 +14304,6 @@ exit 0
                     genesis_factory(Vec::new(), topology, pops)
                 },
             ));
-
         let produced = network.genesis();
         let recorded = seen_topology
             .lock()
@@ -15563,7 +14316,6 @@ exit 0
             .clone()
             .expect("topology pops should be recorded");
         let expected = genesis_factory(Vec::new(), recorded, recorded_pops);
-
         let produced_instructions = collect_non_handshake_instructions(&produced);
         let expected_instructions = collect_non_handshake_instructions(&expected);
         assert!(
@@ -15573,14 +14325,12 @@ exit 0
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
         assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
     }
-
     #[test]
     #[should_panic(
         expected = "signed test-network genesis voting roster must exactly match the guarded validator topology"
     )]
     fn with_genesis_block_rejects_a_different_signed_voting_roster() {
         init_instruction_registry();
-
         let _ = build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_genesis_block(
             |mut topology, mut topology_entries| {
                 for index in 0..3 {
@@ -15598,11 +14348,9 @@ exit 0
             },
         ));
     }
-
     #[test]
     fn with_genesis_block_respects_npos_consensus_mode() {
         init_instruction_registry();
-
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -15617,13 +14365,11 @@ exit 0
                     )
                 }),
         );
-
         let profile = network.consensus_bootstrap_profile();
         assert_eq!(
             profile.mode_tag, NPOS_TAG,
             "custom genesis should preserve requested NPoS consensus mode",
         );
-
         let produced = network.genesis();
         assert_exactly_one_consensus_handshake(&produced, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&produced)
@@ -15634,11 +14380,9 @@ exit 0
             "custom genesis handshake metadata should advertise NPoS mode",
         );
     }
-
     #[test]
     fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {
         init_instruction_registry();
-
         const SEED: &str = "custom-genesis-active-validator-projection";
         let baseline = build_with_isolated_permit(
             NetworkBuilder::new()
@@ -15674,7 +14418,6 @@ exit 0
             .v2_context
             .nexus_amx_context_hash;
         drop(baseline);
-
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -15736,7 +14479,6 @@ exit 0
                     )
                 }),
         );
-
         let genesis = network.genesis();
         assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
         let metadata = consensus_handshake_metadata(&genesis)
@@ -15767,9 +14509,7 @@ exit 0
             "custom genesis must retain its active-validator bootstrap"
         );
     }
-
     include!("lib/kura_restart_storage_test.rs");
-
     #[test]
     fn restart_genesis_file_reuses_latest_run_genesis_when_available() -> Result<()> {
         let root = tempdir()?;
@@ -15777,18 +14517,13 @@ exit 0
             dir: root.path().to_path_buf(),
         };
         let peer = NetworkPeer::builder().build(&env);
-
         assert_eq!(peer.restart_genesis_file(false), None);
-
         let genesis_path = peer.dir.join("run-1-genesis.nrt");
         fs::write(&genesis_path, b"genesis")?;
-
         assert_eq!(peer.restart_genesis_file(false), Some(genesis_path));
         assert_eq!(peer.restart_genesis_file(true), None);
-
         Ok(())
     }
-
     #[test]
     fn restart_genesis_file_skips_failed_early_run_when_later_genesis_exists() -> Result<()> {
         let root = tempdir()?;
@@ -15800,12 +14535,9 @@ exit 0
         let later_genesis_path = peer.dir.join("run-3-genesis.nrt");
         fs::write(&first_genesis_path, b"stale genesis")?;
         fs::write(&later_genesis_path, b"latest genesis")?;
-
         assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
-
         Ok(())
     }
-
     fn parse_peer_run_config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
         let reader = ConfigReader::new()
             .with_env(MockEnv::default())
@@ -15816,7 +14548,6 @@ exit 0
         user.parse()
             .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
     }
-
     #[tokio::test]
     async fn peer_run_configs_reuse_exact_genesis_expected_hash_without_hashing_restart_artifact()
     -> Result<()> {
@@ -15828,7 +14559,6 @@ exit 0
             .config_layers()
             .map(Cow::into_owned)
             .collect::<Vec<_>>();
-
         let no_local_genesis_config = peer
             .write_run_config(layers.iter().map(Cow::Borrowed), None, None, 0)
             .await?;
@@ -15839,7 +14569,6 @@ exit 0
             expected_hash,
             "a first start without a local artifact must still receive the operator anchor"
         );
-
         let bootstrap_config = peer
             .write_run_config(layers.iter().map(Cow::Borrowed), Some(&genesis), None, 1)
             .await?;
@@ -15849,7 +14578,6 @@ exit 0
                 .expected_hash,
             expected_hash
         );
-
         let genesis_path = peer
             .restart_genesis_file(false)
             .expect("bootstrap must persist a restart genesis artifact");
@@ -15871,7 +14599,6 @@ exit 0
             expected_hash,
             "restart must reuse the independently provisioned anchor"
         );
-
         let restart_table: Table = toml::from_str(&fs::read_to_string(&restart_config)?)?;
         let configured_file = get_nested_value(&restart_table, &["genesis", "file"])
             .and_then(Value::as_str)
@@ -15885,7 +14612,6 @@ exit 0
         );
         Ok(())
     }
-
     #[test]
     fn kura_storage_dir_is_cleared_for_bootstrap_when_reset_for_bootstrap_is_true() -> Result<()> {
         let root = tempdir()?;
@@ -15896,9 +14622,7 @@ exit 0
         let storage_dir = peer.dir.join("storage");
         fs::create_dir_all(&storage_dir)?;
         fs::write(storage_dir.join("keep.marker"), b"remove")?;
-
         peer.prepare_kura_storage_dir(&storage_dir, true)?;
-
         assert!(
             !storage_dir.join("keep.marker").exists(),
             "bootstrap reset must clear stale files"

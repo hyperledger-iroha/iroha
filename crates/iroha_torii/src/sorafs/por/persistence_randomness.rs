@@ -1,5 +1,4 @@
 // PoR challenge persistence and pinned randomness-provider state.
-
 #[derive(Debug, Clone)]
 struct ChallengeRecord {
     challenge: PorChallengeV1,
@@ -9,7 +8,6 @@ struct ChallengeRecord {
     verdict: Option<RecordedVerdict>,
     repair_task_id: Option<[u8; 32]>,
 }
-
 impl ChallengeRecord {
     #[cfg(test)]
     fn from_challenge(challenge: PorChallengeV1) -> Self {
@@ -22,7 +20,6 @@ impl ChallengeRecord {
             repair_task_id: None,
         }
     }
-
     #[cfg(test)]
     fn ensure_consistency(
         &self,
@@ -47,7 +44,6 @@ impl ChallengeRecord {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn validate_verdict_transition(
         &self,
@@ -90,7 +86,6 @@ impl ChallengeRecord {
         }
         Ok(())
     }
-
     fn to_status(&self) -> PorChallengeStatusV1 {
         let mut status = PorChallengeStatusV1 {
             version: POR_CHALLENGE_STATUS_VERSION_V1,
@@ -113,7 +108,6 @@ impl ChallengeRecord {
             failure_reason: None,
             verifier_latency_ms: None,
         };
-
         if let Some(verdict) = &self.verdict {
             status.status = match verdict.outcome {
                 AuditOutcomeV1::Success => PorChallengeOutcome::Verified,
@@ -124,10 +118,8 @@ impl ChallengeRecord {
                 status.failure_reason.clone_from(&verdict.failure_reason);
             }
         }
-
         status
     }
-
     fn validate_persisted(&self) -> Result<(), String> {
         self.challenge
             .validate()
@@ -143,7 +135,6 @@ impl ChallengeRecord {
         {
             return Err("proof submission timestamp is outside the challenge window".to_owned());
         }
-
         let expected_responded_at = match &self.verdict {
             None => {
                 if self.repair_task_id.is_some() {
@@ -218,7 +209,6 @@ impl ChallengeRecord {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeRecordSnapshot {
     challenge: PorChallengeV1,
@@ -228,13 +218,11 @@ struct ChallengeRecordSnapshot {
     verdict: Option<RecordedVerdictSnapshot>,
     repair_task_id: Option<[u8; 32]>,
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ChallengeRecordSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<ChallengeRecordSnapshot>(bytes)
     }
 }
-
 impl From<&ChallengeRecord> for ChallengeRecordSnapshot {
     fn from(record: &ChallengeRecord) -> Self {
         Self {
@@ -247,7 +235,6 @@ impl From<&ChallengeRecord> for ChallengeRecordSnapshot {
         }
     }
 }
-
 impl ChallengeRecordSnapshot {
     fn into_record(self) -> Result<ChallengeRecord, PorPersistenceError> {
         let verdict = match self.verdict {
@@ -264,25 +251,21 @@ impl ChallengeRecordSnapshot {
         })
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ForcedProviderSnapshot {
     provider_id: [u8; 32],
     epochs: Vec<u64>,
 }
-
 impl ForcedProviderSnapshot {
     fn into_set(self) -> BTreeSet<u64> {
         self.epochs.into_iter().collect()
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ForcedProviderSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<ForcedProviderSnapshot>(bytes)
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PorCoordinatorSnapshot {
     version: u8,
@@ -291,15 +274,12 @@ struct PorCoordinatorSnapshot {
     forced: Vec<ForcedProviderSnapshot>,
     prepared_weekly_report: Option<PreparedWeeklyReportV1>,
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for PorCoordinatorSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<PorCoordinatorSnapshot>(bytes)
     }
 }
-
 const SECURE_TEMP_RETRIES: usize = 8;
-
 #[derive(Debug, Error)]
 enum SecureFileError {
     #[error("io error: {0}")]
@@ -311,19 +291,16 @@ enum SecureFileError {
     #[error("existing immutable artefact conflicts with canonical bytes")]
     Conflict,
 }
-
 #[derive(Debug)]
 enum SecureAtomicWriteError {
     BeforePublication(SecureFileError),
     CommitUncertain(SecureFileError),
 }
-
 impl From<SecureFileError> for SecureAtomicWriteError {
     fn from(error: SecureFileError) -> Self {
         Self::BeforePublication(error)
     }
 }
-
 impl SecureAtomicWriteError {
     fn into_inner(self) -> SecureFileError {
         match self {
@@ -331,7 +308,6 @@ impl SecureAtomicWriteError {
         }
     }
 }
-
 fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
     if path
         .components()
@@ -365,7 +341,6 @@ fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
     }
     Ok(absolute)
 }
-
 fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata), SecureFileError> {
     let absolute = absolute_secure_path(path)?;
     let parent = absolute
@@ -405,7 +380,6 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata),
     }
     Ok((absolute, parent, metadata))
 }
-
 fn validate_secure_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -427,7 +401,6 @@ fn validate_secure_file_metadata(
     }
     Ok(())
 }
-
 fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, SecureFileError> {
     let (absolute, parent, parent_metadata) = ensure_secure_parent(path)?;
     let filename = absolute.file_name().ok_or_else(|| {
@@ -436,7 +409,6 @@ fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, S
     let parent_file = open_secure_parent_directory(&parent, &parent_metadata)?;
     secure_read_bytes_in_parent(&parent_file, filename, &absolute, max_bytes)
 }
-
 fn open_secure_parent_directory(
     parent: &Path,
     expected: &fs::Metadata,
@@ -461,7 +433,6 @@ fn open_secure_parent_directory(
     }
     Ok(directory)
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn verify_secure_named_file(
     parent: &File,
@@ -485,7 +456,6 @@ fn verify_secure_named_file(
     }
     Ok(named)
 }
-
 #[cfg(any(not(unix), target_os = "espidf"))]
 fn verify_secure_named_file(
     _parent: &File,
@@ -504,7 +474,6 @@ fn verify_secure_named_file(
     }
     Ok(())
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn secure_read_bytes_in_parent(
     parent: &File,
@@ -570,7 +539,6 @@ fn secure_read_bytes_in_parent(
     }
     Ok(Some(bytes))
 }
-
 #[cfg(any(not(unix), target_os = "espidf"))]
 fn secure_read_bytes_in_parent(
     _parent: &File,
@@ -601,7 +569,6 @@ fn secure_read_bytes_in_parent(
     }
     Ok(Some(bytes))
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn create_secure_temporary_file(
     parent: &File,
@@ -637,7 +604,6 @@ fn create_secure_temporary_file(
         "failed to allocate a unique temporary file".to_owned(),
     ))
 }
-
 #[cfg(any(not(unix), target_os = "espidf"))]
 fn create_secure_temporary_file(
     _parent: &File,
@@ -660,7 +626,6 @@ fn create_secure_temporary_file(
         "failed to allocate a unique temporary file".to_owned(),
     ))
 }
-
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
 fn link_secure_file_noreplace(
     parent: &File,
@@ -688,7 +653,6 @@ fn link_secure_file_noreplace(
     }
     Ok(())
 }
-
 #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
 fn publish_secure_file_noreplace(
     parent: &File,
@@ -710,13 +674,11 @@ fn publish_secure_file_noreplace(
         Err(error) => Err(std::io::Error::from(error)),
     }
 }
-
 #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
 fn rename_noreplace_is_unavailable(error: rustix::io::Errno) -> bool {
     let code = error.raw_os_error();
     code == libc::ENOSYS || code == libc::EINVAL || code == libc::EOPNOTSUPP
 }
-
 #[cfg(target_os = "redox")]
 fn publish_secure_file_noreplace(
     parent: &File,
@@ -732,7 +694,6 @@ fn publish_secure_file_noreplace(
     )
     .map_err(std::io::Error::from)
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -750,7 +711,6 @@ fn publish_secure_file_noreplace(
 ) -> std::io::Result<()> {
     link_secure_file_noreplace(parent, source_name, destination_name)
 }
-
 #[cfg(any(not(unix), target_os = "espidf"))]
 fn publish_secure_file_noreplace(
     _parent: &File,
@@ -762,7 +722,6 @@ fn publish_secure_file_noreplace(
         "atomic descriptor-relative no-replace publication is unsupported on this platform",
     ))
 }
-
 #[cfg(unix)]
 fn publish_secure_file_replace(
     parent: &File,
@@ -774,7 +733,6 @@ fn publish_secure_file_replace(
     rustix::fs::renameat(parent, source_name, parent, destination_name)
         .map_err(std::io::Error::from)
 }
-
 #[cfg(not(unix))]
 fn publish_secure_file_replace(
     _parent: &File,
@@ -785,7 +743,6 @@ fn publish_secure_file_replace(
 ) -> std::io::Result<()> {
     fs::rename(source_path, destination_path)
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn unlink_secure_temporary_file(
     parent: &File,
@@ -795,7 +752,6 @@ fn unlink_secure_temporary_file(
     rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
         .map_err(std::io::Error::from)
 }
-
 #[cfg(any(not(unix), target_os = "espidf"))]
 fn unlink_secure_temporary_file(
     _parent: &File,
@@ -804,7 +760,6 @@ fn unlink_secure_temporary_file(
 ) -> std::io::Result<()> {
     fs::remove_file(source_path)
 }
-
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -812,7 +767,6 @@ fn unlink_secure_temporary_file(
     target_os = "redox"
 ))]
 const HAS_RENAME_NOREPLACE: bool = true;
-
 #[cfg(not(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -820,17 +774,13 @@ const HAS_RENAME_NOREPLACE: bool = true;
     target_os = "redox"
 )))]
 const HAS_RENAME_NOREPLACE: bool = false;
-
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
 const HAS_LINK_NOREPLACE: bool = true;
-
 #[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
 const HAS_LINK_NOREPLACE: bool = false;
-
 fn secure_noreplace_publication_is_supported() -> bool {
     HAS_RENAME_NOREPLACE || HAS_LINK_NOREPLACE
 }
-
 fn secure_atomic_write_with_outcome(
     path: &Path,
     bytes: &[u8],
@@ -932,7 +882,6 @@ fn secure_atomic_write_with_outcome(
         }
     })
 }
-
 fn secure_atomic_write(
     path: &Path,
     bytes: &[u8],
@@ -942,7 +891,6 @@ fn secure_atomic_write(
     secure_atomic_write_with_outcome(path, bytes, max_bytes, replace_existing)
         .map_err(SecureAtomicWriteError::into_inner)
 }
-
 /// Errors that may occur when reading or writing PoR persistence snapshots.
 #[derive(Debug, Error)]
 pub enum PorPersistenceError {
@@ -976,21 +924,18 @@ pub enum PorPersistenceError {
         value: u8,
     },
 }
-
 #[derive(Debug)]
 struct PorPersistence {
     path: PathBuf,
     #[cfg(test)]
     fail_after_publication_once: std::sync::atomic::AtomicBool,
 }
-
 struct LoadedPorCoordinatorState {
     records: Arc<DashMap<[u8; 32], ChallengeRecord>>,
     forced: Arc<RwLock<HashMap<[u8; 32], BTreeSet<u64>>>>,
     prepared_weekly_report: Arc<RwLock<Option<PreparedWeeklyReportV1>>>,
     status_generation: u64,
 }
-
 impl PorPersistence {
     fn new(path: PathBuf) -> Self {
         Self {
@@ -999,7 +944,6 @@ impl PorPersistence {
             fail_after_publication_once: std::sync::atomic::AtomicBool::new(false),
         }
     }
-
     /// Load persisted coordinator state from disk if present.
     ///
     /// # Errors
@@ -1009,7 +953,6 @@ impl PorPersistence {
         let records = Arc::new(DashMap::new());
         let forced = Arc::new(RwLock::new(HashMap::new()));
         let prepared_weekly_report = Arc::new(RwLock::new(None));
-
         let Some(bytes) = secure_read_bytes(&self.path, MAX_POR_COORDINATOR_SNAPSHOT_BYTES)
             .map_err(|error| PorPersistenceError::Secure(error.to_string()))?
         else {
@@ -1020,7 +963,6 @@ impl PorPersistence {
                 status_generation: 1,
             });
         };
-
         let snapshot = decode_from_bytes_with_limits::<PorCoordinatorSnapshot>(
             &bytes,
             por_coordinator_decode_limits(),
@@ -1043,7 +985,6 @@ impl PorPersistence {
             ));
         }
         let status_generation = snapshot.status_generation;
-
         if snapshot.records.len() > MAX_POR_COORDINATOR_RECORDS
             || snapshot.forced.len() > MAX_POR_COORDINATOR_FORCED_PROVIDERS
         {
@@ -1090,7 +1031,6 @@ impl PorPersistence {
                 ));
             }
         }
-
         let mut forced_guard = forced.write();
         let mut previous_provider_id = None;
         for provider in snapshot.forced {
@@ -1118,7 +1058,6 @@ impl PorPersistence {
             ));
         }
         drop(forced_guard);
-
         if let Some(prepared) = snapshot.prepared_weekly_report {
             prepared.report.validate().map_err(|error| {
                 PorPersistenceError::Decode(format!("prepared weekly report is invalid: {error}"))
@@ -1136,7 +1075,6 @@ impl PorPersistence {
             }
             *prepared_weekly_report.write() = Some(prepared);
         }
-
         Ok(LoadedPorCoordinatorState {
             records,
             forced,
@@ -1144,7 +1082,6 @@ impl PorPersistence {
             status_generation,
         })
     }
-
     /// Store the supplied coordinator snapshot to disk.
     ///
     /// # Errors
@@ -1170,7 +1107,6 @@ impl PorPersistence {
                 .collect(),
             prepared_weekly_report: prepared_weekly_report.cloned(),
         };
-
         let bytes = to_bytes(&snapshot).map_err(PorPersistenceError::Encode)?;
         match secure_atomic_write_with_outcome(
             &self.path,
@@ -1199,7 +1135,6 @@ impl PorPersistence {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 /// Errors produced by the verified drand randomness provider.
 #[derive(Debug, Error)]
@@ -1239,7 +1174,6 @@ pub enum RandomnessError {
     #[error("drand state persistence failure: {0}")]
     Persistence(String),
 }
-
 #[cfg(feature = "app_api")]
 /// Trait supplying randomness used to schedule PoR challenges.
 #[async_trait]
@@ -1257,14 +1191,12 @@ pub trait RandomnessProvider: Send + Sync {
         response_window_secs: u64,
     ) -> Result<PorRandomness, RandomnessError>;
 }
-
 #[cfg(feature = "app_api")]
 const DRAND_STATE_VERSION_V1: u8 = 1;
 #[cfg(feature = "app_api")]
 const MAX_DRAND_DNS_ADDRESSES: usize = 16;
 #[cfg(feature = "app_api")]
 const MIN_DRAND_RESPONSE_BYTES: usize = 128;
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct DrandHighWaterStateV1 {
@@ -1273,7 +1205,6 @@ struct DrandHighWaterStateV1 {
     randomness: [u8; 32],
     signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct VerifiedDrandBeacon {
@@ -1281,7 +1212,6 @@ struct VerifiedDrandBeacon {
     randomness: [u8; 32],
     signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct DrandEndpoint {
@@ -1291,14 +1221,12 @@ struct DrandEndpoint {
     pinned_addrs: Vec<SocketAddr>,
     client: reqwest::Client,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct SecureStateOwnerLock {
     path: PathBuf,
     file: File,
 }
-
 #[cfg(feature = "app_api")]
 impl SecureStateOwnerLock {
     fn acquire(state_path: &Path, label: &str) -> Result<Self, RandomnessError> {
@@ -1332,7 +1260,6 @@ impl SecureStateOwnerLock {
                 )));
             }
         };
-
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -1388,7 +1315,6 @@ impl SecureStateOwnerLock {
         owner.verify(label)?;
         Ok(owner)
     }
-
     fn verify(&self, label: &str) -> Result<(), RandomnessError> {
         let opened = self.file.metadata().map_err(|error| {
             RandomnessError::Persistence(format!("{label} state lock: {error}"))
@@ -1416,7 +1342,6 @@ impl SecureStateOwnerLock {
         Ok(())
     }
 }
-
 #[cfg(feature = "app_api")]
 /// HTTPS drand provider with pinned chain metadata, DNS, quorum, and durable replay state.
 #[derive(Debug)]
@@ -1435,7 +1360,6 @@ pub struct DrandHttpRandomnessProvider {
     state: Mutex<Option<DrandHighWaterStateV1>>,
     commit_lock: tokio::sync::Mutex<()>,
 }
-
 #[cfg(feature = "app_api")]
 impl DrandHttpRandomnessProvider {
     /// Construct a provider after validating trust roots, endpoints, DNS, and persisted state.
@@ -1446,7 +1370,6 @@ impl DrandHttpRandomnessProvider {
         use iroha_crypto::drand::{
             UNCHAINED_G1_RFC9380_SCHEME, is_valid_unchained_g1_rfc9380_public_key,
         };
-
         if config.scheme != UNCHAINED_G1_RFC9380_SCHEME {
             return Err(RandomnessError::Configuration(format!(
                 "scheme must be `{UNCHAINED_G1_RFC9380_SCHEME}`"
@@ -1502,7 +1425,6 @@ impl DrandHttpRandomnessProvider {
                 "drand freshness/skew bounds are inconsistent".to_owned(),
             ));
         }
-
         let chain_hex = hex::encode(config.chain_hash);
         let expected_path = format!("/v2/chains/{chain_hex}");
         let mut seen_hosts = BTreeSet::new();
@@ -1538,7 +1460,6 @@ impl DrandHttpRandomnessProvider {
                 client,
             });
         }
-
         let state_owner_lock = SecureStateOwnerLock::acquire(&config.state_path, "drand")?;
         let loaded = load_drand_state(&config.state_path, &config.public_key)?;
         Ok(Self {
@@ -1557,7 +1478,6 @@ impl DrandHttpRandomnessProvider {
             commit_lock: tokio::sync::Mutex::new(()),
         })
     }
-
     fn expected_round(&self, epoch_id: u64, now_secs: u64) -> Result<u64, RandomnessError> {
         let target = epoch_id
             .checked_mul(self.epoch_interval_secs)
@@ -1600,7 +1520,6 @@ impl DrandHttpRandomnessProvider {
         }
         Ok(round)
     }
-
     async fn fetch_endpoint(
         &self,
         endpoint: &DrandEndpoint,
@@ -1647,7 +1566,6 @@ impl DrandHttpRandomnessProvider {
         }
         parse_and_verify_drand_response(&body, round, &self.public_key)
     }
-
     async fn commit_high_water(&self, beacon: &VerifiedDrandBeacon) -> Result<(), RandomnessError> {
         let _commit = self.commit_lock.lock().await;
         self.state_owner_lock.verify("drand")?;
@@ -1688,7 +1606,6 @@ impl DrandHttpRandomnessProvider {
         Ok(())
     }
 }
-
 #[cfg(feature = "app_api")]
 #[async_trait]
 impl RandomnessProvider for DrandHttpRandomnessProvider {
@@ -1717,7 +1634,6 @@ impl RandomnessProvider for DrandHttpRandomnessProvider {
         })
     }
 }
-
 #[cfg(feature = "app_api")]
 fn select_drand_quorum(
     beacons: impl IntoIterator<Item = VerifiedDrandBeacon>,
@@ -1736,7 +1652,6 @@ fn select_drand_quorum(
             required: quorum,
         })
 }
-
 #[cfg(feature = "app_api")]
 fn validate_drand_endpoint(
     raw_endpoint: &str,
@@ -1776,7 +1691,6 @@ fn validate_drand_endpoint(
     }
     Ok(host.to_owned())
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_public_endpoint(host: &str, port: u16) -> Result<Vec<SocketAddr>, RandomnessError> {
     let mut addresses = (host, port)
@@ -1797,7 +1711,6 @@ fn resolve_public_endpoint(host: &str, port: u16) -> Result<Vec<SocketAddr>, Ran
     }
     Ok(addresses)
 }
-
 #[cfg(feature = "app_api")]
 async fn revalidate_pinned_dns(endpoint: &DrandEndpoint) -> Result<(), RandomnessError> {
     let mut current = tokio::net::lookup_host((endpoint.host.as_str(), endpoint.port))
@@ -1818,7 +1731,6 @@ async fn revalidate_pinned_dns(endpoint: &DrandEndpoint) -> Result<(), Randomnes
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
@@ -1826,7 +1738,6 @@ fn is_public_ip(ip: IpAddr) -> bool {
         IpAddr::V6(ip) => is_public_ipv6(ip),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
@@ -1844,7 +1755,6 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
         || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
         || (octets[0] == 198 && (18..=19).contains(&octets[1])))
 }
-
 #[cfg(feature = "app_api")]
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     let segments = ip.segments();
@@ -1865,7 +1775,6 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         || orchid
         || transition)
 }
-
 #[cfg(feature = "app_api")]
 fn parse_and_verify_drand_response(
     body: &[u8],
@@ -1923,7 +1832,6 @@ fn parse_and_verify_drand_response(
         signature,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn load_drand_state(
     path: &Path,
@@ -1950,7 +1858,6 @@ fn load_drand_state(
     .map_err(|error| RandomnessError::Persistence(error.to_string()))?;
     Ok(Some(state))
 }
-
 #[cfg(feature = "app_api")]
 fn read_secure_state(
     path: &Path,
@@ -1960,7 +1867,6 @@ fn read_secure_state(
     secure_read_bytes(path, max_bytes)
         .map_err(|error| RandomnessError::Persistence(format!("{label} state: {error}")))
 }
-
 #[cfg(feature = "app_api")]
 fn store_secure_state<T: norito::core::NoritoSerialize>(
     path: &Path,

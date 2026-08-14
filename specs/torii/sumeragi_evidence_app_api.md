@@ -178,7 +178,7 @@ comments until they catch up.
   - `crates/iroha_torii/tests/sse_proof_verified_fields.rs`
   - `crates/iroha_torii/tests/sse_proof_rejected_fields.rs`
   - `integration_tests/tests/events/sse_smoke.rs`
-- CLI helpers mirror the API (`iroha ops sumeragi evidence list|count`), and
+- CLI helpers mirror the API (`iroha --operator-private-key-file /absolute/runtime/operator.key ops sumeragi evidence list|count`), and
   SDKs consume the same DTOs (`javascript/iroha_js`, `IrohaSwift`, Python).
 
 With the schema captured here the roadmap item moves to `status.md`, and SDK

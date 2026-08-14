@@ -1,7 +1,5 @@
 #![cfg(feature = "json")]
-
 use norito::json::native::Value;
-
 #[test]
 fn value_kind_detectors_work() {
     let null = Value::Null;
@@ -17,7 +15,6 @@ fn value_kind_detectors_work() {
     let object = norito::json!({ "k": 1 });
     assert!(object.is_object());
 }
-
 #[test]
 fn value_get_helpers() {
     let value = norito::json!({ "numbers": [10, 20, 30], "flag": true });
@@ -40,7 +37,6 @@ fn value_get_helpers() {
         Some(20)
     );
 }
-
 #[test]
 fn value_get_mut_helpers() {
     let mut value = norito::json!({ "numbers": [1, 2, 3] });
@@ -49,7 +45,6 @@ fn value_get_mut_helpers() {
     }
     assert_eq!(value.pointer("/numbers/0").and_then(Value::as_u64), Some(9));
 }
-
 #[test]
 fn value_pointer_navigation() {
     let value = norito::json!({
@@ -69,14 +64,12 @@ fn value_pointer_navigation() {
         Some(2)
     );
     assert!(value.pointer("/users/idx").is_none());
-
     let escaped = norito::json!({ "a/b": { "til~de": 1u64 } });
     assert_eq!(
         escaped.pointer("/a~1b/til~0de").and_then(Value::as_u64),
         Some(1)
     );
 }
-
 #[test]
 fn value_pointer_mut_allows_updates() {
     let mut value = norito::json!({ "scores": [3, 5, 7] });
@@ -85,7 +78,6 @@ fn value_pointer_mut_allows_updates() {
     }
     assert_eq!(value.pointer("/scores/2").and_then(Value::as_u64), Some(11));
 }
-
 #[test]
 fn value_take_resets_to_null() {
     let mut value = norito::json!({ "v": 123 });
@@ -94,7 +86,6 @@ fn value_take_resets_to_null() {
     assert_eq!(taken.as_u64(), Some(123));
     assert!(slot.is_null());
 }
-
 #[test]
 fn value_roundtrips_via_json_traits() {
     let value = norito::json!({
@@ -106,7 +97,6 @@ fn value_roundtrips_via_json_traits() {
     let decoded = norito::json::from_json::<Value>(&rendered).expect("deserialize value");
     assert_eq!(decoded, value);
 }
-
 #[test]
 fn map_roundtrips_via_json_traits() {
     let mut map = norito::json::Map::new();
@@ -116,7 +106,6 @@ fn map_roundtrips_via_json_traits() {
     let decoded = norito::json::from_json::<norito::json::Map>(&rendered).expect("deserialize map");
     assert_eq!(decoded, map);
 }
-
 #[test]
 fn value_as_f64_covering_integer_inputs() {
     let int = Value::from(-4i64);

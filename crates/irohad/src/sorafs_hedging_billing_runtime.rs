@@ -7,7 +7,6 @@
 //! bounded freshness policy as daemon readiness; acknowledgement commits
 //! recheck that exact head immediately before durable mutation. The runtime
 //! deliberately has no automatic hedge-execution adapter or execution timer.
-
 use std::{
     fmt,
     sync::{
@@ -16,7 +15,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsHedgingBillingRuntime, is_production_runtime_handle};
 use iroha_data_model::NetworkId;
@@ -37,10 +35,8 @@ use sorafs_node::hedging_billing_service::{
     HedgingBillingServiceError, HedgingBillingServicePolicyV1,
     QualifiedHedgingBillingRuntimeProviderV1,
 };
-
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
-
 /// Runtime-only dependencies for the committed hedging/billing worker.
 #[derive(Clone)]
 pub(crate) struct HedgingBillingRuntimeDependenciesV1 {
@@ -51,7 +47,6 @@ pub(crate) struct HedgingBillingRuntimeDependenciesV1 {
     pub(crate) acknowledgement_authority: Arc<dyn BillingStatementAcknowledgementAuthority>,
     pub(crate) epoch_witness_store: Arc<dyn HedgingBillingEpochWitnessStore>,
 }
-
 impl fmt::Debug for HedgingBillingRuntimeDependenciesV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -60,7 +55,6 @@ impl fmt::Debug for HedgingBillingRuntimeDependenciesV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl HedgingBillingRuntimeDependenciesV1 {
     /// Require every runtime-only production adapter before daemon assembly.
     pub(crate) fn require(
@@ -87,7 +81,6 @@ impl HedgingBillingRuntimeDependenciesV1 {
         })
     }
 }
-
 #[derive(Debug, Default)]
 struct HedgingBillingDaemonCounters {
     successful_ticks: AtomicU64,
@@ -101,7 +94,6 @@ struct HedgingBillingDaemonCounters {
     publications_reconciled: AtomicU64,
     acknowledgements_reconciled: AtomicU64,
 }
-
 #[derive(Debug, Default)]
 struct TickOutcome {
     finalized_pages_applied: u64,
@@ -112,14 +104,12 @@ struct TickOutcome {
     publications_reconciled: u64,
     acknowledgements_reconciled: u64,
 }
-
 struct HedgingBillingRuntimeInnerV1 {
     config: SorafsHedgingBillingRuntime,
     policy: HedgingBillingServicePolicyV1,
     service: Arc<HedgingBillingService>,
     dependencies: HedgingBillingRuntimeDependenciesV1,
 }
-
 impl fmt::Debug for HedgingBillingRuntimeInnerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -130,7 +120,6 @@ impl fmt::Debug for HedgingBillingRuntimeInnerV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Cloneable status/metrics handle retained by `irohad`.
 #[derive(Clone)]
 pub struct HedgingBillingRuntimeHandleV1 {
@@ -143,7 +132,6 @@ pub struct HedgingBillingRuntimeHandleV1 {
     tick_lock: Arc<Mutex<()>>,
     delivery_scan_sequence: Arc<AtomicU64>,
 }
-
 impl fmt::Debug for HedgingBillingRuntimeHandleV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -153,7 +141,6 @@ impl fmt::Debug for HedgingBillingRuntimeHandleV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl HedgingBillingRuntimeHandleV1 {
     fn last_successful_tick_is_fresh(&self) -> bool {
         let freshness_guard = match self.last_successful_tick.lock() {
@@ -170,7 +157,6 @@ impl HedgingBillingRuntimeHandleV1 {
                     .unwrap_or(Duration::MAX)
         })
     }
-
     /// Return payload-free health and readiness without performing work.
     ///
     /// # Errors
@@ -225,7 +211,6 @@ impl HedgingBillingRuntimeHandleV1 {
             ready,
         })
     }
-
     /// Return payload-free bounded worker counters.
     #[must_use]
     pub fn metrics(&self) -> HedgingBillingDaemonMetricsV1 {
@@ -254,7 +239,6 @@ impl HedgingBillingRuntimeHandleV1 {
                 .load(Ordering::Relaxed),
         }
     }
-
     fn mark_tick_failed(&self, error: eyre::Report) -> eyre::Report {
         self.external_dependencies_healthy
             .store(false, Ordering::Release);
@@ -262,7 +246,6 @@ impl HedgingBillingRuntimeHandleV1 {
         self.counters.failed_ticks.fetch_add(1, Ordering::Relaxed);
         error
     }
-
     fn probe_finalized_head_for_api(
         &self,
     ) -> std::result::Result<HedgingBillingFinalizedCursorV1, HedgingBillingRuntimeApiErrorV1> {
@@ -272,7 +255,6 @@ impl HedgingBillingRuntimeHandleV1 {
             HedgingBillingRuntimeApiErrorV1::Unavailable
         })
     }
-
     fn require_fresh_projection(
         &self,
     ) -> std::result::Result<
@@ -318,7 +300,6 @@ impl HedgingBillingRuntimeHandleV1 {
         }
         Ok((tick_guard, finalized_head))
     }
-
     fn recheck_fresh_projection_head(
         &self,
         expected_head: HedgingBillingFinalizedCursorV1,
@@ -335,7 +316,6 @@ impl HedgingBillingRuntimeHandleV1 {
         }
         Ok(())
     }
-
     fn with_fresh_projection<T>(
         &self,
         operation: impl FnOnce(
@@ -354,7 +334,6 @@ impl HedgingBillingRuntimeHandleV1 {
         self.recheck_fresh_projection_head(finalized_head)?;
         Ok(response)
     }
-
     fn verify_projection_at_or_before_head(
         &self,
         finalized_head: HedgingBillingFinalizedCursorV1,
@@ -370,7 +349,6 @@ impl HedgingBillingRuntimeHandleV1 {
         }
         Ok(())
     }
-
     fn record_successful_tick(&self, outcome: &TickOutcome) {
         self.last_tick_healthy.store(true, Ordering::Release);
         let mut freshness_guard = match self.last_successful_tick.lock() {
@@ -403,7 +381,6 @@ impl HedgingBillingRuntimeHandleV1 {
             .acknowledgements_reconciled
             .fetch_add(outcome.acknowledgements_reconciled, Ordering::Relaxed);
     }
-
     fn reconcile_once(&self) -> Result<()> {
         let _tick_guard = match self.tick_lock.lock() {
             Ok(guard) => guard,
@@ -461,7 +438,6 @@ impl HedgingBillingRuntimeHandleV1 {
         Ok(())
     }
 }
-
 impl HedgingBillingRuntimeApiV1 for HedgingBillingRuntimeHandleV1 {
     fn projection_anchor(
         &self,
@@ -469,21 +445,18 @@ impl HedgingBillingRuntimeApiV1 for HedgingBillingRuntimeHandleV1 {
     {
         self.with_fresh_projection(|service, _| service.api_projection_anchor())
     }
-
     fn list_statements(
         &self,
         request: &BillingStatementListRequestV1,
     ) -> std::result::Result<BillingStatementPageV1, HedgingBillingRuntimeApiErrorV1> {
         self.with_fresh_projection(|service, _| service.api_list_statements(request))
     }
-
     fn published_statement(
         &self,
         request: &BillingPublishedStatementRequestV1,
     ) -> std::result::Result<BillingPublishedStatementV1, HedgingBillingRuntimeApiErrorV1> {
         self.with_fresh_projection(|service, _| service.api_published_statement(request))
     }
-
     fn acknowledge_statement(
         &self,
         request: &BillingStatementAcknowledgementRequestV1,
@@ -500,32 +473,27 @@ impl HedgingBillingRuntimeApiV1 for HedgingBillingRuntimeHandleV1 {
             )
         })
     }
-
     fn exposure_page(
         &self,
         request: &HedgingBillingProjectionPageRequestV1,
     ) -> std::result::Result<HedgingBillingExposurePageV1, HedgingBillingRuntimeApiErrorV1> {
         self.with_fresh_projection(|service, _| service.api_exposure_page(request))
     }
-
     fn hedge_intent_page(
         &self,
         request: &HedgingBillingProjectionPageRequestV1,
     ) -> std::result::Result<HedgeIntentPageV1, HedgingBillingRuntimeApiErrorV1> {
         self.with_fresh_projection(|service, _| service.api_hedge_intent_page(request))
     }
-
     fn daemon_status(
         &self,
     ) -> std::result::Result<HedgingBillingDaemonStatusV1, HedgingBillingRuntimeApiErrorV1> {
         HedgingBillingRuntimeHandleV1::status(self)
             .map_err(|_| HedgingBillingRuntimeApiErrorV1::Unavailable)
     }
-
     fn daemon_metrics(&self) -> HedgingBillingDaemonMetricsV1 {
         HedgingBillingRuntimeHandleV1::metrics(self)
     }
-
     fn reconciliation_status(
         &self,
     ) -> std::result::Result<HedgingBillingReconciliationStatusV1, HedgingBillingRuntimeApiErrorV1>
@@ -550,7 +518,6 @@ impl HedgingBillingRuntimeApiV1 for HedgingBillingRuntimeHandleV1 {
         })
     }
 }
-
 /// Assemble and start the committed hedging/billing runtime.
 ///
 /// Missing, test-marked, unready, identity-substituted, or period-close
@@ -566,7 +533,6 @@ pub(crate) fn start(
     let poll_interval = config.poll_interval;
     let handle = assemble(config, network_id, policy, feed_policy, dependencies)?;
     record_status_metrics(&handle);
-
     let worker = handle.clone();
     let task = tokio::task::spawn(async move {
         let mut interval = tokio::time::interval(poll_interval);
@@ -617,7 +583,6 @@ pub(crate) fn start(
     });
     Ok((handle, Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT))))
 }
-
 fn assemble(
     config: SorafsHedgingBillingRuntime,
     network_id: &NetworkId,
@@ -651,7 +616,6 @@ fn assemble(
     }
     let dependencies = qualify_dependencies(&config, dependencies)?;
     let startup_finalized_head = probe_dependencies(&config, &policy, &dependencies)?;
-
     let service = Arc::new(
         HedgingBillingService::new(
             &config.state_dir,
@@ -686,7 +650,6 @@ fn assemble(
         delivery_scan_sequence: Arc::new(AtomicU64::new(0)),
     })
 }
-
 fn qualify_dependencies(
     config: &SorafsHedgingBillingRuntime,
     dependencies: HedgingBillingRuntimeDependenciesV1,
@@ -774,14 +737,12 @@ fn qualify_dependencies(
         epoch_witness_store,
     })
 }
-
 fn probe_dependencies(
     config: &SorafsHedgingBillingRuntime,
     policy: &HedgingBillingServicePolicyV1,
     dependencies: &HedgingBillingRuntimeDependenciesV1,
 ) -> Result<HedgingBillingFinalizedCursorV1> {
     let finalized_head = probe_finalized_query(config, dependencies)?;
-
     let verifier_identity = dependencies
         .journal_verifier
         .identity()
@@ -795,7 +756,6 @@ fn probe_dependencies(
         .journal_verifier
         .check_readiness()
         .wrap_err("consensus billing journal verifier is not ready")?;
-
     let signer_identity = dependencies
         .statement_signer
         .identity()
@@ -814,7 +774,6 @@ fn probe_dependencies(
         .statement_signer
         .check_readiness()
         .wrap_err("billing statement signer is not ready")?;
-
     let publisher_identity = dependencies
         .statement_publisher
         .identity()
@@ -834,7 +793,6 @@ fn probe_dependencies(
         .statement_publisher
         .check_readiness()
         .wrap_err("billing statement publisher is not ready")?;
-
     let acknowledgement_identity = dependencies
         .acknowledgement_authority
         .identity()
@@ -848,7 +806,6 @@ fn probe_dependencies(
         .acknowledgement_authority
         .check_readiness()
         .wrap_err("billing acknowledgement authority is not ready")?;
-
     validate_dependency_handle(
         "sealed billing epoch witness store",
         &config.epoch_witness_store_handle,
@@ -860,7 +817,6 @@ fn probe_dependencies(
         .wrap_err("sealed billing epoch witness store is not ready")?;
     Ok(finalized_head)
 }
-
 fn probe_finalized_query(
     config: &SorafsHedgingBillingRuntime,
     dependencies: &HedgingBillingRuntimeDependenciesV1,
@@ -888,14 +844,12 @@ fn probe_finalized_query(
     validate_finalized_head(finalized_head)?;
     Ok(finalized_head)
 }
-
 fn validate_finalized_head(cursor: HedgingBillingFinalizedCursorV1) -> Result<()> {
     if cursor.height == 0 || cursor.block_hash == [0; 32] || cursor.finalized_at_unix == 0 {
         bail!("finalized billing query returned an invalid authenticated head");
     }
     Ok(())
 }
-
 fn finalized_head_extends(
     previous: HedgingBillingFinalizedCursorV1,
     next: HedgingBillingFinalizedCursorV1,
@@ -903,7 +857,6 @@ fn finalized_head_extends(
     next.finalized_at_unix >= previous.finalized_at_unix
         && (next.height > previous.height || next == previous)
 }
-
 fn projection_at_or_before_head(
     projected: Option<HedgingBillingFinalizedCursorV1>,
     head: HedgingBillingFinalizedCursorV1,
@@ -913,7 +866,6 @@ fn projection_at_or_before_head(
             && (cursor.height < head.height || cursor == head)
     })
 }
-
 fn projection_is_fresh_at_head(
     anchor: &HedgingBillingProjectionAnchorV1,
     service_finalized_height: u64,
@@ -927,7 +879,6 @@ fn projection_is_fresh_at_head(
             && finalized_head.height.saturating_sub(cursor.height) <= max_finalized_lag_blocks
     })
 }
-
 fn reconcile_once(
     inner: &HedgingBillingRuntimeInnerV1,
     delivery_scan_sequence: u64,
@@ -946,7 +897,6 @@ fn reconcile_once(
         finalized_events_applied: scan.events_applied,
         ..TickOutcome::default()
     };
-
     let mut next_period_end_unix = inner
         .service
         .status()
@@ -980,7 +930,6 @@ fn reconcile_once(
             .checked_add(inner.policy.billing_period_secs)
             .ok_or_else(|| eyre::eyre!("next finalized billing period boundary overflow"))?;
     }
-
     // The service filters and copies at most the governed per-tick bound while
     // holding its state lock. It never clones the retained statement inventory.
     // Newly advanced records move to their next stage on the following tick.
@@ -1037,7 +986,6 @@ fn reconcile_once(
     }
     Ok(outcome)
 }
-
 fn validate_actual_config(config: &SorafsHedgingBillingRuntime) -> Result<()> {
     if !absolute_leaf(&config.state_dir)
         || !absolute_leaf(&config.service_policy_path)
@@ -1099,7 +1047,6 @@ fn validate_actual_config(config: &SorafsHedgingBillingRuntime) -> Result<()> {
     }
     Ok(())
 }
-
 fn absolute_leaf(path: &std::path::Path) -> bool {
     path.is_absolute()
         && path.file_name().is_some()
@@ -1110,14 +1057,12 @@ fn absolute_leaf(path: &std::path::Path) -> bool {
             )
         })
 }
-
 fn validate_dependency_handle(label: &str, expected: &str, actual: &str) -> Result<()> {
     if !is_production_runtime_handle(actual) || actual != expected {
         bail!("{label} identity does not match committed hedging/billing configuration");
     }
     Ok(())
 }
-
 #[cfg(feature = "telemetry")]
 fn record_status_metrics(handle: &HedgingBillingRuntimeHandleV1) {
     let Some(metrics) = iroha_telemetry::metrics::global() else {
@@ -1178,20 +1123,16 @@ fn record_status_metrics(handle: &HedgingBillingRuntimeHandleV1) {
         ),
     }
 }
-
 #[cfg(not(feature = "telemetry"))]
 fn record_status_metrics(_handle: &HedgingBillingRuntimeHandleV1) {}
-
 #[cfg(feature = "telemetry")]
 fn record_tick_metric(result: &str) {
     if let Some(metrics) = iroha_telemetry::metrics::global() {
         metrics.inc_sorafs_hedging_billing_runtime_tick(result);
     }
 }
-
 #[cfg(not(feature = "telemetry"))]
 fn record_tick_metric(_result: &str) {}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1201,7 +1142,6 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         },
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{account::AccountId, block::BlockHeader};
     use sorafs_manifest::{
@@ -1227,9 +1167,7 @@ mod tests {
         HedgingBillingTransitionAuthorityV1, SignedGovernedBillingStatementV1,
     };
     use tempfile::TempDir;
-
     use super::*;
-
     const DISPLAY_CHAIN_NAME: &str = "sorafs-reference-production";
     const GENESIS_SEED: &[u8] = b"sorafs-reference-production-genesis";
     const QUERY_HANDLE: &str = "ledger.billing.finalized.primary";
@@ -1250,17 +1188,14 @@ mod tests {
         HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA5; 32]);
     const WITNESS_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
         HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA6; 32]);
-
     fn network_id(genesis: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             genesis,
         )))
     }
-
     fn configured_network_id() -> NetworkId {
         network_id(GENESIS_SEED)
     }
-
     #[derive(Debug)]
     struct EmptyFinalizedQuery {
         handle: String,
@@ -1268,12 +1203,10 @@ mod tests {
         supplies_period_closes: bool,
         head: Arc<Mutex<HedgingBillingFinalizedCursorV1>>,
     }
-
     impl HedgingBillingRuntimeProviderV1 for EmptyFinalizedQuery {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1283,7 +1216,6 @@ mod tests {
             Ok(QUERY_QUALIFICATION)
         }
     }
-
     impl HedgingBillingFinalizedQuery for EmptyFinalizedQuery {
         fn identity(
             &self,
@@ -1292,7 +1224,6 @@ mod tests {
                 handle: self.handle.clone(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             if self.ready.load(Ordering::Acquire) {
                 Ok(())
@@ -1300,11 +1231,9 @@ mod tests {
                 Err(HedgingBillingExternalError::Unavailable)
             }
         }
-
         fn supplies_period_closes(&self) -> bool {
             self.supplies_period_closes
         }
-
         fn finalized_head(
             &self,
         ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError> {
@@ -1313,7 +1242,6 @@ mod tests {
                 .lock()
                 .map_err(|_| HedgingBillingExternalError::Unavailable)?)
         }
-
         fn query_finalized_page(
             &self,
             _position: HedgingBillingQueryPositionV1,
@@ -1322,7 +1250,6 @@ mod tests {
         {
             Ok(None)
         }
-
         fn query_finalized_period_close(
             &self,
             _period_end_unix: u64,
@@ -1332,17 +1259,14 @@ mod tests {
             Ok(None)
         }
     }
-
     #[derive(Debug)]
     struct ReadyJournalVerifier {
         handle: String,
     }
-
     impl HedgingBillingRuntimeProviderV1 for ReadyJournalVerifier {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1352,7 +1276,6 @@ mod tests {
             Ok(VERIFIER_QUALIFICATION)
         }
     }
-
     impl HedgingBillingJournalVerifier for ReadyJournalVerifier {
         fn identity(
             &self,
@@ -1361,11 +1284,9 @@ mod tests {
                 handle: self.handle.clone(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify_page(
             &self,
             _network_id: &NetworkId,
@@ -1374,7 +1295,6 @@ mod tests {
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify_period_close(
             &self,
             _network_id: &NetworkId,
@@ -1382,7 +1302,6 @@ mod tests {
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify_epoch_transition(
             &self,
             _network_id: &NetworkId,
@@ -1391,17 +1310,14 @@ mod tests {
             Ok(())
         }
     }
-
     #[derive(Debug)]
     struct PendingStatementSigner {
         identity: BillingStatementSignerIdentityV1,
     }
-
     impl HedgingBillingRuntimeProviderV1 for PendingStatementSigner {
         fn handle(&self) -> &str {
             &self.identity.provider_handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1411,33 +1327,27 @@ mod tests {
             Ok(SIGNER_QUALIFICATION)
         }
     }
-
     impl BillingStatementRuntimeSigner for PendingStatementSigner {
         fn identity(
             &self,
         ) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError> {
             Ok(self.identity.clone())
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn sign_digest(&self, _digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError> {
             Err(HedgingBillingExternalError::Unavailable)
         }
     }
-
     #[derive(Debug)]
     struct EmptyStatementPublisher {
         identity: BillingStatementPublisherIdentityV1,
     }
-
     impl HedgingBillingRuntimeProviderV1 for EmptyStatementPublisher {
         fn handle(&self) -> &str {
             &self.identity.provider_handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1447,18 +1357,15 @@ mod tests {
             Ok(PUBLISHER_QUALIFICATION)
         }
     }
-
     impl BillingStatementPublisher for EmptyStatementPublisher {
         fn identity(
             &self,
         ) -> Result<BillingStatementPublisherIdentityV1, HedgingBillingExternalError> {
             Ok(self.identity.clone())
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn publish(
             &self,
             _idempotency_key: [u8; 32],
@@ -1467,7 +1374,6 @@ mod tests {
         ) -> Result<BillingStatementPublicationReceiptV1, HedgingBillingExternalError> {
             Err(HedgingBillingExternalError::Unavailable)
         }
-
         fn lookup(
             &self,
             _statement_id: [u8; 32],
@@ -1476,17 +1382,14 @@ mod tests {
             Ok(None)
         }
     }
-
     #[derive(Debug)]
     struct EmptyAcknowledgementAuthority {
         handle: String,
     }
-
     impl HedgingBillingRuntimeProviderV1 for EmptyAcknowledgementAuthority {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1496,7 +1399,6 @@ mod tests {
             Ok(ACKNOWLEDGEMENT_QUALIFICATION)
         }
     }
-
     impl BillingStatementAcknowledgementAuthority for EmptyAcknowledgementAuthority {
         fn identity(
             &self,
@@ -1506,11 +1408,9 @@ mod tests {
                 provider_handle: self.handle.clone(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify(
             &self,
             _statement: &SignedGovernedBillingStatementV1,
@@ -1518,7 +1418,6 @@ mod tests {
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn record(
             &self,
             _statement: &SignedGovernedBillingStatementV1,
@@ -1526,7 +1425,6 @@ mod tests {
         ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingExternalError> {
             Ok(acknowledgement.clone())
         }
-
         fn lookup(
             &self,
             _statement_id: [u8; 32],
@@ -1535,17 +1433,14 @@ mod tests {
             Ok(None)
         }
     }
-
     #[derive(Debug)]
     struct EmptyEpochWitnessStore {
         handle: String,
     }
-
     impl HedgingBillingRuntimeProviderV1 for EmptyEpochWitnessStore {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1555,19 +1450,16 @@ mod tests {
             Ok(WITNESS_QUALIFICATION)
         }
     }
-
     impl HedgingBillingEpochWitnessStore for EmptyEpochWitnessStore {
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn load_latest(
             &self,
         ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>
         {
             Ok(None)
         }
-
         fn load_epoch(
             &self,
             _epoch_sequence: u64,
@@ -1575,7 +1467,6 @@ mod tests {
         {
             Ok(None)
         }
-
         fn compare_and_swap_latest(
             &self,
             _expected_revision: Option<[u8; 32]>,
@@ -1584,7 +1475,6 @@ mod tests {
             Err(HedgingBillingExternalError::Unavailable)
         }
     }
-
     fn public_key(seed: u8) -> [u8; 32] {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic Ed25519 key");
@@ -1594,7 +1484,6 @@ mod tests {
             .try_into()
             .expect("Ed25519 public key is 32 bytes")
     }
-
     fn account_bytes(seed: u8) -> Vec<u8> {
         AccountId::new(
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -1606,7 +1495,6 @@ mod tests {
         .expect("canonical I105 account")
         .into_bytes()
     }
-
     fn initial_finalized_head() -> HedgingBillingFinalizedCursorV1 {
         HedgingBillingFinalizedCursorV1 {
             height: 1,
@@ -1614,7 +1502,6 @@ mod tests {
             finalized_at_unix: 1_800_000_001,
         }
     }
-
     fn finality_only_page(
         cursor: HedgingBillingFinalizedCursorV1,
     ) -> HedgingBillingFinalizedEventPageV1 {
@@ -1635,7 +1522,6 @@ mod tests {
             events: Vec::new(),
         }
     }
-
     fn seed_fresh_projection(
         handle: &HedgingBillingRuntimeHandleV1,
         cursor: HedgingBillingFinalizedCursorV1,
@@ -1650,7 +1536,6 @@ mod tests {
             .expect("record fresh successful projection tick");
         assert!(handle.status().expect("fresh runtime status").ready);
     }
-
     fn assert_all_runtime_data_methods_unavailable(
         handle: &HedgingBillingRuntimeHandleV1,
         expected_checkpoint_fingerprint: [u8; 32],
@@ -1709,7 +1594,6 @@ mod tests {
             Err(HedgingBillingRuntimeApiErrorV1::Unavailable)
         ));
     }
-
     fn feed_policy() -> HedgingFeedTrustPolicyV1 {
         HedgingFeedTrustPolicyV1 {
             version: HEDGING_FEED_TRUST_POLICY_VERSION_V1,
@@ -1731,7 +1615,6 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn service_policy(feed_policy: &HedgingFeedTrustPolicyV1) -> HedgingBillingServicePolicyV1 {
         HedgingBillingServicePolicyV1 {
             version: HEDGING_BILLING_POLICY_VERSION_V1,
@@ -1782,7 +1665,6 @@ mod tests {
             checkpoint_max_bytes: 16 * 1024 * 1024,
         }
     }
-
     fn config(
         state_dir: PathBuf,
         policy: &HedgingBillingServicePolicyV1,
@@ -1819,7 +1701,6 @@ mod tests {
             max_finalized_lag_blocks: 2,
         }
     }
-
     fn dependencies(
         policy: &HedgingBillingServicePolicyV1,
         query_handle: &str,
@@ -1834,7 +1715,6 @@ mod tests {
             Arc::new(Mutex::new(initial_finalized_head())),
         )
     }
-
     #[test]
     fn production_config_rejects_credential_parameter_and_dummy_handles() {
         let feed_policy = feed_policy();
@@ -1854,7 +1734,6 @@ mod tests {
             );
         }
     }
-
     fn dependencies_with_head(
         policy: &HedgingBillingServicePolicyV1,
         query_handle: &str,
@@ -1895,7 +1774,6 @@ mod tests {
             }),
         }
     }
-
     fn fresh_runtime(
         state_dir: PathBuf,
         query_ready: Arc<AtomicBool>,
@@ -1915,13 +1793,11 @@ mod tests {
         seed_fresh_projection(&handle, initial_head);
         handle
     }
-
     #[test]
     fn startup_requires_all_six_runtime_only_adapters() {
         let feed_policy = feed_policy();
         let policy = service_policy(&feed_policy);
         let complete = dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true)));
-
         assert!(
             HedgingBillingRuntimeDependenciesV1::require(
                 None,
@@ -1989,7 +1865,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn assembly_rejects_adapter_identity_substitution_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -2009,14 +1884,12 @@ mod tests {
             ),
         )
         .expect_err("substituted query identity must fail startup");
-
         assert!(error.to_string().contains("qualify finalized"));
         assert!(
             !state_dir.exists(),
             "provider qualification must run before private state is opened"
         );
     }
-
     #[test]
     fn assembly_rejects_same_label_with_different_genesis() {
         let temp = TempDir::new().expect("tempdir");
@@ -2028,7 +1901,6 @@ mod tests {
         let foreign_network = network_id(b"sorafs-reference-foreign-genesis");
         assert_eq!(deployment_a_label, deployment_b_label);
         assert_ne!(policy.network_id, foreign_network);
-
         let error = assemble(
             config(state_dir.clone(), &policy),
             &foreign_network,
@@ -2037,14 +1909,12 @@ mod tests {
             dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
         )
         .expect_err("a matching display label cannot authorize another genesis");
-
         assert!(error.to_string().contains("network identity"));
         assert!(
             !state_dir.exists(),
             "network mismatch must fail before state opens"
         );
     }
-
     #[test]
     fn assembly_rejects_all_six_provider_qualification_mismatches_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -2090,7 +1960,6 @@ mod tests {
                 }
                 _ => unreachable!("all table entries are explicit"),
             }
-
             let error = assemble(
                 config,
                 &configured_network_id(),
@@ -2099,7 +1968,6 @@ mod tests {
                 dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
             )
             .expect_err("stale provider qualification must fail startup");
-
             assert!(
                 error.to_string().contains(expected_context),
                 "{provider} returned an unexpected startup error: {error:#}"
@@ -2110,7 +1978,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn assembly_rejects_query_without_typed_period_closes_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -2130,14 +1997,12 @@ mod tests {
             ),
         )
         .expect_err("page-only query adapter must fail startup");
-
         assert!(error.to_string().contains("period-close"));
         assert!(
             !state_dir.exists(),
             "capability checks must run before private state is opened"
         );
     }
-
     #[test]
     fn assembly_rejects_unready_adapter_before_state_open() {
         let temp = TempDir::new().expect("tempdir");
@@ -2157,14 +2022,12 @@ mod tests {
             ),
         )
         .expect_err("unready query adapter must fail startup");
-
         assert!(error.to_string().contains("not ready"));
         assert!(
             !state_dir.exists(),
             "readiness checks must run before private state is opened"
         );
     }
-
     #[test]
     fn outage_and_restart_are_visible_without_enabling_automatic_execution() {
         let temp = TempDir::new().expect("tempdir");
@@ -2181,7 +2044,6 @@ mod tests {
             dependencies(&policy, QUERY_HANDLE, true, Arc::clone(&query_ready)),
         )
         .expect("assemble committed hedging/billing runtime");
-
         let initial = handle.status().expect("initial status");
         assert!(!initial.live);
         assert!(!initial.ready);
@@ -2190,7 +2052,6 @@ mod tests {
         assert!(!initial.last_tick_fresh);
         assert!(!initial.finalized_projection_ready);
         assert!(!initial.automatic_hedge_execution_enabled);
-
         handle.reconcile_once().expect("empty finalized tick");
         let healthy = handle.status().expect("healthy status");
         assert!(healthy.live);
@@ -2205,7 +2066,6 @@ mod tests {
         assert_eq!(healthy.finalized_head_height, 1);
         assert_eq!(healthy.finalized_lag_blocks, 1);
         assert!(!healthy.automatic_hedge_execution_enabled);
-
         {
             let mut freshness = handle.last_successful_tick.lock().expect("freshness state");
             *freshness = Instant::now().checked_sub(Duration::from_secs(4));
@@ -2215,7 +2075,6 @@ mod tests {
         assert!(!stale.ready);
         handle.reconcile_once().expect("freshness recovery tick");
         assert!(handle.status().expect("fresh status").last_tick_fresh);
-
         query_ready.store(false, Ordering::Release);
         let _error = handle
             .reconcile_once()
@@ -2230,7 +2089,6 @@ mod tests {
         assert!(!unavailable.automatic_hedge_execution_enabled);
         assert_eq!(handle.metrics().successful_ticks, 2);
         assert_eq!(handle.metrics().failed_ticks, 1);
-
         query_ready.store(true, Ordering::Release);
         handle.reconcile_once().expect("dependency recovery tick");
         assert!(
@@ -2238,7 +2096,6 @@ mod tests {
             "dependency recovery without finalized progress is still not ready"
         );
         drop(handle);
-
         let restarted = assemble(
             config,
             &configured_network_id(),
@@ -2263,7 +2120,6 @@ mod tests {
             "restart with no finalized projection must remain unready"
         );
     }
-
     #[test]
     fn data_api_fails_closed_when_finalized_head_exceeds_projection_lag() {
         let temp = TempDir::new().expect("tempdir");
@@ -2275,7 +2131,6 @@ mod tests {
             Arc::clone(&head),
         );
         let anchor = handle.projection_anchor().expect("fresh projection anchor");
-
         set_finalized_head(&head, 4, [0x47; 32], 1_800_000_004);
         assert!(
             handle.status().expect("cached runtime status").ready,
@@ -2283,7 +2138,6 @@ mod tests {
         );
         assert_all_runtime_data_methods_unavailable(&handle, anchor.checkpoint_fingerprint);
     }
-
     #[test]
     fn acknowledgement_fence_rejects_any_concurrent_finalized_head_change() {
         let temp = TempDir::new().expect("tempdir");
@@ -2294,7 +2148,6 @@ mod tests {
             query_ready,
             Arc::clone(&head),
         );
-
         let error = handle
             .with_fresh_projection(|_service, pre_commit_fence| {
                 set_finalized_head(&head, 2, [0x45; 32], 1_800_000_002);
@@ -2303,7 +2156,6 @@ mod tests {
             .expect_err("a head change inside the permitted lag still invalidates the ACK fence");
         assert_eq!(error, HedgingBillingRuntimeApiErrorV1::Unavailable);
     }
-
     #[test]
     fn data_api_fails_closed_on_live_finalized_query_failure() {
         let temp = TempDir::new().expect("tempdir");
@@ -2315,7 +2167,6 @@ mod tests {
             head,
         );
         let anchor = handle.projection_anchor().expect("fresh projection anchor");
-
         query_ready.store(false, Ordering::Release);
         assert!(
             handle.status().expect("cached runtime status").ready,
@@ -2324,7 +2175,6 @@ mod tests {
         assert_all_runtime_data_methods_unavailable(&handle, anchor.checkpoint_fingerprint);
         assert!(!handle.status().expect("failed live probe status").ready);
     }
-
     #[test]
     fn data_api_fails_closed_after_tick_freshness_expires() {
         let temp = TempDir::new().expect("tempdir");
@@ -2332,7 +2182,6 @@ mod tests {
         let head = Arc::new(Mutex::new(initial_finalized_head()));
         let handle = fresh_runtime(temp.path().join("billing-state"), query_ready, head);
         let anchor = handle.projection_anchor().expect("fresh projection anchor");
-
         {
             let mut freshness = handle.last_successful_tick.lock().expect("freshness state");
             *freshness = Instant::now().checked_sub(Duration::from_secs(4));
@@ -2340,7 +2189,6 @@ mod tests {
         assert!(!handle.status().expect("expired runtime status").ready);
         assert_all_runtime_data_methods_unavailable(&handle, anchor.checkpoint_fingerprint);
     }
-
     fn set_finalized_head(
         head: &Mutex<HedgingBillingFinalizedCursorV1>,
         height: u64,
@@ -2353,7 +2201,6 @@ mod tests {
             finalized_at_unix,
         };
     }
-
     #[test]
     fn finalized_head_regression_and_equivocation_fail_closed() {
         let temp = TempDir::new().expect("tempdir");
@@ -2378,7 +2225,6 @@ mod tests {
             ),
         )
         .expect("assemble committed hedging/billing runtime");
-
         handle
             .reconcile_once()
             .expect("observe initial finalized head");
@@ -2396,7 +2242,6 @@ mod tests {
             .service
             .api_projection_anchor()
             .expect("projection anchor before invalid head");
-
         set_finalized_head(&head, 2, [0x43; 32], 1_800_000_002);
         let equivocation = handle
             .reconcile_once()
@@ -2421,7 +2266,6 @@ mod tests {
             anchor_before_failure,
             "invalid head observations must be rejected before projection work"
         );
-
         set_finalized_head(&head, 3, [0x44; 32], 1_800_000_003);
         handle
             .reconcile_once()
@@ -2435,7 +2279,6 @@ mod tests {
         );
         assert_eq!(handle.metrics().successful_ticks, 2);
         assert_eq!(handle.metrics().failed_ticks, 1);
-
         set_finalized_head(&head, 2, [0x42; 32], 1_800_000_004);
         let regression = handle
             .reconcile_once()
@@ -2459,7 +2302,6 @@ mod tests {
             anchor_before_failure
         );
     }
-
     #[test]
     fn runtime_api_is_object_safe_and_exposes_only_bounded_node_owned_projections() {
         let temp = TempDir::new().expect("tempdir");

@@ -1,9 +1,7 @@
 //! End-to-end SORA parliament lifecycle test for ZK voting.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-
 mod zk_testkit;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -38,12 +36,10 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;
 const BALLOT_LOCK: u128 = CITIZEN_FUND - CITIZEN_BOND;
-
 fn governance_contract_artifact() -> (Vec<u8>, ContractManifest) {
     let (artifact, _) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(
@@ -58,14 +54,12 @@ seiyaku ParliamentZkLifecycle {
     let verified = ivm::verify_contract_artifact(&artifact).expect("verify ZK-governance artifact");
     (artifact, verified.manifest)
 }
-
 fn manifest_provenance(manifest: ContractManifest, signer: &KeyPair) -> ManifestProvenance {
     manifest
         .signed(signer)
         .provenance
         .expect("exact manifest should contain provenance")
 }
-
 fn proposal_contract_address(
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
@@ -79,7 +73,6 @@ fn proposal_contract_address(
     )
     .expect("proposal contract address")
 }
-
 #[test]
 fn sora_parliament_zk_lifecycle_with_20_citizens() {
     let (proposer_id, proposer_kp) = gen_account_in("sora");
@@ -90,7 +83,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
             id
         })
         .collect();
-
     let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
     let asset_def_id: AssetDefinitionId =
@@ -105,7 +97,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         None,
     )
     .build(&proposer_id);
-
     let proposer_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), proposer_id.clone()),
         Quantity::from(1_000_000_u64),
@@ -114,14 +105,12 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         AssetId::new(asset_def_id.clone(), escrow_id.clone()),
         Quantity::from(0_u64),
     );
-
     let proposer_account = Account::new(proposer_id.clone()).build(&proposer_id);
     let escrow_account = Account::new(escrow_id.clone()).build(&proposer_id);
     let citizen_accounts = citizens
         .iter()
         .cloned()
         .map(|id| Account::new(id.clone()).build(&proposer_id));
-
     let world = World::with_assets(
         [domain],
         std::iter::once(proposer_account)
@@ -132,12 +121,10 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         [proposer_asset, escrow_asset],
         [],
     );
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.zk.halo2.enabled = true;
-
     let mut gov_cfg = state.gov.clone();
     gov_cfg.voting_asset_id = asset_def_id.clone();
     gov_cfg.citizenship_asset_id = asset_def_id.clone();
@@ -161,18 +148,14 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     gov_cfg.fma_committee_size = 1;
     gov_cfg.parliament_alternate_size = Some(1);
     state.set_gov(gov_cfg);
-
     let bundle_ballot = zk_testkit::vote_merkle8_bundle();
-
     let (contract_artifact, contract_manifest) = governance_contract_artifact();
     let code_hash = contract_manifest.code_hash.expect("verified code hash");
     let abi_hash = contract_manifest.abi_hash.expect("verified ABI hash");
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let abi_hash_hex = hex::encode(<[u8; 32]>::from(abi_hash));
     let manifest_provenance = manifest_provenance(contract_manifest, &proposer_kp);
-
     let proposal_contract_address = proposal_contract_address(&proposer_id);
-
     let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
@@ -188,7 +171,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("register exact ZK-governance artifact before proposal enactment");
-
     let propose_perm: Permission = CanProposeContractDeployment {
         contract_address: proposal_contract_address.clone(),
     }
@@ -196,22 +178,18 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     Grant::account_permission(propose_perm, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant proposer permission");
-
     let enact_perm: Permission = CanEnactGovernance.into();
     Grant::account_permission(enact_perm, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant enact permission");
-
     let manage_parliament: Permission = CanManageParliament.into();
     Grant::account_permission(manage_parliament, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant parliament permission");
-
     let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     Grant::account_permission(manage_vk, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant verifying key permission");
-
     for citizen in &citizens {
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
             referendum_id: "sora-parliament-zk-lifecycle".to_string(),
@@ -221,7 +199,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
             .execute(&proposer_id, &mut stx_1)
             .expect("grant ballot permission");
     }
-
     for citizen in &citizens {
         Transfer::asset_quantity(
             AssetId::new(asset_def_id.clone(), proposer_id.clone()),
@@ -230,7 +207,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         )
         .execute(&proposer_id, &mut stx_1)
         .expect("fund citizen account");
-
         RegisterCitizen {
             owner: citizen.clone(),
             amount: CITIZEN_BOND.into(),
@@ -238,7 +214,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         .execute(citizen, &mut stx_1)
         .expect("bond citizenship");
     }
-
     PersistCouncilForEpoch {
         epoch: 0,
         members: citizens[..10].to_vec(),
@@ -246,7 +221,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("persist council");
-
     ProposeDeployContract {
         contract_address: proposal_contract_address.clone(),
         code_hash_hex: code_hash_hex.clone(),
@@ -258,7 +232,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("propose contract deployment");
-
     let (proposal_id, _) = stx_1
         .world
         .governance_proposals()
@@ -267,14 +240,12 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         .expect("proposal should exist");
     let proposal_id = *proposal_id;
     let referendum_id = hex::encode(proposal_id);
-
     verifying_keys::RegisterVerifyingKey {
         id: bundle_ballot.vk_id.clone(),
         record: bundle_ballot.vk_record.clone(),
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("register voting key");
-
     CreateElection {
         election_id: referendum_id.clone(),
         options: 2,
@@ -287,7 +258,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("create election");
-
     let stage_bodies = stx_1
         .world
         .parliament_bodies()
@@ -312,9 +282,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
             .execute(&signer, &mut stx_1)
             .expect("parliament body approval");
     }
-
     let root_hint = hex::encode(bundle_ballot.root_bytes());
-
     let voter_a = citizens[0].clone();
     let inputs_a = norito::json::object([
         (
@@ -339,7 +307,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         ),
     ])
     .expect("serialize first ballot inputs");
-
     CastZkBallot {
         election_id: referendum_id.clone(),
         proof_b64: bundle_ballot.proof_b64(),
@@ -347,16 +314,13 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     }
     .execute(&voter_a, &mut stx_1)
     .expect("first zk ballot");
-
     stx_1.apply();
     block_1
         .commit()
         .expect("commit setup/approval/ballot block");
-
     let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block_2 = state.block(header_2);
     let mut stx_2 = block_2.transaction();
-
     // Keep this lifecycle test focused on parliament/referendum transitions. The dedicated
     // `FinalizeElection` tests cover tally proof verification under the heavy ZK test features.
     let mut election = stx_2
@@ -371,17 +335,14 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         .world
         .elections_mut()
         .insert(referendum_id.clone(), election);
-
     FinalizeReferendum {
         referendum_id: referendum_id.clone(),
         proposal_id,
     }
     .execute(&proposer_id, &mut stx_2)
     .expect("finalize referendum");
-
     stx_2.apply();
     block_2.commit().expect("commit finalize block");
-
     let proposal_after_finalize = state
         .view()
         .world()
@@ -393,7 +354,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         proposal_after_finalize.status,
         iroha_core::state::GovernanceProposalStatus::Approved
     ));
-
     let referendum_window = state
         .view()
         .world()
@@ -402,11 +362,9 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         .copied()
         .expect("referendum exists before enact");
     let proposal_fingerprint = proposal_after_finalize.kind.fingerprint();
-
     let header_3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block_3 = state.block(header_3);
     let mut stx_3 = block_3.transaction();
-
     EnactReferendum {
         referendum_id: proposal_id,
         preimage_hash: proposal_fingerprint,
@@ -417,10 +375,8 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_3)
     .expect("enact referendum");
-
     stx_3.apply();
     block_3.commit().expect("commit enact block");
-
     let proposal_after_enact = state
         .view()
         .world()
@@ -432,7 +388,6 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         proposal_after_enact.status,
         iroha_core::state::GovernanceProposalStatus::Enacted
     ));
-
     assert!(
         state
             .view()

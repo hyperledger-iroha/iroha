@@ -59,7 +59,6 @@ fn appeal_pricing_quote_uses_baseline_config() {
     assert_eq!(value.json_str(&["deposit_xor"]), Some(deposit.as_str()));
     assert!(value.json_str(&["breakdown", "raw_deposit_xor"]).is_some());
 }
-
 #[test]
 fn appeal_pricing_quote_rejects_unknown_class() {
     let config = baseline_appeal_pricing_config();
@@ -71,10 +70,8 @@ fn appeal_pricing_quote_rejects_unknown_class() {
         panel_size: None,
     };
     let err = appeal_quote_input(request, &config).expect_err("unknown class rejected");
-
     assert!(err.contains("unknown appeal class"));
 }
-
 #[test]
 fn appeal_pricing_status_marks_deposit_builder_and_publish_flows_enabled() {
     let policy = baseline_appeal_finance_runtime_policy();
@@ -140,7 +137,6 @@ fn appeal_pricing_status_marks_deposit_builder_and_publish_flows_enabled() {
         Some("enabled_durable_finalized_ledger_reconciliation")
     );
 }
-
 #[tokio::test]
 async fn appeal_pricing_handlers_return_baseline_quote_and_status() {
     let app = mk_app_state_for_tests();
@@ -157,7 +153,6 @@ async fn appeal_pricing_handlers_return_baseline_quote_and_status() {
             .and_then(|classes| classes.get("content"))
             .is_some()
     );
-
     let quote_request = AppealPricingQuoteRequestDto {
         class: "fraud".to_owned(),
         backlog: 9,
@@ -214,7 +209,6 @@ async fn appeal_pricing_handlers_return_baseline_quote_and_status() {
         Some("enabled_canonical_auth_local_governance_dag")
     );
 }
-
 #[tokio::test]
 async fn appeal_pricing_quote_handler_rejects_invalid_panel_size() {
     let request = AppealPricingQuoteRequestDto {
@@ -227,7 +221,6 @@ async fn appeal_pricing_quote_handler_rejects_invalid_panel_size() {
     let response =
         handle_post_sorafs_appeal_pricing_quote(State(mk_app_state_for_tests()), JsonOnly(request))
             .await;
-
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let value = api_test_response_json(response).await;
     assert!(
@@ -236,7 +229,6 @@ async fn appeal_pricing_quote_handler_rejects_invalid_panel_size() {
             .is_some_and(|error| error.contains("panel"))
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_settle_handler_returns_baseline_plan() {
     let response = handle_post_sorafs_appeal_finance_settle(
@@ -248,7 +240,6 @@ async fn appeal_finance_settle_handler_returns_baseline_plan() {
         }),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -259,13 +250,11 @@ async fn appeal_finance_settle_handler_returns_baseline_plan() {
     assert_eq!(value.json_str(&["refund_xor"]), Some("400"));
     assert_eq!(value.json_str(&["treasury_xor"]), Some("0"));
 }
-
 #[tokio::test]
 async fn appeal_finance_disburse_handler_returns_juror_plan() {
     fn account(seed: u8) -> String {
         AccountId::new(checked_test_keypair(seed).public_key().clone()).to_string()
     }
-
     let juror_ids = (0x10..0x17).map(account).collect::<Vec<_>>();
     let no_show = juror_ids[0].clone();
     let response = handle_post_sorafs_appeal_finance_disburse(
@@ -282,7 +271,6 @@ async fn appeal_finance_disburse_handler_returns_juror_plan() {
         }),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -297,7 +285,6 @@ async fn appeal_finance_disburse_handler_returns_juror_plan() {
         Some(no_show.as_str())
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
@@ -306,7 +293,6 @@ async fn appeal_finance_deposit_endpoint_requires_canonical_request_auth() {
         &auth.buyer.account,
         Some(&auth.provider.account),
     ));
-
     let response = handle_post_sorafs_appeal_finance_deposit(
         State(app),
         HeaderMap::new(),
@@ -315,10 +301,8 @@ async fn appeal_finance_deposit_endpoint_requires_canonical_request_auth() {
         body,
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_endpoint_rejects_payer_mismatch() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
@@ -327,12 +311,9 @@ async fn appeal_finance_deposit_endpoint_rejects_payer_mismatch() {
         &auth.provider.account,
         Some(&auth.provider.account),
     ));
-
     let response = post_appeal_finance_deposit(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
-
 #[test]
 fn appeal_finance_deposit_amount_preserves_wide_values_and_enforces_xor_scale() {
     let wide: XorQuantity = "340282366920938463463374607431768211456.000000001"
@@ -343,7 +324,6 @@ fn appeal_finance_deposit_amount_preserves_wide_values_and_enforces_xor_scale() 
         wide.into_quantity()
     );
 }
-
 #[test]
 fn appeal_finance_runtime_policy_digest_is_deterministic_and_config_bound() {
     let first = baseline_appeal_finance_runtime_policy();
@@ -355,7 +335,6 @@ fn appeal_finance_runtime_policy_digest_is_deterministic_and_config_bound() {
         first.settlement_policy_digest,
         second.settlement_policy_digest
     );
-
     let mut changed = iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
     changed.pricing.version = "baseline-revision-v2".to_owned();
     let changed = AppealFinanceRuntimePolicy::from_config(&changed).expect("valid changed policy");
@@ -365,7 +344,6 @@ fn appeal_finance_runtime_policy_digest_is_deterministic_and_config_bound() {
         first.settlement_policy_digest,
         changed.settlement_policy_digest
     );
-
     let mut wrong_asset =
         iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
     wrong_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -373,18 +351,15 @@ fn appeal_finance_runtime_policy_digest_is_deterministic_and_config_bound() {
         "other".parse().expect("asset definition name"),
     );
     assert!(AppealFinanceRuntimePolicy::from_config(&wrong_asset).is_err());
-
     let mut wrong_scale =
         iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
     wrong_scale.asset_scale = 8;
     assert!(AppealFinanceRuntimePolicy::from_config(&wrong_scale).is_err());
-
     let mut mismatched_panel =
         iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
     mismatched_panel.settlement.default_panel_size =
         mismatched_panel.pricing.default_panel_size + 1;
     assert!(AppealFinanceRuntimePolicy::from_config(&mismatched_panel).is_err());
-
     for version in [
         "Baseline-v1",
         "baseline_v1",
@@ -401,14 +376,12 @@ fn appeal_finance_runtime_policy_digest_is_deterministic_and_config_bound() {
         );
     }
 }
-
 #[test]
 fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
     use sorafs_node::appeal_finance_transaction_forwarder::{
         AppealFinanceFinalizedCursorV1, AppealFinanceOperationV1,
         AppealFinanceTransactionSigningRequestV1,
     };
-
     let auth = orderbook_auth_fixture();
     let expected = appeal_finance_deposit_expectation(appeal_finance_deposit_request(
         &auth.provider.account,
@@ -438,7 +411,6 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
         decode_appeal_finance_outbox_context(&encoded),
         Some(context.clone())
     );
-
     let drawdown_xor = breakdown
         .treasury_xor
         .checked_add(&breakdown.held_xor)
@@ -481,7 +453,6 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
     assert_eq!(drawdown_post.remaining_amount, breakdown.refund_xor);
     assert_eq!(drawdown_post.status, AssetEscrowStatus::Locked);
     assert_eq!(drawdown_post.closed_at_ms, None);
-
     let mut rotated = iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
     rotated.pricing.version = "baseline-rotated-v2".to_owned();
     let rotated = AppealFinanceRuntimePolicy::from_config(&rotated).expect("valid rotated policy");
@@ -489,7 +460,6 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
         appeal_finance_outbox_policy_status(&request, &rotated),
         AppealFinanceOutboxPolicyStatusV1::Superseded
     );
-
     expected_record.remaining_amount = breakdown.refund_xor.clone();
     request.operation = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
         expected.escrow_id,
@@ -506,7 +476,6 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
     assert!(cancel_post.remaining_amount.is_zero());
     assert_eq!(cancel_post.status, AssetEscrowStatus::Cancelled);
     assert_eq!(cancel_post.closed_at_ms, Some(42));
-
     let refund_only_verdict = AppealVerdict::Decision(AppealDecision::Overturn);
     let refund_only = policy
         .settlement()
@@ -547,7 +516,6 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
         AppealFinanceOutboxPolicyStatusV1::Grandfathered,
         "a validated refund-only cancellation must not strand custody on policy rotation"
     );
-
     let mut tampered = context;
     tampered.settlement.refund_xor = tampered
         .settlement
@@ -561,7 +529,6 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
         AppealFinanceOutboxPolicyStatusV1::InvalidContext
     );
 }
-
 #[test]
 fn appeal_finance_deposit_rejects_non_governed_asset_definition() {
     let auth = orderbook_auth_fixture();
@@ -579,7 +546,6 @@ fn appeal_finance_deposit_rejects_non_governed_asset_definition() {
         .expect_err("caller-selected appeal asset must be rejected");
     assert!(error.contains("must equal governed asset"));
 }
-
 #[test]
 fn appeal_finance_asset_readiness_requires_exact_ledger_scale() {
     let missing = mk_app_state_for_tests();
@@ -587,7 +553,6 @@ fn appeal_finance_asset_readiness_requires_exact_ledger_scale() {
         appeal_finance_asset_readiness(&missing, &missing.sorafs_appeal_finance_policy);
     assert!(!missing_readiness.ready);
     assert_eq!(missing_readiness.status, "asset_definition_missing");
-
     let auth = orderbook_auth_fixture();
     let policy = baseline_appeal_finance_runtime_policy();
     let scale_mismatch =
@@ -603,7 +568,6 @@ fn appeal_finance_asset_readiness_requires_exact_ledger_scale() {
     assert!(!mismatch_readiness.ready);
     assert_eq!(mismatch_readiness.status, "asset_scale_mismatch");
     assert_eq!(mismatch_readiness.observed_scale, Some(8));
-
     let (ready, _temp_dir) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &policy.asset_definition_id);
     let ready_readiness =
@@ -611,7 +575,6 @@ fn appeal_finance_asset_readiness_requires_exact_ledger_scale() {
     assert!(ready_readiness.ready);
     assert_eq!(ready_readiness.observed_scale, Some(9));
 }
-
 #[test]
 fn appeal_finance_request_dtos_enforce_xor_scale_at_json_boundary() {
     macro_rules! assert_nominal_xor_wire {
@@ -628,7 +591,6 @@ fn appeal_finance_request_dtos_enforce_xor_scale_at_json_boundary() {
             );
         }};
     }
-
     assert_nominal_xor_wire!(
         AppealFinanceSettleRequestDto,
         r#"{"deposit_xor":"0.000000001","outcome":"overturn","panel_size":7}"#,
@@ -650,7 +612,6 @@ fn appeal_finance_request_dtos_enforce_xor_scale_at_json_boundary() {
         r#"{"escrow_id_hex":"escrow","case_id":"case","round_id":"round","payer_account":"payer","destination_account":"destination","release_authority_account":null,"asset_definition_id":"xor","deposit_xor":"0.0000000001","expires_at_ms":null,"idempotency_key":"attempt","evidence_hashes_hex":[]}"#
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     let auth = orderbook_auth_fixture();
@@ -674,9 +635,7 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     let expires_at_ms = request.expires_at_ms;
     let body = appeal_finance_deposit_body(request);
     let replay_body = body.clone();
-
     let response = post_appeal_finance_deposit(app.clone(), &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -748,7 +707,6 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
         value.json_str(&["escrow_id_hex"]),
         Some(escrow_id_hex.as_str())
     );
-
     let replay = post_appeal_finance_deposit(app.clone(), &auth.provider, replay_body).await;
     assert_eq!(replay.status(), StatusCode::ACCEPTED);
     let replay_value = api_test_response_json(replay).await;
@@ -761,7 +719,6 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
         value.json_str(&["operation_id_hex"])
     );
 }
-
 #[test]
 fn appeal_finance_deposit_visibility_is_limited_to_participants() {
     let auth = orderbook_auth_fixture();
@@ -771,7 +728,6 @@ fn appeal_finance_deposit_visibility_is_limited_to_participants() {
         Some(auth.buyer.account.clone()),
         Some(release_authority.clone()),
     );
-
     assert!(appeal_finance_deposit_record_visible_to(
         &record,
         &auth.provider.account
@@ -789,7 +745,6 @@ fn appeal_finance_deposit_visibility_is_limited_to_participants() {
         &record, &outsider
     ));
 }
-
 #[test]
 fn appeal_finance_deposit_confirmation_detects_runtime_mismatches() {
     let auth = orderbook_auth_fixture();
@@ -809,9 +764,7 @@ fn appeal_finance_deposit_confirmation_detects_runtime_mismatches() {
     record.evidence_hashes = expected.evidence_hashes.clone();
     record.status = AssetEscrowStatus::DrawnDown;
     record.remaining_amount = iroha_primitives::numeric::Quantity::zero();
-
     let mismatches = appeal_finance_deposit_confirmation_mismatches(&expected, &record);
-
     assert!(mismatches.iter().any(|item| item.contains("locked")));
     assert!(
         mismatches
@@ -819,7 +772,6 @@ fn appeal_finance_deposit_confirmation_detects_runtime_mismatches() {
             .any(|item| item.contains("remaining_amount"))
     );
 }
-
 #[test]
 fn asset_escrow_kind_labels_cover_the_closed_enum() {
     assert_eq!(
@@ -832,7 +784,6 @@ fn asset_escrow_kind_labels_cover_the_closed_enum() {
         "conditional"
     );
 }
-
 #[test]
 fn appeal_finance_deposit_status_json_renders_native_asset_lock_record() {
     let auth = orderbook_auth_fixture();
@@ -842,9 +793,7 @@ fn appeal_finance_deposit_status_json_renders_native_asset_lock_record() {
         Some(auth.buyer.account.clone()),
         Some(release_authority.clone()),
     );
-
     let value = appeal_finance_deposit_status_json(&record);
-
     assert_eq!(
         value.json_str(&["schema"]),
         Some("sorafs.appeal_finance.deposit_status.v1")
@@ -875,12 +824,10 @@ fn appeal_finance_deposit_status_json_renders_native_asset_lock_record() {
     assert_eq!(value.json_str(&["amount"]), Some("420"));
     assert_eq!(value.json_len(&["evidence_hashes_hex"]), Some(1));
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_status_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let escrow_id_hex = Hash::new("missing deposit status").to_string();
-
     let response = handle_get_sorafs_appeal_finance_deposit(
         State(app),
         HeaderMap::new(),
@@ -891,20 +838,15 @@ async fn appeal_finance_deposit_status_endpoint_requires_canonical_request_auth(
         Path(escrow_id_hex),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_status_endpoint_returns_not_found_for_absent_escrow() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let escrow_id_hex = Hash::new("missing deposit status").to_string();
-
     let response = get_appeal_finance_deposit(app, &auth.provider, &escrow_id_hex).await;
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_confirm_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
@@ -919,7 +861,6 @@ async fn appeal_finance_deposit_confirm_endpoint_requires_canonical_request_auth
         &request,
         expected.escrow_id.as_hash().to_string(),
     ));
-
     let response = handle_post_sorafs_appeal_finance_deposit_confirm(
         State(app),
         HeaderMap::new(),
@@ -928,10 +869,8 @@ async fn appeal_finance_deposit_confirm_endpoint_requires_canonical_request_auth
         body,
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
     let auth = orderbook_auth_fixture();
@@ -949,9 +888,7 @@ async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
         &request,
         expected.escrow_id.as_hash().to_string(),
     ));
-
     let response = post_appeal_finance_deposit_confirm(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -965,7 +902,6 @@ async fn appeal_finance_deposit_confirm_endpoint_confirms_runtime_asset_lock() {
         Some("locked")
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_settle_endpoint_returns_plan_without_signing_payloads() {
     let auth = orderbook_auth_fixture();
@@ -982,9 +918,7 @@ async fn appeal_finance_deposit_settle_endpoint_returns_plan_without_signing_pay
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-
     let response = post_appeal_finance_deposit_settle(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1017,7 +951,6 @@ async fn appeal_finance_deposit_settle_endpoint_returns_plan_without_signing_pay
             .all(|step| { step.get("wire_id").is_none() && step.get("payload_hex").is_none() })
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_settle_endpoint_builds_refund_only_cancel() {
     let auth = orderbook_auth_fixture();
@@ -1034,9 +967,7 @@ async fn appeal_finance_deposit_settle_endpoint_builds_refund_only_cancel() {
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "overturn");
-
     let response = post_appeal_finance_deposit_settle(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(value.json_str(&["drawdown_xor"]), Some("0"));
@@ -1050,7 +981,6 @@ async fn appeal_finance_deposit_settle_endpoint_builds_refund_only_cancel() {
         Some("cancel_refund")
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     let auth = orderbook_auth_fixture();
@@ -1068,9 +998,7 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
     assert_eq!(value.json_str(&["status"]), Some("durably_enqueued"));
@@ -1105,7 +1033,6 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
         Some("awaiting_finalized_commit")
     );
 }
-
 #[test]
 fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
     let auth = orderbook_auth_fixture();
@@ -1147,12 +1074,10 @@ fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
                 .map(|step| step.action.to_owned());
         Ok(action.map(|action| (action, reconciliation.reconciliation_digest_hex)))
     };
-
     let (first_action, first_reconciliation_digest) = next_step()
         .expect("initial settlement step")
         .expect("initial settlement step is pending");
     assert_eq!(first_action, "drawdown_non_refund");
-
     drawdown_appeal_finance_asset_lock(
         &app,
         &expected,
@@ -1165,11 +1090,9 @@ fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
         .expect("refund settlement step is pending");
     assert_eq!(follow_up_action, "cancel_refund");
     assert_ne!(first_reconciliation_digest, follow_up_reconciliation_digest);
-
     cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
     assert!(next_step().expect("settled submission state").is_none());
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finalization() {
     let auth = orderbook_auth_fixture();
@@ -1190,9 +1113,7 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
     let authority_reader = Arc::clone(&app);
-
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
     let receipt_status = value
@@ -1228,7 +1149,6 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
         "unfinalized settlement must not persist publication sources"
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_submit_settlement_endpoint_reports_missing_submitter() {
     let auth = orderbook_auth_fixture();
@@ -1245,9 +1165,7 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_reports_missing_submi
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1264,7 +1182,6 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_reports_missing_submi
         Some(provider_account.as_str())
     );
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_submit_settlement_fails_closed_without_runtime_provider() {
     let auth = orderbook_auth_fixture();
@@ -1288,15 +1205,12 @@ async fn appeal_finance_deposit_submit_settlement_fails_closed_without_runtime_p
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let value = api_test_response_json(response).await;
     assert_eq!(value.json_str(&["status"]), Some("missing_required_signer"));
     assert_eq!(value.json_str(&["operation_id_hex"]), None);
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_forwarder_submission() {
     let auth = orderbook_auth_fixture();
@@ -1313,9 +1227,7 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_forwarder_sub
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-
     let response = post_appeal_finance_deposit_reconcile(app, &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1338,7 +1250,6 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_pending_forwarder_sub
     assert_eq!(value.json_len(&["mismatches"]), Some(0));
     assert_appeal_finance_reconciliation_digest_hex(&value);
 }
-
 #[tokio::test]
 async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settled() {
     let auth = orderbook_auth_fixture();
@@ -1361,30 +1272,25 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
     );
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
-
     let response = post_appeal_finance_deposit_reconcile(
         app.clone(),
         &auth.provider,
         appeal_finance_deposit_settle_body(confirmation.clone(), "frivolous"),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(value.json_str(&["status"]), Some("awaiting_refund_cancel"));
     assert_eq!(value.json_bool(&["reconciled"]), Some(false));
     assert_eq!(value.json_str(&["observed_remaining_amount"]), Some("210"));
     let in_progress_digest = assert_appeal_finance_reconciliation_digest_hex(&value).to_owned();
-
     cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
-
     let response = post_appeal_finance_deposit_reconcile(
         app,
         &auth.provider,
         appeal_finance_deposit_settle_body(confirmation, "frivolous"),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(value.json_str(&["status"]), Some("settled"));
@@ -1397,12 +1303,10 @@ async fn appeal_finance_deposit_reconcile_endpoint_reports_in_progress_and_settl
     let settled_digest = assert_appeal_finance_reconciliation_digest_hex(&value);
     assert_ne!(settled_digest, in_progress_digest);
 }
-
 #[tokio::test]
 async fn appeal_finance_report_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let body = appeal_finance_report_body(appeal_finance_report_fixture());
-
     let response = handle_post_sorafs_appeal_finance_report(
         State(app),
         HeaderMap::new(),
@@ -1411,10 +1315,8 @@ async fn appeal_finance_report_endpoint_requires_canonical_request_auth() {
         body,
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn appeal_finance_writes_require_finance_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
@@ -1425,7 +1327,6 @@ async fn appeal_finance_writes_require_finance_publisher_role() {
     )
     .await;
     assert_forbidden_role(report_response, SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE).await;
-
     let rollup_response = post_appeal_finance_weekly_rollup(
         app.clone(),
         &auth.buyer,
@@ -1435,15 +1336,12 @@ async fn appeal_finance_writes_require_finance_publisher_role() {
     assert_forbidden_role(rollup_response, SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
 }
-
 #[tokio::test]
 async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let report = appeal_finance_report_fixture();
     let body = appeal_finance_report_body(report.clone());
-
     let response = post_appeal_finance_report(app.clone(), &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1456,12 +1354,10 @@ async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
         value.json_str(&["report_id_hex"]),
         Some(report_id_hex.as_str())
     );
-
     let sources = publication_source_paths_fixture(&app, APPEAL_FINANCE_REPORT_KIND);
     assert_eq!(sources.len(), 1);
     assert!(sources[0].0.exists());
     assert!(sources[0].1.exists());
-
     let index = read_publication_section_fixture(&app, "publish_index");
     assert_eq!(
         index
@@ -1478,14 +1374,12 @@ async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
         "appeal_finance_report",
     );
 }
-
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_orderbook_auth();
     let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
         "privacy-event-a",
     ));
-
     let response = handle_post_sorafs_transparency_privacy_aggregate_source_event(
         State(app),
         HeaderMap::new(),
@@ -1494,32 +1388,25 @@ async fn privacy_aggregate_source_event_endpoint_requires_canonical_request_auth
         body,
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_requires_source_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
     let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
         "privacy-event-role-denied",
     ));
-
     let response = post_privacy_aggregate_source_event(app.clone(), &auth.buyer, body).await;
-
     assert_forbidden_role(response, SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 0);
 }
-
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_records_event_for_cycle_publication() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
     let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
         "privacy-event-a",
     ));
-
     let response = post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1531,24 +1418,20 @@ async fn privacy_aggregate_source_event_endpoint_records_event_for_cycle_publica
     assert!(value.get("retained_source_event_count").is_none());
     assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
 }
-
 #[tokio::test]
 async fn privacy_aggregate_source_event_endpoint_replays_exact_duplicate_event() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
     let request = privacy_aggregate_source_event_request("privacy-event-a");
     let body = privacy_aggregate_source_event_body(request);
-
     let first =
         post_privacy_aggregate_source_event(app.clone(), &auth.provider, body.clone()).await;
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-
     let duplicate = post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
     assert_eq!(duplicate.status(), StatusCode::OK);
     let value = api_test_response_json(duplicate).await;
     assert_eq!(value.json_str(&["status"]), Some("already_recorded"));
     assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
 }
-
 #[test]
 fn privacy_aggregate_source_event_requires_subject_digest() {
     let body = norito::json::to_vec(&norito::json!({
@@ -1560,12 +1443,10 @@ fn privacy_aggregate_source_event_requires_subject_digest() {
         ],
     }))
     .expect("encode source event without subject digest");
-
     let response = privacy_aggregate_source_event_from_body(&body)
         .expect_err("missing subject digest must be rejected");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[test]
 fn privacy_aggregate_publish_due_rejects_caller_supplied_policy() {
     let body = norito::json::to_vec(&norito::json!({
@@ -1575,12 +1456,10 @@ fn privacy_aggregate_publish_due_rejects_caller_supplied_policy() {
         "suppression_threshold": 1_u64,
     }))
     .expect("encode retired publish-due policy fields");
-
     let response = privacy_aggregate_publish_due_request_from_body(&body)
         .expect_err("caller-supplied privacy policy must be rejected");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[test]
 fn privacy_aggregate_publish_due_rejects_caller_supplied_prf_output() {
     let body = norito::json::to_vec(&norito::json!({
@@ -1588,17 +1467,14 @@ fn privacy_aggregate_publish_due_rejects_caller_supplied_prf_output() {
         "cycle_prf_output_hex": ("5a".repeat(32)),
     }))
     .expect("encode retired caller PRF field");
-
     let response = privacy_aggregate_publish_due_request_from_body(&body)
         .expect_err("caller-supplied PRF output must be rejected as an unknown field");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_requires_canonical_request_auth() {
     let (app, _temp_dir, _auth) = sorafs_app_state_with_privacy_aggregate_schedule();
     let body = privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211));
-
     let response = handle_post_sorafs_transparency_privacy_aggregate_publish_due(
         State(app),
         HeaderMap::new(),
@@ -1607,21 +1483,16 @@ async fn privacy_aggregate_publish_due_endpoint_requires_canonical_request_auth(
         body,
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_requires_cycle_publisher_role() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
     let body = privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211));
-
     let response = post_privacy_aggregate_publish_due(app.clone(), &auth.buyer, body).await;
-
     assert_forbidden_role(response, SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE).await;
     assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
 }
-
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
@@ -1631,14 +1502,12 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     let source_response =
         post_privacy_aggregate_source_event(app.clone(), &auth.provider, source_body).await;
     assert_eq!(source_response.status(), StatusCode::ACCEPTED);
-
     let response = post_privacy_aggregate_publish_due(
         app.clone(),
         &auth.provider,
         privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1667,7 +1536,6 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
         &auth.provider.account,
         "privacy_aggregate_publish_due",
     );
-
     let repeat = post_privacy_aggregate_publish_due(
         app,
         &auth.provider,
@@ -1679,32 +1547,26 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
     assert_eq!(value.json_str(&["status"]), Some("published"));
     assert_eq!(value.json_bool(&["published"]), Some(true));
 }
-
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_commits_empty_suppression_window() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
-
     let response = post_privacy_aggregate_publish_due(
         app,
         &auth.provider,
         privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211)),
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let value = api_test_response_json(response).await;
     assert_eq!(value.json_str(&["status"]), Some("all_buckets_suppressed"));
     assert_eq!(value.json_bool(&["published"]), Some(false));
 }
-
 #[tokio::test]
 async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
     let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let rollup = appeal_finance_weekly_rollup_fixture();
     let body = appeal_finance_weekly_rollup_body(rollup.clone());
-
     let response = post_appeal_finance_weekly_rollup(app.clone(), &auth.provider, body).await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let value = api_test_response_json(response).await;
     assert_eq!(
@@ -1718,7 +1580,6 @@ async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
     assert_eq!(sources.len(), 1);
     assert!(sources[0].0.exists());
     assert!(sources[0].1.exists());
-
     let index = read_publication_section_fixture(&app, "publish_index");
     assert_eq!(
         index
@@ -1735,7 +1596,6 @@ async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
         "appeal_finance_weekly_rollup",
     );
 }
-
 async fn post_appeal_finance_report(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1746,7 +1606,6 @@ async fn post_appeal_finance_report(
     let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
     handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
 }
-
 async fn post_privacy_aggregate_source_event(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1764,7 +1623,6 @@ async fn post_privacy_aggregate_source_event(
     )
     .await
 }
-
 async fn post_privacy_aggregate_publish_due(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1782,7 +1640,6 @@ async fn post_privacy_aggregate_publish_due(
     )
     .await
 }
-
 async fn post_transparency_proof_token_issuance(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1793,7 +1650,6 @@ async fn post_transparency_proof_token_issuance(
     let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
     handle_post_sorafs_transparency_token_issuance(State(app), headers, method, uri, body).await
 }
-
 async fn post_appeal_finance_deposit(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1804,7 +1660,6 @@ async fn post_appeal_finance_deposit(
     let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
     handle_post_sorafs_appeal_finance_deposit(State(app), headers, method, uri, body).await
 }
-
 async fn post_appeal_finance_deposit_confirm(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1815,7 +1670,6 @@ async fn post_appeal_finance_deposit_confirm(
     let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
     handle_post_sorafs_appeal_finance_deposit_confirm(State(app), headers, method, uri, body).await
 }
-
 async fn post_appeal_finance_deposit_settle(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1826,7 +1680,6 @@ async fn post_appeal_finance_deposit_settle(
     let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
     handle_post_sorafs_appeal_finance_deposit_settle(State(app), headers, method, uri, body).await
 }
-
 async fn post_appeal_finance_deposit_submit_settlement(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1844,7 +1697,6 @@ async fn post_appeal_finance_deposit_submit_settlement(
     )
     .await
 }
-
 async fn post_appeal_finance_deposit_reconcile(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1856,7 +1708,6 @@ async fn post_appeal_finance_deposit_reconcile(
     handle_post_sorafs_appeal_finance_deposit_reconcile(State(app), headers, method, uri, body)
         .await
 }
-
 async fn get_appeal_finance_deposit(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,
@@ -1876,7 +1727,6 @@ async fn get_appeal_finance_deposit(
     )
     .await
 }
-
 async fn post_appeal_finance_weekly_rollup(
     app: SharedAppState,
     signer: &OrderbookAccountFixture,

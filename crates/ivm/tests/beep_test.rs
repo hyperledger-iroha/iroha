@@ -1,6 +1,5 @@
 #[cfg(feature = "beep")]
 use ivm::IVM;
-
 #[cfg(feature = "beep")]
 #[test]
 fn beep_music_runs() {

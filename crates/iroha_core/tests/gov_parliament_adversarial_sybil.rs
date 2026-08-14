@@ -1,9 +1,6 @@
 //! Adversarial SORA parliament tests for wealthy Sybil-style sortition capture.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use core::num::NonZeroU64;
-use std::collections::BTreeSet;
-
 use iroha_core::{
     governance::{draw, state::ParliamentTerm},
     kura::Kura,
@@ -24,34 +21,29 @@ use iroha_data_model::{
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
 };
 use mv::storage::StorageReadOnly;
-
+use std::collections::BTreeSet;
 const ATTACKER_BOND_XOR: u128 = 10_000;
 const ATTACKER_COUNT: usize = 97;
 const HONEST_COUNT: usize = 3;
 const REFERENDUM_END: u64 = 500;
 const MULTI_BEACON_SAMPLES: u64 = 32;
-
 fn seeded_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("seeded governance keypair should be valid")
 }
-
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         label,
     )))
 }
-
 fn mk_account(seed: u8) -> AccountId {
     let keypair = seeded_keypair(seed);
     let (public_key, _) = keypair.into_parts();
     AccountId::new(public_key)
 }
-
 fn canonical_abi_hash_bytes() -> [u8; 32] {
     ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
 }
-
 fn proposal_contract_address(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -65,7 +57,6 @@ fn proposal_contract_address(
     )
     .expect("proposal contract address")
 }
-
 fn manifest_provenance(
     code_hash_hex: &str,
     abi_hash_hex: &str,
@@ -77,7 +68,6 @@ fn manifest_provenance(
         out.copy_from_slice(&bytes);
         out
     }
-
     ContractManifest {
         seiyaku_name: None,
         code_hash: Some(Hash::prehashed(parse_hex32(code_hash_hex))),
@@ -95,7 +85,6 @@ fn manifest_provenance(
     .provenance
     .expect("manifest should contain provenance")
 }
-
 fn seeded_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -114,7 +103,6 @@ fn seeded_state() -> State {
     state.set_gov(cfg);
     state
 }
-
 fn seed_sortition_term_from_candidates(
     candidates: &[(AccountId, u128)],
     beacon: [u8; 32],
@@ -150,7 +138,6 @@ fn seed_sortition_term_from_candidates(
     let bodies = draw::derive_parliament_bodies(&gov_cfg, &network_id, epoch, &beacon, &term);
     (network_id, beacon, term, bodies)
 }
-
 fn seed_sortition_term_with_beacon(
     attacker_accounts: &[AccountId],
     honest_accounts: &[AccountId],
@@ -174,7 +161,6 @@ fn seed_sortition_term_with_beacon(
     );
     seed_sortition_term_from_candidates(&candidates, beacon)
 }
-
 fn seed_sortition_term(
     attacker_accounts: &[AccountId],
     honest_accounts: &[AccountId],
@@ -186,7 +172,6 @@ fn seed_sortition_term(
 ) {
     seed_sortition_term_with_beacon(attacker_accounts, honest_accounts, [0x7b; 32])
 }
-
 fn body_list() -> [ParliamentBody; 7] {
     [
         ParliamentBody::RulesCommittee,
@@ -198,7 +183,6 @@ fn body_list() -> [ParliamentBody; 7] {
         ParliamentBody::FmaCommittee,
     ]
 }
-
 fn beacon_from_seed(seed: u64) -> [u8; 32] {
     let mut beacon = [0_u8; 32];
     beacon[..8].copy_from_slice(&seed.to_le_bytes());
@@ -207,7 +191,6 @@ fn beacon_from_seed(seed: u64) -> [u8; 32] {
     beacon[24..32].copy_from_slice(&seed.wrapping_mul(0x9E37_79B9_7F4A_7C15_u64).to_le_bytes());
     beacon
 }
-
 fn controlled_member_seats(
     bodies: &iroha_data_model::governance::types::ParliamentBodies,
     attacker_set: &BTreeSet<AccountId>,
@@ -224,7 +207,6 @@ fn controlled_member_seats(
         })
         .sum()
 }
-
 fn seed_proposal_and_referendum(
     state: &mut State,
     proposal_id: [u8; 32],
@@ -269,7 +251,6 @@ fn seed_proposal_and_referendum(
     block.commit().expect("seed proposal block commit");
     referendum_id
 }
-
 fn seed_captured_parliament(
     state: &mut State,
     members: Vec<AccountId>,
@@ -305,7 +286,6 @@ fn seed_captured_parliament(
     stx.apply();
     block.commit().expect("seed parliament block commit");
 }
-
 fn approve(
     state: &mut State,
     height: u64,
@@ -332,7 +312,6 @@ fn approve(
         Err(err) => Err(err),
     }
 }
-
 #[test]
 fn wealthy_sybil_can_capture_multibody_sortition_share_under_good_settings() {
     let attackers: Vec<AccountId> = (0..ATTACKER_COUNT)
@@ -341,11 +320,9 @@ fn wealthy_sybil_can_capture_multibody_sortition_share_under_good_settings() {
     let honest: Vec<AccountId> = (0..HONEST_COUNT)
         .map(|idx| mk_account(u8::try_from(idx + ATTACKER_COUNT + 1).expect("index should fit u8")))
         .collect();
-
     let (_chain, _beacon, _term, bodies) = seed_sortition_term(&attackers, &honest);
     let attacker_set: BTreeSet<_> = attackers.iter().cloned().collect();
     let cfg = iroha_config::parameters::actual::Governance::default();
-
     for body in body_list() {
         let roster = bodies.rosters.get(&body).expect("body roster should exist");
         let controlled = roster
@@ -365,7 +342,6 @@ fn wealthy_sybil_can_capture_multibody_sortition_share_under_good_settings() {
         );
     }
 }
-
 #[test]
 fn wealthy_sybil_capture_is_stable_across_many_beacons() {
     let attackers: Vec<AccountId> = (0..ATTACKER_COUNT)
@@ -377,7 +353,6 @@ fn wealthy_sybil_capture_is_stable_across_many_beacons() {
     let attacker_set: BTreeSet<_> = attackers.iter().cloned().collect();
     let cfg = iroha_config::parameters::actual::Governance::default();
     let mut misses = Vec::new();
-
     for seed in 0..MULTI_BEACON_SAMPLES {
         let beacon = beacon_from_seed(seed);
         let (_chain, _beacon, _term, bodies) =
@@ -399,7 +374,6 @@ fn wealthy_sybil_capture_is_stable_across_many_beacons() {
             }
         }
     }
-
     const MAX_ALLOWED_MISSES: usize = 1;
     assert!(
         misses.len() <= MAX_ALLOWED_MISSES,
@@ -408,7 +382,6 @@ fn wealthy_sybil_capture_is_stable_across_many_beacons() {
         MULTI_BEACON_SAMPLES as usize * body_list().len()
     );
 }
-
 #[test]
 fn splitting_budget_into_many_10k_identities_outcontrols_single_whale() {
     const SPLIT_ATTACKER_COUNT: usize = 20;
@@ -420,7 +393,6 @@ fn splitting_budget_into_many_10k_identities_outcontrols_single_whale() {
     let honest: Vec<AccountId> = (0..HONEST_BASELINE_COUNT)
         .map(|idx| mk_account(u8::try_from(idx + 170).expect("index should fit u8")))
         .collect();
-
     let total_attacker_budget = ATTACKER_BOND_XOR
         .saturating_mul(u128::try_from(SPLIT_ATTACKER_COUNT).expect("count should fit u128"));
     let split_candidates: Vec<(AccountId, u128)> = split_attackers
@@ -433,10 +405,8 @@ fn splitting_budget_into_many_10k_identities_outcontrols_single_whale() {
         std::iter::once((whale_attacker.clone(), total_attacker_budget))
             .chain(honest.iter().cloned().map(|id| (id, ATTACKER_BOND_XOR)))
             .collect();
-
     let split_set: BTreeSet<_> = split_attackers.iter().cloned().collect();
     let whale_set: BTreeSet<_> = std::iter::once(whale_attacker).collect();
-
     for seed in 0..MULTI_BEACON_SAMPLES {
         let beacon = beacon_from_seed(seed);
         let (_chain, _beacon, _term, split_bodies) =
@@ -445,14 +415,12 @@ fn splitting_budget_into_many_10k_identities_outcontrols_single_whale() {
         let (_chain, _beacon, _term, whale_bodies) =
             seed_sortition_term_from_candidates(&whale_candidates, beacon);
         let whale_control = controlled_member_seats(&whale_bodies, &whale_set);
-
         assert!(
             split_control > whale_control,
             "10k-account splitting should out-control a single whale with the same budget for beacon seed {seed}: split_control={split_control}, whale_control={whale_control}"
         );
     }
 }
-
 #[test]
 fn attacker_control_seat_count_is_monotonic_with_identity_set_growth() {
     let all_accounts: Vec<AccountId> = (0..(ATTACKER_COUNT + HONEST_COUNT))
@@ -461,11 +429,9 @@ fn attacker_control_seat_count_is_monotonic_with_identity_set_growth() {
     let attackers_hi: Vec<AccountId> = all_accounts.iter().take(97).cloned().collect();
     let honest: Vec<AccountId> = all_accounts.iter().skip(97).cloned().collect();
     let (_chain, _beacon, _term, bodies) = seed_sortition_term(&attackers_hi, &honest);
-
     let attacker_lo: BTreeSet<_> = all_accounts.iter().take(10).cloned().collect();
     let attacker_mid: BTreeSet<_> = all_accounts.iter().take(50).cloned().collect();
     let attacker_hi: BTreeSet<_> = all_accounts.iter().take(97).cloned().collect();
-
     let controlled_total = |set: &BTreeSet<AccountId>| -> usize {
         body_list()
             .into_iter()
@@ -475,7 +441,6 @@ fn attacker_control_seat_count_is_monotonic_with_identity_set_growth() {
             })
             .sum()
     };
-
     let lo = controlled_total(&attacker_lo);
     let mid = controlled_total(&attacker_mid);
     let hi = controlled_total(&attacker_hi);
@@ -484,7 +449,6 @@ fn attacker_control_seat_count_is_monotonic_with_identity_set_growth() {
         "controlled seat totals must be monotonic with attacker identity-set growth: lo={lo}, mid={mid}, hi={hi}"
     );
 }
-
 #[test]
 fn duplicate_approvals_do_not_count_twice_for_quorum() {
     let mut state = seeded_state();
@@ -510,13 +474,11 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         }),
         &attacker_a,
     );
-
     seed_captured_parliament(
         &mut state,
         vec![attacker_a.clone(), attacker_b.clone(), honest.clone()],
         vec![],
     );
-
     approve(
         &mut state,
         4,
@@ -549,7 +511,6 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         1,
         "duplicate approval from same signer must not increase recorded approvers"
     );
-
     approve(
         &mut state,
         6,
@@ -586,7 +547,6 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         iroha_core::state::GovernanceReferendumStatus::Proposed,
         "single-signer duplicates must not open referendum before unique quorum"
     );
-
     approve(
         &mut state,
         9,
@@ -611,7 +571,6 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         2,
         "agenda stage should count unique approvers and ignore duplicates"
     );
-
     let referendum = state
         .view()
         .world()
@@ -625,7 +584,6 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         "duplicated signatures must not accelerate progression; remaining body approvals are still required"
     );
 }
-
 #[test]
 fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
     let mut state = seeded_state();
@@ -658,7 +616,6 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
         vec![honest_a.clone(), honest_b.clone(), honest_c.clone()],
         vec![],
     );
-
     let err_rules = approve(
         &mut state,
         4,
@@ -687,7 +644,6 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
             .contains("only seated parliament members"),
         "unexpected agenda error: {err_agenda:?}"
     );
-
     let referendum = state
         .view()
         .world()

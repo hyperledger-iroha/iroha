@@ -2,7 +2,6 @@
 //!
 //! Currently exposes [`ReadConfig`] which generates an implementation of
 //! [`iroha_config_base::read::ReadConfig`] for the annotated struct.
-
 //!
 //! The macro reads fields from environment variables or provides defaults.
 //! Supported attributes:
@@ -10,18 +9,14 @@
 //! - `default` or `default = "expr"` - fallback value.
 //! - `nested` - read a nested struct under the field-name namespace unless `key` overrides it.
 //! - `key = "name"` - replace the Rust field name with a nonempty, unique configuration key.
-
 #![allow(unused)]
 #![allow(clippy::large_enum_variant)]
-
+use self::ast::Input;
+use crate::DarlingErrorWrapper;
 use darling::{FromAttributes, FromDeriveInput};
 use iroha_derive_primitives::Emitter;
 use manyhow::emit;
 use proc_macro2::TokenStream;
-
-use self::ast::Input;
-use crate::DarlingErrorWrapper;
-
 /// Derive `iroha_config_base::reader::ReadConfig` trait.
 ///
 /// Example schema:
@@ -74,7 +69,6 @@ use crate::DarlingErrorWrapper;
 /// for configuration structs based on `#[config(...)]` field attributes.
 pub fn derive_read_config_impl(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input): Option<syn::DeriveInput> = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
@@ -95,21 +89,16 @@ pub fn derive_read_config_impl(input: TokenStream) -> TokenStream {
     let Some(ir) = parsed.lower(&mut emitter) else {
         return emitter.finish_token_stream();
     };
-
     emitter.finish_token_stream_with(ir.generate())
 }
-
 /// Parsing proc-macro input
 mod ast {
-    use std::collections::HashSet;
-
+    use super::codegen;
     use iroha_derive_primitives::{Emitter, parse_single_list_attr_opt};
     use manyhow::{JoinToTokensError, emit};
     use proc_macro2::{Ident, Span, TokenStream, TokenTree};
+    use std::collections::HashSet;
     use syn::{Token, parse::ParseStream, punctuated::Punctuated};
-
-    use super::codegen;
-
     // Previously we used `attributes(config)` here which rejected all unknown
     // attributes with a generic error message. Struct-level attributes are now
     // handled explicitly in [`derive_read_config`], so no additional attribute
@@ -121,11 +110,9 @@ mod ast {
         generics: syn::Generics,
         data: darling::ast::Data<(), Field>,
     }
-
     impl Input {
         pub fn lower(self, emitter: &mut Emitter) -> Option<codegen::Ir> {
             let mut halt_codegen = false;
-
             for i in self.generics.params {
                 emit!(
                     emitter,
@@ -135,7 +122,6 @@ mod ast {
                 // proceeding to codegen with these errors will produce a mess
                 halt_codegen = true;
             }
-
             let entries = self
                 .data
                 .take_struct()
@@ -144,7 +130,6 @@ mod ast {
                 .into_iter()
                 .map(|field| field.into_codegen(emitter))
                 .collect::<Vec<_>>();
-
             let mut effective_keys = HashSet::new();
             for entry in &entries {
                 let key = entry
@@ -160,7 +145,6 @@ mod ast {
                     halt_codegen = true;
                 }
             }
-
             if halt_codegen {
                 None
             } else {
@@ -171,14 +155,12 @@ mod ast {
             }
         }
     }
-
     #[derive(Debug)]
     struct Field {
         ident: syn::Ident,
         ty: syn::Type,
         attrs: Attrs,
     }
-
     impl darling::FromField for Field {
         fn from_field(field: &syn::Field) -> darling::Result<Self> {
             let ident = field
@@ -187,18 +169,14 @@ mod ast {
                 .expect("darling should only allow named structs")
                 .clone();
             let ty = field.ty.clone();
-
             let attrs: Attrs =
                 parse_single_list_attr_opt("config", &field.attrs)?.unwrap_or_default();
-
             Ok(Self { ident, ty, attrs })
         }
     }
-
     impl Field {
         fn into_codegen(self, emitter: &mut Emitter) -> codegen::Entry {
             let Field { ident, ty, attrs } = self;
-
             let (kind, key) = match attrs {
                 Attrs::Nested { key } => (codegen::EntryKind::Nested, key),
                 Attrs::Parameter { default, env, key } => {
@@ -219,7 +197,6 @@ mod ast {
                             codegen::Evaluation::Optional
                         }
                     };
-
                     (
                         codegen::EntryKind::Parameter {
                             env,
@@ -233,7 +210,6 @@ mod ast {
             codegen::Entry { ident, key, kind }
         }
     }
-
     #[derive(Debug)]
     enum Attrs {
         Nested {
@@ -245,7 +221,6 @@ mod ast {
             key: Option<syn::LitStr>,
         },
     }
-
     impl Default for Attrs {
         fn default() -> Self {
             Self::Parameter {
@@ -255,7 +230,6 @@ mod ast {
             }
         }
     }
-
     #[derive(Debug)]
     enum AttrDefault {
         /// `config(default)`
@@ -263,7 +237,6 @@ mod ast {
         /// `config(default = "<expr>")`
         Value(syn::Expr),
     }
-
     impl syn::parse::Parse for Attrs {
         #[allow(clippy::too_many_lines)]
         fn parse(input: ParseStream) -> syn::Result<Self> {
@@ -274,7 +247,6 @@ mod ast {
                 key: Option<(Span, syn::LitStr)>,
                 nested: Option<Span>,
             }
-
             fn reject_duplicate<T>(
                 acc: &mut Option<T>,
                 span: Span,
@@ -287,7 +259,6 @@ mod ast {
                     Ok(())
                 }
             }
-
             let mut acc = Accumulator::default();
             let tokens: Punctuated<AttrItem, Token![,]> = Punctuated::parse_terminated(input)?;
             for token in tokens {
@@ -304,7 +275,6 @@ mod ast {
                     AttrItem::Nested(span) => reject_duplicate(&mut acc.nested, span, span)?,
                 }
             }
-
             let value = match acc {
                 Accumulator {
                     nested: Some(_),
@@ -330,11 +300,9 @@ mod ast {
                     key: key.map(|(_, lit)| lit),
                 },
             };
-
             Ok(value)
         }
     }
-
     #[derive(Debug)]
     /// A single item in the attribute list. Used for parsing of [`Attrs`].
     enum AttrItem {
@@ -343,17 +311,14 @@ mod ast {
         Key(Span, syn::LitStr),
         Nested(Span),
     }
-
     impl syn::parse::Parse for AttrItem {
         fn parse(input: ParseStream) -> syn::Result<Self> {
             input.step(|cursor| {
                 const EXPECTED_IDENT: &str =
                     "unexpected token; expected `default`, `env`, `key`, or `nested`";
-
                 let Some((ident, cursor)) = cursor.ident() else {
                     Err(syn::Error::new(cursor.span(), EXPECTED_IDENT))?
                 };
-
                 match ident.to_string().as_str() {
                     "default" => {
                         let (lit_str, cursor) = expect_eq_with_lit_str(cursor)?;
@@ -394,35 +359,29 @@ mod ast {
             })
         }
     }
-
     fn expect_eq_with_lit_str(
         cursor: syn::buffer::Cursor,
     ) -> syn::Result<(Option<syn::LitStr>, syn::buffer::Cursor)> {
         const EXPECTED_STR_LIT: &str = r#"expected a string literal, e.g. "...""#;
-
         let next = match cursor.token_tree() {
             Some((TokenTree::Punct(punct), next)) if punct.as_char() == '=' => next,
             _ => return Ok((None, cursor)),
         };
-
         let (lit, next) = match next.token_tree() {
             Some((TokenTree::Literal(lit), next)) => (lit, next),
             Some((other, _)) => Err(syn::Error::new(other.span(), EXPECTED_STR_LIT))?,
             None => Err(syn::Error::new(next.span(), EXPECTED_STR_LIT))?,
         };
-
         let mut lit_str = syn::parse_str::<syn::LitStr>(&lit.to_string())
             .map_err(|_| syn::Error::new(lit.span(), EXPECTED_STR_LIT))?;
         lit_str.set_span(lit.span());
         Ok((Some(lit_str), next))
     }
-
     #[derive(Debug, PartialEq)]
     struct ParameterTypeShape {
         option: bool,
         with_origin: bool,
     }
-
     impl ParameterTypeShape {
         fn analyze(ty: &syn::Type) -> Self {
             #[derive(Debug)]
@@ -431,7 +390,6 @@ mod ast {
                 WithOrigin,
                 Unknown,
             }
-
             fn try_find(ty: &syn::Type) -> Option<(Option<&syn::Type>, &Ident)> {
                 if let syn::Type::Path(type_path) = ty
                     && let Some(last_segment) = type_path.path.segments.last()
@@ -448,24 +406,19 @@ mod ast {
                         _ => {}
                     }
                 }
-
                 None
             }
-
             fn parse_tokens(ty: &syn::Type, depth: u8) -> Vec<Token> {
                 if depth == 0 {
                     return vec![];
                 }
-
                 if let Some((next, ident)) = try_find(ty) {
                     let token = match ident.to_string().as_ref() {
                         "Option" => Token::Option,
                         "WithOrigin" => Token::WithOrigin,
                         _ => Token::Unknown,
                     };
-
                     let mut chain = vec![token];
-
                     if let Some(next) = next {
                         chain.extend(parse_tokens(next, depth - 1));
                     }
@@ -474,33 +427,26 @@ mod ast {
                     vec![]
                 }
             }
-
             let chain = parse_tokens(ty, 3);
-
             let (option, with_origin) = match (chain.first(), chain.get(1)) {
                 (Some(Token::Option), Some(Token::WithOrigin)) => (true, true),
                 (Some(Token::Option), Some(_)) => (true, false),
                 (Some(Token::WithOrigin), _) => (false, true),
                 _ => (false, false),
             };
-
             Self {
                 option,
                 with_origin,
             }
         }
     }
-
     #[cfg(test)]
     mod tests {
-        use syn::parse_quote;
-
         use super::*;
-
+        use syn::parse_quote;
         #[test]
         fn parse_default() {
             let attrs: Attrs = syn::parse_quote!(default);
-
             assert!(matches!(
                 attrs,
                 Attrs::Parameter {
@@ -510,11 +456,9 @@ mod ast {
                 }
             ));
         }
-
         #[test]
         fn parse_default_with_expr() {
             let attrs: Attrs = syn::parse_quote!(default = "42 + 411");
-
             assert!(matches!(
                 attrs,
                 Attrs::Parameter {
@@ -524,11 +468,9 @@ mod ast {
                 }
             ));
         }
-
         #[test]
         fn parse_default_env() {
             let attrs: Attrs = syn::parse_quote!(default, env = "$!@#");
-
             let Attrs::Parameter {
                 default: Some(AttrDefault::Flag),
                 env: Some(var),
@@ -539,11 +481,9 @@ mod ast {
             };
             assert_eq!(var.value(), "$!@#");
         }
-
         #[test]
         fn parse_explicit_key() {
             let attrs: Attrs = syn::parse_quote!(default, key = "canonical_name");
-
             let Attrs::Parameter {
                 default: Some(AttrDefault::Flag),
                 env: None,
@@ -554,17 +494,14 @@ mod ast {
             };
             assert_eq!(key.value(), "canonical_name");
         }
-
         #[test]
         fn parse_nested_explicit_key() {
             let attrs: Attrs = syn::parse_quote!(nested, key = "canonical_namespace");
-
             let Attrs::Nested { key: Some(key) } = attrs else {
                 panic!("expectation failed")
             };
             assert_eq!(key.value(), "canonical_namespace");
         }
-
         #[test]
         #[should_panic(
             expected = "attributes conflict: `nested` cannot be set with `default` or `env`"
@@ -572,37 +509,31 @@ mod ast {
         fn conflict() {
             let _: Attrs = syn::parse_quote!(nested, default);
         }
-
         #[test]
         #[should_panic(expected = "duplicate attribute")]
         fn duplicates() {
             let _: Attrs = syn::parse_quote!(default, default);
         }
-
         #[test]
         #[should_panic(expected = "duplicate attribute")]
         fn duplicate_explicit_keys() {
             let _: Attrs = syn::parse_quote!(key = "first", key = "second");
         }
-
         #[test]
         #[should_panic(expected = "expected `key` to be set as")]
         fn key_requires_value() {
             let _: Attrs = syn::parse_quote!(key);
         }
-
         #[test]
         #[should_panic(expected = "configuration key cannot be empty")]
         fn key_rejects_empty_value() {
             let _: Attrs = syn::parse_quote!(key = "");
         }
-
         #[test]
         #[should_panic(expected = "configuration key cannot be empty")]
         fn key_rejects_empty_raw_string() {
             let _: Attrs = syn::parse_quote!(key = r#""#);
         }
-
         #[test]
         fn determine_shapes() {
             macro_rules! case {
@@ -618,7 +549,6 @@ mod ast {
                     );
                 };
             }
-
             case!(Something, false, false);
             case!(Option<Something>, true, false);
             case!(Option<WithOrigin<Something>>, true, true);
@@ -633,18 +563,15 @@ mod ast {
         }
     }
 }
-
 /// Generating code based on [`model`]
 mod codegen {
     use proc_macro2::TokenStream;
     use quote::quote;
-
     pub struct Ir {
         /// The type we are implementing `ReadConfig` for
         pub ident: syn::Ident,
         pub entries: Vec<Entry>,
     }
-
     impl Ir {
         pub fn generate(self) -> TokenStream {
             let (read_fields, unwrap_fields): (Vec<_>, Vec<_>) = self
@@ -653,16 +580,13 @@ mod codegen {
                 .map(Entry::generate)
                 .map(|EntryParts { read, unwrap }| (read, unwrap))
                 .unzip();
-
             let ident = self.ident;
-
             quote! {
                 impl ::iroha_config_base::read::ReadConfig for #ident {
                     fn read(
                         __reader: &mut ::iroha_config_base::read::ConfigReader
                     ) -> ::iroha_config_base::read::FinalWrap<Self> {
                         #(#read_fields)*
-
                         ::iroha_config_base::read::FinalWrap::value_fn(|| Self {
                             #(#unwrap_fields),*
                         })
@@ -671,18 +595,15 @@ mod codegen {
             }
         }
     }
-
     pub struct Entry {
         pub ident: syn::Ident,
         pub key: Option<syn::LitStr>,
         pub kind: EntryKind,
     }
-
     impl Entry {
         fn generate(self) -> EntryParts {
             let Self { kind, ident, key } = self;
             let key = key.map_or_else(|| quote! { stringify!(#ident) }, |key| quote! { #key });
-
             let read = match kind {
                 EntryKind::Nested => {
                     quote! { let #ident = __reader.read_nested(#key); }
@@ -712,19 +633,16 @@ mod codegen {
                     read
                 }
             };
-
             EntryParts {
                 read,
                 unwrap: quote! { #ident: #ident.unwrap() },
             }
         }
     }
-
     struct EntryParts {
         read: TokenStream,
         unwrap: TokenStream,
     }
-
     pub enum EntryKind {
         Parameter {
             env: Option<syn::LitStr>,
@@ -733,21 +651,17 @@ mod codegen {
         },
         Nested,
     }
-
     pub enum Evaluation {
         Required,
         OrElse(syn::Expr),
         OrDefault,
         Optional,
     }
-
     #[cfg(test)]
     mod tests {
+        use super::*;
         use expect_test::expect;
         use syn::parse_quote;
-
-        use super::*;
-
         #[test]
         fn entry_with_env_reading() {
             let entry = Entry {
@@ -759,12 +673,9 @@ mod codegen {
                     with_origin: false,
                 },
             };
-
             let actual = entry.generate().read.to_string();
-
             expect![[r#"let test = __reader . read_parameter (["canonical_test"]) . env ("TEST_ENV") . value_required () . finish () ;"#]].assert_eq(&actual);
         }
-
         #[test]
         fn nested_entry_uses_explicit_key() {
             let entry = Entry {
@@ -772,13 +683,10 @@ mod codegen {
                 key: Some(parse_quote!("governance_dag_service")),
                 kind: EntryKind::Nested,
             };
-
             let actual = entry.generate().read.to_string();
-
             expect![[r#"let service = __reader . read_nested ("governance_dag_service") ;"#]]
                 .assert_eq(&actual);
         }
-
         #[test]
         fn entry_without_explicit_key_preserves_field_name_codegen() {
             let entry = Entry {
@@ -790,9 +698,7 @@ mod codegen {
                     with_origin: false,
                 },
             };
-
             let actual = entry.generate().read.to_string();
-
             expect![[r#"let test = __reader . read_parameter ([stringify ! (test)]) . value_optional () . finish () ;"#]].assert_eq(&actual);
         }
     }

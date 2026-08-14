@@ -6,44 +6,34 @@
 //! response JSON DOM construction, and cache filesystem ingestion; those require
 //! a deployment-equivalent process-RSS or cgroup gate before the complete 64 MiB
 //! fetch requirement can be claimed.
-
 // This integration test is the narrow exception that needs `GlobalAlloc` in order to
 // measure the production stream bridge in an isolated child process.
 #![allow(unsafe_code)]
-
+use iroha_data_model::musubi::{MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1};
+use sorafs_car::{CarBuildPlan, CarChunk, CarStreamingWriter, FilePlan};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     io::{self, Read},
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
-
-use iroha_data_model::musubi::{MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1};
-use sorafs_car::{CarBuildPlan, CarChunk, CarStreamingWriter, FilePlan};
-
 #[path = "../src/musubi_archive_fetch/bounded_stream.rs"]
 mod bounded_stream;
-
 const CHILD_MODE_ENV: &str = "IROHA_MUSUBI_FETCH_MEMORY_CHILD_V1";
 const FETCH_HEAP_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 const BUNDLE_METADATA_FILE_COUNT: usize = 3;
-
 struct PeakAllocator;
-
 static CURRENT_ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 static PEAK_ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
-
 fn record_allocation(bytes: usize) {
     let current = CURRENT_ALLOCATED_BYTES
         .fetch_add(bytes, Ordering::SeqCst)
         .saturating_add(bytes);
     PEAK_ALLOCATED_BYTES.fetch_max(current, Ordering::SeqCst);
 }
-
 fn record_deallocation(bytes: usize) {
     CURRENT_ALLOCATED_BYTES.fetch_sub(bytes, Ordering::SeqCst);
 }
-
 // SAFETY: every operation delegates to `System` with the exact pointer/layout
 // contract it received, then updates only independent atomic byte counters.
 unsafe impl GlobalAlloc for PeakAllocator {
@@ -55,7 +45,6 @@ unsafe impl GlobalAlloc for PeakAllocator {
         }
         pointer
     }
-
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         // SAFETY: the caller supplies the `GlobalAlloc` layout contract unchanged.
         let pointer = unsafe { System.alloc_zeroed(layout) };
@@ -64,13 +53,11 @@ unsafe impl GlobalAlloc for PeakAllocator {
         }
         pointer
     }
-
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
         record_deallocation(layout.size());
         // SAFETY: the pointer and layout are forwarded unchanged to their allocator.
         unsafe { System.dealloc(pointer, layout) };
     }
-
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         // SAFETY: the pointer, old layout, and requested size are forwarded unchanged.
         let replacement = unsafe { System.realloc(pointer, layout, new_size) };
@@ -81,20 +68,16 @@ unsafe impl GlobalAlloc for PeakAllocator {
         replacement
     }
 }
-
 #[global_allocator]
 static GLOBAL_ALLOCATOR: PeakAllocator = PeakAllocator;
-
 struct ZeroReader {
     remaining: u64,
 }
-
 impl ZeroReader {
     const fn new(remaining: u64) -> Self {
         Self { remaining }
     }
 }
-
 impl Read for ZeroReader {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         let output_len = u64::try_from(output.len()).expect("output length fits u64");
@@ -105,7 +88,6 @@ impl Read for ZeroReader {
         Ok(count)
     }
 }
-
 fn zero_digest(length: usize) -> blake3::Hash {
     let mut hasher = blake3::Hasher::new();
     let zeroes = [0_u8; 8 * 1024];
@@ -117,7 +99,6 @@ fn zero_digest(length: usize) -> blake3::Hash {
     }
     hasher.finalize()
 }
-
 fn worst_case_v1_geometry_plan() -> CarBuildPlan {
     let profile = sorafs_car::chunker_registry::default_descriptor().profile;
     let content_length = MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1;
@@ -131,7 +112,6 @@ fn worst_case_v1_geometry_plan() -> CarBuildPlan {
     let mut chunks = Vec::new();
     let mut files = Vec::new();
     let mut offset = 0_u64;
-
     for file_index in 0..file_count {
         let first_chunk = chunks.len();
         let mut size = 1_u64;
@@ -173,7 +153,6 @@ fn worst_case_v1_geometry_plan() -> CarBuildPlan {
     plan.validate().expect("worst-case V1 geometry is valid");
     plan
 }
-
 fn push_zero_chunk(chunks: &mut Vec<CarChunk>, offset: &mut u64, length: usize) {
     let length_u32 = u32::try_from(length).expect("registered chunk length fits u32");
     chunks.push(CarChunk {
@@ -184,7 +163,6 @@ fn push_zero_chunk(chunks: &mut Vec<CarChunk>, offset: &mut u64, length: usize) 
     });
     *offset += u64::try_from(length).expect("registered chunk length fits u64");
 }
-
 fn retained_plan_heap_bytes(plan: &CarBuildPlan) -> usize {
     let mut retained = plan.chunks.capacity() * std::mem::size_of::<CarChunk>()
         + plan.files.capacity() * std::mem::size_of::<FilePlan>();
@@ -198,7 +176,6 @@ fn retained_plan_heap_bytes(plan: &CarBuildPlan) -> usize {
     }
     retained
 }
-
 fn measured_peak_delta(operation: impl FnOnce()) -> usize {
     let baseline = CURRENT_ALLOCATED_BYTES.load(Ordering::SeqCst);
     PEAK_ALLOCATED_BYTES.store(baseline, Ordering::SeqCst);
@@ -207,7 +184,6 @@ fn measured_peak_delta(operation: impl FnOnce()) -> usize {
         .load(Ordering::SeqCst)
         .saturating_sub(baseline)
 }
-
 #[test]
 fn production_stream_bridge_peak_heap_is_bounded() {
     let output = Command::new(std::env::current_exe().expect("current test executable"))
@@ -227,7 +203,6 @@ fn production_stream_bridge_peak_heap_is_bounded() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
 #[test]
 #[ignore = "executed in an isolated child by production_stream_bridge_peak_heap_is_bounded"]
 fn production_stream_bridge_peak_heap_child() {
@@ -241,7 +216,6 @@ fn production_stream_bridge_peak_heap_child() {
         .expect("precompute canonical CAR statistics");
     let caller_plan_bytes = retained_plan_heap_bytes(&plan);
     let maximum_provider_chunk = plan.chunk_profile.max_size;
-
     let stream_peak_delta = measured_peak_delta(|| {
         let worker_plan = plan.clone();
         let expected_roots = expected.root_cids.clone();

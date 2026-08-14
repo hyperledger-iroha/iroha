@@ -1,5 +1,4 @@
 // Lane-geometry journal structure validation and recovery guards.
-
 fn lane_geometry_journal_structure_error(
     store_root: &Path,
     kind: ErrorKind,
@@ -10,7 +9,6 @@ fn lane_geometry_journal_structure_error(
         store_root.join(JOURNAL_FILE_NAME),
     )
 }
-
 fn validate_lane_geometry_phase_frontier(
     store_root: &Path,
     journal: &LaneGeometryJournal,
@@ -45,7 +43,6 @@ fn validate_lane_geometry_phase_frontier(
     }
     Ok(())
 }
-
 fn validate_lane_geometry_journal_structure(
     store_root: &Path,
     journal: &LaneGeometryJournal,
@@ -111,7 +108,6 @@ fn validate_lane_geometry_journal_structure(
     }
     validate_pending_lane_geometry_gc_structure(store_root, journal)?;
     validate_lane_geometry_phase_frontier(store_root, journal)?;
-
     let mut transition_ids = BTreeSet::new();
     let mut retained_paths = BTreeSet::new();
     if journal.records.windows(2).any(|pair| {
@@ -170,7 +166,6 @@ fn validate_lane_geometry_journal_structure(
                 "lane geometry journal transition chain is not contiguous",
             ));
         }
-
         let transition_hex = hex::encode(record.transition_id.as_ref());
         let previous_by_lane = record
             .previous_bindings
@@ -193,7 +188,6 @@ fn validate_lane_geometry_journal_structure(
                 "lane geometry journal operations are duplicated or unsorted",
             ));
         }
-
         let mut lane_ids = BTreeSet::new();
         for operation in &record.operations {
             if !lane_ids.insert(operation.lane_id)
@@ -291,7 +285,6 @@ fn validate_lane_geometry_journal_structure(
                 ));
             }
         }
-
         let expected_changed_lanes = previous_by_lane
             .keys()
             .chain(updated_by_lane.keys())
@@ -312,7 +305,6 @@ fn validate_lane_geometry_journal_structure(
     }
     Ok(())
 }
-
 fn validate_lane_geometry_checkpoint_structure(
     store_root: &Path,
     checkpoint: &LaneGeometrySnapshotCheckpoint,
@@ -385,7 +377,6 @@ fn validate_lane_geometry_checkpoint_structure(
         )),
     }
 }
-
 fn validate_geometry_merge_release_structure(
     store_root: &Path,
     releases: &[LaneGeometryMergeRelease],
@@ -412,7 +403,6 @@ fn validate_geometry_merge_release_structure(
     }
     Ok(())
 }
-
 fn validate_pending_lane_geometry_gc_structure(
     store_root: &Path,
     journal: &LaneGeometryJournal,
@@ -512,9 +502,7 @@ fn validate_pending_lane_geometry_gc_structure(
     }
     Ok(())
 }
-
 // Lane-geometry catalog validation and deterministic commitment helpers.
-
 fn validate_geometry_binding_structure(
     store_root: &Path,
     binding: &LaneGeometryBinding,
@@ -529,7 +517,6 @@ fn validate_geometry_binding_structure(
     validate_geometry_journal_relative_path(store_root, &binding.blocks_path, true)?;
     validate_geometry_journal_relative_path(store_root, &binding.merge_path, false)
 }
-
 fn validate_geometry_binding_set_structure(
     store_root: &Path,
     bindings: &[LaneGeometryBinding],
@@ -563,7 +550,6 @@ fn validate_geometry_binding_set_structure(
     }
     Ok(())
 }
-
 fn validate_geometry_journal_relative_path(
     store_root: &Path,
     relative: &str,
@@ -580,7 +566,6 @@ fn validate_geometry_journal_relative_path(
             "Kura geometry store root must remain a non-symlink directory",
         ));
     }
-
     let components = relative.components().collect::<Vec<_>>();
     let mut cursor = store_root.to_path_buf();
     for (index, component) in components.iter().enumerate() {
@@ -625,7 +610,6 @@ fn validate_geometry_journal_relative_path(
     }
     Ok(())
 }
-
 fn native_amx_receipt_targets_retirement(
     receipt: &iroha_data_model::block::consensus::NativeAmxReceipt,
     retiring: &BTreeSet<LaneRetirementIdentity>,
@@ -642,7 +626,6 @@ fn native_amx_receipt_targets_retirement(
     }
     Ok(targets_retirement)
 }
-
 fn lane_payload_targets_retirement(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     retiring: &BTreeSet<LaneRetirementIdentity>,
@@ -686,7 +669,6 @@ fn lane_payload_targets_retirement(
             native_amx_receipt_targets_retirement(receipt, retiring).unwrap_or(true)
         })
 }
-
 fn lane_proposal_coordinator_targets_retirement(
     proposal: &LaneBlockProposalV1,
     retiring: &BTreeSet<LaneRetirementIdentity>,
@@ -698,7 +680,6 @@ fn lane_proposal_coordinator_targets_retirement(
         lane_incarnation: descriptor.lane_incarnation,
     })
 }
-
 fn routing_plan_from_execution_context(
     context: &ExternalExecutionContext,
 ) -> Option<crate::queue::RoutingPlan> {
@@ -734,22 +715,18 @@ fn routing_plan_from_execution_context(
             == context.routing_plan_legs)
         .then_some(plan)
 }
-
 fn geometry_catalog_fingerprint(bindings: &[LaneGeometryBinding]) -> Hash {
     let encoded = bindings.to_vec().encode();
     Hash::new_from_chunks(&[CATALOG_DOMAIN, encoded.as_slice()])
 }
-
 #[cfg(test)]
 fn unscoped_lineage_root(bindings: &[LaneGeometryBinding]) -> Hash {
     let catalog = geometry_catalog_fingerprint(bindings);
     Hash::new_from_chunks(&[UNSCOPED_LINEAGE_DOMAIN, catalog.as_ref()])
 }
-
 fn lineage_root_is_zero(root: Hash) -> bool {
     root.as_ref().iter().all(|byte| *byte == 0)
 }
-
 fn geometry_transition_id(
     transition_sequence: u64,
     transition_height: u64,
@@ -768,7 +745,6 @@ fn geometry_transition_id(
         updated_lineage_root.as_ref(),
     ])
 }
-
 fn geometry_checkpoint_commitment(checkpoint: &LaneGeometrySnapshotCheckpoint) -> Hash {
     let mut payload = Vec::new();
     payload.push(checkpoint.version);
@@ -829,18 +805,15 @@ fn geometry_checkpoint_commitment(checkpoint: &LaneGeometrySnapshotCheckpoint) -
     }
     Hash::new_from_chunks(&[CHECKPOINT_DOMAIN, payload.as_slice()])
 }
-
 fn geometry_pending_archive_gc_root(pending: &[LaneGeometryPendingArchiveGc]) -> Hash {
     Hash::new_from_chunks(&[PENDING_GC_DOMAIN, pending.to_vec().encode().as_slice()])
 }
-
 fn geometry_merge_marker_set_root(markers: &[(StatePath, Vec<u8>)]) -> Hash {
     Hash::new_from_chunks(&[
         MERGE_RELEASE_MARKERS_DOMAIN,
         markers.to_vec().encode().as_slice(),
     ])
 }
-
 fn lane_geometry_snapshot_checkpoint(
     snapshot_height: u64,
     snapshot_block_hash: Option<HashOf<BlockHeader>>,
@@ -875,7 +848,6 @@ fn lane_geometry_snapshot_checkpoint(
     checkpoint.commitment = geometry_checkpoint_commitment(&checkpoint);
     checkpoint
 }
-
 fn validate_relative_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
@@ -893,12 +865,10 @@ fn validate_relative_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-
         GeometryFileIdentity {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -907,7 +877,6 @@ fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
     #[cfg(windows)]
     {
         use std::{os::windows::fs::MetadataExt, sync::atomic::Ordering};
-
         let volume_serial_number = metadata.volume_serial_number();
         let file_index = metadata.file_index();
         let unsupported_nonce = if volume_serial_number.is_some() && file_index.is_some() {
@@ -926,14 +895,12 @@ fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
     #[cfg(not(any(unix, windows)))]
     {
         use std::sync::atomic::Ordering;
-
         let _ = metadata;
         GeometryFileIdentity {
             unsupported_nonce: UNSUPPORTED_GEOMETRY_IDENTITY_NONCE.fetch_add(1, Ordering::Relaxed),
         }
     }
 }
-
 fn checked_geometry_file_identity(
     metadata: &fs::Metadata,
     path: &Path,
@@ -966,7 +933,6 @@ fn checked_geometry_file_identity(
         Ok(identity)
     }
 }
-
 fn decode_exact<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::core::Error> {
     let mut input = bytes;
     let value = T::decode(&mut input)?;

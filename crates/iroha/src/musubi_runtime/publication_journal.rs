@@ -1,16 +1,4 @@
 //! Crash-safe replay and idempotency persistence for the private Musubi publication service.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
-    path::{Path, PathBuf},
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
@@ -22,12 +10,19 @@ use super::{
     MusubiPublicationServiceJournalBindingV1, MusubiPublicationServiceJournalErrorV1,
     MusubiPublicationServiceJournalV1, valid_storage_generation_target,
 };
-
 #[cfg(unix)]
 use crate::musubi_archive_fetch::{
     secure_directory_open_flags, secure_no_follow_nonblocking_flags,
 };
-
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
+    path::{Path, PathBuf},
+};
 const JOURNAL_STATE_FILE: &str = "publication-journal-v1.norito";
 const JOURNAL_LOCK_FILE: &str = "publication-journal-v1.lock";
 const JOURNAL_NEXT_FILE: &str = "publication-journal-v1.next";
@@ -40,7 +35,6 @@ const MAX_DURABLE_JOURNAL_SNAPSHOT_BYTES_V1: u64 = 96 * 1024 * 1024;
 const MIN_DURABLE_JOURNAL_SNAPSHOT_OVERHEAD_BYTES_V1: u64 = 256 * 1024;
 const JOURNAL_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 8;
 const JOURNAL_DECODE_FIXED_ALLOCATION_BYTES_V1: usize = 64 * 1024;
-
 /// Immutable capacities bound into one durable publication journal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 #[allow(
@@ -53,7 +47,6 @@ pub struct DurableMusubiPublicationServiceJournalLimitsV1 {
     max_total_response_bytes: u64,
     max_snapshot_bytes: u64,
 }
-
 impl DurableMusubiPublicationServiceJournalLimitsV1 {
     /// Construct deployment-fixed lifetime capacities for one journal.
     ///
@@ -81,31 +74,26 @@ impl DurableMusubiPublicationServiceJournalLimitsV1 {
         limits.validate()?;
         Ok(limits)
     }
-
     /// Maximum immutable publication-operation bindings retained for this journal's lifetime.
     #[must_use]
     pub const fn max_operations(self) -> u32 {
         self.max_operations
     }
-
     /// Maximum unexpired consumed-authorization digests retained at once.
     #[must_use]
     pub const fn max_authorizations(self) -> u32 {
         self.max_authorizations
     }
-
     /// Maximum completed-response bytes plus in-flight terminal reservations.
     #[must_use]
     pub const fn max_total_response_bytes(self) -> u64 {
         self.max_total_response_bytes
     }
-
     /// Maximum complete canonical journal-envelope length.
     #[must_use]
     pub const fn max_snapshot_bytes(self) -> u64 {
         self.max_snapshot_bytes
     }
-
     fn validate(self) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
         let minimum_response =
             u64::try_from(MAX_CONTROL_RESPONSE_BYTES).expect("control-response bound fits u64");
@@ -130,25 +118,20 @@ impl DurableMusubiPublicationServiceJournalLimitsV1 {
         }
         Ok(())
     }
-
     fn max_operations_usize(self) -> usize {
         usize::try_from(self.max_operations).expect("validated operation bound fits usize")
     }
-
     fn max_authorizations_usize(self) -> usize {
         usize::try_from(self.max_authorizations).expect("validated authorization bound fits usize")
     }
-
     fn max_snapshot_usize(self) -> usize {
         usize::try_from(self.max_snapshot_bytes).expect("validated snapshot bound fits usize")
     }
-
     fn max_results_usize(self) -> Option<usize> {
         self.max_operations_usize()
             .checked_mul(results_per_operation())
     }
 }
-
 /// Stable failure opening or initializing a durable publication journal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DurableMusubiPublicationServiceJournalOpenErrorV1 {
@@ -173,7 +156,6 @@ pub enum DurableMusubiPublicationServiceJournalOpenErrorV1 {
     /// Private durable state could not be read, recovered, or atomically replaced.
     StorageUnavailable,
 }
-
 impl DurableMusubiPublicationServiceJournalOpenErrorV1 {
     /// Return the stable operator-facing error code.
     #[must_use]
@@ -192,21 +174,17 @@ impl DurableMusubiPublicationServiceJournalOpenErrorV1 {
         }
     }
 }
-
 impl fmt::Display for DurableMusubiPublicationServiceJournalOpenErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
-
 impl std::error::Error for DurableMusubiPublicationServiceJournalOpenErrorV1 {}
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurablePublicationOperationRecordV1 {
     operation_id: [u8; 32],
     binding: MusubiPublicationOperationBindingV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 enum DurablePublicationResultStateV1 {
     #[codec(index = 0)]
@@ -228,19 +206,16 @@ enum DurablePublicationResultStateV1 {
         response: Vec<u8>,
     },
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurablePublicationResultRecordV1 {
     key: MusubiPublicationIdempotencyKeyV1,
     state: DurablePublicationResultStateV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurablePublicationAuthorizationRecordV1 {
     authorization_digest: [u8; 32],
     expires_at_ms: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurablePublicationJournalStateV1 {
     domain: [u8; 32],
@@ -254,7 +229,6 @@ struct DurablePublicationJournalStateV1 {
     total_response_bytes: u64,
     reserved_response_bytes: u64,
 }
-
 impl DurablePublicationJournalStateV1 {
     fn digest(&self) -> Result<[u8; 32], CandidateStateErrorV1> {
         let encoded = norito::encode_canonical(self).map_err(|_| CandidateStateErrorV1::Invalid)?;
@@ -264,13 +238,11 @@ impl DurablePublicationJournalStateV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurablePublicationJournalEnvelopeV1 {
     state: DurablePublicationJournalStateV1,
     state_digest: [u8; 32],
 }
-
 impl DurablePublicationJournalEnvelopeV1 {
     fn new(state: DurablePublicationJournalStateV1) -> Result<Self, CandidateStateErrorV1> {
         let state_digest = state.digest()?;
@@ -279,7 +251,6 @@ impl DurablePublicationJournalEnvelopeV1 {
             state_digest,
         })
     }
-
     fn validate_digest(&self) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
         if self
             .state
@@ -292,13 +263,11 @@ impl DurablePublicationJournalEnvelopeV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CandidateStateErrorV1 {
     Capacity,
     Invalid,
 }
-
 /// Restart-persistent bounded journal for one exact private publication-service deployment.
 ///
 /// V1 uses a dedicated Unix `0700` directory, holds one exclusive owner lock for its lifetime,
@@ -321,7 +290,6 @@ pub struct DurableMusubiPublicationServiceJournalV1 {
     state_version: PersistedJournalVersionV1,
     poisoned: bool,
 }
-
 impl fmt::Debug for DurableMusubiPublicationServiceJournalV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -334,7 +302,6 @@ impl fmt::Debug for DurableMusubiPublicationServiceJournalV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl DurableMusubiPublicationServiceJournalV1 {
     /// Explicitly initialize one empty private journal directory.
     ///
@@ -353,7 +320,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
     ) -> Result<Self, DurableMusubiPublicationServiceJournalOpenErrorV1> {
         Self::open_inner(root, binding, limits, true)
     }
-
     /// Open an initialized journal and durably recover every interrupted transition.
     ///
     /// `Pending` records become retryable aborted tombstones and interrupted receipt refreshes
@@ -370,7 +336,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
     ) -> Result<Self, DurableMusubiPublicationServiceJournalOpenErrorV1> {
         Self::open_inner(root, binding, limits, false)
     }
-
     fn open_inner(
         root: &Path,
         binding: MusubiPublicationServiceJournalBindingV1,
@@ -400,7 +365,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
         } else {
             None
         };
-
         let (root, root_handle, root_identity, root_owner) = open_private_root(root)?;
         if initialize {
             ensure_empty_initialization_root(&root)?;
@@ -420,7 +384,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
             lock_identity,
         };
         reconcile_directory(storage, limits.max_snapshot_usize())?;
-
         let state_path = root.join(JOURNAL_STATE_FILE);
         let loaded = read_journal_state(&state_path, root_owner, &binding, limits)?;
         if initialize && loaded.is_some() {
@@ -429,7 +392,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
         if !initialize && loaded.is_none() {
             return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized);
         }
-
         let (journal, revision, state_version) = loaded.map_or_else(
             || {
                 debug_assert!(initialize);
@@ -458,7 +420,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
                 }
             },
         )?;
-
         Ok(Self {
             binding,
             limits,
@@ -474,19 +435,16 @@ impl DurableMusubiPublicationServiceJournalV1 {
             poisoned: false,
         })
     }
-
     /// Return the durably committed snapshot revision.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
     }
-
     /// Return the deployment-fixed capacities persisted in this journal.
     #[must_use]
     pub const fn limits(&self) -> DurableMusubiPublicationServiceJournalLimitsV1 {
         self.limits
     }
-
     fn storage_context(&self) -> JournalStorageContext<'_> {
         JournalStorageContext {
             root: &self.root,
@@ -497,7 +455,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
             lock_identity: self.lock_identity,
         }
     }
-
     fn transition<T>(
         &mut self,
         apply: impl FnOnce(
@@ -549,7 +506,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
         self.state_version = state_version;
         Ok(value)
     }
-
     fn ensure_live(&mut self) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         if self.poisoned {
             return Err(MusubiPublicationServiceJournalErrorV1::Unavailable);
@@ -567,12 +523,10 @@ impl DurableMusubiPublicationServiceJournalV1 {
         Ok(())
     }
 }
-
 impl MusubiPublicationServiceJournalV1 for DurableMusubiPublicationServiceJournalV1 {
     fn deployment_binding(&self) -> &MusubiPublicationServiceJournalBindingV1 {
         &self.binding
     }
-
     fn begin(
         &mut self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -580,7 +534,6 @@ impl MusubiPublicationServiceJournalV1 for DurableMusubiPublicationServiceJourna
     ) -> Result<MusubiPublicationJournalBeginV1, MusubiPublicationServiceJournalErrorV1> {
         self.transition(|journal| journal.begin(attempt, current_time_ms))
     }
-
     fn refresh_expired_seed_receipt(
         &mut self,
         attempt: &MusubiPublicationJournalAttemptV1,
@@ -591,7 +544,6 @@ impl MusubiPublicationServiceJournalV1 for DurableMusubiPublicationServiceJourna
             journal.refresh_expired_seed_receipt(attempt, expected_response, current_time_ms)
         })
     }
-
     fn commit(
         &mut self,
         key: MusubiPublicationIdempotencyKeyV1,
@@ -600,7 +552,6 @@ impl MusubiPublicationServiceJournalV1 for DurableMusubiPublicationServiceJourna
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         self.transition(|journal| journal.commit(key, request_digest, response))
     }
-
     fn abort(
         &mut self,
         key: MusubiPublicationIdempotencyKeyV1,
@@ -609,7 +560,6 @@ impl MusubiPublicationServiceJournalV1 for DurableMusubiPublicationServiceJourna
         self.transition(|journal| journal.abort(key, request_digest))
     }
 }
-
 fn candidate_open_error(
     error: CandidateStateErrorV1,
 ) -> DurableMusubiPublicationServiceJournalOpenErrorV1 {
@@ -622,7 +572,6 @@ fn candidate_open_error(
         }
     }
 }
-
 fn results_per_operation() -> usize {
     maximum_historical_readbacks_per_operation()
         .checked_add(1)
@@ -631,7 +580,6 @@ fn results_per_operation() -> usize {
         })
         .expect("Musubi result bound is a fixed small constant")
 }
-
 fn maximum_historical_readbacks_per_operation() -> usize {
     let bound = MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
         .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
@@ -644,7 +592,6 @@ fn maximum_historical_readbacks_per_operation() -> usize {
     );
     bound
 }
-
 fn recover_interrupted_results(journal: &mut InMemoryMusubiPublicationServiceJournalV1) -> bool {
     let mut changed = false;
     for result in journal.results.values_mut() {
@@ -669,7 +616,6 @@ fn recover_interrupted_results(journal: &mut InMemoryMusubiPublicationServiceJou
     }
     changed
 }
-
 fn encode_candidate(
     journal: &InMemoryMusubiPublicationServiceJournalV1,
     binding: &MusubiPublicationServiceJournalBindingV1,
@@ -693,14 +639,12 @@ fn encode_candidate(
     }
     Ok(bytes)
 }
-
 fn encode_envelope(
     state: DurablePublicationJournalStateV1,
 ) -> Result<Vec<u8>, CandidateStateErrorV1> {
     let envelope = DurablePublicationJournalEnvelopeV1::new(state)?;
     norito::encode_canonical(&envelope).map_err(|_| CandidateStateErrorV1::Invalid)
 }
-
 fn validate_candidate_journal(
     journal: &InMemoryMusubiPublicationServiceJournalV1,
     binding: &MusubiPublicationServiceJournalBindingV1,
@@ -726,7 +670,6 @@ fn validate_candidate_journal(
     {
         return Err(CandidateStateErrorV1::Invalid);
     }
-
     for (operation_id, operation_binding) in &journal.operation_bindings {
         if !digest_is_nonzero(operation_id)
             || operation_binding.operation_id != *operation_id
@@ -736,7 +679,6 @@ fn validate_candidate_journal(
             return Err(CandidateStateErrorV1::Invalid);
         }
     }
-
     let mut result_operations = BTreeSet::new();
     let mut per_operation = BTreeMap::<[u8; 32], (bool, usize, usize)>::new();
     for (key, result) in &journal.results {
@@ -784,7 +726,6 @@ fn validate_candidate_journal(
     {
         return Err(CandidateStateErrorV1::Invalid);
     }
-
     if journal.authorization_expiry.iter().any(|(digest, expiry)| {
         !digest_is_nonzero(digest)
             || *expiry == 0
@@ -796,7 +737,6 @@ fn validate_candidate_journal(
     }
     Ok(())
 }
-
 fn state_from_journal(
     journal: &InMemoryMusubiPublicationServiceJournalV1,
     binding: &MusubiPublicationServiceJournalBindingV1,
@@ -903,7 +843,6 @@ fn state_from_journal(
         reserved_response_bytes,
     })
 }
-
 fn terminal_projection(
     state: &DurablePublicationJournalStateV1,
 ) -> Result<DurablePublicationJournalStateV1, CandidateStateErrorV1> {
@@ -928,7 +867,6 @@ fn terminal_projection(
     projected.reserved_response_bytes = 0;
     Ok(projected)
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "durable snapshot admission keeps every ordering, capacity, replay, and accounting invariant in one validator"
@@ -966,7 +904,6 @@ fn journal_from_state(
     {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
     }
-
     let mut operation_bindings = BTreeMap::new();
     let mut previous_operation_id = None;
     for record in &state.operations {
@@ -981,7 +918,6 @@ fn journal_from_state(
         previous_operation_id = Some(record.operation_id);
         operation_bindings.insert(record.operation_id, record.binding.clone());
     }
-
     let mut results = BTreeMap::new();
     let mut previous_key = None;
     let mut per_operation = BTreeMap::<[u8; 32], (bool, usize, usize)>::new();
@@ -1078,7 +1014,6 @@ fn journal_from_state(
     {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
     }
-
     let mut authorization_expiry = BTreeMap::new();
     let mut expiry_index = BTreeSet::new();
     let mut previous_authorization = None;
@@ -1094,7 +1029,6 @@ fn journal_from_state(
         authorization_expiry.insert(record.authorization_digest, record.expires_at_ms);
         expiry_index.insert((record.expires_at_ms, record.authorization_digest));
     }
-
     Ok(InMemoryMusubiPublicationServiceJournalV1 {
         binding: expected_binding.clone(),
         max_operations: expected_limits.max_operations_usize(),
@@ -1108,15 +1042,12 @@ fn journal_from_state(
         expiry_index,
     })
 }
-
 fn digest_is_nonzero(digest: &[u8; 32]) -> bool {
     digest.iter().any(|byte| *byte != 0)
 }
-
 fn valid_response(response: &[u8]) -> bool {
     !response.is_empty() && response.len() <= MAX_CONTROL_RESPONSE_BYTES
 }
-
 fn valid_result_key(key: MusubiPublicationIdempotencyKeyV1) -> bool {
     digest_is_nonzero(&key.operation_id)
         && match key.operation {
@@ -1129,7 +1060,6 @@ fn valid_result_key(key: MusubiPublicationIdempotencyKeyV1) -> bool {
             }
         }
 }
-
 #[derive(Clone, Copy)]
 struct JournalStorageContext<'a> {
     root: &'a Path,
@@ -1139,14 +1069,12 @@ struct JournalStorageContext<'a> {
     lock_handle: &'a File,
     lock_identity: JournalFileIdentity,
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PersistedJournalVersionV1 {
     identity: JournalFileIdentity,
     length: u64,
     digest: [u8; 32],
 }
-
 fn read_journal_state(
     path: &Path,
     root_owner: u32,
@@ -1231,7 +1159,6 @@ fn read_journal_state(
         },
     )))
 }
-
 fn journal_decode_limits(
     payload_bytes: usize,
 ) -> Result<norito::DecodeLimits, DurableMusubiPublicationServiceJournalOpenErrorV1> {
@@ -1247,13 +1174,11 @@ fn journal_decode_limits(
         64,
     ))
 }
-
 fn journal_file_digest(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("iroha:musubi:publication-journal-file:v1");
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn write_state(
     storage: JournalStorageContext<'_>,
     expected: Option<PersistedJournalVersionV1>,
@@ -1307,7 +1232,6 @@ fn write_state(
     validate_exact_state_file(&target, pending_version, root_owner, maximum_bytes)?;
     Ok(pending_version)
 }
-
 fn validate_live_state(
     storage: JournalStorageContext<'_>,
     expected: PersistedJournalVersionV1,
@@ -1332,7 +1256,6 @@ fn validate_live_state(
         maximum_bytes,
     )
 }
-
 fn validate_persisted_state(
     path: &Path,
     expected: Option<PersistedJournalVersionV1>,
@@ -1347,7 +1270,6 @@ fn validate_persisted_state(
         |expected| validate_exact_state_file(path, expected, root_owner, maximum_bytes),
     )
 }
-
 fn validate_exact_state_file(
     path: &Path,
     expected: PersistedJournalVersionV1,
@@ -1409,7 +1331,6 @@ fn validate_exact_state_file(
     }
     Ok(())
 }
-
 fn validate_state_length(
     length: u64,
     maximum_bytes: usize,
@@ -1423,7 +1344,6 @@ fn validate_state_length(
     }
     Ok(())
 }
-
 fn open_private_root(
     root: &Path,
 ) -> Result<
@@ -1475,13 +1395,11 @@ fn open_private_root(
         metadata_owner(&opened),
     ))
 }
-
 #[derive(Clone, Copy)]
 enum JournalLockOpenMode {
     Existing,
     CreateNew,
 }
-
 fn ensure_empty_initialization_root(
     root: &Path,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
@@ -1497,7 +1415,6 @@ fn ensure_empty_initialization_root(
     }
     Ok(())
 }
-
 fn open_and_lock(
     root: &Path,
     root_owner: u32,
@@ -1578,7 +1495,6 @@ fn open_and_lock(
     }
     Ok((file, JournalFileIdentity::from_metadata(&opened)))
 }
-
 fn reconcile_directory(
     storage: JournalStorageContext<'_>,
     maximum_bytes: usize,
@@ -1646,7 +1562,6 @@ fn reconcile_directory(
         storage.root_owner,
     )
 }
-
 fn validate_lock_identity(
     root: &Path,
     lock_handle: &File,
@@ -1671,7 +1586,6 @@ fn validate_lock_identity(
     }
     Ok(())
 }
-
 fn validate_root_identity(
     root: &Path,
     root_handle: &File,
@@ -1694,7 +1608,6 @@ fn validate_root_identity(
     }
     Ok(())
 }
-
 fn optional_metadata(
     path: &Path,
 ) -> Result<Option<fs::Metadata>, DurableMusubiPublicationServiceJournalOpenErrorV1> {
@@ -1704,7 +1617,6 @@ fn optional_metadata(
         Err(_) => Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable),
     }
 }
-
 fn validate_private_root(
     metadata: &fs::Metadata,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
@@ -1717,7 +1629,6 @@ fn validate_private_root(
     }
     Ok(())
 }
-
 fn validate_private_file(
     metadata: &fs::Metadata,
     root_owner: u32,
@@ -1733,14 +1644,12 @@ fn validate_private_file(
     }
     Ok(())
 }
-
 struct PrivateJournalTemporaryFile {
     path: PathBuf,
     file: File,
     identity: JournalFileIdentity,
     armed: bool,
 }
-
 impl PrivateJournalTemporaryFile {
     fn create(
         root: &Path,
@@ -1771,7 +1680,6 @@ impl PrivateJournalTemporaryFile {
         pending.validate(root_owner)?;
         Ok(pending)
     }
-
     fn validate(
         &self,
         root_owner: u32,
@@ -1792,12 +1700,10 @@ impl PrivateJournalTemporaryFile {
         }
         Ok(())
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for PrivateJournalTemporaryFile {
     fn drop(&mut self) {
         if !self.armed {
@@ -1814,14 +1720,12 @@ impl Drop for PrivateJournalTemporaryFile {
         }
     }
 }
-
 #[cfg(unix)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct JournalFileIdentity {
     device: u64,
     inode: u64,
 }
-
 #[cfg(unix)]
 impl JournalFileIdentity {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
@@ -1830,32 +1734,26 @@ impl JournalFileIdentity {
             inode: metadata.ino(),
         }
     }
-
     fn matches(self, metadata: &fs::Metadata) -> bool {
         self.device == metadata.dev() && self.inode == metadata.ino()
     }
 }
-
 #[cfg(not(unix))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct JournalFileIdentity;
-
 #[cfg(not(unix))]
 impl JournalFileIdentity {
     fn from_metadata(_metadata: &fs::Metadata) -> Self {
         Self
     }
-
     fn matches(self, _metadata: &fs::Metadata) -> bool {
         true
     }
 }
-
 #[cfg(unix)]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(unix)]
 fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file(left, right)
@@ -1868,31 +1766,26 @@ fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.uid() == right.uid()
         && left.nlink() == right.nlink()
 }
-
 #[cfg(not(unix))]
 fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     true
 }
-
 #[cfg(not(unix))]
 fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 #[cfg(unix)]
 fn metadata_owner(metadata: &fs::Metadata) -> u32 {
     metadata.uid()
 }
-
 #[cfg(not(unix))]
 fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
     0
 }
-
 #[cfg(all(test, unix))]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
-
+    use super::*;
+    use crate::musubi_runtime::MusubiPublicationServiceConfigurationV1;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -1901,23 +1794,18 @@ mod tests {
         musubi::{ArchiveId, MusubiContentDigestV1},
         sorafs::capacity::ProviderId,
     };
-
-    use super::*;
-    use crate::musubi_runtime::MusubiPublicationServiceConfigurationV1;
-
+    use std::os::unix::fs::PermissionsExt as _;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],
         )))
     }
-
     fn private_tempdir() -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("private journal root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("set private journal-root permissions");
         root
     }
-
     fn configuration() -> MusubiPublicationServiceConfigurationV1 {
         let broker_key = KeyPair::try_from_seed(
             b"musubi-durable-publication-journal-test".to_vec(),
@@ -1932,13 +1820,11 @@ mod tests {
             receipt_lifetime_ms: 60_000,
         }
     }
-
     fn journal_binding(
         configuration: &MusubiPublicationServiceConfigurationV1,
     ) -> MusubiPublicationServiceJournalBindingV1 {
         MusubiPublicationServiceJournalBindingV1::from_configuration(configuration)
     }
-
     fn limits() -> DurableMusubiPublicationServiceJournalLimitsV1 {
         DurableMusubiPublicationServiceJournalLimitsV1::new(
             8,
@@ -1949,7 +1835,6 @@ mod tests {
         )
         .expect("valid journal limits")
     }
-
     fn attempt(
         configuration: &MusubiPublicationServiceConfigurationV1,
         operation_id: u8,
@@ -1976,7 +1861,6 @@ mod tests {
             authorization_expires_at_ms: 20_000,
         }
     }
-
     #[test]
     fn error_codes_and_limits_are_stable() {
         let cases = [
@@ -2038,7 +1922,6 @@ mod tests {
             Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidLimits)
         );
     }
-
     #[test]
     fn initialization_is_explicit_and_lifetime_lock_is_exclusive() {
         let root = private_tempdir();
@@ -2077,7 +1960,6 @@ mod tests {
         .expect("lock released after drop");
         assert_eq!(reopened.revision(), 1);
     }
-
     #[test]
     fn root_mode_rejects_special_permission_bits() {
         let root = private_tempdir();
@@ -2096,7 +1978,6 @@ mod tests {
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("restore tempdir mode");
     }
-
     #[test]
     fn completed_response_and_consumed_authorizations_survive_restart() {
         let root = private_tempdir();
@@ -2116,7 +1997,6 @@ mod tests {
             .commit(first.key, first.request_digest, b"canonical response")
             .expect("commit response");
         drop(journal);
-
         let mut reopened = DurableMusubiPublicationServiceJournalV1::open(
             root.path(),
             journal_binding(&configuration),
@@ -2141,7 +2021,6 @@ mod tests {
             Err(MusubiPublicationServiceJournalErrorV1::Replay)
         );
     }
-
     #[test]
     fn all_storage_location_generations_survive_durable_restart_and_ninth_fails_closed() {
         let root = private_tempdir();
@@ -2152,7 +2031,6 @@ mod tests {
             limits(),
         )
         .expect("initialize journal");
-
         for generation in 1..=MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1 {
             let generation = u8::try_from(generation).expect("generation fits u8");
             let mut generation_attempt = attempt(&configuration, 0x35, 0x40 + generation);
@@ -2176,7 +2054,6 @@ mod tests {
                 .expect("commit storage generation");
         }
         let revision = journal.revision();
-
         let mut ninth = attempt(&configuration, 0x35, 0x70);
         ninth.key.operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
         ninth.key.target = crate::musubi_runtime::storage_generation_target(
@@ -2188,7 +2065,6 @@ mod tests {
             journal.begin(&ninth, 10_001),
             Err(MusubiPublicationServiceJournalErrorV1::Invalid)
         );
-
         let mut malformed = ninth;
         malformed.key.target = crate::musubi_runtime::storage_generation_target(1);
         malformed.key.target[1] = 1;
@@ -2199,7 +2075,6 @@ mod tests {
         );
         assert_eq!(journal.revision(), revision);
         drop(journal);
-
         let mut reopened = DurableMusubiPublicationServiceJournalV1::open(
             root.path(),
             journal_binding(&configuration),
@@ -2220,7 +2095,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn startup_recovers_pending_to_aborted_without_dropping_replay_state() {
         let root = private_tempdir();
@@ -2238,7 +2112,6 @@ mod tests {
         );
         let revision = journal.revision();
         drop(journal);
-
         let mut reopened = DurableMusubiPublicationServiceJournalV1::open(
             root.path(),
             journal_binding(&configuration),
@@ -2257,7 +2130,6 @@ mod tests {
             MusubiPublicationJournalBeginV1::Execute
         );
     }
-
     #[test]
     fn startup_restores_previous_response_from_interrupted_refresh() {
         let root = private_tempdir();
@@ -2285,7 +2157,6 @@ mod tests {
             .refresh_expired_seed_receipt(&refresh, b"prior receipt", 10_001)
             .expect("begin refresh");
         drop(journal);
-
         let mut reopened = DurableMusubiPublicationServiceJournalV1::open(
             root.path(),
             journal_binding(&configuration),
@@ -2301,7 +2172,6 @@ mod tests {
             MusubiPublicationJournalBeginV1::Cached(b"prior receipt".to_vec())
         );
     }
-
     #[test]
     fn worst_case_response_capacity_is_reserved_before_backend_work() {
         let root = private_tempdir();
@@ -2327,7 +2197,6 @@ mod tests {
             MusubiPublicationJournalBeginV1::Execute
         );
     }
-
     #[test]
     fn invalid_attempts_cannot_persist_a_snapshot_that_reopen_rejects() {
         let root = private_tempdir();
@@ -2339,21 +2208,18 @@ mod tests {
         )
         .expect("initialize journal");
         let initial_revision = journal.revision();
-
         let mut foreign_chain = attempt(&configuration, 0x65, 0x66);
         foreign_chain.binding.network_id = network_id(0x70);
         assert_eq!(
             journal.begin(&foreign_chain, 10_000),
             Err(MusubiPublicationServiceJournalErrorV1::Invalid)
         );
-
         let mut zero_expiry = attempt(&configuration, 0x67, 0x68);
         zero_expiry.authorization_expires_at_ms = 0;
         assert_eq!(
             journal.begin(&zero_expiry, 10_000),
             Err(MusubiPublicationServiceJournalErrorV1::Invalid)
         );
-
         let zero_time = attempt(&configuration, 0x69, 0x6a);
         assert_eq!(
             journal.begin(&zero_time, 0),
@@ -2372,7 +2238,6 @@ mod tests {
             initial_revision
         );
     }
-
     #[test]
     fn candidate_validation_rejects_orphans_and_expiry_index_divergence() {
         let configuration = configuration();
@@ -2392,7 +2257,6 @@ mod tests {
             state_from_journal(&journal, &binding, limits, 2),
             Err(CandidateStateErrorV1::Invalid)
         );
-
         journal.operation_bindings.clear();
         journal.begin(&first, 10_000).expect("valid reservation");
         journal.expiry_index.clear();
@@ -2401,7 +2265,6 @@ mod tests {
             Err(CandidateStateErrorV1::Invalid)
         );
     }
-
     #[test]
     fn nonempty_lifetime_lock_fails_closed() {
         let root = private_tempdir();
@@ -2433,7 +2296,6 @@ mod tests {
             DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState
         );
     }
-
     #[test]
     fn configuration_limits_corruption_and_deleted_state_fail_closed() {
         let root = private_tempdir();
@@ -2445,7 +2307,6 @@ mod tests {
         )
         .expect("initialize journal");
         drop(journal);
-
         let mut wrong_configuration = configuration.clone();
         wrong_configuration.network_id = network_id(0x71);
         assert_eq!(
@@ -2474,7 +2335,6 @@ mod tests {
             .expect_err("limits mismatch rejected"),
             DurableMusubiPublicationServiceJournalOpenErrorV1::LimitsMismatch
         );
-
         let mut changed_timing_policy = configuration.clone();
         changed_timing_policy.max_future_clock_skew_ms = 2_000;
         changed_timing_policy.receipt_lifetime_ms = 30_000;
@@ -2485,7 +2345,6 @@ mod tests {
         )
         .expect("timing policy is not durable replay identity");
         drop(reopened);
-
         fs::write(root.path().join(JOURNAL_STATE_FILE), b"not norito")
             .expect("corrupt journal state");
         fs::set_permissions(

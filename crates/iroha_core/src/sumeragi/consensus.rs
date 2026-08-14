@@ -7,13 +7,11 @@
 //! Mode separation (permissioned vs `NPoS`) is runtime-selectable via config/WSV.
 //! Build artifacts no longer hard‑code consensus mode; peers validate mode
 //! at handshake time using a mode tag provided by the running node.
-
 // BLS signatures are mandatory; consensus code must not be built without the `bls` feature.
 #[cfg(not(feature = "bls"))]
 compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
-
 use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
@@ -32,18 +30,15 @@ pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_V
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
 /// NPoS Sumeragi v2 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
-
 /// Commit-certificate phase (prepare/commit/new-view).
 pub type Phase = CertPhase;
 /// Runtime adapter vote used for certificate aggregation.
 pub type Vote = QcVote;
 /// Reference to a QC header carried in hints.
 pub type QcHeaderRef = QcRef;
+use crate::state::{StateView, WorldReadOnly};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
-
-use crate::state::{StateView, WorldReadOnly};
-
 /// Count the number of validators encoded into a QC signer bitmap.
 pub fn qc_signer_count(qc: &Qc) -> usize {
     qc.aggregate
@@ -52,7 +47,6 @@ pub fn qc_signer_count(qc: &Qc) -> usize {
         .map(|byte| byte.count_ones() as usize)
         .sum()
 }
-
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
@@ -80,12 +74,10 @@ pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8
     }
     out
 }
-
 /// Build the canonical preimage for a VRF commit signature under the given chain and mode tag.
 pub fn vrf_commit_preimage(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
     vrf_commit_preimage_fields(network_id, mode_tag, c.epoch, c.signer, &c.commitment)
 }
-
 /// Build the canonical preimage for a versioned-v2 VRF commitment.
 pub fn v2_vrf_commit_preimage(
     network_id: &NetworkId,
@@ -100,7 +92,6 @@ pub fn v2_vrf_commit_preimage(
     out.extend_from_slice(&commit.commitment);
     out
 }
-
 fn vrf_commit_preimage_fields(
     network_id: &NetworkId,
     mode_tag: &str,
@@ -116,12 +107,10 @@ fn vrf_commit_preimage_fields(
     out.extend_from_slice(commitment);
     out
 }
-
 /// Build the canonical preimage for a VRF reveal signature under the given chain and mode tag.
 pub fn vrf_reveal_preimage(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
     vrf_reveal_preimage_fields(network_id, mode_tag, r.epoch, r.signer, &r.reveal)
 }
-
 /// Build the canonical preimage for a versioned-v2 VRF reveal.
 pub fn v2_vrf_reveal_preimage(
     network_id: &NetworkId,
@@ -139,7 +128,6 @@ pub fn v2_vrf_reveal_preimage(
     out.extend_from_slice(&reveal.vrf_proof);
     out
 }
-
 fn vrf_reveal_preimage_fields(
     network_id: &NetworkId,
     mode_tag: &str,
@@ -155,28 +143,23 @@ fn vrf_reveal_preimage_fields(
     out.extend_from_slice(reveal);
     out
 }
-
 /// Canonical preimage helpers for BLS signing (same-message across signers).
 #[cfg(feature = "bls")]
 pub mod bls_preimage {
     use super::*;
-
     /// Build the canonical preimage for a Vote signature under the given chain and mode tag.
     pub fn vote(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
         super::vote_preimage(network_id, mode_tag, v)
     }
-
     /// Build the canonical preimage for a VRF commit signature.
     pub fn vrf_commit(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
         super::vrf_commit_preimage(network_id, mode_tag, c)
     }
-
     /// Build the canonical preimage for a VRF reveal signature.
     pub fn vrf_reveal(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
         super::vrf_reveal_preimage(network_id, mode_tag, r)
     }
 }
-
 /// Domain separation helper for signable payloads.
 /// Returns a 32‑byte Blake2b digest of the domain preimage.
 pub fn consensus_domain(
@@ -198,7 +181,6 @@ pub fn consensus_domain(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 /// Compute the genesis-embedded v2 consensus-parameters fingerprint.
 ///
 /// The projection deliberately omits v1 collectors, phase-specific and
@@ -212,7 +194,6 @@ pub fn compute_consensus_parameters_fingerprint(
 ) -> Result<[u8; 32], String> {
     iroha_data_model::block::consensus_v2::fingerprint::compute(params)
 }
-
 /// Build the exact first-release carrier for consensus-genesis parameters.
 ///
 /// Runtime handshakes, genesis metadata generation, and startup validation all
@@ -231,7 +212,6 @@ pub fn consensus_genesis_params_from_parameters(
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter);
-
     let mode = match mode {
         iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
             let npos = npos_payload.ok_or("NPoS genesis requires `sumeragi_npos_parameters`")?;
@@ -259,7 +239,6 @@ pub fn consensus_genesis_params_from_parameters(
             ConsensusGenesisModeParams::Permissioned
         }
     };
-
     Ok(ConsensusGenesisParams {
         block_cadence_ms: sumeragi.block_cadence_ms(),
         block_max_transactions: block.max_transactions(),
@@ -268,7 +247,6 @@ pub fn consensus_genesis_params_from_parameters(
         v2_context,
     })
 }
-
 /// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from a world
 /// snapshot, committed height, and local configuration.
 #[allow(clippy::too_many_lines)]
@@ -301,7 +279,6 @@ pub fn compute_consensus_handshake_caps_from_world(
         .map_err(|error| error.to_string())?
         .fingerprint()
         .into();
-
     Ok((
         mode_tag.clone(),
         bls_domain,
@@ -313,7 +290,6 @@ pub fn compute_consensus_handshake_caps_from_world(
         },
     ))
 }
-
 /// Derive consensus handshake capabilities (mode tag, BLS domain, fingerprint) from the current
 /// state view and configuration.
 pub fn compute_consensus_handshake_caps_from_view(
@@ -333,7 +309,6 @@ pub fn compute_consensus_handshake_caps_from_view(
         signed_v2_context,
     )
 }
-
 /// Handshake gate structure for p2p checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandshakeGate {
@@ -346,7 +321,6 @@ pub struct HandshakeGate {
     /// Deterministic genesis-embedded consensus-parameters fingerprint.
     pub parameters_fingerprint: [u8; 32],
 }
-
 /// Build canonical preimage for signing an RBC READY message.
 pub fn rbc_ready_preimage(network_id: &NetworkId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
@@ -361,7 +335,6 @@ pub fn rbc_ready_preimage(network_id: &NetworkId, mode_tag: &str, ready: &RbcRea
     out.extend_from_slice(&ready.sender.to_be_bytes());
     out
 }
-
 /// Build canonical preimage for signing an RBC DELIVER message.
 pub fn rbc_deliver_preimage(
     network_id: &NetworkId,
@@ -397,7 +370,6 @@ pub fn rbc_deliver_preimage(
     }
     out
 }
-
 impl HandshakeGate {
     /// Build a local handshake gate from an exact network id and parameters fingerprint.
     pub fn local(network_id: NetworkId, parameters_fingerprint: [u8; 32], mode_tag: &str) -> Self {
@@ -408,7 +380,6 @@ impl HandshakeGate {
             parameters_fingerprint,
         }
     }
-
     /// Validate a peer handshake tuple. Returns Ok(()) on exact match; Err otherwise.
     /// Validate peer parameters from the handshake.
     ///
@@ -450,30 +421,25 @@ impl HandshakeGate {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1;
-
     fn test_network_id(seed: &str) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::new(seed.as_bytes()),
         ))
     }
-
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("Sumeragi consensus fixture BLS key generation should succeed")
     }
-
     fn sample_validator_set(count: usize) -> Vec<PeerId> {
         (0..count)
             .map(|_| PeerId::new(checked_bls_keypair().public_key().clone()))
             .collect()
     }
-
     fn permissioned_genesis_params() -> ConsensusGenesisParams {
         ConsensusGenesisParams {
             block_cadence_ms: core::num::NonZeroU64::new(1_000)
@@ -486,7 +452,6 @@ mod tests {
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
         }
     }
-
     fn qc_with_raw_signers_bitmap(signers_bitmap: Vec<u8>) -> Qc {
         let validator_set = Vec::<PeerId>::new();
         let validator_set_hash = HashOf::new(&validator_set);
@@ -513,7 +478,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn qc_roundtrip_encode_decode() {
         let validator_set = sample_validator_set(16);
@@ -543,7 +507,6 @@ mod tests {
         let dec = Qc::decode(&mut &bytes[..]).expect("decode qc");
         assert_eq!(qc, dec);
     }
-
     #[test]
     fn qc_signer_count_formal_gate_matrix() {
         let cases: [(&str, &[u8], usize); 12] = [
@@ -560,7 +523,6 @@ mod tests {
             ("three_zero_bytes", &[0, 0, 0], 0),
             ("mixed_three", &[15, 0, 240], 8),
         ];
-
         for (name, bitmap, expected) in cases {
             let qc = qc_with_raw_signers_bitmap(bitmap.to_vec());
             assert_eq!(qc_signer_count(&qc), expected, "{name}");
@@ -570,7 +532,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn qc_signer_count_counts_bits() {
         let validator_set = sample_validator_set(16);
@@ -598,7 +559,6 @@ mod tests {
         };
         assert_eq!(qc_signer_count(&qc), 6);
     }
-
     #[test]
     fn qc_signer_count_empty_bitmap() {
         let validator_set = sample_validator_set(0);
@@ -626,7 +586,6 @@ mod tests {
         };
         assert_eq!(qc_signer_count(&qc), 0);
     }
-
     #[test]
     fn domain_depends_on_all_fields() {
         let cid_a = test_network_id("iroha:test:A");
@@ -635,14 +594,12 @@ mod tests {
         let d2 = consensus_domain(&cid_b, "Vote", b"x", PERMISSIONED_TAG);
         assert_ne!(d1, d2);
     }
-
     #[test]
     fn preimages_use_current_domain_tags() {
         let chain = test_network_id("iroha:test:preimage-tags");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
         let roster_hash = iroha_crypto::Hash::prehashed([3u8; 32]);
         let chunk_root = iroha_crypto::Hash::prehashed([4u8; 32]);
-
         let vote = Vote {
             block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
@@ -662,7 +619,6 @@ mod tests {
             &vote_preimage[..32],
             &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
         );
-
         let vrf_commit = VrfCommit {
             epoch: 0,
             commitment: [0xA1; 32],
@@ -685,7 +641,6 @@ mod tests {
             &vrf_reveal_preimage[..32],
             &consensus_domain(&chain, "VrfReveal", b"v1", PERMISSIONED_TAG)
         );
-
         let ready = RbcReady {
             block_hash,
             height: 11,
@@ -705,7 +660,6 @@ mod tests {
             &ready_preimage[..32],
             &consensus_domain(&chain, "RbcReady", b"v2", PERMISSIONED_TAG)
         );
-
         let deliver = RbcDeliver {
             block_hash,
             height: 11,
@@ -727,7 +681,6 @@ mod tests {
             &consensus_domain(&chain, "RbcDeliver", b"v2", PERMISSIONED_TAG)
         );
     }
-
     #[test]
     fn vote_preimage_matches_formal_layout_and_excludes_signature_material() {
         let chain = test_network_id("iroha:test:classic-vote-preimage-layout");
@@ -751,7 +704,6 @@ mod tests {
             signer: 0x4142_4344,
             bls_sig: vec![0xAA, 0xBB, 0xCC],
         };
-
         let mut expected_without_highest = Vec::new();
         expected_without_highest.extend_from_slice(&consensus_domain(
             &chain,
@@ -769,7 +721,6 @@ mod tests {
         expected_without_highest.extend_from_slice(&vote.rechain_seq.to_be_bytes());
         expected_without_highest.push(vote.phase as u8);
         expected_without_highest.push(0);
-
         assert_eq!(
             vote_preimage(&chain, PERMISSIONED_TAG, &vote),
             expected_without_highest
@@ -788,7 +739,6 @@ mod tests {
             expected_without_highest,
             "mode tag must be bound through the consensus domain"
         );
-
         vote.signer = 0x5152_5354;
         vote.bls_sig = vec![0xDD, 0xEE, 0xFF, 0x00];
         assert_eq!(
@@ -796,7 +746,6 @@ mod tests {
             expected_without_highest,
             "mutable signer transport fields must stay outside the vote preimage"
         );
-
         vote.highest_qc = Some(QcRef {
             height: 0x6162_6364_6566_6768,
             view: 0x7172_7374_7576_7778,
@@ -804,7 +753,6 @@ mod tests {
             subject_block_hash: highest_block_hash,
             phase: Phase::Prepare,
         });
-
         let mut expected_with_highest = expected_without_highest;
         *expected_with_highest
             .last_mut()
@@ -815,13 +763,11 @@ mod tests {
         expected_with_highest.extend_from_slice(&highest.epoch.to_be_bytes());
         expected_with_highest.extend_from_slice(highest.subject_block_hash.as_ref().as_ref());
         expected_with_highest.push(highest.phase as u8);
-
         assert_eq!(
             vote_preimage(&chain, PERMISSIONED_TAG, &vote),
             expected_with_highest
         );
     }
-
     #[test]
     fn vrf_preimages_match_formal_layout_and_exclude_signatures() {
         let chain = test_network_id("iroha:test:classic-vrf-preimage-layout");
@@ -837,7 +783,6 @@ mod tests {
             signer: 0x5152_5354,
             bls_sig: vec![0xCC, 0xDD],
         };
-
         let mut expected_commit = Vec::new();
         expected_commit.extend_from_slice(&consensus_domain(
             &chain,
@@ -873,7 +818,6 @@ mod tests {
             expected_v2_commit,
             "the versioned carrier must bind its own domain and canonical fields",
         );
-
         commit.bls_sig = vec![0x10, 0x11, 0x12];
         v2_commit.bls_sig = vec![0x13, 0x14];
         assert_eq!(
@@ -886,7 +830,6 @@ mod tests {
             expected_v2_commit,
             "versioned VRF commit signatures must stay outside the commit preimage",
         );
-
         let mut expected_reveal = Vec::new();
         expected_reveal.extend_from_slice(&consensus_domain(
             &chain,
@@ -933,7 +876,6 @@ mod tests {
             expected_commit, expected_reveal,
             "VRF commit and reveal preimages must remain type-separated"
         );
-
         reveal.bls_sig = vec![0x20, 0x21, 0x22];
         v2_reveal.bls_sig = vec![0x23, 0x24];
         assert_eq!(
@@ -947,7 +889,6 @@ mod tests {
             "versioned VRF reveal signatures must stay outside the reveal preimage",
         );
     }
-
     #[test]
     fn rbc_ready_preimage_matches_formal_layout_and_excludes_signature() {
         let chain = test_network_id("iroha:test:rbc-ready-preimage-layout");
@@ -964,7 +905,6 @@ mod tests {
             sender: 0x4142_4344,
             signature: vec![0xAA, 0xBB, 0xCC],
         };
-
         let mut expected = Vec::new();
         expected.extend_from_slice(&consensus_domain(
             &chain,
@@ -979,19 +919,16 @@ mod tests {
         expected.extend_from_slice(ready.roster_hash.as_ref());
         expected.extend_from_slice(ready.chunk_root.as_ref());
         expected.extend_from_slice(&ready.sender.to_be_bytes());
-
         assert_eq!(
             rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready),
             expected
         );
-
         ready.signature = vec![0xDD, 0xEE, 0xFF, 0x00];
         assert_eq!(
             rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready),
             expected
         );
     }
-
     #[test]
     fn rbc_deliver_preimage_matches_formal_layout_and_excludes_signature() {
         let chain = test_network_id("iroha:test:rbc-deliver-preimage-layout");
@@ -1018,7 +955,6 @@ mod tests {
                 },
             ],
         };
-
         let mut expected = Vec::new();
         expected.extend_from_slice(&consensus_domain(
             &chain,
@@ -1040,25 +976,21 @@ mod tests {
         expected.extend_from_slice(&0x7172_7374_u32.to_be_bytes());
         expected.extend_from_slice(&2_u32.to_be_bytes());
         expected.extend_from_slice(&[0x20, 0x21]);
-
         assert_eq!(
             rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
             expected
         );
-
         deliver.signature = vec![0xDD, 0xEE, 0xFF, 0x00];
         assert_eq!(
             rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
             expected
         );
-
         deliver.ready_signatures.swap(0, 1);
         assert_ne!(
             rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
             expected
         );
     }
-
     #[test]
     fn vote_preimage_binds_chain_order() {
         let chain = test_network_id("iroha:test:chain-order-binding");
@@ -1078,19 +1010,16 @@ mod tests {
             bls_sig: Vec::new(),
         };
         let base = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-
         let mut changed_order = vote.clone();
         changed_order.chain_order_hash = iroha_crypto::Hash::new(b"alternate-chain-order");
         assert_ne!(
             base,
             vote_preimage(&chain, PERMISSIONED_TAG, &changed_order)
         );
-
         let mut changed_seq = vote;
         changed_seq.rechain_seq = 1;
         assert_ne!(base, vote_preimage(&chain, PERMISSIONED_TAG, &changed_seq));
     }
-
     #[test]
     fn handshake_gate_rejects_same_name_same_config_different_genesis() {
         let display_name = iroha_data_model::ChainId::from("shared-display-name");
@@ -1112,7 +1041,6 @@ mod tests {
         assert!(err.contains(&other.to_string()));
         assert_eq!(display_name.as_str(), "shared-display-name");
     }
-
     #[test]
     fn handshake_fingerprint_changes_with_mode() {
         let chain = test_network_id("iroha:test:cutover");
@@ -1137,17 +1065,14 @@ mod tests {
             }),
             ..permissioned_params
         };
-
         let fp_permissioned = compute_consensus_parameters_fingerprint(&permissioned_params)
             .expect("permissioned fixture must fingerprint");
         let fp_npos = compute_consensus_parameters_fingerprint(&npos_params)
             .expect("NPoS fixture must fingerprint");
-
         assert_ne!(
             fp_permissioned, fp_npos,
             "fingerprints must differ across mode tags/domains"
         );
-
         let gate_permissioned =
             HandshakeGate::local(chain.clone(), fp_permissioned, PERMISSIONED_TAG);
         assert!(
@@ -1162,7 +1087,6 @@ mod tests {
                 .is_err(),
             "permissioned gate should reject NPoS tag/fingerprint"
         );
-
         let gate_npos = HandshakeGate::local(chain.clone(), fp_npos, NPOS_TAG);
         assert!(
             gate_npos
@@ -1177,7 +1101,6 @@ mod tests {
             "npos gate should reject permissioned tag/fingerprint"
         );
     }
-
     #[test]
     fn canonical_fingerprint_binds_v2_protocol_and_context() {
         let params = permissioned_genesis_params();
@@ -1191,11 +1114,9 @@ mod tests {
             protocol_version: PROTO_VERSION.saturating_add(1),
             ..params
         };
-
         assert_ne!(baseline, changed_context);
         assert!(compute_consensus_parameters_fingerprint(&changed_protocol).is_err());
     }
-
     #[test]
     fn canonical_v2_npos_fingerprint_binds_election_seed() {
         let mut p = ConsensusGenesisParams {
@@ -1232,7 +1153,6 @@ mod tests {
             .expect("changed NPoS fixture must fingerprint");
         assert_ne!(a, election_seed_changed);
     }
-
     #[test]
     fn handshake_gate_rejects_on_fingerprint_mismatch() {
         let chain = test_network_id("iroha:test:hshake");
@@ -1248,7 +1168,6 @@ mod tests {
             gate.validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &f1)
                 .is_ok()
         );
-
         let err = gate
             .validate_peer(&chain, PERMISSIONED_TAG, PROTO_VERSION, &f2)
             .expect_err("signed Nexus/AMX context mismatch must be rejected");
@@ -1261,7 +1180,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn exec_witness_roundtrip_codec() {
         // Build a small witness with two reads and one write

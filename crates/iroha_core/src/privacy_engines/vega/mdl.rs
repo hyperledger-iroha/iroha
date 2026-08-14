@@ -1,7 +1,10 @@
 //! Figure 9 mDL witness parsing and native preflight validation.
-
+use super::{
+    VEGA_MDL_DOCUMENT_TYPE_V1, VEGA_MDL_NAMESPACE_V1, VegaMdlConsensusBindingV1, VegaMdlError,
+    VegaMdlPublicInputsV1, VegaSignatureRoleV1, cbor::CborNode,
+    derive_device_authentication_digest_v1, validate_date, validate_trusted_presentation_date_v1,
+};
 use core::fmt;
-
 use iroha_data_model::privacy::{
     PrivacyP256PointV1, PrivacyVegaMdlDateV1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
     VEGA_MDL_BIRTH_RANDOM_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
@@ -15,13 +18,6 @@ use p256::{
 };
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
-
-use super::{
-    VEGA_MDL_DOCUMENT_TYPE_V1, VEGA_MDL_NAMESPACE_V1, VegaMdlConsensusBindingV1, VegaMdlError,
-    VegaMdlPublicInputsV1, VegaSignatureRoleV1, cbor::CborNode,
-    derive_device_authentication_digest_v1, validate_date, validate_trusted_presentation_date_v1,
-};
-
 const COSE_ES256_PROTECTED_HEADER_V1: &[u8] = &[0xa1, 0x01, 0x26];
 const DEVICE_KEY_PREFIX_V1: &[u8] = b"\x69deviceKey";
 const VALID_UNTIL_PREFIX_V1: &[u8] = b"\x6avalidUntil";
@@ -30,7 +26,6 @@ const VALID_UNTIL_FIELD_BYTES_V1: usize = 33;
 const BIRTH_DATE_DIGEST_ENTRY_BYTES_V1: usize = 35;
 const MDL_LOOKUP_ENTRY_COUNT_V1: usize =
     DEVICE_KEY_FIELD_BYTES_V1 + VALID_UNTIL_FIELD_BYTES_V1 + BIRTH_DATE_DIGEST_ENTRY_BYTES_V1;
-
 /// Raw private inputs needed by the Figure 9 mDL relation.
 ///
 /// All variable-length byte buffers are zeroized on drop. Lookup addresses and
@@ -43,7 +38,6 @@ pub struct VegaMdlWitnessV1 {
     issuer_signature: Zeroizing<[u8; 64]>,
     device_signature: Zeroizing<[u8; 64]>,
 }
-
 impl VegaMdlWitnessV1 {
     /// Construct one exact-shape raw witness.
     ///
@@ -99,7 +93,6 @@ impl VegaMdlWitnessV1 {
             device_signature_bytes,
         )
     }
-
     /// Assemble guarded private inputs already represented at fixed signature
     /// width, revalidating all variable-width document fragments.
     pub(super) fn from_zeroizing_parts(
@@ -133,7 +126,6 @@ impl VegaMdlWitnessV1 {
         })
     }
 }
-
 impl fmt::Debug for VegaMdlWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -154,54 +146,46 @@ impl fmt::Debug for VegaMdlWitnessV1 {
             .finish()
     }
 }
-
 /// Canonical Figure 9 ECDSA witness `(r, s^-1 mod n)`.
 pub struct VegaEcdsaWitnessV1 {
     r: Zeroizing<[u8; 32]>,
     s_inverse: Zeroizing<[u8; 32]>,
 }
-
 impl VegaEcdsaWitnessV1 {
     /// Borrow canonical big-endian `r`.
     #[must_use]
     pub fn r(&self) -> &[u8; 32] {
         &self.r
     }
-
     /// Borrow canonical big-endian `s^-1 mod n`.
     #[must_use]
     pub fn s_inverse(&self) -> &[u8; 32] {
         &self.s_inverse
     }
 }
-
 impl fmt::Debug for VegaEcdsaWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("VegaEcdsaWitnessV1([REDACTED])")
     }
 }
-
 /// Derived lookup relation over authenticated MSO payload bytes.
 #[derive(Default)]
 pub struct VegaMdlLookupTableV1 {
     addresses: Vec<u32>,
     values: Zeroizing<Vec<u8>>,
 }
-
 impl VegaMdlLookupTableV1 {
     /// Borrow the ordered MSO byte addresses.
     #[must_use]
     pub fn addresses(&self) -> &[u32] {
         &self.addresses
     }
-
     /// Borrow the bytes at [`Self::addresses`].
     #[must_use]
     pub fn values(&self) -> &[u8] {
         &self.values
     }
 }
-
 impl fmt::Debug for VegaMdlLookupTableV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -211,7 +195,6 @@ impl fmt::Debug for VegaMdlLookupTableV1 {
             .finish()
     }
 }
-
 /// Fully parsed, preflighted private witness ready for circuit assignment.
 pub struct VegaMdlValidatedWitnessV1 {
     raw: VegaMdlWitnessV1,
@@ -227,92 +210,77 @@ pub struct VegaMdlValidatedWitnessV1 {
     issuer_ecdsa: VegaEcdsaWitnessV1,
     device_ecdsa: VegaEcdsaWitnessV1,
 }
-
 impl VegaMdlValidatedWitnessV1 {
     /// Borrow the exact Figure 9 public-input vector.
     #[must_use]
     pub const fn public_inputs(&self) -> &VegaMdlPublicInputsV1 {
         &self.public_inputs
     }
-
     /// Borrow the deterministically derived lookup table.
     #[must_use]
     pub const fn lookup(&self) -> &VegaMdlLookupTableV1 {
         &self.lookup
     }
-
     /// Borrow the exact issuer-authenticated COSE `Sig_structure`.
     #[must_use]
     pub fn issuer_authentication_sig_structure(&self) -> &[u8] {
         &self.raw.issuer_authentication_sig_structure
     }
-
     /// Borrow the exact Tag-24 MSO payload.
     #[must_use]
     pub fn mobile_security_object_payload(&self) -> &[u8] {
         &self.raw.mobile_security_object_payload
     }
-
     /// Borrow the exact Tag-24 birth-date `IssuerSignedItemBytes`.
     #[must_use]
     pub fn birth_date_issuer_signed_item(&self) -> &[u8] {
         &self.raw.birth_date_issuer_signed_item
     }
-
     /// Return SHA-256 of the exact issuer COSE `Sig_structure`.
     #[must_use]
     pub const fn issuer_authentication_digest(&self) -> [u8; 32] {
         self.issuer_authentication_digest
     }
-
     /// Return SHA-256 of the exact birth-date signed item.
     #[must_use]
     pub const fn birth_date_digest(&self) -> [u8; 32] {
         self.birth_date_digest
     }
-
     /// Return the canonical compressed device P-256 key.
     #[must_use]
     pub const fn device_public_key(&self) -> PrivacyP256PointV1 {
         self.device_public_key
     }
-
     /// Return the private device-key x-coordinate.
     #[must_use]
     pub const fn device_public_key_x(&self) -> [u8; 32] {
         self.device_public_key_x
     }
-
     /// Return the private device-key y-coordinate.
     #[must_use]
     pub const fn device_public_key_y(&self) -> [u8; 32] {
         self.device_public_key_y
     }
-
     /// Return the private Gregorian date of birth.
     #[must_use]
     pub const fn birth_date(&self) -> PrivacyVegaMdlDateV1 {
         self.birth_date
     }
-
     /// Return the private credential-expiry date.
     #[must_use]
     pub const fn valid_until(&self) -> PrivacyVegaMdlDateV1 {
         self.valid_until
     }
-
     /// Borrow the canonical issuer `(r, s^-1)` witness.
     #[must_use]
     pub const fn issuer_ecdsa(&self) -> &VegaEcdsaWitnessV1 {
         &self.issuer_ecdsa
     }
-
     /// Borrow the canonical device `(r, s^-1)` witness.
     #[must_use]
     pub const fn device_ecdsa(&self) -> &VegaEcdsaWitnessV1 {
         &self.device_ecdsa
     }
-
     /// Borrow the exact private assignment accepted by the native Figure 9
     /// proof circuit.
     ///
@@ -332,7 +300,6 @@ impl VegaMdlValidatedWitnessV1 {
         .map_err(VegaMdlError::from)
     }
 }
-
 impl fmt::Debug for VegaMdlValidatedWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -342,7 +309,6 @@ impl fmt::Debug for VegaMdlValidatedWitnessV1 {
             .finish()
     }
 }
-
 /// Parse and preflight the complete Figure 9 witness.
 ///
 /// This validates strict deterministic CBOR, exact COSE payload binding,
@@ -367,7 +333,6 @@ pub fn validate_mdl_witness(
         return Err(VegaMdlError::DeviceAuthenticationDigestMismatch);
     }
     let public_inputs = VegaMdlPublicInputsV1::from_statement(statement)?;
-
     validate_vega_mdl_figure9_encoding_v1(
         &witness.issuer_authentication_sig_structure,
         &witness.birth_date_issuer_signed_item,
@@ -395,7 +360,6 @@ pub fn validate_mdl_witness(
         statement.presentation_date,
         statement.minimum_age_years,
     )?;
-
     let issuer_key = VerifyingKey::from_sec1_bytes(statement.issuer_public_key.as_bytes())
         .map_err(|_| VegaMdlError::InvalidP256PublicKey {
             field: "issuer_public_key",
@@ -416,7 +380,6 @@ pub fn validate_mdl_witness(
         &device_key,
         VegaSignatureRoleV1::Device,
     )?;
-
     Ok(VegaMdlValidatedWitnessV1 {
         raw: witness,
         public_inputs,
@@ -432,13 +395,11 @@ pub fn validate_mdl_witness(
         device_ecdsa,
     })
 }
-
 struct ParsedBirthItem {
     digest_id: u64,
     date: PrivacyVegaMdlDateV1,
     digest: [u8; 32],
 }
-
 struct ParsedMso {
     birth_date_digest: [u8; 32],
     device_public_key: PrivacyP256PointV1,
@@ -449,13 +410,11 @@ struct ParsedMso {
     valid_until: PrivacyVegaMdlDateV1,
     lookup: VegaMdlLookupTableV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ParsedRfc3339UtcSeconds {
     date: PrivacyVegaMdlDateV1,
     seconds_since_midnight: u32,
 }
-
 fn validate_issuer_signature_structure(
     sig_structure: &[u8],
     expected_payload: &[u8],
@@ -493,7 +452,6 @@ fn validate_issuer_signature_structure(
     }
     Ok(())
 }
-
 fn parse_birth_item(bytes: &[u8]) -> Result<ParsedBirthItem, VegaMdlError> {
     let wrapper = CborNode::parse_exact(bytes)?;
     let inner_bytes = wrapper.tagged(24).and_then(CborNode::as_bytes).ok_or(
@@ -527,7 +485,6 @@ fn parse_birth_item(bytes: &[u8]) -> Result<ParsedBirthItem, VegaMdlError> {
         digest: Sha256::digest(bytes).into(),
     })
 }
-
 fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, VegaMdlError> {
     let wrapper = CborNode::parse_exact(bytes)?;
     let tagged = wrapper
@@ -558,7 +515,6 @@ fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, Ve
     if required_text(&mso, "docType")?.as_bytes() != VEGA_MDL_DOCUMENT_TYPE_V1 {
         return Err(VegaMdlError::InvalidDocumentFieldValue { field: "docType" });
     }
-
     let value_digests = required_map(&mso, "valueDigests")?;
     let namespace = value_digests
         .map_get_text(
@@ -585,7 +541,6 @@ fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, Ve
         })?;
     let mut birth_date_digest = [0_u8; 32];
     birth_date_digest.copy_from_slice(digest);
-
     let device_key_info = required_map(&mso, "deviceKeyInfo")?;
     let (device_key_name, device_key) = device_key_info
         .map_entry_text("deviceKey")
@@ -601,7 +556,6 @@ fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, Ve
     }
     let (device_public_key, device_public_key_x, device_public_key_y) =
         parse_device_key(device_key)?;
-
     let validity_info = required_map(&mso, "validityInfo")?;
     let signed = required_tagged_rfc3339_seconds(&validity_info, "signed")?;
     let valid_from = required_tagged_rfc3339_seconds(&validity_info, "validFrom")?;
@@ -631,7 +585,6 @@ fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, Ve
             field: "validUntil",
         })?;
     let valid_until = parse_rfc3339_utc_seconds(valid_until_text, "validUntil")?.date;
-
     let digest_entry_range = digest_key.range().start..digest_value.range().end;
     if digest_entry_range.len() != BIRTH_DATE_DIGEST_ENTRY_BYTES_V1 {
         return Err(VegaMdlError::InvalidDocumentFieldShape {
@@ -653,7 +606,6 @@ fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, Ve
             field: "mobile_security_object_lookup",
         });
     }
-
     Ok(ParsedMso {
         birth_date_digest,
         device_public_key,
@@ -665,7 +617,6 @@ fn parse_mso_payload(bytes: &[u8], birth_digest_id: u64) -> Result<ParsedMso, Ve
         lookup,
     })
 }
-
 fn parse_device_key(
     node: &CborNode<'_>,
 ) -> Result<(PrivacyP256PointV1, [u8; 32], [u8; 32]), VegaMdlError> {
@@ -706,7 +657,6 @@ fn parse_device_key(
     compressed_bytes.copy_from_slice(compressed.as_bytes());
     Ok((PrivacyP256PointV1::new(compressed_bytes), x_bytes, y_bytes))
 }
-
 fn validate_signature(
     signature_bytes: &[u8; 64],
     message_digest: [u8; 32],
@@ -729,7 +679,6 @@ fn validate_signature(
         s_inverse: Zeroizing::new(inverse.to_repr().into()),
     })
 }
-
 fn required_map<'a>(
     map: &'a CborNode<'a>,
     field: &'static str,
@@ -742,14 +691,12 @@ fn required_map<'a>(
         .map(|_| value)
         .ok_or(VegaMdlError::InvalidDocumentFieldShape { field })
 }
-
 fn required_text<'a>(map: &'a CborNode<'a>, field: &'static str) -> Result<&'a str, VegaMdlError> {
     map.map_get_text(field)
         .ok_or(VegaMdlError::MissingDocumentField { field })?
         .as_text()
         .ok_or(VegaMdlError::InvalidDocumentFieldShape { field })
 }
-
 fn required_bytes<'a>(
     map: &'a CborNode<'a>,
     field: &'static str,
@@ -759,14 +706,12 @@ fn required_bytes<'a>(
         .as_bytes()
         .ok_or(VegaMdlError::InvalidDocumentFieldShape { field })
 }
-
 fn required_unsigned(map: &CborNode<'_>, field: &'static str) -> Result<u64, VegaMdlError> {
     map.map_get_text(field)
         .ok_or(VegaMdlError::MissingDocumentField { field })?
         .as_unsigned()
         .ok_or(VegaMdlError::InvalidDocumentFieldShape { field })
 }
-
 fn required_tagged_rfc3339_seconds(
     map: &CborNode<'_>,
     field: &'static str,
@@ -779,7 +724,6 @@ fn required_tagged_rfc3339_seconds(
         .ok_or(VegaMdlError::InvalidDocumentFieldShape { field })?;
     parse_rfc3339_utc_seconds(text, field)
 }
-
 fn parse_full_date(text: &str, field: &'static str) -> Result<PrivacyVegaMdlDateV1, VegaMdlError> {
     let bytes = text.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
@@ -796,7 +740,6 @@ fn parse_full_date(text: &str, field: &'static str) -> Result<PrivacyVegaMdlDate
     let _ = validate_date(date, field)?;
     Ok(date)
 }
-
 fn parse_rfc3339_utc_seconds(
     text: &str,
     field: &'static str,
@@ -824,7 +767,6 @@ fn parse_rfc3339_utc_seconds(
             + u32::from(second),
     })
 }
-
 fn parse_decimal_u8(bytes: &[u8], field: &'static str) -> Result<u8, VegaMdlError> {
     bytes.iter().try_fold(0_u8, |value, byte| {
         let digit = byte
@@ -837,7 +779,6 @@ fn parse_decimal_u8(bytes: &[u8], field: &'static str) -> Result<u8, VegaMdlErro
             .ok_or(VegaMdlError::InvalidDate { field })
     })
 }
-
 fn parse_decimal_u16(bytes: &[u8], field: &'static str) -> Result<u16, VegaMdlError> {
     bytes.iter().try_fold(0_u16, |value, byte| {
         let digit = byte
@@ -850,7 +791,6 @@ fn parse_decimal_u16(bytes: &[u8], field: &'static str) -> Result<u16, VegaMdlEr
             .ok_or(VegaMdlError::InvalidDate { field })
     })
 }
-
 fn validate_age(
     birth: PrivacyVegaMdlDateV1,
     presentation: PrivacyVegaMdlDateV1,
@@ -872,7 +812,6 @@ fn validate_age(
     }
     Ok(())
 }
-
 fn append_lookup_range(
     lookup: &mut VegaMdlLookupTableV1,
     source: &[u8],
@@ -891,7 +830,6 @@ fn append_lookup_range(
     }
     Ok(())
 }
-
 fn validate_exact_input_length(
     field: &'static str,
     actual: usize,
@@ -906,9 +844,13 @@ fn validate_exact_input_length(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::privacy_engines::vega::{
+        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaBindingFieldV1,
+        verify_mdl_figure9_v1,
+    };
     use iroha_data_model::privacy::{
         PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1,
         PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
@@ -920,20 +862,11 @@ mod tests {
     };
     use iroha_zkp_halo2::vega::VegaT256ScalarV1;
     use p256::ecdsa::{SigningKey, signature::hazmat::PrehashSigner};
-
-    use super::*;
-    use crate::privacy_engines::vega::{
-        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaBindingFieldV1,
-        verify_mdl_figure9_v1,
-    };
-
     const TRUSTED_TIMESTAMP_MS: u64 = 1_785_024_000_000;
-
     struct Fixture {
         statement: VegaExistingCredentialStatementV1,
         witness: VegaMdlWitnessV1,
     }
-
     fn cbor_head(major: u8, argument: u64) -> Vec<u8> {
         let mut encoded = Vec::new();
         match argument {
@@ -961,11 +894,9 @@ mod tests {
         }
         encoded
     }
-
     fn cbor_unsigned(value: u64) -> Vec<u8> {
         cbor_head(0, value)
     }
-
     fn cbor_negative(value: i64) -> Vec<u8> {
         assert!(value < 0);
         cbor_head(
@@ -973,19 +904,16 @@ mod tests {
             u64::try_from(-(i128::from(value)) - 1).expect("negative CBOR argument"),
         )
     }
-
     fn cbor_bytes(value: &[u8]) -> Vec<u8> {
         let mut encoded = cbor_head(2, u64::try_from(value.len()).expect("test length fits u64"));
         encoded.extend_from_slice(value);
         encoded
     }
-
     fn cbor_text(value: &str) -> Vec<u8> {
         let mut encoded = cbor_head(3, u64::try_from(value.len()).expect("test length fits u64"));
         encoded.extend_from_slice(value.as_bytes());
         encoded
     }
-
     fn cbor_array(values: Vec<Vec<u8>>) -> Vec<u8> {
         let mut encoded = cbor_head(
             4,
@@ -996,7 +924,6 @@ mod tests {
         }
         encoded
     }
-
     fn cbor_map(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
         entries.sort_by(|left, right| {
             left.0
@@ -1014,25 +941,21 @@ mod tests {
         }
         encoded
     }
-
     fn cbor_tag(tag: u64, value: Vec<u8>) -> Vec<u8> {
         let mut encoded = cbor_head(6, tag);
         encoded.extend_from_slice(&value);
         encoded
     }
-
     fn signing_key(seed: u8) -> SigningKey {
         let bytes = [seed; 32];
         SigningKey::from_bytes((&bytes).into()).expect("fixed non-zero test signing key")
     }
-
     fn compressed_key(signing_key: &SigningKey) -> PrivacyP256PointV1 {
         let encoded = signing_key.verifying_key().to_encoded_point(true);
         let mut bytes = [0_u8; 33];
         bytes.copy_from_slice(encoded.as_bytes());
         PrivacyP256PointV1::new(bytes)
     }
-
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: super::super::network_id_from_genesis_hash_bytes([0xA7; 32]),
@@ -1045,11 +968,9 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new([0x25; 32]),
         }
     }
-
     fn binding(statement: &VegaExistingCredentialStatementV1) -> VegaMdlConsensusBindingV1<'_> {
         VegaMdlConsensusBindingV1::from_context(&statement.context, [0xa7; 32])
     }
-
     fn fixture_with_dates(
         birth_date: &str,
         signed: &str,
@@ -1063,7 +984,6 @@ mod tests {
         let device_uncompressed = device_signing_key.verifying_key().to_encoded_point(false);
         let device_x = device_uncompressed.x().expect("uncompressed x");
         let device_y = device_uncompressed.y().expect("uncompressed y");
-
         let birth_inner = cbor_map(vec![
             (cbor_text("digestID"), cbor_unsigned(1)),
             (cbor_text("random"), cbor_bytes(&[0x42; 16])),
@@ -1072,7 +992,6 @@ mod tests {
         ]);
         let birth_item = cbor_tag(24, cbor_bytes(&birth_inner));
         let birth_digest: [u8; 32] = Sha256::digest(&birth_item).into();
-
         let device_key = cbor_map(vec![
             (cbor_unsigned(1), cbor_unsigned(2)),
             (cbor_negative(-1), cbor_unsigned(1)),
@@ -1120,7 +1039,6 @@ mod tests {
             birth_item.len(),
             VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1
         );
-
         let mut statement = VegaExistingCredentialStatementV1 {
             context: context(),
             issuer_id: PrivacyIssuerIdV1::new([0x40; 32]),
@@ -1160,7 +1078,6 @@ mod tests {
         .expect("bounded witness");
         Fixture { statement, witness }
     }
-
     fn fixture(birth_date: &str, valid_until: &str) -> Fixture {
         fixture_with_dates(
             birth_date,
@@ -1175,11 +1092,9 @@ mod tests {
             18,
         )
     }
-
     fn valid_fixture() -> Fixture {
         fixture("1980-06-15", "2035-08-17T12:34:56Z")
     }
-
     #[test]
     fn canonical_figure9_witness_validates_end_to_end() {
         let Fixture { statement, witness } = valid_fixture();
@@ -1242,7 +1157,6 @@ mod tests {
         assert_ne!(validated.issuer_ecdsa().s_inverse(), &[0; 32]);
         assert_ne!(validated.device_ecdsa().s_inverse(), &[0; 32]);
     }
-
     #[test]
     fn achievable_date_and_age_maxima_validate_with_a_later_four_digit_expiry() {
         const MAXIMUM_PRESENTATION_TIMESTAMP_MS: u64 = 253_370_678_400_000;
@@ -1272,7 +1186,6 @@ mod tests {
             VegaT256ScalarV1::from_u64(150)
         );
     }
-
     #[test]
     fn hdev_frame_has_a_pinned_kat_and_binds_every_consensus_class() {
         let Fixture { statement, .. } = valid_fixture();
@@ -1282,7 +1195,6 @@ mod tests {
             hex::encode(baseline.as_bytes()),
             "9ed6822d1c9f47e11e21ebe20dc7362efecf79d639af9949d78212f408ec2f25"
         );
-
         let mut challenge = statement.clone();
         challenge.reader_challenge = PrivacyChallengeV1::new([0x41; 32]);
         assert_ne!(
@@ -1352,7 +1264,6 @@ mod tests {
                 .expect("parameter digest"),
             baseline
         );
-
         assert_eq!(
             verify_mdl_figure9_v1(&intent, &binding(&intent), TRUSTED_TIMESTAMP_MS, &[0x51],)
                 .expect_err("a Vega proof cannot replay under another transaction intent"),
@@ -1383,7 +1294,6 @@ mod tests {
             baseline
         );
     }
-
     #[test]
     fn cheap_prechecks_reject_binding_signature_digest_age_and_expiry_attacks() {
         let Fixture {
@@ -1404,7 +1314,6 @@ mod tests {
                 role: VegaSignatureRoleV1::Issuer
             })
         ));
-
         for role in [VegaSignatureRoleV1::Issuer, VegaSignatureRoleV1::Device] {
             let Fixture {
                 statement,
@@ -1436,7 +1345,6 @@ mod tests {
                 VegaMdlError::NonCanonicalHighSSignature { role }
             );
         }
-
         let Fixture {
             statement,
             mut witness,
@@ -1457,7 +1365,6 @@ mod tests {
             .expect_err("birth digest attack"),
             VegaMdlError::BirthDateDigestMismatch
         );
-
         let Fixture { statement, witness } = fixture("2010-06-15", "2035-08-17T12:34:56Z");
         assert_eq!(
             validate_mdl_witness(
@@ -1469,7 +1376,6 @@ mod tests {
             .expect_err("under-age attack"),
             VegaMdlError::AgeThresholdNotMet
         );
-
         let Fixture { statement, witness } = fixture("1980-06-15", "2026-07-26T23:59:59Z");
         assert_eq!(
             validate_mdl_witness(
@@ -1481,7 +1387,6 @@ mod tests {
             .expect_err("same-day expiry"),
             VegaMdlError::CredentialExpired
         );
-
         let Fixture { statement, witness } = valid_fixture();
         assert_eq!(
             validate_mdl_witness(
@@ -1494,7 +1399,6 @@ mod tests {
             VegaMdlError::TrustedPresentationDateMismatch
         );
     }
-
     #[test]
     fn validity_preflight_rejects_malformed_signed_and_valid_from_dates() {
         for (field, signed, valid_from) in [
@@ -1525,7 +1429,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validity_preflight_enforces_the_circuit_date_ordering() {
         let Fixture { statement, witness } = fixture_with_dates(
@@ -1550,7 +1453,6 @@ mod tests {
             .expect_err("signed after validFrom"),
             VegaMdlError::CredentialSignedAfterValidFrom
         );
-
         let Fixture { statement, witness } = fixture_with_dates(
             "1980-06-15",
             "2025-01-01T03:04:05Z",
@@ -1573,7 +1475,6 @@ mod tests {
             .expect_err("presentation before validFrom"),
             VegaMdlError::CredentialNotYetValid
         );
-
         let Fixture { statement, witness } = fixture_with_dates(
             "1980-06-15",
             "2026-07-26T23:59:59Z",
@@ -1596,7 +1497,6 @@ mod tests {
             .expect_err("signed timestamp follows validFrom within one date"),
             VegaMdlError::CredentialSignedAfterValidFrom
         );
-
         for (signed, valid_from) in [
             ("2026-07-26T00:00:00Z", "2026-07-26T00:00:00Z"),
             ("2026-07-26T00:00:00Z", "2026-07-26T23:59:59Z"),
@@ -1622,7 +1522,6 @@ mod tests {
             .expect("equal and forward-ordered private timestamps are valid");
         }
     }
-
     #[test]
     fn strict_structure_rejects_payload_swap_fixed_key_mutation_and_noncanonical_cbor() {
         let Fixture {
@@ -1643,7 +1542,6 @@ mod tests {
             .expect_err("payload swap"),
             VegaMdlError::IssuerPayloadMismatch
         );
-
         let Fixture {
             statement,
             mut witness,
@@ -1670,7 +1568,6 @@ mod tests {
             .expect_err("fixed deviceKey mutation"),
             VegaMdlError::InvalidClosedProfileEncoding
         );
-
         let Fixture {
             statement,
             mut witness,
@@ -1690,7 +1587,6 @@ mod tests {
             VegaMdlError::InvalidClosedProfileEncoding
         );
     }
-
     #[test]
     fn every_issuer_structure_truncation_is_rejected_without_panic() {
         let Fixture { witness, .. } = valid_fixture();
@@ -1709,7 +1605,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fixed_date_parser_rejects_invalid_calendar_and_time_forms() {
         assert_eq!(
@@ -1742,7 +1637,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn completed_gregorian_age_observes_birthday_boundary() {
         let birth = PrivacyVegaMdlDateV1 {
@@ -1773,7 +1667,6 @@ mod tests {
         )
         .expect("birthday completes the threshold age");
     }
-
     #[test]
     fn witness_constructor_enforces_every_exact_bound() {
         let exact = || {
@@ -1785,7 +1678,6 @@ mod tests {
         };
         let (issuer, mso, birth) = exact();
         assert!(VegaMdlWitnessV1::new(issuer, mso, birth, &[1; 64], &[2; 64]).is_ok());
-
         for issuer_len in [
             VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1 - 1,
             VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1 + 1,
@@ -1818,7 +1710,6 @@ mod tests {
         let (issuer, mso, birth) = exact();
         assert!(VegaMdlWitnessV1::new(issuer, mso, birth, &[1; 64], &[2; 65]).is_err());
     }
-
     #[test]
     fn birth_randomizer_rejects_both_adjacent_noncanonical_widths() {
         for random_len in [
@@ -1842,7 +1733,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn arbitrary_short_cbor_inputs_never_panic() {
         for length in 0..=96 {
@@ -1853,7 +1743,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn public_scalar_type_remains_non_reducing_at_application_boundary() {
         assert!(VegaT256ScalarV1::from_be_bytes_exact([0xff; 32]).is_err());

@@ -6,7 +6,6 @@ use std::{
     },
     time::Duration,
 };
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -54,20 +53,16 @@ use sorafs_node::{
     ProviderIngestSourceRequestV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1, config::StorageConfig, store::StorageError,
 };
-
 use super::*;
-
 const LOCAL_PROVIDER: [u8; 32] = [0x11; 32];
 const SOURCE_PROVIDER: [u8; 32] = [0x22; 32];
 const ORDER_ID: [u8; 32] = [0x31; 32];
 const CHECKPOINT_HANDLE: &str = "sealed:sorafs-provider-ingest-primary";
 const CHECKPOINT_POLICY_DIGEST: [u8; 32] = [0xC7; 32];
-
 #[derive(Debug)]
 struct CrashRestartCheckpointRuntimeV1 {
     latest: Mutex<Option<ProviderIngestSealedCheckpointRecordV1>>,
 }
-
 impl CrashRestartCheckpointRuntimeV1 {
     fn binding() -> ProviderIngestCheckpointProviderBindingV1 {
         ProviderIngestCheckpointProviderBindingV1 {
@@ -77,12 +72,10 @@ impl CrashRestartCheckpointRuntimeV1 {
         }
     }
 }
-
 impl ProviderIngestCheckpointRuntimeV1 for CrashRestartCheckpointRuntimeV1 {
     fn handle(&self) -> &str {
         CHECKPOINT_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -94,7 +87,6 @@ impl ProviderIngestCheckpointRuntimeV1 for CrashRestartCheckpointRuntimeV1 {
             CHECKPOINT_POLICY_DIGEST,
         ))
     }
-
     fn load_latest(
         &self,
     ) -> Result<
@@ -106,7 +98,6 @@ impl ProviderIngestCheckpointRuntimeV1 for CrashRestartCheckpointRuntimeV1 {
             .map(|latest| latest.clone())
             .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)
     }
-
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -123,7 +114,6 @@ impl ProviderIngestCheckpointRuntimeV1 for CrashRestartCheckpointRuntimeV1 {
         Ok(())
     }
 }
-
 struct CrashRestartLedgerV1 {
     network_id: NetworkId,
     cursor: ProviderIngestFinalizedCursorV1,
@@ -131,7 +121,6 @@ struct CrashRestartLedgerV1 {
     order: ReplicationOrderRecord,
     archive: MusubiReplicationOrderArchiveBindingV1,
 }
-
 impl ProviderIngestFinalizedLedgerV1 for CrashRestartLedgerV1 {
     fn read_assignment_page<'a>(
         &'a self,
@@ -182,14 +171,11 @@ impl ProviderIngestFinalizedLedgerV1 for CrashRestartLedgerV1 {
         Box::pin(async move { result })
     }
 }
-
 struct CrashRestartFetchV1 {
     calls: AtomicU64,
 }
-
 impl ProviderIngestAuthenticatedSourceFetchV1 for CrashRestartFetchV1 {
     type Fetched = VerifiedProviderIngestPayloadV1;
-
     fn fetch<'a>(
         &'a self,
         _request: ProviderIngestSourceRequestV1,
@@ -198,9 +184,7 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for CrashRestartFetchV1 {
         Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
     }
 }
-
 struct NeverBuildCompletionV1;
-
 impl ProviderIngestCompletionPayloadBuilderV1 for NeverBuildCompletionV1 {
     fn build_payload<'a>(
         &'a self,
@@ -212,12 +196,9 @@ impl ProviderIngestCompletionPayloadBuilderV1 for NeverBuildCompletionV1 {
         Box::pin(async { Err(ProviderIngestCompletionPayloadErrorV1::Rejected) })
     }
 }
-
 struct NeverResolveSignerV1;
-
 impl ProviderIngestCompletionSignerResolverV1 for NeverResolveSignerV1 {
     type Signer = TestGovernedCompletionSignerV1;
-
     fn resolve<'a>(
         &'a self,
         _context: ProviderIngestCompletionSignerResolutionContextV1,
@@ -228,12 +209,9 @@ impl ProviderIngestCompletionSignerResolverV1 for NeverResolveSignerV1 {
         Box::pin(async { Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected) })
     }
 }
-
 struct NeverIngressV1;
-
 impl ProviderIngestTransactionIngressV1 for NeverIngressV1 {
     type Prepared = ();
-
     fn prepare<'a>(
         &'a self,
         _transaction: SignedTransaction,
@@ -241,7 +219,6 @@ impl ProviderIngestTransactionIngressV1 for NeverIngressV1 {
     {
         Box::pin(async { Err(ProviderIngestIngressPrepareErrorV1::Rejected) })
     }
-
     fn expose<'a>(
         &'a self,
         _prepared: Self::Prepared,
@@ -249,7 +226,6 @@ impl ProviderIngestTransactionIngressV1 for NeverIngressV1 {
     ) -> ProviderIngestFutureV1<'a, ProviderIngestIngressDispositionV1> {
         Box::pin(async { ProviderIngestIngressDispositionV1::Rejected })
     }
-
     fn observe<'a>(
         &'a self,
         _transaction_hash: [u8; 32],
@@ -257,20 +233,16 @@ impl ProviderIngestTransactionIngressV1 for NeverIngressV1 {
         Box::pin(async { ProviderIngestTransactionObservationV1::Unknown })
     }
 }
-
 struct FixedClockV1(u64);
-
 impl ProviderIngestClockV1 for FixedClockV1 {
     fn now_ms(&self) -> u64 {
         self.0
     }
 }
-
 fn account(seed: u8) -> AccountId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("account key");
     AccountId::new(key.public_key().clone())
 }
-
 fn outbox_policy() -> ProviderIngestOutboxPolicyV1 {
     ProviderIngestOutboxPolicyV1 {
         max_active_entries: 32,
@@ -286,7 +258,6 @@ fn outbox_policy() -> ProviderIngestOutboxPolicyV1 {
         max_status_page_size: 32,
     }
 }
-
 fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
     ProviderIngestRuntimePolicyV1 {
         max_page_rows: 16,
@@ -300,14 +271,12 @@ fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
         ingress_timeout_ms: 100,
     }
 }
-
 #[tokio::test]
 async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
     let temp = tempfile::tempdir().expect("provider-ingest crash tempdir");
     let root = temp.path().canonicalize().expect("canonical crash tempdir");
     let storage_dir = root.join("storage");
     std::fs::create_dir(&storage_dir).expect("create storage directory");
-
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xA7; 32]),
     ));
@@ -344,7 +313,6 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
         manifest.digest().expect("primary manifest digest"),
         shared_manifest.digest().expect("shared manifest digest")
     );
-
     let digest = ManifestDigest::new(
         *manifest
             .digest()
@@ -381,7 +349,6 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
         commitment,
     );
     archive.validate().expect("Musubi archive binding");
-
     let mut pin = PinManifestRecord::new(
         digest,
         root_cid.clone(),
@@ -465,7 +432,6 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
         order,
         archive,
     };
-
     let checkpoint = Arc::new(CrashRestartCheckpointRuntimeV1 {
         latest: Mutex::new(None),
     });
@@ -497,7 +463,6 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
             ProviderIngestDeliveryStateV1::SourceClaimed { attempts: 0, .. }
         ));
     }
-
     let plain_config = StorageConfig::builder()
         .enabled(true)
         .provider_id(Some(ProviderId::new(LOCAL_PROVIDER)))
@@ -517,7 +482,6 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
         assert_eq!(node.stored_manifests().expect("stored manifests").len(), 2);
         (manifest_id, shared_manifest_id)
     };
-
     let configured = StorageConfig::builder()
         .enabled(true)
         .provider_id(Some(ProviderId::new(LOCAL_PROVIDER)))
@@ -576,7 +540,6 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
     );
     drop(runtime);
     drop(node);
-
     let reopened = NodeHandle::try_new_with_runtime_deps(configured, runtime_deps())
         .expect("reopen terminal node");
     assert_eq!(

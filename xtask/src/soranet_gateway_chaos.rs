@@ -1,21 +1,18 @@
 //! Chaos drill harness for the SoraGlobal Gateway CDN (SNNet-15F1).
 //! Generates scenario packs, quarterly schedules, and runs dry-run or
 //! execution passes to capture evidence bundles for SRE/GameDay drills.
-
+use eyre::{Result, WrapErr, eyre};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     process::Command,
     time::Instant,
 };
-
-use eyre::{Result, WrapErr, eyre};
-use norito::{
-    derive::{JsonDeserialize, JsonSerialize},
-    json,
-};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct ChaosScenario {
     pub id: String,
@@ -27,14 +24,12 @@ pub struct ChaosScenario {
     pub verify: Vec<ActionStep>,
     pub remediate: Vec<ActionStep>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct ScenarioBenchmarks {
     pub alert_budget_seconds: u64,
     pub recovery_budget_seconds: u64,
     pub max_backlog_percent: u64,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct ActionStep {
     pub name: String,
@@ -42,14 +37,12 @@ pub struct ActionStep {
     pub timeout_seconds: u64,
     pub evidence: Vec<String>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct ScheduleEntry {
     pub quarter: String,
     pub scenarios: Vec<String>,
     pub owner: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct ScenarioPack {
     pub version: u32,
@@ -57,14 +50,12 @@ pub struct ScenarioPack {
     pub scenarios: Vec<ChaosScenario>,
     pub schedule: Vec<ScheduleEntry>,
 }
-
 #[derive(Debug)]
 pub struct ChaosAssets {
     pub scenarios_path: PathBuf,
     pub runbook_path: PathBuf,
     pub schedule_path: PathBuf,
 }
-
 #[derive(Debug)]
 pub struct ChaosOptions {
     pub config_path: PathBuf,
@@ -75,20 +66,17 @@ pub struct ChaosOptions {
     pub note: Option<String>,
     pub now: OffsetDateTime,
 }
-
 #[derive(Debug)]
 pub enum ScenarioSelection {
     All,
     Only(Vec<String>),
 }
-
 #[derive(Debug)]
 pub struct ChaosOutcome {
     pub plan_path: PathBuf,
     pub report_path: PathBuf,
     pub markdown_path: PathBuf,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct PlanStep {
     stage: String,
@@ -97,7 +85,6 @@ struct PlanStep {
     timeout_seconds: u64,
     evidence: Vec<String>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct PlanScenario {
     id: String,
@@ -106,7 +93,6 @@ struct PlanScenario {
     benchmarks: ScenarioBenchmarks,
     steps: Vec<PlanStep>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct ChaosPlan {
     version: u32,
@@ -117,7 +103,6 @@ struct ChaosPlan {
     note: Option<String>,
     started_at: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct StepReport {
     stage: String,
@@ -129,7 +114,6 @@ struct StepReport {
     output: Option<String>,
     evidence: Vec<String>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct ScenarioReport {
     id: String,
@@ -138,7 +122,6 @@ struct ScenarioReport {
     benchmarks: ScenarioBenchmarks,
     steps: Vec<StepReport>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct ChaosReport {
     run_id: String,
@@ -148,7 +131,6 @@ struct ChaosReport {
     note: Option<String>,
     started_at: String,
 }
-
 /// Writes the default chaos scenario bundle, quarterly schedule, and runbook.
 pub fn write_chaos_assets(
     output_dir: &Path,
@@ -165,7 +147,6 @@ pub fn write_chaos_assets(
     let scenarios_path = output_dir.join("chaos_scenarios.json");
     let runbook_path = output_dir.join("chaos_runbook.md");
     let schedule_path = output_dir.join("gameday_schedule.json");
-
     let scenario_pack = build_default_pack(&pop_label, now);
     let scenario_file = File::create(&scenarios_path)
         .wrap_err_with(|| format!("create {}", scenarios_path.display()))?;
@@ -175,11 +156,9 @@ pub fn write_chaos_assets(
             scenarios_path.display()
         )
     })?;
-
     let runbook = render_runbook(&scenario_pack);
     fs::write(&runbook_path, runbook)
         .wrap_err_with(|| format!("write {}", runbook_path.display()))?;
-
     let schedule_file = File::create(&schedule_path)
         .wrap_err_with(|| format!("create {}", schedule_path.display()))?;
     json::to_writer_pretty(schedule_file, &scenario_pack.schedule).wrap_err_with(|| {
@@ -188,14 +167,12 @@ pub fn write_chaos_assets(
             schedule_path.display()
         )
     })?;
-
     Ok(ChaosAssets {
         scenarios_path,
         runbook_path,
         schedule_path,
     })
 }
-
 /// Execute or dry-run chaos scenarios, writing plan + report artifacts.
 pub fn run(options: ChaosOptions) -> Result<ChaosOutcome> {
     fs::create_dir_all(&options.output_dir).wrap_err_with(|| {
@@ -213,7 +190,6 @@ pub fn run(options: ChaosOptions) -> Result<ChaosOutcome> {
     let pack: ScenarioPack =
         json::from_slice(&config_bytes).wrap_err("invalid chaos config JSON")?;
     let selected = select_scenarios(&pack.scenarios, &options.scenarios)?;
-
     let started_at = options
         .now
         .format(&Rfc3339)
@@ -222,7 +198,6 @@ pub fn run(options: ChaosOptions) -> Result<ChaosOutcome> {
     let run_id = format!("{}-{}", safe_ts, sanitize_label(&options.pop));
     let plan = build_plan(&selected, &run_id, &options, &started_at);
     let report = execute_plan(&selected, &options, &started_at, &run_id)?;
-
     let run_dir = options.output_dir.join(format!("run_{run_id}"));
     fs::create_dir_all(&run_dir).wrap_err_with(|| {
         format!(
@@ -230,30 +205,25 @@ pub fn run(options: ChaosOptions) -> Result<ChaosOutcome> {
             run_dir.display()
         )
     })?;
-
     let plan_path = run_dir.join("chaos_plan.json");
     let plan_file =
         File::create(&plan_path).wrap_err_with(|| format!("create {}", plan_path.display()))?;
     json::to_writer_pretty(plan_file, &plan)
         .wrap_err_with(|| format!("write chaos plan {}", plan_path.display()))?;
-
     let report_path = run_dir.join("chaos_report.json");
     let report_file =
         File::create(&report_path).wrap_err_with(|| format!("create {}", report_path.display()))?;
     json::to_writer_pretty(report_file, &report)
         .wrap_err_with(|| format!("write chaos report {}", report_path.display()))?;
-
     let markdown_path = run_dir.join("chaos_report.md");
     fs::write(&markdown_path, render_report_markdown(&report))
         .wrap_err_with(|| format!("write {}", markdown_path.display()))?;
-
     Ok(ChaosOutcome {
         plan_path,
         report_path,
         markdown_path,
     })
 }
-
 fn select_scenarios<'a>(
     scenarios: &'a [ChaosScenario],
     selection: &ScenarioSelection,
@@ -272,7 +242,6 @@ fn select_scenarios<'a>(
         }
     }
 }
-
 fn build_plan(
     scenarios: &[&ChaosScenario],
     run_id: &str,
@@ -289,7 +258,6 @@ fn build_plan(
             steps: collect_steps(scenario),
         })
         .collect();
-
     ChaosPlan {
         version: 1,
         run_id: run_id.to_string(),
@@ -300,7 +268,6 @@ fn build_plan(
         started_at: started_at.to_string(),
     }
 }
-
 fn collect_steps(scenario: &ChaosScenario) -> Vec<PlanStep> {
     scenario
         .inject
@@ -328,7 +295,6 @@ fn collect_steps(scenario: &ChaosScenario) -> Vec<PlanStep> {
         }))
         .collect()
 }
-
 fn execute_plan(
     scenarios: &[&ChaosScenario],
     options: &ChaosOptions,
@@ -355,7 +321,6 @@ fn execute_plan(
             steps: step_reports,
         });
     }
-
     Ok(ChaosReport {
         run_id: run_id.to_string(),
         pop: options.pop.clone(),
@@ -365,12 +330,10 @@ fn execute_plan(
         started_at: started_at.to_string(),
     })
 }
-
 fn run_step(stage: &str, step: &ActionStep, execute: bool) -> Result<StepReport> {
     if step.command.is_empty() {
         return Err(eyre!("step `{}` is missing a command", step.name));
     }
-
     if !execute {
         return Ok(StepReport {
             stage: stage.to_string(),
@@ -383,7 +346,6 @@ fn run_step(stage: &str, step: &ActionStep, execute: bool) -> Result<StepReport>
             evidence: step.evidence.clone(),
         });
     }
-
     let start = Instant::now();
     let mut cmd = Command::new(&step.command[0]);
     if step.command.len() > 1 {
@@ -410,7 +372,6 @@ fn run_step(stage: &str, step: &ActionStep, execute: bool) -> Result<StepReport>
         }
         combined_output.push_str(&String::from_utf8_lossy(&output.stderr));
     }
-
     Ok(StepReport {
         stage: stage.to_string(),
         name: step.name.clone(),
@@ -426,7 +387,6 @@ fn run_step(stage: &str, step: &ActionStep, execute: bool) -> Result<StepReport>
         evidence: step.evidence.clone(),
     })
 }
-
 fn build_default_pack(pop_label: &str, now: OffsetDateTime) -> ScenarioPack {
     let scenarios = vec![
         ChaosScenario {
@@ -592,7 +552,6 @@ fn build_default_pack(pop_label: &str, now: OffsetDateTime) -> ScenarioPack {
             ],
         },
     ];
-
     let schedule = build_schedule(now, &scenarios);
     ScenarioPack {
         version: 1,
@@ -601,7 +560,6 @@ fn build_default_pack(pop_label: &str, now: OffsetDateTime) -> ScenarioPack {
         schedule,
     }
 }
-
 fn build_schedule(now: OffsetDateTime, scenarios: &[ChaosScenario]) -> Vec<ScheduleEntry> {
     let current_year = now.year();
     let current_quarter = ((now.month() as i32 - 1) / 3) + 1;
@@ -611,7 +569,6 @@ fn build_schedule(now: OffsetDateTime, scenarios: &[ChaosScenario]) -> Vec<Sched
         scenarios[2].id.clone(),
         "rotation".to_string(),
     ];
-
     (0..4)
         .map(|idx| {
             let quarter_idx = current_quarter + idx;
@@ -630,7 +587,6 @@ fn build_schedule(now: OffsetDateTime, scenarios: &[ChaosScenario]) -> Vec<Sched
         })
         .collect()
 }
-
 fn render_runbook(pack: &ScenarioPack) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Gateway Chaos Runbook ({})\n\n", pack.pop));
@@ -657,7 +613,6 @@ fn render_runbook(pack: &ScenarioPack) -> String {
     }
     out
 }
-
 fn render_report_markdown(report: &ChaosReport) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Gateway Chaos Report ({})\n\n", report.pop));
@@ -671,7 +626,6 @@ fn render_report_markdown(report: &ChaosReport) -> String {
         out.push_str(&format!("- Note: {note}\n"));
     }
     out.push('\n');
-
     for scenario in &report.scenarios {
         out.push_str(&format!("## {} (`{}`)\n\n", scenario.title, scenario.id));
         out.push_str(&format!(
@@ -695,10 +649,8 @@ fn render_report_markdown(report: &ChaosReport) -> String {
         }
         out.push('\n');
     }
-
     out
 }
-
 fn sanitize_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -710,39 +662,32 @@ fn sanitize_label(input: &str) -> String {
     }
     out.trim_matches('-').to_string()
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::json::Value;
     use tempfile::tempdir;
-
-    use super::*;
-
     #[test]
     fn default_assets_are_written() {
         let temp = tempdir().expect("tempdir");
         let now = OffsetDateTime::from_unix_timestamp(1_702_000_000).expect("timestamp");
         let assets = write_chaos_assets(temp.path(), "qa-pop_01", now).expect("write assets");
-
         let pack_bytes = fs::read(&assets.scenarios_path).expect("scenario file exists");
         let pack: ScenarioPack = json::from_slice(&pack_bytes).expect("scenario pack parses");
         assert_eq!(pack.scenarios.len(), 3);
         assert_eq!(pack.scenarios[0].id, "prefix-withdrawal");
         assert_eq!(pack.schedule.len(), 4);
-
         let runbook = fs::read_to_string(&assets.runbook_path).expect("runbook exists");
         assert!(
             runbook.contains("Gateway Chaos Runbook"),
             "runbook text should mention runbook"
         );
     }
-
     #[test]
     fn chaos_runner_generates_reports() {
         let temp = tempdir().expect("tempdir");
         let now = OffsetDateTime::from_unix_timestamp(1_702_000_000).expect("timestamp");
         let assets = write_chaos_assets(temp.path(), "qa-pop_01", now).expect("write assets");
-
         let run_out = temp.path().join("runs");
         let outcome = run(ChaosOptions {
             config_path: assets.scenarios_path.clone(),
@@ -754,11 +699,9 @@ mod tests {
             now,
         })
         .expect("chaos run executes");
-
         assert!(outcome.plan_path.exists());
         assert!(outcome.report_path.exists());
         assert!(outcome.markdown_path.exists());
-
         let report_bytes = fs::read(outcome.report_path).expect("report exists");
         let report: Value = json::from_slice(&report_bytes).expect("report parses");
         assert_eq!(report["scenarios"].as_array().unwrap().len(), 1);

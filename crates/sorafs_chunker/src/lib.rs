@@ -22,19 +22,14 @@
 //!         .all(|c| c.length >= ChunkProfile::DEFAULT.min_size)
 //! );
 //! ```
-
-use std::{error::Error, fmt, sync::OnceLock};
-
 use sha3::{Digest, Sha3_256};
-
+use std::{error::Error, fmt, sync::OnceLock};
 /// Rolling hash mask controlling the probability of a boundary for the default profile.
 const BREAK_MASK: u64 = 0x0000_FFFF;
 /// Rolling hash mask used by the high-density profile (smaller target chunks).
 const BREAK_MASK_SF2: u64 = 0x0000_7FFF;
-
 /// Seed tag used when expanding the SHA3-256-based gear table.
 const GEAR_TABLE_SEED: &[u8] = b"sorafs-v1-gear";
-
 /// Default chunking profile matching the SF-1 spec.
 pub const DEFAULT_PROFILE: ChunkProfile = ChunkProfile {
     min_size: 64 * 1024,
@@ -42,7 +37,6 @@ pub const DEFAULT_PROFILE: ChunkProfile = ChunkProfile {
     max_size: 512 * 1024,
     break_mask: BREAK_MASK,
 };
-
 /// Higher-density profile used by SF-2 (smaller target size, tighter mask).
 pub const HIGH_DENSITY_PROFILE: ChunkProfile = ChunkProfile {
     min_size: 32 * 1024,
@@ -50,7 +44,6 @@ pub const HIGH_DENSITY_PROFILE: ChunkProfile = ChunkProfile {
     max_size: 384 * 1024,
     break_mask: BREAK_MASK_SF2,
 };
-
 /// Content-defined chunk produced by the chunker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Chunk {
@@ -59,21 +52,18 @@ pub struct Chunk {
     /// Length of the chunk in bytes.
     pub length: usize,
 }
-
 impl Chunk {
     /// Returns the end offset (`offset + length`) when it fits in `usize`.
     #[must_use]
     pub fn checked_end(&self) -> Option<usize> {
         self.offset.checked_add(self.length)
     }
-
     /// Returns the end offset (`offset + length`) of the chunk.
     #[must_use]
     pub fn end(&self) -> usize {
         self.checked_end().expect("chunk end overflows usize")
     }
 }
-
 /// Chunk metadata enriched with a BLAKE3 digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkDigest {
@@ -84,7 +74,6 @@ pub struct ChunkDigest {
     /// 32-byte BLAKE3 digest of the chunk contents.
     pub digest: [u8; 32],
 }
-
 /// Compute the canonical SHA3-256 commitment for an ordered chunk plan.
 ///
 /// Each entry contributes its little-endian 64-bit offset, little-endian
@@ -103,7 +92,6 @@ pub fn compute_chunk_plan_digest_sha3(
     }
     hasher.finalize().into()
 }
-
 /// Chunking configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkProfile {
@@ -116,7 +104,6 @@ pub struct ChunkProfile {
     /// Mask applied to the rolling hash; a zero result triggers a boundary.
     pub break_mask: u64,
 }
-
 /// Errors returned when chunking cannot proceed deterministically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkerError {
@@ -146,7 +133,6 @@ pub enum ChunkerError {
         length: usize,
     },
 }
-
 impl fmt::Display for ChunkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -173,15 +159,12 @@ impl fmt::Display for ChunkerError {
         }
     }
 }
-
 impl Error for ChunkerError {}
-
 impl ChunkProfile {
     /// Default profile used by SoraFS.
     pub const DEFAULT: Self = DEFAULT_PROFILE;
     /// Higher-density SF-2 profile (smaller chunk sizes for latency-sensitive workloads).
     pub const SF2: Self = HIGH_DENSITY_PROFILE;
-
     /// Validates that the profile respects ordering and mask requirements.
     pub fn validate(self) -> Result<(), ChunkerError> {
         if self.min_size == 0 {
@@ -205,19 +188,16 @@ impl ChunkProfile {
         Ok(())
     }
 }
-
 /// Chunks the provided bytes with the default SoraFS profile.
 #[must_use]
 pub fn chunk_bytes(input: &[u8]) -> Vec<Chunk> {
     chunk_bytes_with_profile(ChunkProfile::DEFAULT, input)
 }
-
 /// Chunks the provided bytes using a custom profile.
 #[must_use]
 pub fn chunk_bytes_with_profile(profile: ChunkProfile, input: &[u8]) -> Vec<Chunk> {
     try_chunk_bytes_with_profile(profile, input).expect("invalid SoraFS chunk profile")
 }
-
 /// Chunks the provided bytes using a custom profile, returning validation
 /// errors instead of panicking on invalid profile parameters.
 pub fn try_chunk_bytes_with_profile(
@@ -231,26 +211,20 @@ pub fn try_chunk_bytes_with_profile(
             length: 0,
         }]);
     }
-
     let table = gear_table();
     let mut offset = 0usize;
     let len = input.len();
     let mut chunks = Vec::new();
-
     while offset < len {
         let max_end = checked_window_end(offset, profile.max_size, len);
         let mut idx = offset;
         let mut hash = 0u64;
-
         let must_end = checked_window_end(offset, profile.min_size, len);
-
         while idx < must_end {
             hash = roll(hash, input[idx], table);
             idx += 1;
         }
-
         let mut chunk_end = idx;
-
         if idx < max_end {
             while idx < max_end {
                 hash = roll(hash, input[idx], table);
@@ -260,41 +234,34 @@ pub fn try_chunk_bytes_with_profile(
                     break;
                 }
             }
-
             if idx == max_end {
                 chunk_end = idx;
             }
         } else {
             chunk_end = idx;
         }
-
         if chunk_end <= offset {
             // Safety net: never emit zero-length chunks.
             chunk_end = checked_window_end(offset, profile.max_size, len);
         }
-
         chunks.push(Chunk {
             offset,
             length: chunk_end - offset,
         });
         offset = chunk_end;
     }
-
     Ok(chunks)
 }
-
 /// Chunks the input and returns chunk metadata with BLAKE3 digests.
 #[must_use]
 pub fn chunk_bytes_with_digests(input: &[u8]) -> Vec<ChunkDigest> {
     chunk_bytes_with_digests_profile(ChunkProfile::DEFAULT, input)
 }
-
 /// Chunks the input with a custom profile and computes BLAKE3 digests per chunk.
 #[must_use]
 pub fn chunk_bytes_with_digests_profile(profile: ChunkProfile, input: &[u8]) -> Vec<ChunkDigest> {
     try_chunk_bytes_with_digests_profile(profile, input).expect("invalid SoraFS chunk profile")
 }
-
 /// Chunks the input with a custom profile and computes BLAKE3 digests per
 /// chunk, returning validation errors instead of panicking on invalid profile
 /// parameters.
@@ -323,17 +290,14 @@ pub fn try_chunk_bytes_with_digests_profile(
         })
         .collect()
 }
-
 fn checked_window_end(offset: usize, window: usize, len: usize) -> usize {
     offset.checked_add(window).map_or(len, |end| end.min(len))
 }
-
 #[inline]
 fn roll(mut hash: u64, byte: u8, table: &[u64; 256]) -> u64 {
     hash = hash.rotate_left(1);
     hash.wrapping_add(table[byte as usize])
 }
-
 fn gear_table() -> &'static [u64; 256] {
     static TABLE: OnceLock<[u64; 256]> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -350,7 +314,6 @@ fn gear_table() -> &'static [u64; 256] {
         table
     })
 }
-
 /// Incremental chunker that streams input and emits deterministic chunk
 /// boundaries as data is fed.
 #[derive(Debug, Clone, Copy)]
@@ -362,26 +325,22 @@ pub struct Chunker {
     current_hash: u64,
     chunk_start: usize,
 }
-
 impl Default for Chunker {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Chunker {
     /// Creates a new chunker configured with the default SoraFS profile.
     #[must_use]
     pub fn new() -> Self {
         Self::with_profile(ChunkProfile::DEFAULT)
     }
-
     /// Creates a chunker configured with a custom profile.
     #[must_use]
     pub fn with_profile(profile: ChunkProfile) -> Self {
         Self::try_with_profile(profile).expect("invalid SoraFS chunk profile")
     }
-
     /// Creates a chunker configured with a custom profile, returning validation
     /// errors instead of panicking on invalid profile parameters.
     pub fn try_with_profile(profile: ChunkProfile) -> Result<Self, ChunkerError> {
@@ -395,18 +354,15 @@ impl Chunker {
             chunk_start: 0,
         })
     }
-
     /// Feeds data into the chunker, invoking `emit` for each completed chunk.
     pub fn feed(&mut self, data: &[u8], mut emit: impl FnMut(Chunk)) {
         for &byte in data {
             self.offset += 1;
             self.current_len += 1;
             self.current_hash = roll(self.current_hash, byte, self.table);
-
             let min_reached = self.current_len >= self.profile.min_size;
             let max_reached = self.current_len >= self.profile.max_size;
             let matches_mask = (self.current_hash & self.profile.break_mask) == 0;
-
             if max_reached || (min_reached && matches_mask) {
                 let chunk = Chunk {
                     offset: self.chunk_start,
@@ -419,7 +375,6 @@ impl Chunker {
             }
         }
     }
-
     /// Flushes any remaining buffered data as the final chunk.
     pub fn finish(&mut self, mut emit: impl FnMut(Chunk)) {
         if self.current_len > 0 {
@@ -439,13 +394,11 @@ impl Chunker {
         }
     }
 }
-
 /// Canonical fixtures for the SoraFS chunker.
 pub mod fixtures {
     use super::{
         ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile, compute_chunk_plan_digest_sha3,
     };
-
     /// Parameters for the deterministic pseudo-random generator.
     #[derive(Debug, Clone, Copy)]
     pub struct PrngSpec {
@@ -454,7 +407,6 @@ pub mod fixtures {
         /// Additive offset applied on each step.
         pub increment: u64,
     }
-
     /// Fixture definition describing how to derive canonical chunking vectors.
     #[derive(Debug, Clone, Copy)]
     pub struct FixtureProfile {
@@ -469,7 +421,6 @@ pub mod fixtures {
         /// Chunking configuration used to derive the vectors.
         pub chunk_profile: ChunkProfile,
     }
-
     impl FixtureProfile {
         /// Canonical SF1 profile used by SoraFS.
         pub const SF1_V1: Self = Self {
@@ -482,7 +433,6 @@ pub mod fixtures {
             },
             chunk_profile: ChunkProfile::DEFAULT,
         };
-
         /// Generates the deterministic input bytes described by the fixture.
         #[must_use]
         pub fn generate_input(self) -> Vec<u8> {
@@ -496,7 +446,6 @@ pub mod fixtures {
             }
             out
         }
-
         /// Produces the canonical chunking vectors for this fixture.
         #[must_use]
         pub fn generate_vectors(self) -> FixtureVectors {
@@ -505,9 +454,7 @@ pub mod fixtures {
             let chunk_lengths = chunks.iter().map(|chunk| chunk.length).collect();
             let chunk_offsets = chunks.iter().map(|chunk| chunk.offset).collect();
             let chunk_digests_blake3 = chunks.iter().map(|chunk| chunk.digest).collect();
-
             let chunk_digest_sha3_256 = sha3_digest(&chunks);
-
             FixtureVectors {
                 profile_id: self.profile_id,
                 input_seed_hex: self.input_seed_hex,
@@ -522,7 +469,6 @@ pub mod fixtures {
             }
         }
     }
-
     /// Fully materialised fixture vectors.
     #[derive(Debug, Clone)]
     pub struct FixtureVectors {
@@ -547,20 +493,17 @@ pub mod fixtures {
         /// SHA3-256 digest of the `(offset, length)` pairs.
         pub chunk_digest_sha3_256: [u8; 32],
     }
-
     impl FixtureVectors {
         /// Total number of chunks present in the fixture.
         #[must_use]
         pub fn chunk_count(&self) -> usize {
             self.chunk_lengths.len()
         }
-
         /// Renders the SHA3-256 digest as a lowercase hexadecimal string.
         #[must_use]
         pub fn sha3_digest_hex(&self) -> String {
             to_hex(&self.chunk_digest_sha3_256)
         }
-
         /// Renders each chunk BLAKE3 digest as lowercase hexadecimal strings.
         #[must_use]
         pub fn blake3_digest_hexes(&self) -> Vec<String> {
@@ -570,12 +513,10 @@ pub mod fixtures {
                 .collect()
         }
     }
-
     fn parse_seed(hex: &str) -> u64 {
         let trimmed = hex.strip_prefix("0x").unwrap_or(hex);
         u64::from_str_radix(trimmed, 16).expect("fixture seed must be valid hex")
     }
-
     fn sha3_digest(chunks: &[ChunkDigest]) -> [u8; 32] {
         compute_chunk_plan_digest_sha3(
             chunks
@@ -583,7 +524,6 @@ pub mod fixtures {
                 .map(|chunk| (chunk.offset as u64, chunk.length as u64, chunk.digest)),
         )
     }
-
     /// Converts bytes to a lowercase hexadecimal string.
     #[must_use]
     pub fn to_hex(bytes: &[u8]) -> String {
@@ -596,11 +536,9 @@ pub mod fixtures {
         out
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn random_bytes(len: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(len);
         let mut state: u64 = 0xBAD5EED;
@@ -610,31 +548,26 @@ mod tests {
         }
         out
     }
-
     #[test]
     fn chunk_plan_digest_commits_to_content_with_unchanged_boundaries() {
         let original = [(0_u64, 4_u64, [0x11; 32]), (4_u64, 4_u64, [0x22; 32])];
         let mut content_changed = original;
         content_changed[1].2[31] ^= 1;
-
         let digest = compute_chunk_plan_digest_sha3(original);
         assert_eq!(digest, compute_chunk_plan_digest_sha3(original));
         assert_ne!(digest, compute_chunk_plan_digest_sha3(content_changed));
     }
-
     #[test]
     fn chunk_plan_digest_commits_to_order_and_boundaries() {
         let first = (0_u64, 4_u64, [0x11; 32]);
         let second = (4_u64, 4_u64, [0x22; 32]);
         let digest = compute_chunk_plan_digest_sha3([first, second]);
-
         assert_ne!(digest, compute_chunk_plan_digest_sha3([second, first]));
         assert_ne!(
             digest,
             compute_chunk_plan_digest_sha3([(0, 3, first.2), (3, 5, second.2)])
         );
     }
-
     #[test]
     fn empty_input_produces_zero_length_chunk() {
         let chunks = chunk_bytes(&[]);
@@ -646,14 +579,12 @@ mod tests {
                 length: 0
             }
         );
-
         let digests = chunk_bytes_with_digests(&[]);
         assert_eq!(digests.len(), 1);
         assert_eq!(digests[0].offset, 0);
         assert_eq!(digests[0].length, 0);
         assert_eq!(digests[0].digest, *blake3::hash(&[]).as_bytes());
     }
-
     #[test]
     fn small_input_single_chunk() {
         let buf = vec![0u8; 32];
@@ -661,7 +592,6 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].length, buf.len());
     }
-
     #[test]
     fn deterministic_boundaries() {
         let buf = random_bytes(2 * 1024 * 1024);
@@ -669,18 +599,15 @@ mod tests {
         let b = chunk_bytes(&buf);
         assert_eq!(a, b);
     }
-
     #[test]
     fn respects_profile_bounds() {
         let buf = random_bytes(3 * 1024 * 1024);
         let chunks = chunk_bytes(&buf);
-
         assert_eq!(
             chunks.iter().map(|c| c.length).sum::<usize>(),
             buf.len(),
             "chunk lengths should sum to total input length"
         );
-
         for (idx, chunk) in chunks.iter().enumerate() {
             let is_last = idx == chunks.len() - 1;
             if !is_last {
@@ -691,7 +618,6 @@ mod tests {
                     chunk.length
                 );
             }
-
             assert!(
                 chunk.length <= DEFAULT_PROFILE.max_size,
                 "chunk {} above max: {}",
@@ -700,15 +626,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn streaming_matches_batch() {
         let input = random_bytes(3 * 1024 * 1024 + 17);
         let expected = chunk_bytes(&input);
-
         let mut chunker = Chunker::new();
         let mut actual = Vec::new();
-
         let mut idx = 0;
         while idx < input.len() {
             let end = (idx + 37_000).min(input.len());
@@ -716,10 +639,8 @@ mod tests {
             idx = end;
         }
         chunker.finish(|chunk| actual.push(chunk));
-
         assert_eq!(expected, actual);
     }
-
     #[test]
     fn streaming_emits_zero_length_chunk_when_no_data() {
         let mut chunker = Chunker::new();
@@ -733,7 +654,6 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn invalid_profiles_return_errors_without_chunking() {
         let zero_min = ChunkProfile {
@@ -748,7 +668,6 @@ mod tests {
             try_chunk_bytes_with_profile(zero_min, b"payload"),
             Err(ChunkerError::MinSizeZero)
         ));
-
         let target_before_min = ChunkProfile {
             min_size: 4096,
             target_size: 1024,
@@ -759,7 +678,6 @@ mod tests {
             try_chunk_bytes_with_digests_profile(target_before_min, b"payload"),
             Err(ChunkerError::TargetBeforeMin { .. })
         ));
-
         let max_before_target = ChunkProfile {
             min_size: 1024,
             target_size: 4096,
@@ -770,7 +688,6 @@ mod tests {
             Chunker::try_with_profile(max_before_target),
             Err(ChunkerError::MaxBeforeTarget { .. })
         ));
-
         let zero_mask = ChunkProfile {
             break_mask: 0,
             ..ChunkProfile::DEFAULT
@@ -780,7 +697,6 @@ mod tests {
             Err(ChunkerError::BreakMaskZero)
         ));
     }
-
     #[test]
     fn checked_chunk_end_reports_overflow() {
         let chunk = Chunk {
@@ -789,7 +705,6 @@ mod tests {
         };
         assert_eq!(chunk.checked_end(), None);
     }
-
     #[test]
     fn streaming_backpressure_fuzz_matches_batch() {
         let mut state: u64 = 0xC001_FEED;
@@ -798,11 +713,9 @@ mod tests {
             let len = (state >> 8) as usize % (2 * 1024 * 1024 + 1);
             let input = random_bytes(len);
             let expected = chunk_bytes(&input);
-
             let mut chunker = Chunker::new();
             let mut actual = Vec::new();
             let mut idx = 0usize;
-
             while idx < input.len() {
                 state = state
                     .wrapping_mul(2862933555777941757)
@@ -812,13 +725,10 @@ mod tests {
                 chunker.feed(&input[idx..end], |chunk| actual.push(chunk));
                 idx = end;
             }
-
             chunker.finish(|chunk| actual.push(chunk));
-
             assert_eq!(expected, actual, "iteration {iteration}");
         }
     }
-
     #[test]
     fn digest_matches_manual_hash() {
         let buf = random_bytes(512 * 1024 + 123);

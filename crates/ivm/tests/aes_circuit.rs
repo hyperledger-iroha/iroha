@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{AesDecCircuit, AesEncCircuit};
-
 #[test]
 fn test_aesenc_known_vector() {
     let state = hex_literal::hex!("00102030405060708090a0b0c0d0e0f0");
@@ -17,7 +16,6 @@ fn test_aesenc_known_vector() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_aesdec_inverts() {
     let state = [0x12u8; 16];
@@ -32,7 +30,6 @@ fn test_aesdec_inverts() {
     assert!(circuit.verify().is_ok());
     assert_eq!(dec, state);
 }
-
 #[test]
 fn test_sbox_values() {
     assert_eq!(ivm::sbox(0x00), 0x63);

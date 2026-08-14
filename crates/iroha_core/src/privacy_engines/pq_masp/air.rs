@@ -4,12 +4,6 @@
 //! byte-copy permutation connects note fields, hash inputs and outputs,
 //! accumulator children, and value arithmetic. Public statement bytes are
 //! verifier-derived fixed constraints at their final endpoints.
-
-use std::collections::BTreeMap;
-
-use iroha_data_model::privacy::PqMaspStarkStatementV1;
-use thiserror::Error;
-
 use super::relation::{
     ACCUMULATOR_LEAF_DOMAIN_V1, ACCUMULATOR_NODE_DOMAIN_V1, HASH_FRAME_DOMAIN_V1,
     NOTE_COMMITMENT_DOMAIN_V1, NOTE_ENCRYPTION_KEYS_DOMAIN_V1, NOTE_NULLIFIER_DOMAIN_V1,
@@ -23,7 +17,9 @@ use crate::privacy_engines::{
     },
     transparent_stark::GoldilocksFieldV1 as F,
 };
-
+use iroha_data_model::privacy::PqMaspStarkStatementV1;
+use std::collections::BTreeMap;
+use thiserror::Error;
 pub(super) const PQ_MASP_TRACE_LOG2_V1: u8 = 14;
 pub(super) const PQ_MASP_TRACE_SIZE_V1: usize = 1 << PQ_MASP_TRACE_LOG2_V1;
 pub(super) const PQ_MASP_COPY_WIDTH_V1: usize = 8;
@@ -33,7 +29,6 @@ pub(super) const PQ_MASP_SHA_BIT_GROUPS_V1: usize = 11;
 pub(super) const PQ_MASP_SHA_BITS_PER_GROUP_V1: usize = 32;
 pub(super) const PQ_MASP_SHA_BIT_COLUMNS_V1: usize =
     PQ_MASP_SHA_BIT_GROUPS_V1 * PQ_MASP_SHA_BITS_PER_GROUP_V1;
-
 pub(super) const COPY_OFFSET: usize = 0;
 pub(super) const SHA_SCHEDULE_OFFSET: usize = COPY_OFFSET + PQ_MASP_COPY_WIDTH_V1;
 pub(super) const SHA_INITIAL_STATE_OFFSET: usize =
@@ -47,7 +42,6 @@ pub(super) const SHA_CARRY_WIDTH: usize = 18;
 pub(super) const SCRATCH_OFFSET: usize = SHA_CARRY_OFFSET + SHA_CARRY_WIDTH;
 pub(super) const SCRATCH_WIDTH: usize = 96;
 pub(super) const PQ_MASP_BASE_WIDTH_V1: usize = SCRATCH_OFFSET + SCRATCH_WIDTH;
-
 pub(super) const SCRATCH_NONZERO_BYTE_SELECT_OFFSET: usize = SCRATCH_OFFSET;
 pub(super) const SCRATCH_NONZERO_BIT_SELECT_OFFSET: usize =
     SCRATCH_NONZERO_BYTE_SELECT_OFFSET + PQ_MASP_COPY_WIDTH_V1;
@@ -74,9 +68,7 @@ pub(super) const SCRATCH_VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_RESULT_BI
 // difference decomposition. The row selectors are disjoint, so the alias
 // preserves the committed V0 layout while naming both consumers explicitly.
 pub(super) const SCRATCH_DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
-
 const _: () = assert!(SCRATCH_DISTINCT_RIGHT_BITS_OFFSET == SCRATCH_OFFSET + 81);
-
 pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -87,7 +79,6 @@ pub(super) const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 pub(super) const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -154,10 +145,8 @@ pub(super) const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
-
 /// Stable aggregate AIR descriptor.
 pub(crate) const PQ_MASP_AGGREGATE_AIR_DESCRIPTOR_V1: &[u8] = b"pq-masp-aggregate-air-v1:trace=16384:copy-width=8:copy-lanes=3:sha256-wide-round64-private-intermediates:value=u128-checked-byte-carry:tree=depth32-private-direction:public-endpoints=verifier-fixed";
-
 /// Aggregate trace construction or algebraic failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum PqMaspAirErrorV1 {
@@ -175,17 +164,14 @@ pub(super) enum PqMaspAirErrorV1 {
     #[cfg_attr(not(test), allow(dead_code))]
     Copy,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ByteVariableV1(usize);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 enum ByteExpressionV1 {
     Constant(u8),
     Variable(ByteVariableV1),
 }
-
 impl ByteExpressionV1 {
     fn value(self, assignment: &[u8]) -> Result<u8, PqMaspAirErrorV1> {
         match self {
@@ -197,7 +183,6 @@ impl ByteExpressionV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 enum CopyCellV1 {
@@ -205,7 +190,6 @@ enum CopyCellV1 {
     Constant(u8),
     Variable(ByteVariableV1),
 }
-
 impl CopyCellV1 {
     fn value(self, assignment: &[u8]) -> Result<F, PqMaspAirErrorV1> {
         match self {
@@ -219,7 +203,6 @@ impl CopyCellV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 pub(super) enum PqMaspFixedRowV1 {
@@ -273,27 +256,23 @@ pub(super) enum PqMaspFixedRowV1 {
     },
     Padding,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SumSideV1 {
     Inputs,
     Outputs,
     Conservation,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PqMaspFixedTraceV1 {
     pub(super) rows: Vec<PqMaspFixedRowV1>,
     copy_cells: Vec<[CopyCellV1; PQ_MASP_COPY_WIDTH_V1]>,
     pub(super) copy_sigma: Vec<[u32; PQ_MASP_COPY_WIDTH_V1]>,
 }
-
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct PqMaspBaseTraceV1 {
     pub(super) fixed: PqMaspFixedTraceV1,
     pub(super) rows: Vec<Vec<F>>,
 }
-
 impl core::fmt::Debug for PqMaspBaseTraceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -303,7 +282,6 @@ impl core::fmt::Debug for PqMaspBaseTraceV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone)]
 struct NoteVariablesV1 {
     value: [ByteVariableV1; 16],
@@ -316,7 +294,6 @@ struct NoteVariablesV1 {
     blinding: [ByteVariableV1; 32],
     memo: [ByteVariableV1; 32],
 }
-
 #[derive(Clone)]
 struct InputVariablesV1 {
     note: NoteVariablesV1,
@@ -325,13 +302,11 @@ struct InputVariablesV1 {
     path: [[ByteVariableV1; 32]; PQ_MASP_TREE_DEPTH_V1],
     commitment: Option<[ByteVariableV1; 32]>,
 }
-
 #[derive(Clone)]
 struct OutputVariablesV1 {
     note: NoteVariablesV1,
     commitment: Option<[ByteVariableV1; 32]>,
 }
-
 struct TraceBuilderV1<'a> {
     #[cfg_attr(not(test), allow(dead_code))]
     statement: &'a PqMaspStarkStatementV1,
@@ -346,7 +321,6 @@ struct TraceBuilderV1<'a> {
     expected_input_sum: u128,
     expected_output_sum: u128,
 }
-
 impl<'a> TraceBuilderV1<'a> {
     fn new(
         statement: &'a PqMaspStarkStatementV1,
@@ -378,7 +352,6 @@ impl<'a> TraceBuilderV1<'a> {
             expected_output_sum,
         })
     }
-
     fn allocate_bytes<const N: usize>(&mut self, bytes: [u8; N]) -> [ByteVariableV1; N] {
         core::array::from_fn(|index| {
             let variable = ByteVariableV1(self.assignment.len());
@@ -386,7 +359,6 @@ impl<'a> TraceBuilderV1<'a> {
             variable
         })
     }
-
     fn assign_bytes<const N: usize>(
         &mut self,
         variables: [ByteVariableV1; N],
@@ -404,7 +376,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn push_row(
         &mut self,
         fixed: PqMaspFixedRowV1,
@@ -422,11 +393,9 @@ impl<'a> TraceBuilderV1<'a> {
         self.rows.push(row);
         Ok(())
     }
-
     fn empty_row() -> Vec<F> {
         vec![F::ZERO; PQ_MASP_BASE_WIDTH_V1]
     }
-
     fn check_invocation(
         &mut self,
         role: PqMaspSha256RoleV1,
@@ -446,7 +415,6 @@ impl<'a> TraceBuilderV1<'a> {
         self.invocation_cursor += 1;
         Ok(())
     }
-
     fn push_hash(
         &mut self,
         role: PqMaspSha256RoleV1,
@@ -633,7 +601,6 @@ impl<'a> TraceBuilderV1<'a> {
             .ok_or(PqMaspAirErrorV1::Resource)?;
         Ok(())
     }
-
     fn next_oracle_digest(&self, role: PqMaspSha256RoleV1) -> Result<[u8; 32], PqMaspAirErrorV1> {
         if self.witness.is_none() {
             return Ok([0; 32]);
@@ -644,7 +611,6 @@ impl<'a> TraceBuilderV1<'a> {
             .map(|invocation| invocation.digest)
             .ok_or(PqMaspAirErrorV1::Topology)
     }
-
     fn allocate_note_field(
         &mut self,
         bytes: [u8; 32],
@@ -659,7 +625,6 @@ impl<'a> TraceBuilderV1<'a> {
         let variables = self.allocate_bytes(bytes);
         Ok((variables.map(ByteExpressionV1::Variable), Some(variables)))
     }
-
     fn allocate_note(
         &mut self,
         note: Option<PqMaspNotePlaintextV1>,
@@ -695,7 +660,6 @@ impl<'a> TraceBuilderV1<'a> {
             memo: self.allocate_bytes(memo),
         })
     }
-
     fn push_node_select(
         &mut self,
         input: u8,
@@ -747,7 +711,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok((left, right))
     }
-
     fn push_distinct(
         &mut self,
         comparison: u8,
@@ -755,7 +718,6 @@ impl<'a> TraceBuilderV1<'a> {
         right: &[ByteVariableV1],
     ) -> Result<(), PqMaspAirErrorV1> {
         const PAIRS_PER_ROW: usize = PQ_MASP_COPY_WIDTH_V1 / 2;
-
         if left.is_empty() || left.len() != right.len() || left.len() > 32 {
             return Err(PqMaspAirErrorV1::Topology);
         }
@@ -808,7 +770,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn push_nonzero(
         &mut self,
         component: u16,
@@ -860,7 +821,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(())
     }
-
     fn push_sum(
         &mut self,
         side: SumSideV1,
@@ -912,7 +872,6 @@ impl<'a> TraceBuilderV1<'a> {
         }
         Ok(sum_variables)
     }
-
     fn push_conservation(
         &mut self,
         input_sum: [ByteVariableV1; 16],
@@ -964,7 +923,6 @@ impl<'a> TraceBuilderV1<'a> {
         Ok(())
     }
 }
-
 fn variables_as_expressions<const N: usize>(
     variables: &[ByteVariableV1; N],
 ) -> Vec<ByteExpressionV1> {
@@ -974,7 +932,6 @@ fn variables_as_expressions<const N: usize>(
         .map(ByteExpressionV1::Variable)
         .collect()
 }
-
 fn constants_as_expressions(bytes: &[u8]) -> Vec<ByteExpressionV1> {
     bytes
         .iter()
@@ -982,7 +939,6 @@ fn constants_as_expressions(bytes: &[u8]) -> Vec<ByteExpressionV1> {
         .map(ByteExpressionV1::Constant)
         .collect()
 }
-
 fn frame_expressions_v1(
     domain: &[u8],
     fields: &[Vec<ByteExpressionV1>],
@@ -1018,7 +974,6 @@ fn frame_expressions_v1(
     }
     Ok(message)
 }
-
 fn note_commitment_fields(
     asset: &[u8],
     pool: &[u8],
@@ -1036,7 +991,6 @@ fn note_commitment_fields(
         variables_as_expressions(&note.memo),
     ]
 }
-
 fn sha256_padding_v1(
     message: &[ByteExpressionV1],
 ) -> Result<Vec<ByteExpressionV1>, PqMaspAirErrorV1> {
@@ -1052,44 +1006,35 @@ fn sha256_padding_v1(
     padded.extend(constants_as_expressions(&bit_len.to_be_bytes()));
     Ok(padded)
 }
-
 fn sigma_small_0(value: u32) -> u32 {
     value.rotate_right(7) ^ value.rotate_right(18) ^ (value >> 3)
 }
-
 fn sigma_small_1(value: u32) -> u32 {
     value.rotate_right(17) ^ value.rotate_right(19) ^ (value >> 10)
 }
-
 fn sigma_big_0(value: u32) -> u32 {
     value.rotate_right(2) ^ value.rotate_right(13) ^ value.rotate_right(22)
 }
-
 fn sigma_big_1(value: u32) -> u32 {
     value.rotate_right(6) ^ value.rotate_right(11) ^ value.rotate_right(25)
 }
-
 fn sha_choose(x: u32, y: u32, z: u32) -> u32 {
     (x & y) ^ (!x & z)
 }
-
 fn sha_majority(x: u32, y: u32, z: u32) -> u32 {
     (x & y) ^ (x & z) ^ (y & z)
 }
-
 fn write_word_bits(row: &mut [F], group: usize, value: u32) {
     let start = SHA_BITS_OFFSET + group * PQ_MASP_SHA_BITS_PER_GROUP_V1;
     for bit in 0..32 {
         row[start + bit] = F(u64::from((value >> bit) & 1));
     }
 }
-
 fn write_u32_carry(row: &mut [F], offset: usize, value: u32, bits: usize) {
     for bit in 0..bits {
         row[offset + bit] = F(u64::from((value >> bit) & 1));
     }
 }
-
 fn signed_small_field(value: i16) -> F {
     if value >= 0 {
         F(value as u64)
@@ -1097,7 +1042,6 @@ fn signed_small_field(value: i16) -> F {
         F::ZERO.sub(F(u64::from(value.unsigned_abs())))
     }
 }
-
 fn copy_cells_for_word(
     bytes: &[ByteExpressionV1],
 ) -> Result<[CopyCellV1; PQ_MASP_COPY_WIDTH_V1], PqMaspAirErrorV1> {
@@ -1113,7 +1057,6 @@ fn copy_cells_for_word(
     }
     Ok(cells)
 }
-
 fn word_from_expressions(
     bytes: &[ByteExpressionV1],
     assignment: &[u8],
@@ -1128,7 +1071,6 @@ fn word_from_expressions(
         bytes[3].value(assignment)?,
     ]))
 }
-
 fn build_copy_sigma_v1(
     cells: &[[CopyCellV1; PQ_MASP_COPY_WIDTH_V1]],
 ) -> Result<Vec<[u32; PQ_MASP_COPY_WIDTH_V1]>, PqMaspAirErrorV1> {
@@ -1164,11 +1106,9 @@ fn build_copy_sigma_v1(
     }
     Ok(sigma)
 }
-
 fn dummy_path() -> [[u8; 32]; PQ_MASP_TREE_DEPTH_V1] {
     [[0; 32]; PQ_MASP_TREE_DEPTH_V1]
 }
-
 fn build_pq_masp_trace_v1(
     statement: &PqMaspStarkStatementV1,
     witness: Option<&PqMaspWitnessV1>,
@@ -1181,7 +1121,6 @@ fn build_pq_masp_trace_v1(
     {
         return Err(PqMaspAirErrorV1::Topology);
     }
-
     let mut builder = TraceBuilderV1::new(statement, witness)?;
     let statement = builder.statement;
     let mut input_variables = Vec::with_capacity(statement.nullifiers.len());
@@ -1206,7 +1145,6 @@ fn build_pq_masp_trace_v1(
             commitment: None,
         });
     }
-
     let mut output_variables = Vec::with_capacity(statement.output_commitments.len());
     for index in 0..statement.output_commitments.len() {
         let output = witness.and_then(|witness| witness.outputs.get(index));
@@ -1220,16 +1158,13 @@ fn build_pq_masp_trace_v1(
             commitment: None,
         });
     }
-
     let asset =
         norito::to_bytes(&statement.asset_definition_id).map_err(|_| PqMaspAirErrorV1::Topology)?;
     let namespace =
         norito::to_bytes(&namespace_v1(statement)).map_err(|_| PqMaspAirErrorV1::Topology)?;
     let mut nonzero_components = Vec::<Vec<ByteVariableV1>>::new();
-
     for (index, input) in input_variables.iter_mut().enumerate() {
         let input_index = u8::try_from(index).map_err(|_| PqMaspAirErrorV1::Resource)?;
-
         let nullifier_key_message = frame_expressions_v1(
             NULLIFIER_KEY_DOMAIN_V1,
             &[variables_as_expressions(&input.secret)],
@@ -1240,7 +1175,6 @@ fn build_pq_masp_trace_v1(
             input.note.nullifier_key,
             None,
         )?;
-
         let commitment_digest = builder
             .next_oracle_digest(PqMaspSha256RoleV1::InputCommitment { input: input_index })?;
         let commitment_variables = builder.allocate_bytes(commitment_digest);
@@ -1255,7 +1189,6 @@ fn build_pq_masp_trace_v1(
             None,
         )?;
         input.commitment = Some(commitment_variables);
-
         let nullifier_variables = builder.allocate_bytes(*statement.nullifiers[index].as_bytes());
         let nullifier_message = frame_expressions_v1(
             NOTE_NULLIFIER_DOMAIN_V1,
@@ -1272,7 +1205,6 @@ fn build_pq_masp_trace_v1(
             nullifier_variables,
             Some(*statement.nullifiers[index].as_bytes()),
         )?;
-
         let leaf_digest = builder
             .next_oracle_digest(PqMaspSha256RoleV1::AccumulatorLeaf { input: input_index })?;
         let mut current = builder.allocate_bytes(leaf_digest);
@@ -1291,7 +1223,6 @@ fn build_pq_masp_trace_v1(
             current,
             None,
         )?;
-
         for level in 0..PQ_MASP_TREE_DEPTH_V1 {
             let level_u8 = u8::try_from(level).map_err(|_| PqMaspAirErrorV1::Resource)?;
             let (left, right) = builder.push_node_select(
@@ -1322,7 +1253,6 @@ fn build_pq_masp_trace_v1(
             )?;
             current = next;
         }
-
         nonzero_components.push(input.note.value.to_vec());
         nonzero_components.push(
             input
@@ -1336,7 +1266,6 @@ fn build_pq_masp_trace_v1(
         nonzero_components.push(input.note.blinding.to_vec());
         nonzero_components.push(input.secret.to_vec());
     }
-
     for (index, output) in output_variables.iter_mut().enumerate() {
         let output_index = u8::try_from(index).map_err(|_| PqMaspAirErrorV1::Resource)?;
         let commitment_variables =
@@ -1354,7 +1283,6 @@ fn build_pq_masp_trace_v1(
             Some(*statement.output_commitments[index].as_bytes()),
         )?;
         output.commitment = Some(commitment_variables);
-
         nonzero_components.push(output.note.value.to_vec());
         nonzero_components.push(
             output
@@ -1367,7 +1295,6 @@ fn build_pq_masp_trace_v1(
         nonzero_components.push(output.note.rho.to_vec());
         nonzero_components.push(output.note.blinding.to_vec());
     }
-
     let mut key_fields = Vec::with_capacity(
         statement
             .encrypted_outputs
@@ -1390,7 +1317,6 @@ fn build_pq_masp_trace_v1(
         encryption_digest,
         Some(*statement.note_encryption_key_digest.as_bytes()),
     )?;
-
     let mut comparison = 0_u8;
     if input_variables.len() == 2 {
         let left_commitment = input_variables[0]
@@ -1431,14 +1357,12 @@ fn build_pq_masp_trace_v1(
             .ok_or(PqMaspAirErrorV1::Topology)?;
         builder.push_distinct(comparison, &left_commitment, &right_commitment)?;
     }
-
     for (component, variables) in nonzero_components.iter().enumerate() {
         builder.push_nonzero(
             u16::try_from(component).map_err(|_| PqMaspAirErrorV1::Resource)?,
             variables,
         )?;
     }
-
     let input_values = input_variables
         .iter()
         .map(|input| input.note.value)
@@ -1455,7 +1379,6 @@ fn build_pq_masp_trace_v1(
         builder.expected_output_sum,
     )?;
     builder.push_conservation(input_sum_variables, output_sum_variables)?;
-
     if witness.is_some() && builder.invocation_cursor != builder.invocation_oracle.len() {
         return Err(PqMaspAirErrorV1::Topology);
     }
@@ -1479,7 +1402,6 @@ fn build_pq_masp_trace_v1(
         rows: builder.rows,
     })
 }
-
 /// Compile the complete prover trace after checking the native differential
 /// oracle.
 pub(super) fn build_pq_masp_base_trace_v1(
@@ -1488,14 +1410,12 @@ pub(super) fn build_pq_masp_base_trace_v1(
 ) -> Result<PqMaspBaseTraceV1, PqMaspAirErrorV1> {
     build_pq_masp_trace_v1(statement, Some(witness))
 }
-
 /// Compile verifier-owned fixed topology without requiring wallet material.
 pub(super) fn build_pq_masp_fixed_trace_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<PqMaspFixedTraceV1, PqMaspAirErrorV1> {
     Ok(build_pq_masp_trace_v1(statement, None)?.fixed)
 }
-
 fn map_copy_schedule_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspAirErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Copy => PqMaspAirErrorV1::Copy,
@@ -1512,13 +1432,11 @@ fn map_copy_schedule_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspAirE
         | ProofManagedNoteStarkErrorV1::Internal => PqMaspAirErrorV1::Topology,
     }
 }
-
 fn validate_copy_schedule_v1(schedule: &NoteCopyScheduleV1) -> Result<(), PqMaspAirErrorV1> {
     schedule
         .validate(PQ_MASP_TRACE_SIZE_V1)
         .map_err(map_copy_schedule_error_v1)
 }
-
 /// Compile witness-allocation identities into the shared copy-chip policy.
 pub(super) fn build_pq_masp_copy_schedule_v1(
     statement: &PqMaspStarkStatementV1,
@@ -1542,11 +1460,9 @@ pub(super) fn build_pq_masp_copy_schedule_v1(
     validate_copy_schedule_v1(&schedule)?;
     Ok(schedule)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn copy_schedule_validation_preserves_copy_and_resource_errors() {
         let invalid = NoteCopyScheduleV1 {

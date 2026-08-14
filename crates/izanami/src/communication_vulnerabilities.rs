@@ -5,7 +5,6 @@
 //! runs report Iroha results next to the paper's Algorand, Aptos, Avalanche,
 //! Redbelly, and Solana baseline without baking the comparison into ad hoc
 //! shell output.
-
 /// Paper title used in generated reports.
 pub const PAPER_TITLE: &str = "Blockchain Communication Vulnerabilities";
 /// Paper arXiv identifier.
@@ -26,7 +25,6 @@ pub const PAPER_NODE_COUNT: u8 = 20;
 pub const IZANAMI_REVISION4_NODE_COUNT: u8 = 19;
 /// Byzantine fault budget for [`IZANAMI_REVISION4_NODE_COUNT`].
 pub const IZANAMI_REVISION4_FAULT_BUDGET: u8 = 6;
-
 /// Protocol-agnostic communication attacks evaluated by the paper.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum CommunicationAttack {
@@ -41,7 +39,6 @@ pub enum CommunicationAttack {
     /// The current consensus leader has its network connectivity impaired.
     LeaderIsolation,
 }
-
 impl CommunicationAttack {
     /// All paper attack cases in report order.
     pub const ALL: [Self; 5] = [
@@ -51,7 +48,6 @@ impl CommunicationAttack {
         Self::Stopping,
         Self::LeaderIsolation,
     ];
-
     /// Stable machine-readable name.
     #[must_use]
     pub const fn slug(self) -> &'static str {
@@ -63,7 +59,6 @@ impl CommunicationAttack {
             Self::LeaderIsolation => "leader-isolation",
         }
     }
-
     /// Human-readable report label.
     #[must_use]
     pub const fn title(self) -> &'static str {
@@ -75,7 +70,6 @@ impl CommunicationAttack {
             Self::LeaderIsolation => "Leader isolation",
         }
     }
-
     /// Concise description of the paper setup.
     #[must_use]
     pub const fn paper_setup(self) -> &'static str {
@@ -95,7 +89,6 @@ impl CommunicationAttack {
             }
         }
     }
-
     /// Primary signals used to classify an Izanami run.
     #[must_use]
     pub const fn primary_metrics(self) -> &'static [&'static str] {
@@ -124,7 +117,6 @@ impl CommunicationAttack {
         }
     }
 }
-
 /// Blockchains compared by the paper.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ReferenceBlockchain {
@@ -139,7 +131,6 @@ pub enum ReferenceBlockchain {
     /// Solana.
     Solana,
 }
-
 impl ReferenceBlockchain {
     /// Stable display name.
     #[must_use]
@@ -153,7 +144,6 @@ impl ReferenceBlockchain {
         }
     }
 }
-
 /// Paper outcome bucket used for cross-chain comparison.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaperOutcome {
@@ -168,7 +158,6 @@ pub enum PaperOutcome {
     /// The paper setup required a mitigation or did not make a clean classification.
     Inconclusive,
 }
-
 impl PaperOutcome {
     /// Stable report label.
     #[must_use]
@@ -182,7 +171,6 @@ impl PaperOutcome {
         }
     }
 }
-
 /// One paper outcome and the short evidence note behind it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReferenceOutcome {
@@ -193,7 +181,6 @@ pub struct ReferenceOutcome {
     /// Short evidence note from the paper.
     pub note: &'static str,
 }
-
 /// Baseline for one blockchain from the paper.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReferenceBaseline {
@@ -206,7 +193,6 @@ pub struct ReferenceBaseline {
     /// Per-attack outcomes.
     pub outcomes: &'static [ReferenceOutcome],
 }
-
 const ALGORAND_OUTCOMES: &[ReferenceOutcome] = &[
     ReferenceOutcome {
         attack: CommunicationAttack::TargetedLoad,
@@ -234,7 +220,6 @@ const ALGORAND_OUTCOMES: &[ReferenceOutcome] = &[
         note: "randomized consensus does not expose a deterministic single leader",
     },
 ];
-
 const APTOS_OUTCOMES: &[ReferenceOutcome] = &[
     ReferenceOutcome {
         attack: CommunicationAttack::TargetedLoad,
@@ -262,7 +247,6 @@ const APTOS_OUTCOMES: &[ReferenceOutcome] = &[
         note: "isolating each deterministic leader stops commits during the window",
     },
 ];
-
 const AVALANCHE_OUTCOMES: &[ReferenceOutcome] = &[
     ReferenceOutcome {
         attack: CommunicationAttack::TargetedLoad,
@@ -290,7 +274,6 @@ const AVALANCHE_OUTCOMES: &[ReferenceOutcome] = &[
         note: "soft proposer fallback preserved progress but increased latency",
     },
 ];
-
 const REDBELLY_OUTCOMES: &[ReferenceOutcome] = &[
     ReferenceOutcome {
         attack: CommunicationAttack::TargetedLoad,
@@ -318,7 +301,6 @@ const REDBELLY_OUTCOMES: &[ReferenceOutcome] = &[
         note: "leaderless consensus has no single leader to isolate",
     },
 ];
-
 const SOLANA_OUTCOMES: &[ReferenceOutcome] = &[
     ReferenceOutcome {
         attack: CommunicationAttack::TargetedLoad,
@@ -346,7 +328,6 @@ const SOLANA_OUTCOMES: &[ReferenceOutcome] = &[
         note: "scheduled leader isolation stops commits during the attack window",
     },
 ];
-
 /// Paper baselines in the same order used by the report script.
 pub const REFERENCE_BASELINES: &[ReferenceBaseline] = &[
     ReferenceBaseline {
@@ -380,7 +361,6 @@ pub const REFERENCE_BASELINES: &[ReferenceBaseline] = &[
         outcomes: SOLANA_OUTCOMES,
     },
 ];
-
 /// How closely Izanami can exercise a paper case today.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IzanamiCoverage {
@@ -389,7 +369,6 @@ pub enum IzanamiCoverage {
     /// Izanami exercises the relevant stress shape but not the exact network primitive.
     Approximation,
 }
-
 impl IzanamiCoverage {
     /// Stable report label.
     #[must_use]
@@ -400,7 +379,6 @@ impl IzanamiCoverage {
         }
     }
 }
-
 /// Izanami command profile for one paper scenario.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IzanamiScenarioProfile {
@@ -413,7 +391,6 @@ pub struct IzanamiScenarioProfile {
     /// Short note for operators.
     pub note: &'static str,
 }
-
 /// Izanami profiles for the five paper cases.
 pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
     IzanamiScenarioProfile {
@@ -566,7 +543,6 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
         note: "Izanami samples Sumeragi leader telemetry and applies 75% in-process P2P packet loss to the current leader during the timed attack window",
     },
 ];
-
 /// Return the baseline for a reference blockchain.
 #[must_use]
 pub fn baseline_for(blockchain: ReferenceBlockchain) -> Option<&'static ReferenceBaseline> {
@@ -574,7 +550,6 @@ pub fn baseline_for(blockchain: ReferenceBlockchain) -> Option<&'static Referenc
         .iter()
         .find(|baseline| baseline.blockchain == blockchain)
 }
-
 /// Return the paper outcome for one blockchain and attack.
 #[must_use]
 pub fn outcome_for(
@@ -587,7 +562,6 @@ pub fn outcome_for(
         .copied()
         .find(|outcome| outcome.attack == attack)
 }
-
 /// Return the Izanami profile for one attack.
 #[must_use]
 pub fn izanami_profile_for(attack: CommunicationAttack) -> Option<&'static IzanamiScenarioProfile> {
@@ -595,28 +569,22 @@ pub fn izanami_profile_for(attack: CommunicationAttack) -> Option<&'static Izana
         .iter()
         .find(|profile| profile.attack == attack)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use iroha_data_model::block::consensus_v2::is_valid_committee_size;
-
     use super::*;
-
+    use iroha_data_model::block::consensus_v2::is_valid_committee_size;
+    use std::collections::BTreeSet;
     fn numeric_arg(args: &[&str], name: &str) -> usize {
         args.windows(2)
             .find_map(|pair| (pair[0] == name).then(|| pair[1].parse().expect("numeric CLI arg")))
             .unwrap_or_else(|| panic!("missing {name} argument"))
     }
-
     #[test]
     fn catalog_covers_the_five_paper_attacks_once() {
         let slugs: BTreeSet<_> = CommunicationAttack::ALL
             .iter()
             .map(|attack| attack.slug())
             .collect();
-
         assert_eq!(slugs.len(), CommunicationAttack::ALL.len());
         assert!(slugs.contains("targeted-load"));
         assert!(slugs.contains("transient-failure"));
@@ -624,7 +592,6 @@ mod tests {
         assert!(slugs.contains("stopping"));
         assert!(slugs.contains("leader-isolation"));
     }
-
     #[test]
     fn reference_baselines_cover_each_attack_for_each_chain() {
         for baseline in REFERENCE_BASELINES {
@@ -647,7 +614,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn reported_headline_vulnerabilities_are_pinned() {
         assert_eq!(
@@ -702,7 +668,6 @@ mod tests {
             PaperOutcome::Vulnerable
         );
     }
-
     #[test]
     fn izanami_profiles_cover_each_attack_and_mark_native_faults() {
         let profiled: BTreeSet<_> = IZANAMI_SCENARIO_PROFILES
@@ -713,7 +678,6 @@ mod tests {
         for attack in CommunicationAttack::ALL {
             assert!(profiled.contains(&attack), "missing {}", attack.slug());
         }
-
         assert_eq!(
             izanami_profile_for(CommunicationAttack::PacketLoss)
                 .expect("packet-loss profile")
@@ -727,13 +691,11 @@ mod tests {
             IzanamiCoverage::Native
         );
     }
-
     #[test]
     fn comparison_profiles_preserve_paper_timing_with_revision4_geometry() {
         assert_eq!(PAPER_NODE_COUNT, 20);
         assert_eq!(IZANAMI_REVISION4_NODE_COUNT, 19);
         assert_eq!(IZANAMI_REVISION4_FAULT_BUDGET, 6);
-
         for profile in IZANAMI_SCENARIO_PROFILES {
             let args = profile.paper_like_args;
             let peers = numeric_arg(args, "--peers");
@@ -765,7 +727,6 @@ mod tests {
                 );
             }
         }
-
         let stopping = izanami_profile_for(CommunicationAttack::Stopping)
             .expect("stopping comparison profile");
         assert_eq!(stopping.coverage, IzanamiCoverage::Approximation);

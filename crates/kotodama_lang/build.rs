@@ -1,5 +1,4 @@
 //! Generate Kotodama V1 lexical tables and validated translation offsets.
-
 use std::{
     collections::BTreeSet,
     env,
@@ -7,15 +6,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 const TRANSLATION_SPEC_PATH: &str = "src/i18n/translations/messages.v1.tsv";
 const TRANSLATION_OFFSET_OUTPUT: &str = "kotodama_i18n_v1_offsets.bin";
 const TRANSLATION_HEADER: &str = "kotodama-i18n-v1\t76\t15";
 const TRANSLATION_LANGUAGE_COUNT: usize = 76;
 const TRANSLATION_MESSAGE_COUNT: usize = 15;
-
 const TRANSLATION_LANGUAGES: &str = "English\tJapanese\tSimplifiedChinese\tTraditionalChinese\tThai\tKhmer\tVietnamese\tKorean\tArabic\tHebrew\tRussian\tBurmese\tHindi\tUrdu\tSinhala\tTamil\tFrench\tUkrainian\tPolish\tSwedish\tGerman\tGreek\tItalian\tKazakh\tMongolian\tJavanese\tMadurese\tBalinese\tMinangkabau\tAncientEgyptianHieroglyph\tDzongkha\tSerbian\tTurkish\tArmenian\tAmharic\tHausa\tTibetan\tKashmiri\tNepali\tAfrikaans\tSpanish\tFarsi\tOldAkkadian\tQuechua\tAymara\tBengali\tBalochi\tBashkir\tBrahui\tPortuguese\tPunjabi\tSindhi\tPashto\tSaraiki\tTatar\tSomali\tSundanese\tShona\tSwahili\tOromo\tIgbo\tYoruba\tZulu\tDutch\tDanish\tNorse\tFinnish\tEstonian\tLatvian\tHungarian\tCzech\tLao\tIndonesian\tPijin\tDivehi\tManchurian";
-
 const TRANSLATION_FIELDS: [(&str, &[&str]); TRANSLATION_MESSAGE_COUNT] = [
     ("no_functions", &[]),
     ("unsupported_binary_op", &["op"]),
@@ -33,7 +29,6 @@ const TRANSLATION_FIELDS: [(&str, &[&str]); TRANSLATION_MESSAGE_COUNT] = [
     ("lint_usage", &[]),
     ("lint_usage_help", &[]),
 ];
-
 fn validate_translation_placeholders(
     message: &str,
     required: &[&str],
@@ -79,7 +74,6 @@ fn validate_translation_placeholders(
             _ => cursor += 1,
         }
     }
-
     let mut required_index = 0;
     while required_index < required.len() {
         assert!(
@@ -90,7 +84,6 @@ fn validate_translation_placeholders(
         required_index += 1;
     }
 }
-
 fn write_translation_offsets(out_dir: &Path) {
     println!("cargo:rerun-if-changed={TRANSLATION_SPEC_PATH}");
     let languages = TRANSLATION_LANGUAGES.split('\t').collect::<Vec<_>>();
@@ -101,7 +94,6 @@ fn write_translation_offsets(out_dir: &Path) {
         asset.ends_with('\n'),
         "Kotodama translation asset must end with a newline"
     );
-
     let mut lines = asset.split_inclusive('\n');
     let header_line = lines.next().expect("translation asset version header");
     assert_eq!(
@@ -109,7 +101,6 @@ fn write_translation_offsets(out_dir: &Path) {
         Some(TRANSLATION_HEADER),
         "unexpected Kotodama translation asset version/count header"
     );
-
     let schema_line = lines.next().expect("translation asset field schema");
     let schema = schema_line
         .strip_suffix('\n')
@@ -131,7 +122,6 @@ fn write_translation_offsets(out_dir: &Path) {
         None,
         "translation asset has an unexpected message field"
     );
-
     let mut asset_offset = header_line.len() + schema_line.len();
     let mut offsets = Vec::with_capacity(
         TRANSLATION_LANGUAGE_COUNT * TRANSLATION_MESSAGE_COUNT * 2 * std::mem::size_of::<u32>(),
@@ -159,7 +149,6 @@ fn write_translation_offsets(out_dir: &Path) {
             columns[0], languages[language_index],
             "translation language row {language_index} is out of order"
         );
-
         let mut relative_start = columns[0].len() + 1;
         message_index = 0;
         while message_index < TRANSLATION_FIELDS.len() {
@@ -176,7 +165,6 @@ fn write_translation_offsets(out_dir: &Path) {
                 columns[0],
                 TRANSLATION_FIELDS[message_index].0,
             );
-
             let start = asset_offset + relative_start;
             let end = start + message.len();
             offsets.extend_from_slice(
@@ -201,11 +189,9 @@ fn write_translation_offsets(out_dir: &Path) {
         "translation asset has rows after the language catalog"
     );
     assert_eq!(asset_offset, asset.len());
-
     fs::write(out_dir.join(TRANSLATION_OFFSET_OUTPUT), offsets)
         .expect("write Kotodama translation offsets");
 }
-
 fn regex_escape_literal(spelling: &str) -> String {
     let mut escaped = String::with_capacity(spelling.len().saturating_mul(2));
     for character in spelling.chars() {
@@ -219,11 +205,9 @@ fn regex_escape_literal(spelling: &str) -> String {
     }
     escaped
 }
-
 fn markdown_code(spelling: &str) -> String {
     format!("`{}`", spelling.replace('|', "\\|"))
 }
-
 fn main() {
     const SPEC_PATH: &str = "grammar/v1.lex";
     println!("cargo:rerun-if-changed={SPEC_PATH}");
@@ -231,7 +215,6 @@ fn main() {
     let mut keywords = Vec::<(String, String)>::new();
     let mut operators = Vec::<(String, String)>::new();
     let mut seen_spellings = BTreeSet::new();
-
     for (line_index, raw_line) in spec.lines().enumerate() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with("//") {
@@ -293,7 +276,6 @@ fn main() {
             ),
         }
     }
-
     for (variant, expected) in [
         ("Seiyaku", ["seiyaku", "誓約"]),
         ("Kotoage", ["kotoage", "言挙げ"]),
@@ -318,7 +300,6 @@ fn main() {
             "English compatibility alias `{forbidden}` must not enter Kotodama V1"
         );
     }
-
     let mut generated = String::from(
         "// @generated by crates/kotodama_lang/build.rs from grammar/v1.lex.\n\
          // Do not edit this file directly.\n\n\
@@ -337,7 +318,6 @@ fn main() {
         writeln!(&mut generated, "    {spelling:?},").expect("write generated operator table");
     }
     generated.push_str("];\n\n");
-
     let mut sorted_operator_kinds = operators.clone();
     sorted_operator_kinds.sort_unstable_by(|left, right| {
         right
@@ -355,7 +335,6 @@ fn main() {
             .expect("write generated punctuation scanner table");
     }
     generated.push_str("];\n\n");
-
     let keyword_pattern = format!(
         r"(?<![\p{{L}}\p{{N}}_])(?:{})(?![\p{{L}}\p{{N}}_])",
         keywords
@@ -382,7 +361,6 @@ fn main() {
         "/// Generated TextMate/LSP matcher for canonical V1 operators.\npub const V1_OPERATOR_EDITOR_PATTERN: &str = {operator_pattern:?};"
     )
     .expect("write generated operator editor pattern");
-
     let mut keyword_docs = String::from("| Spelling | Token |\n| --- | --- |\n");
     for (spelling, variant) in &keywords {
         writeln!(
@@ -407,7 +385,6 @@ fn main() {
         "/// Generated normative Markdown operator table.\npub const V1_OPERATOR_DOC_TABLE: &str = {operator_docs:?};"
     )
     .expect("write generated operator documentation constant");
-
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
     write_translation_offsets(&out_dir);
     fs::write(out_dir.join("kotodama_v1_lexical.rs"), generated)

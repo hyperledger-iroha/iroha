@@ -6,7 +6,6 @@ use std::{
     },
     time::Instant,
 };
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -38,7 +37,6 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, ManifestV1,
     capacity::{REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1},
 };
-
 use super::*;
 use crate::provider_ingest_outbox::{
     ProviderIngestCompletionStateV1, ProviderIngestDeliveryStateV1, ProviderIngestOutboxPolicyV1,
@@ -62,23 +60,19 @@ use crate::{
     scheduler::{StorageSchedulerConfig, StorageSchedulersRuntime},
     store::StorageBackend,
 };
-
 const LOCAL_PROVIDER: [u8; 32] = [0x11; 32];
 const SOURCE_PROVIDER: [u8; 32] = [0x22; 32];
 const TEST_GENESIS_BLOCK_HASH: [u8; 32] = [0xA7; 32];
-
 fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed(TEST_GENESIS_BLOCK_HASH),
     ))
 }
-
 fn foreign_test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xB7; 32]),
     ))
 }
-
 fn validate_assignment(
     row: &ProviderIngestFinalizedAssignmentV1,
     cursor: ProviderIngestFinalizedCursorV1,
@@ -87,19 +81,16 @@ fn validate_assignment(
 ) -> Result<ValidatedAssignmentV1, ProviderIngestRuntimeErrorV1> {
     super::validate_assignment(row, cursor, provider_id, &test_network_id(), policy)
 }
-
 fn account(seed: u8) -> AccountId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
     AccountId::new(key.public_key().clone())
 }
-
 fn cursor(height: u64) -> ProviderIngestFinalizedCursorV1 {
     ProviderIngestFinalizedCursorV1 {
         height,
         block_hash: [u8::try_from(height).unwrap_or(0xFE); 32],
     }
 }
-
 fn completion_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
     let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
     ProviderIngestCompletionSignerPolicyV1 {
@@ -109,7 +100,6 @@ fn completion_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPoli
         policy_digest: [digest_byte; 32],
     }
 }
-
 #[test]
 fn completion_signer_binding_rejects_test_handles_stale_revisions_and_key_mismatch() {
     let key =
@@ -139,7 +129,6 @@ fn completion_signer_binding_rejects_test_handles_stale_revisions_and_key_mismat
         .validate(),
         Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerHandle)
     );
-
     let mut stale = qualification.clone();
     stale.adapter_revision = 0;
     assert_eq!(
@@ -153,7 +142,6 @@ fn completion_signer_binding_rejects_test_handles_stale_revisions_and_key_mismat
         Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerQualification)
     );
 }
-
 fn completion_record(
     provider_id: ProviderId,
     completed_by: AccountId,
@@ -174,7 +162,6 @@ fn completion_record(
         },
     }
 }
-
 fn fixture_row(order_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
     let digest = ManifestDigest::new([order_seed.wrapping_add(0x40); 32]);
     let root = ManifestRootCid::from_blake3_digest([order_seed.wrapping_add(0x50); 32]).unwrap();
@@ -262,7 +249,6 @@ fn fixture_row(order_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
         committed_transaction_hash: None,
     }
 }
-
 fn fixture_page(
     row: ProviderIngestFinalizedAssignmentV1,
 ) -> ProviderIngestFinalizedAssignmentPageV1 {
@@ -277,7 +263,6 @@ fn fixture_page(
         next_after_order_id: None,
     }
 }
-
 fn musubi_binding_for_row(
     row: &ProviderIngestFinalizedAssignmentV1,
     seed: u8,
@@ -310,7 +295,6 @@ fn musubi_binding_for_row(
         commitment,
     )
 }
-
 fn fixture_musubi_row(order_seed: u8, commitment_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
     let mut row = fixture_row(order_seed);
     let binding = musubi_binding_for_row(&row, commitment_seed);
@@ -327,7 +311,6 @@ fn fixture_musubi_row(order_seed: u8, commitment_seed: u8) -> ProviderIngestFina
     row.musubi_archive = Some(claim);
     row
 }
-
 fn test_verified_musubi_receipt(
     claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -344,7 +327,6 @@ fn test_verified_musubi_receipt(
         verification_lock_digest: MusubiVerificationLockDigestV1::new([0xC2; 32]),
     }
 }
-
 fn append_attestation_fixture_frame(output: &mut Vec<u8>, bytes: &[u8]) {
     output.extend_from_slice(
         &u64::try_from(bytes.len())
@@ -353,7 +335,6 @@ fn append_attestation_fixture_frame(output: &mut Vec<u8>, bytes: &[u8]) {
     );
     output.extend_from_slice(bytes);
 }
-
 fn attestation_fixture_domain_digest(domain: &[u8], material: &[u8]) -> MusubiContentDigestV1 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -365,18 +346,15 @@ fn attestation_fixture_domain_digest(domain: &[u8], material: &[u8]) -> MusubiCo
     hasher.update(material);
     MusubiContentDigestV1::new(*hasher.finalize().as_bytes())
 }
-
 struct VerifiedAttestationBundleFixtureV1 {
     verified: VerifiedMusubiBundleV1,
     commitment: MusubiArchiveCommitmentV1,
     plan: CarBuildPlan,
     payload: Vec<u8>,
 }
-
 fn verified_attestation_bundle_fixture(source_seed: u8) -> VerifiedAttestationBundleFixtureV1 {
     const SOURCE_TREE_DOMAIN: &[u8] = b"musubi-source-tree-v1\0";
     const BUNDLE_DOMAIN: &[u8] = b"musubi-bundle-v1\0";
-
     let release = MusubiReleaseIdV1::new(
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -513,13 +491,11 @@ fn verified_attestation_bundle_fixture(source_seed: u8) -> VerifiedAttestationBu
         payload,
     }
 }
-
 fn completed_attestation_claim(
     commitment: MusubiArchiveCommitmentV1,
 ) -> ProviderIngestFinalizedMusubiCompletionClaimV1 {
     completed_attestation_claim_with_order_id(commitment, [0xAC; 32])
 }
-
 fn completed_attestation_claim_with_order_id(
     commitment: MusubiArchiveCommitmentV1,
     order_id: [u8; 32],
@@ -537,7 +513,6 @@ fn completed_attestation_claim_with_order_id(
         completed_musubi_store_instance: Some(CompletedMusubiStoreInstanceV1::new()),
     }
 }
-
 fn completed_attestation_inventory_item(
     fixture: &VerifiedAttestationBundleFixtureV1,
     substitute_bundle_digest: bool,
@@ -565,7 +540,6 @@ fn completed_attestation_inventory_item(
     MusubiProviderAttestationInventoryItemV1::new(attestation)
         .expect("construct completed-attestation inventory item")
 }
-
 fn completed_attestation_authorization(
     claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
     manifest_digest: [u8; 32],
@@ -586,7 +560,6 @@ fn completed_attestation_authorization(
     )
     .expect("completed-claim retained authorization")
 }
-
 fn completed_attestation_manifest(fixture: &VerifiedAttestationBundleFixtureV1) -> ManifestV1 {
     let car_stats = CarWriter::new(&fixture.plan, &fixture.payload)
         .expect("prepare completed-attestation fixture CAR")
@@ -614,14 +587,12 @@ fn completed_attestation_manifest(fixture: &VerifiedAttestationBundleFixtureV1) 
         .build()
         .expect("completed-attestation fixture manifest")
 }
-
 fn completed_attestation_capture_source_row(
     fixture: &VerifiedAttestationBundleFixtureV1,
     manifest: &ManifestV1,
 ) -> ProviderIngestCompletedMusubiCaptureSourceRowV1 {
     completed_attestation_capture_source_row_with_order_id(fixture, manifest, [0xAC; 32])
 }
-
 fn completed_attestation_capture_source_row_with_order_id(
     fixture: &VerifiedAttestationBundleFixtureV1,
     manifest: &ManifestV1,
@@ -708,12 +679,10 @@ fn completed_attestation_capture_source_row_with_order_id(
         None,
     )
 }
-
 #[derive(Default)]
 struct CaptureJournalMemoryStore {
     checkpoint: Mutex<Option<Vec<u8>>>,
 }
-
 impl MusubiProviderAttestationJournalStoreV1 for CaptureJournalMemoryStore {
     fn load<'a>(
         &'a self,
@@ -739,7 +708,6 @@ impl MusubiProviderAttestationJournalStoreV1 for CaptureJournalMemoryStore {
             )
         })
     }
-
     fn compare_and_swap<'a>(
         &'a self,
         expected_revision: Option<[u8; 32]>,
@@ -784,7 +752,6 @@ impl MusubiProviderAttestationJournalStoreV1 for CaptureJournalMemoryStore {
         })
     }
 }
-
 struct CaptureInventory {
     item: Mutex<Option<MusubiProviderAttestationInventoryItemV1>>,
     get_error: Mutex<Option<MusubiProviderAttestationInventoryErrorV1>>,
@@ -797,7 +764,6 @@ struct CaptureInventory {
     get_calls: AtomicUsize,
     inventory_calls: AtomicUsize,
 }
-
 impl CaptureInventory {
     fn new(item: Option<MusubiProviderAttestationInventoryItemV1>) -> Self {
         Self {
@@ -813,35 +779,28 @@ impl CaptureInventory {
             inventory_calls: AtomicUsize::new(0),
         }
     }
-
     fn set_item(&self, item: MusubiProviderAttestationInventoryItemV1) {
         *self.item.lock().expect("capture inventory item lock") = Some(item);
     }
-
     fn set_get_error(&self, error: Option<MusubiProviderAttestationInventoryErrorV1>) {
         *self.get_error.lock().expect("capture inventory error lock") = error;
     }
-
     fn block_get(&self) {
         self.block_get.store(true, Ordering::SeqCst);
     }
-
     fn block_get_on_call(&self, call: usize) {
         assert_ne!(call, 0, "capture inventory call index must be non-zero");
         self.block_get_call.store(call, Ordering::SeqCst);
     }
-
     fn unblock_get(&self) {
         self.block_get.store(false, Ordering::SeqCst);
         self.block_get_call.store(0, Ordering::SeqCst);
         self.release_get.notify_waiters();
     }
-
     async fn wait_until_get_entered(&self) {
         self.get_entered.notified().await;
     }
 }
-
 impl MusubiProviderAttestationInventorySinkV1 for CaptureInventory {
     fn put<'a>(
         &'a self,
@@ -853,7 +812,6 @@ impl MusubiProviderAttestationInventorySinkV1 for CaptureInventory {
         })
     }
 }
-
 impl MusubiProviderAttestationInventoryReaderV1 for CaptureInventory {
     fn get<'a>(
         &'a self,
@@ -889,7 +847,6 @@ impl MusubiProviderAttestationInventoryReaderV1 for CaptureInventory {
                 .transpose()
         })
     }
-
     fn inventory<'a>(
         &'a self,
         _scope: &'a MusubiProviderAttestationInventoryScopeV1,
@@ -906,12 +863,10 @@ impl MusubiProviderAttestationInventoryReaderV1 for CaptureInventory {
         })
     }
 }
-
 impl MusubiProviderAttestationInventoryRuntimeV1 for CaptureInventory {
     fn runtime_handle(&self) -> &str {
         "inventory://sorafs/musubi/provider-attestation/primary"
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -922,7 +877,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for CaptureInventory {
             1, [0xD1; 32],
         ))
     }
-
     fn check_readiness<'a>(
         &'a self,
     ) -> ProviderIngestFutureV1<'a, Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>>
@@ -933,7 +887,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for CaptureInventory {
         })
     }
 }
-
 fn outbox_policy() -> ProviderIngestOutboxPolicyV1 {
     ProviderIngestOutboxPolicyV1 {
         max_active_entries: 32,
@@ -949,7 +902,6 @@ fn outbox_policy() -> ProviderIngestOutboxPolicyV1 {
         max_status_page_size: 32,
     }
 }
-
 fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
     ProviderIngestRuntimePolicyV1 {
         max_page_rows: 16,
@@ -963,11 +915,9 @@ fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
         ingress_timeout_ms: 100,
     }
 }
-
 struct TestLedger {
     page: Mutex<ProviderIngestFinalizedAssignmentPageV1>,
 }
-
 impl ProviderIngestFinalizedLedgerV1 for TestLedger {
     fn read_assignment_page<'a>(
         &'a self,
@@ -997,7 +947,6 @@ impl ProviderIngestFinalizedLedgerV1 for TestLedger {
         })
     }
 }
-
 fn fixture_completed_musubi_capture_row(
     order_seed: u8,
     commitment_seed: u8,
@@ -1018,7 +967,6 @@ fn fixture_completed_musubi_capture_row(
         row.committed_transaction_hash,
     )
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureScannerLedgerFaultV1 {
     None,
@@ -1030,7 +978,6 @@ enum CaptureScannerLedgerFaultV1 {
     ReplayPrevious,
     Unavailable,
 }
-
 struct CaptureScannerLedgerV1 {
     rows: Vec<ProviderIngestCompletedMusubiCaptureSourceRowV1>,
     finalized_height: AtomicU64,
@@ -1041,7 +988,6 @@ struct CaptureScannerLedgerV1 {
     binding: ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
     previous_response: Mutex<Option<ProviderIngestCompletedMusubiSignedCapturePageV1>>,
 }
-
 impl CaptureScannerLedgerV1 {
     fn new(
         rows: Vec<ProviderIngestCompletedMusubiCaptureSourceRowV1>,
@@ -1074,24 +1020,19 @@ impl CaptureScannerLedgerV1 {
             previous_response: Mutex::new(None),
         }
     }
-
     fn set_finalized_height(&self, height: u64) {
         self.finalized_height.store(height, Ordering::SeqCst);
     }
-
     fn set_fault(&self, fault: CaptureScannerLedgerFaultV1) {
         *self.fault.lock().unwrap() = fault;
     }
-
     fn requested_limits(&self) -> Vec<usize> {
         self.requested_limits.lock().unwrap().clone()
     }
-
     fn requested_generations(&self) -> Vec<u64> {
         self.requested_generations.lock().unwrap().clone()
     }
 }
-
 impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureScannerLedgerV1 {
     fn capture_verifier_binding(
         &self,
@@ -1101,7 +1042,6 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureScannerLedger
     > {
         Ok(self.binding.clone())
     }
-
     fn read_signed_completed_musubi_capture_page<'a>(
         &'a self,
         request: ProviderIngestCompletedMusubiCaptureRequestV1,

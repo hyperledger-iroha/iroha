@@ -1,11 +1,3 @@
-use std::{
-    net::SocketAddr,
-    num::NonZeroU32,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
-
 use iroha_crypto::soranet::{
     handshake::DEFAULT_DESCRIPTOR_COMMIT,
     pow::Parameters as PowParameters,
@@ -19,7 +11,13 @@ use soranet_relay::{
     dos::{DoSControls, ThrottleReason},
     metrics::Metrics,
 };
-
+use std::{
+    net::SocketAddr,
+    num::NonZeroU32,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 #[test]
 fn adaptive_difficulty_escalates_after_repeated_failures() {
     let metrics = Arc::new(Metrics::new());
@@ -46,7 +44,6 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
     };
     pow_cfg.apply_defaults().expect("pow defaults");
     assert_eq!(pow_cfg.adaptive.pow_failure_threshold, 2);
-
     let base = PowParameters::new(
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
@@ -61,9 +58,7 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
         RelayMode::Entry,
     )
     .expect("dos controls");
-
     let remote: SocketAddr = "192.0.2.10:7447".parse().expect("valid socket");
-
     // Cross the failure threshold twice with a small delay so the adaptive window closes.
     let iterations =
         usize::try_from(pow_cfg.adaptive.pow_failure_threshold + 1).expect("fits into usize");
@@ -74,14 +69,12 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
         controls.record_pow_failure(&attempt, Duration::from_millis(5));
         thread::sleep(Duration::from_millis(10));
     }
-
     // Allow the adaptive window to roll over so adjustments are applied, then trigger an update.
     thread::sleep(Duration::from_secs(2));
     let attempt = controls
         .begin(remote, None)
         .expect("attempt should be accepted after cooldown");
     controls.record_pow_failure(&attempt, Duration::from_millis(5));
-
     let new_params = controls.current_pow_parameters();
     assert!(
         new_params.difficulty() > base.difficulty(),
@@ -90,7 +83,6 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
         new_params.difficulty()
     );
 }
-
 #[test]
 fn puzzle_failures_surface_and_sync_policies() {
     let metrics = Arc::new(Metrics::new());
@@ -131,7 +123,6 @@ fn puzzle_failures_surface_and_sync_policies() {
         ..PowConfig::default()
     };
     pow_cfg.apply_defaults().expect("pow defaults");
-
     let base = PowParameters::new(
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
@@ -146,13 +137,11 @@ fn puzzle_failures_surface_and_sync_policies() {
         RelayMode::Entry,
     )
     .expect("dos controls");
-
     let remote: SocketAddr = "192.0.2.44:7555".parse().expect("valid socket");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let relay_id = [0xCC; 32];
     let transcript = [0xDD; 32];
     let mut rng = StdRng::from_seed([0xAA; 32]);
-
     let attempt = controls
         .begin(remote, Some(&descriptor))
         .expect("attempt should be accepted");
@@ -169,7 +158,6 @@ fn puzzle_failures_surface_and_sync_policies() {
         other => panic!("unexpected puzzle error variant: {other:?}"),
     };
     controls.record_pow_failure(&attempt, Duration::from_millis(5));
-
     let pow_state = controls.current_pow_parameters();
     let puzzle_state = controls
         .current_puzzle_parameters()
@@ -185,7 +173,6 @@ fn puzzle_failures_surface_and_sync_policies() {
         "puzzle policy must share timing bounds with pow"
     );
 }
-
 #[test]
 fn adaptive_difficulty_replay_is_deterministic() {
     #[derive(Clone, Copy)]
@@ -193,13 +180,11 @@ fn adaptive_difficulty_replay_is_deterministic() {
         Success,
         PowFailure,
     }
-
     #[derive(Clone, Copy)]
     struct Event {
         offset: Duration,
         outcome: Outcome,
     }
-
     fn run_sequence(
         controls: &DoSControls,
         base: Instant,
@@ -230,7 +215,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
         }
         (pow_diffs, puzzle_diffs)
     }
-
     let mut pow_cfg = PowConfig {
         required: true,
         difficulty: 5,
@@ -259,7 +243,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
         ..PowConfig::default()
     };
     pow_cfg.apply_defaults().expect("pow defaults");
-
     let base_params = PowParameters::new(
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
@@ -269,7 +252,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
         .puzzle_parameters(&base_params)
         .expect("puzzle defaults valid")
         .expect("puzzle parameters enabled");
-
     let metrics_primary = Arc::new(Metrics::new());
     let metrics_replay = Arc::new(Metrics::new());
     let controls_primary = DoSControls::new(
@@ -290,7 +272,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
         RelayMode::Entry,
     )
     .expect("replay dos controls");
-
     let remote: SocketAddr = "192.0.2.200:7555".parse().expect("valid socket addr");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let events = [
@@ -323,7 +304,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
             outcome: Outcome::PowFailure,
         },
     ];
-
     let base_primary = Instant::now();
     let (pow_primary, puzzle_primary) = run_sequence(
         &controls_primary,
@@ -332,11 +312,9 @@ fn adaptive_difficulty_replay_is_deterministic() {
         &descriptor,
         &events,
     );
-
     let base_replay = base_primary + Duration::from_secs(30);
     let (pow_replay, puzzle_replay) =
         run_sequence(&controls_replay, base_replay, remote, &descriptor, &events);
-
     assert_eq!(
         pow_primary, pow_replay,
         "pow difficulty sequence should be deterministic"
@@ -349,7 +327,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
         assert_eq!(pow, puzzle, "puzzle difficulty must track pow");
     }
 }
-
 #[test]
 fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     const SLO_MS: u64 = 300;
@@ -395,14 +372,12 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     pow_cfg
         .apply_defaults()
         .expect("pow configuration should be valid");
-
     let quotas_entry = pow_cfg.quotas_for_mode(RelayMode::Entry);
     let burst_limit = quotas_entry.per_remote_burst;
     let cooldown = Duration::from_secs(quotas_entry.cooldown_secs);
     let slowloris_threshold =
         usize::try_from(pow_cfg.slowloris.timeout_threshold).expect("threshold fits into usize");
     let slowloris_penalty = Duration::from_secs(pow_cfg.slowloris.penalty_secs);
-
     let base_params = PowParameters::new(
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
@@ -429,11 +404,9 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     let remote2: SocketAddr = "198.51.100.11:7001".parse().expect("valid socket addr");
     let mut rng = StdRng::from_seed([0x42; 32]);
     let mut now = Instant::now();
-
     let baseline_difficulty = controls.current_pow_parameters().difficulty();
     let mut observed_difficulties = Vec::new();
     let mut latencies = Vec::new();
-
     for _ in 0..burst_limit {
         let attempt = controls
             .begin_at(remote1, Some(&descriptor), now)
@@ -447,7 +420,6 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
             controls.current_pow_parameters().difficulty(),
             "puzzle difficulty should track pow difficulty"
         );
-
         let ticket = puzzle::mint_ticket(
             &params,
             &binding,
@@ -456,20 +428,17 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         )
         .expect("ticket minted");
         puzzle::verify(&ticket, &binding, &params).expect("minted ticket verifies");
-
         let elapsed = Duration::from_millis(190);
         latencies.push(elapsed);
         controls.record_success_at(&attempt, elapsed, now);
         now += Duration::from_millis(75);
     }
-
     assert!(
         latencies
             .iter()
             .all(|&lat| lat <= Duration::from_millis(SLO_MS)),
         "latencies {latencies:?} must stay within the {SLO_MS} ms SLO"
     );
-
     let throttle = controls
         .begin_at(remote1, Some(&descriptor), now)
         .expect_err("burst limit should throttle the remote");
@@ -480,9 +449,7 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         throttle.cooldown,
         cooldown
     );
-
     now += throttle.cooldown + Duration::from_millis(10);
-
     for _ in 0..slowloris_threshold {
         let attempt = controls
             .begin_at(remote2, Some(&descriptor), now)
@@ -491,7 +458,6 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
             .current_puzzle_parameters()
             .expect("puzzle policy active");
         observed_difficulties.push(params.difficulty());
-
         let ticket = puzzle::mint_ticket(
             &params,
             &binding,
@@ -500,12 +466,10 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         )
         .expect("ticket minted");
         puzzle::verify(&ticket, &binding, &params).expect("minted ticket verifies");
-
         let elapsed = Duration::from_millis(SLO_MS + 40);
         controls.record_success_at(&attempt, elapsed, now);
         now += Duration::from_millis(10);
     }
-
     let penalty = controls
         .begin_at(remote2, Some(&descriptor), now)
         .expect_err("slow handshake series should trigger cooldown");
@@ -519,13 +483,11 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         slowloris_penalty,
         penalty_tolerance
     );
-
     let snapshot = metrics.snapshot();
     assert!(
         snapshot.active_remote_cooldowns > 0,
         "slowloris penalty should register active cooldowns"
     );
-
     for difficulty in observed_difficulties {
         assert_eq!(
             difficulty, baseline_difficulty,

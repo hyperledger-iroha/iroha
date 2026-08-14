@@ -1,11 +1,8 @@
 //! Runtime upgrade app API handlers.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+use crate::{
+    NoritoJson,
+    json_macros::{JsonDeserialize, JsonSerialize},
 };
-
 use axum::{extract::Path, response::IntoResponse};
 use iroha_core::{
     query::projection_checkpoint::{
@@ -45,17 +42,15 @@ use iroha_data_model::{
 use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-
-use crate::{
-    NoritoJson,
-    json_macros::{JsonDeserialize, JsonSerialize},
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
-
 const CURVE_REGISTRY_VERSION: u32 = 1;
 const QUERY_PROJECTION_SHARD_CATALOG_VERSION: u16 = 1;
 const QUERY_PROJECTION_SHARD_CATALOG_DEFAULT_LIMIT: u32 = 1024;
 const QUERY_PROJECTION_SHARD_CATALOG_MAX_LIMIT: u32 = 8192;
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Node capabilities advert (subset)
 pub struct NodeCapabilitiesResponse {
@@ -70,7 +65,6 @@ pub struct NodeCapabilitiesResponse {
     /// Query DSL and projection-index capabilities.
     pub query: NodeQueryCapabilities,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Crypto capability advert (currently SM-focused).
 pub struct NodeCryptoCapabilities {
@@ -79,7 +73,6 @@ pub struct NodeCryptoCapabilities {
     /// Curve capability advert anchored to the registry.
     pub curves: NodeCurveCapabilities,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// SM capability manifest exported by the node.
 pub struct NodeSmCapabilities {
@@ -96,7 +89,6 @@ pub struct NodeSmCapabilities {
     /// Acceleration advert (scalar/NEON policy).
     pub acceleration: NodeSmAcceleration,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Hardware/software acceleration advert for SM algorithms.
 pub struct NodeSmAcceleration {
@@ -109,7 +101,6 @@ pub struct NodeSmAcceleration {
     /// Dispatch policy string (`auto`, `force-enable`, `force-disable`, `scalar-only`).
     pub policy: String,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Curve capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeCurveCapabilities {
@@ -122,7 +113,6 @@ pub struct NodeCurveCapabilities {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub allowed_curve_bitmap: Vec<u64>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Query capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeQueryCapabilities {
@@ -135,7 +125,6 @@ pub struct NodeQueryCapabilities {
     /// Reserved DA-backed projection checkpoint contract.
     pub projection: NodeProjectionCapabilities,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Aggregate DSL capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeAggregateQueryCapabilities {
@@ -146,7 +135,6 @@ pub struct NodeAggregateQueryCapabilities {
     /// Resource families that currently accept aggregate mode.
     pub supported_resources: Vec<String>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Reserved DA query projection capability advert.
 pub struct NodeProjectionCapabilities {
@@ -185,7 +173,6 @@ pub struct NodeProjectionCapabilities {
     /// Latest indexed block hash covered by a persisted projection checkpoint, if any.
     pub latest_checkpoint_block_hash_hex: Option<String>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the latest persisted query projection checkpoint descriptor.
 pub struct NodeProjectionCheckpointResponse {
@@ -210,7 +197,6 @@ pub struct NodeProjectionCheckpointResponse {
     /// Immutable shard references that make up this checkpoint.
     pub shards: Vec<NodeProjectionCheckpointShardRef>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// JSON/Norito-friendly representation of one shard reference inside a checkpoint.
 pub struct NodeProjectionCheckpointShardRef {
@@ -227,7 +213,6 @@ pub struct NodeProjectionCheckpointShardRef {
     /// Compressed blob hash, lowercase hex.
     pub blob_hash_hex: String,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Request body for planning or publishing a projection checkpoint from uploaded shard refs.
@@ -237,7 +222,6 @@ pub struct NodeProjectionCheckpointPublishRequest {
     /// Uploaded shard references that must cover the canonical non-empty live shard set.
     pub shards: Vec<NodeProjectionCheckpointPublishShardRef>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// One uploaded shard reference used to plan or publish a projection checkpoint.
@@ -255,7 +239,6 @@ pub struct NodeProjectionCheckpointPublishShardRef {
     /// Storage ticket resolving the uploaded shard archive in DA, hex-encoded.
     pub storage_ticket_hex: String,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ProjectionCheckpointShardKey {
@@ -263,7 +246,6 @@ struct ProjectionCheckpointShardKey {
     partition_id: u32,
     asset_definition_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 impl ProjectionCheckpointShardKey {
     fn from_archive(archive: &QueryProjectionShardArchive) -> Self {
@@ -273,7 +255,6 @@ impl ProjectionCheckpointShardKey {
             asset_definition_id: archive.asset_definition_id.clone(),
         }
     }
-
     fn from_catalog_entry(
         resource: QueryProjectionResourceKind,
         entry: NodeProjectionShardCatalogEntry,
@@ -284,7 +265,6 @@ impl ProjectionCheckpointShardKey {
             asset_definition_id: entry.asset_definition_id,
         }
     }
-
     fn describe(&self) -> String {
         match &self.asset_definition_id {
             Some(asset_definition_id) => format!(
@@ -300,7 +280,6 @@ impl ProjectionCheckpointShardKey {
         }
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the live projection shard catalog of one resource family.
 pub struct NodeProjectionShardCatalogResponse {
@@ -327,7 +306,6 @@ pub struct NodeProjectionShardCatalogResponse {
     /// Stable ordered non-empty shard entries for the selected resource family.
     pub entries: Vec<NodeProjectionShardCatalogEntry>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// One stable shard entry inside the live projection catalog.
 pub struct NodeProjectionShardCatalogEntry {
@@ -340,7 +318,6 @@ pub struct NodeProjectionShardCatalogEntry {
     /// Optional display alias for `asset_definition_id`.
     pub asset_alias: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, JsonDeserialize, NoritoDeserialize)]
 /// Query parameters for exporting one canonical query projection shard archive.
@@ -348,7 +325,6 @@ pub struct NodeProjectionShardExportQuery {
     /// Canonical or alias asset-definition selector required for `asset_holders`.
     pub asset_definition_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, JsonDeserialize, NoritoDeserialize)]
 /// Query parameters for enumerating the live projection shard catalog of one resource family.
@@ -360,7 +336,6 @@ pub struct NodeProjectionShardCatalogQuery {
     /// Maximum number of entries to return.
     pub limit: Option<u32>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// JSON summary of runtime-related metrics of interest
 pub struct RuntimeMetricsResponse {
@@ -369,19 +344,16 @@ pub struct RuntimeMetricsResponse {
     /// Upgrade lifecycle event counters
     pub upgrade_events_total: UpgradeEventsCounters,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct UpgradeEventsCounters {
     pub proposed: u64,
     pub activated: u64,
     pub canceled: u64,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct RuntimeAbiActiveResponse {
     pub abi_version: u16,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response with the node's canonical ABI hash for the active policy.
 pub struct RuntimeAbiHashResponse {
@@ -390,21 +362,17 @@ pub struct RuntimeAbiHashResponse {
     /// 32-byte lowercase hex digest of the ABI surface.
     pub abi_hash_hex: String,
 }
-
 // Tests omitted to keep feature-gating friction low; behavior is trivial (hash compute) and
 // exercised by doc-sync tests in the ivm crate.
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct RuntimeUpgradeListItem {
     pub id_hex: String,
     pub record: iroha_data_model::runtime::RuntimeUpgradeRecord,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct RuntimeUpgradesListResponse {
     pub items: Vec<RuntimeUpgradeListItem>,
 }
-
 /// GET /v1/runtime/abi/active
 pub async fn handle_runtime_abi_active(
     state: Arc<iroha_core::state::State>,
@@ -414,7 +382,6 @@ pub async fn handle_runtime_abi_active(
         abi_version: world.abi_version(),
     })
 }
-
 /// GET /v1/node/capabilities — advertise the fixed runtime ABI version and defaults
 pub async fn handle_node_capabilities(
     state: Arc<iroha_core::state::State>,
@@ -526,7 +493,6 @@ pub async fn handle_node_capabilities(
         },
     })
 }
-
 /// GET /v1/privacy/capabilities — return the canonical committed Exact12 manifest.
 pub async fn handle_privacy_capabilities(
     state: Arc<iroha_core::state::State>,
@@ -545,7 +511,6 @@ pub async fn handle_privacy_capabilities(
         }
     })
 }
-
 /// GET /v1/node/query/projection/checkpoint — return the latest persisted checkpoint descriptor.
 #[must_use]
 pub async fn handle_node_query_projection_checkpoint(
@@ -555,7 +520,6 @@ pub async fn handle_node_query_projection_checkpoint(
         .query_projection_checkpoint_snapshot()
         .map(node_projection_checkpoint_response)
 }
-
 #[cfg(feature = "app_api")]
 /// POST /v1/node/query/projection/checkpoint/plan — validate uploaded shard refs and build a checkpoint.
 pub async fn handle_node_query_projection_checkpoint_plan(
@@ -570,7 +534,6 @@ pub async fn handle_node_query_projection_checkpoint_plan(
         .map_err(projection_checkpoint_plan_error)?;
     Ok(node_projection_checkpoint_response(plan.into_checkpoint()))
 }
-
 #[cfg(feature = "app_api")]
 /// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs and persist the checkpoint.
 pub async fn handle_node_query_projection_checkpoint_publish(
@@ -579,7 +542,6 @@ pub async fn handle_node_query_projection_checkpoint_publish(
 ) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
     handle_node_query_projection_checkpoint_publish_with_app(None, state, request).await
 }
-
 #[cfg(feature = "app_api")]
 /// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs, seed local cache/storage, and persist the checkpoint.
 pub async fn handle_node_query_projection_checkpoint_publish_with_app(
@@ -607,7 +569,6 @@ pub async fn handle_node_query_projection_checkpoint_publish_with_app(
         .map_err(projection_checkpoint_plan_error)?;
     Ok(node_projection_checkpoint_response(checkpoint))
 }
-
 fn node_projection_checkpoint_response(
     checkpoint: QueryProjectionCheckpoint,
 ) -> NodeProjectionCheckpointResponse {
@@ -637,21 +598,18 @@ fn node_projection_checkpoint_response(
             .collect(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn build_query_projection_uploaded_archives(
     state: &iroha_core::state::State,
     shards: Vec<NodeProjectionCheckpointPublishShardRef>,
 ) -> Result<Vec<QueryProjectionUploadedShardArchive>, crate::Error> {
     let mut uploads = Vec::with_capacity(shards.len());
-
     for shard in shards {
         validate_projection_partition_id(shard.partition_id)?;
         let manifest_digest =
             parse_blob_digest_hex(&shard.manifest_digest_hex, "manifest_digest_hex")?;
         let storage_ticket =
             parse_storage_ticket_hex(&shard.storage_ticket_hex, "storage_ticket_hex")?;
-
         let archive = match shard.resource.trim().to_ascii_lowercase().as_str() {
             "accounts" => {
                 if let Some(asset_definition_id) = shard
@@ -746,17 +704,14 @@ fn build_query_projection_uploaded_archives(
                 )));
             }
         };
-
         uploads.push(QueryProjectionUploadedShardArchive::new(
             archive,
             manifest_digest,
             storage_ticket,
         ));
     }
-
     Ok(uploads)
 }
-
 #[cfg(feature = "app_api")]
 fn validate_projection_checkpoint_shard_set(
     state: &iroha_core::state::State,
@@ -767,13 +722,11 @@ fn validate_projection_checkpoint_shard_set(
         .iter()
         .map(|upload| ProjectionCheckpointShardKey::from_archive(&upload.archive))
         .collect();
-
     let missing_count = expected.difference(&actual).count();
     let unexpected_count = actual.difference(&expected).count();
     if missing_count == 0 && unexpected_count == 0 {
         return Ok(());
     }
-
     let missing_preview = expected
         .difference(&actual)
         .take(8)
@@ -784,7 +737,6 @@ fn validate_projection_checkpoint_shard_set(
         .take(8)
         .map(ProjectionCheckpointShardKey::describe)
         .collect::<Vec<_>>();
-
     let mut problems = Vec::new();
     if missing_count > 0 {
         problems.push(format!(
@@ -800,13 +752,11 @@ fn validate_projection_checkpoint_shard_set(
             preview_suffix(unexpected_count, unexpected_preview.len())
         ));
     }
-
     Err(projection_export_conversion_error(format!(
         "checkpoint shard set must match the canonical live shard catalog; {}",
         problems.join("; ")
     )))
 }
-
 #[cfg(feature = "app_api")]
 fn build_expected_projection_checkpoint_shard_keys(
     state: &iroha_core::state::State,
@@ -864,7 +814,6 @@ fn build_expected_projection_checkpoint_shard_keys(
     );
     Ok(expected)
 }
-
 #[cfg(feature = "app_api")]
 fn preview_suffix(total: usize, shown: usize) -> String {
     let remaining = total.saturating_sub(shown);
@@ -874,7 +823,6 @@ fn preview_suffix(total: usize, shown: usize) -> String {
         format!(" (+{remaining} more)")
     }
 }
-
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
 pub async fn handle_node_query_projection_shard_catalog(
@@ -883,7 +831,6 @@ pub async fn handle_node_query_projection_shard_catalog(
     query: NodeProjectionShardCatalogQuery,
 ) -> Result<NodeProjectionShardCatalogResponse, crate::Error> {
     let index_status = state.query_index_status_snapshot();
-
     match resource.trim().to_ascii_lowercase().as_str() {
         "accounts" => {
             if let Some(asset_definition_id) = query
@@ -991,7 +938,6 @@ pub async fn handle_node_query_projection_shard_catalog(
         ))),
     }
 }
-
 /// GET /v1/node/query/projection/shards/{resource}/{partition_id} — export one canonical shard archive.
 #[cfg(feature = "app_api")]
 pub async fn handle_node_query_projection_shard_export(
@@ -1001,7 +947,6 @@ pub async fn handle_node_query_projection_shard_export(
     query: NodeProjectionShardExportQuery,
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
     validate_projection_partition_id(partition_id)?;
-
     let emitted_at_unix = current_unix_seconds();
     match resource.trim().to_ascii_lowercase().as_str() {
         "accounts" => {
@@ -1087,7 +1032,6 @@ pub async fn handle_node_query_projection_shard_export(
         ))),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn build_projection_shard_catalog_response(
     resource: QueryProjectionResourceKind,
@@ -1111,7 +1055,6 @@ fn build_projection_shard_catalog_response(
         }
         limit => limit,
     };
-
     let total_entries = entries.len() as u64;
     let start = usize::try_from(offset.min(total_entries)).unwrap_or(entries.len());
     let end = start
@@ -1123,7 +1066,6 @@ fn build_projection_shard_catalog_response(
         .skip(start)
         .take(end.saturating_sub(start))
         .collect();
-
     Ok(NodeProjectionShardCatalogResponse {
         version: QUERY_PROJECTION_SHARD_CATALOG_VERSION,
         resource: resource.as_stable_str().to_string(),
@@ -1138,7 +1080,6 @@ fn build_projection_shard_catalog_response(
         entries,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn build_accounts_projection_shard_catalog_entries(
     state: &iroha_core::state::State,
@@ -1146,14 +1087,12 @@ fn build_accounts_projection_shard_catalog_entries(
     let world = state.world_view();
     let accounts = crate::routing::collect_subject_accounts(&world);
     drop(world);
-
     let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
     for account in accounts {
         let partition_id =
             query_projection_default_partition_for_account(&account.id().to_string());
         *counts.entry(partition_id).or_default() += 1;
     }
-
     counts
         .into_iter()
         .map(
@@ -1166,7 +1105,6 @@ fn build_accounts_projection_shard_catalog_entries(
         )
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn build_accounts_projection_shard_archive(
     state: &iroha_core::state::State,
@@ -1176,7 +1114,6 @@ pub(crate) fn build_accounts_projection_shard_archive(
     let world = state.world_view();
     let accounts = crate::routing::collect_subject_accounts(&world);
     drop(world);
-
     let mut rows = Vec::new();
     for account in accounts {
         let account_id = account.id().to_string();
@@ -1194,7 +1131,6 @@ pub(crate) fn build_accounts_projection_shard_archive(
         });
     }
     rows.sort_by(|left, right| left.account_id.cmp(&right.account_id));
-
     let rowset = QueryProjectionShardRowSet::Accounts(QueryProjectionAccountsShardRowSet::new(
         partition_id,
         rows,
@@ -1205,7 +1141,6 @@ pub(crate) fn build_accounts_projection_shard_archive(
             "failed to encode accounts projection shard rowset: {err}"
         ))
     })?;
-
     Ok(QueryProjectionShardArchive::from_index_status(
         state.query_index_status_snapshot(),
         emitted_at_unix,
@@ -1216,7 +1151,6 @@ pub(crate) fn build_accounts_projection_shard_archive(
         payload,
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn build_account_assets_projection_shard_catalog_entries(
     state: &iroha_core::state::State,
@@ -1229,7 +1163,6 @@ fn build_account_assets_projection_shard_catalog_entries(
         *counts.entry(partition_id).or_default() += 1;
     }
     drop(world);
-
     counts
         .into_iter()
         .map(
@@ -1242,7 +1175,6 @@ fn build_account_assets_projection_shard_catalog_entries(
         )
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn build_account_assets_projection_shard_archive(
     state: &iroha_core::state::State,
@@ -1290,7 +1222,6 @@ pub(crate) fn build_account_assets_projection_shard_archive(
             .then(left.asset.cmp(&right.asset))
             .then(left.scope.cmp(&right.scope))
     });
-
     let rowset = QueryProjectionShardRowSet::AccountAssets(
         QueryProjectionAccountAssetsShardRowSet::new(partition_id, rows),
     );
@@ -1300,7 +1231,6 @@ pub(crate) fn build_account_assets_projection_shard_archive(
             "failed to encode account_assets projection shard rowset: {err}"
         ))
     })?;
-
     Ok(QueryProjectionShardArchive::from_index_status(
         state.query_index_status_snapshot(),
         emitted_at_unix,
@@ -1311,7 +1241,6 @@ pub(crate) fn build_account_assets_projection_shard_archive(
         payload,
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn build_asset_definitions_projection_shard_catalog_entries(
     state: &iroha_core::state::State,
@@ -1327,7 +1256,6 @@ fn build_asset_definitions_projection_shard_catalog_entries(
         *counts.entry(partition_id).or_default() += 1;
     }
     drop(world);
-
     counts
         .into_iter()
         .map(
@@ -1340,7 +1268,6 @@ fn build_asset_definitions_projection_shard_catalog_entries(
         )
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn build_asset_definitions_projection_shard_archive(
     state: &iroha_core::state::State,
@@ -1396,7 +1323,6 @@ pub(crate) fn build_asset_definitions_projection_shard_archive(
     }
     drop(world);
     rows.sort_by(|left, right| left.id.cmp(&right.id));
-
     let rowset = QueryProjectionShardRowSet::AssetDefinitions(
         QueryProjectionAssetDefinitionsShardRowSet::new(partition_id, rows),
     );
@@ -1406,7 +1332,6 @@ pub(crate) fn build_asset_definitions_projection_shard_archive(
             "failed to encode asset_definitions projection shard rowset: {err}"
         ))
     })?;
-
     Ok(QueryProjectionShardArchive::from_index_status(
         state.query_index_status_snapshot(),
         emitted_at_unix,
@@ -1417,7 +1342,6 @@ pub(crate) fn build_asset_definitions_projection_shard_archive(
         payload,
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn build_domains_projection_shard_catalog_entries(
     state: &iroha_core::state::State,
@@ -1433,7 +1357,6 @@ fn build_domains_projection_shard_catalog_entries(
         *counts.entry(partition_id).or_default() += 1;
     }
     drop(world);
-
     counts
         .into_iter()
         .map(
@@ -1446,7 +1369,6 @@ fn build_domains_projection_shard_catalog_entries(
         )
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn build_domains_projection_shard_archive(
     state: &iroha_core::state::State,
@@ -1467,7 +1389,6 @@ pub(crate) fn build_domains_projection_shard_archive(
     }
     drop(world);
     rows.sort_by(|left, right| left.id.cmp(&right.id));
-
     let rowset = QueryProjectionShardRowSet::Domains(QueryProjectionDomainsShardRowSet::new(
         partition_id,
         rows,
@@ -1478,7 +1399,6 @@ pub(crate) fn build_domains_projection_shard_archive(
             "failed to encode domains projection shard rowset: {err}"
         ))
     })?;
-
     Ok(QueryProjectionShardArchive::from_index_status(
         state.query_index_status_snapshot(),
         emitted_at_unix,
@@ -1489,7 +1409,6 @@ pub(crate) fn build_domains_projection_shard_archive(
         payload,
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn build_asset_holders_projection_shard_catalog_entries(
     state: &iroha_core::state::State,
@@ -1502,7 +1421,6 @@ fn build_asset_holders_projection_shard_catalog_entries(
         .filter(|value| !value.is_empty())
         .map(|selector| crate::routing::resolve_asset_definition_selector(&world, selector, now_ms))
         .transpose()?;
-
     let mut counts: BTreeMap<(iroha_data_model::asset::AssetDefinitionId, u32), u64> =
         BTreeMap::new();
     match selected_definition_id {
@@ -1527,7 +1445,6 @@ fn build_asset_holders_projection_shard_catalog_entries(
             }
         }
     }
-
     let mut entries = Vec::with_capacity(counts.len());
     for ((definition_id, partition_id), row_count) in counts {
         let asset_alias = world
@@ -1542,10 +1459,8 @@ fn build_asset_holders_projection_shard_catalog_entries(
         });
     }
     drop(world);
-
     Ok(entries)
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn build_asset_holders_projection_shard_archive(
     state: &iroha_core::state::State,
@@ -1564,7 +1479,6 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
         .asset_definition(&definition_id)
         .ok()
         .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
-
     let mut aggregated: BTreeMap<
         (
             iroha_data_model::account::AccountId,
@@ -1592,7 +1506,6 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
         })
         .collect();
     drop(world);
-
     let mut rows = Vec::new();
     for ((account_id, scope), quantity) in aggregated {
         let canonical_id = account_id.to_string();
@@ -1616,7 +1529,6 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
             .cmp(&right.account_id)
             .then(left.scope.cmp(&right.scope))
     });
-
     let rowset =
         QueryProjectionShardRowSet::AssetHolders(QueryProjectionAssetHoldersShardRowSet::new(
             partition_id,
@@ -1630,7 +1542,6 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
             "failed to encode asset_holders projection shard rowset: {err}"
         ))
     })?;
-
     Ok(QueryProjectionShardArchive::from_index_status(
         state.query_index_status_snapshot(),
         emitted_at_unix,
@@ -1641,21 +1552,18 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
         payload,
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn projection_export_conversion_error(message: impl Into<String>) -> crate::Error {
     crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn projection_checkpoint_plan_error(err: QueryProjectionCheckpointPlanError) -> crate::Error {
     projection_export_conversion_error(format!(
         "failed to validate query projection checkpoint publish plan: {err}"
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Error> {
     if partition_id >= QUERY_PROJECTION_DEFAULT_PARTITION_COUNT {
@@ -1666,17 +1574,14 @@ fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Erro
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn parse_blob_digest_hex(value: &str, field: &str) -> Result<BlobDigest, crate::Error> {
     parse_fixed_hex_32(value, field).map(BlobDigest::new)
 }
-
 #[cfg(feature = "app_api")]
 fn parse_storage_ticket_hex(value: &str, field: &str) -> Result<StorageTicketId, crate::Error> {
     parse_fixed_hex_32(value, field).map(StorageTicketId::new)
 }
-
 #[cfg(feature = "app_api")]
 fn parse_fixed_hex_32(value: &str, field: &str) -> Result<[u8; 32], crate::Error> {
     let trimmed = value.trim_start_matches("0x");
@@ -1690,7 +1595,6 @@ fn parse_fixed_hex_32(value: &str, field: &str) -> Result<[u8; 32], crate::Error
         projection_export_conversion_error(format!("`{field}` must be 32 bytes (got {len})"))
     })
 }
-
 #[cfg(feature = "app_api")]
 fn current_unix_seconds() -> u64 {
     SystemTime::now()
@@ -1698,11 +1602,9 @@ fn current_unix_seconds() -> u64 {
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
-
 fn signed_transaction_schema_hash_hex() -> String {
     hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
 }
-
 fn summarize_curve_capabilities(
     crypto: &iroha_config::parameters::actual::Crypto,
 ) -> NodeCurveCapabilities {
@@ -1728,7 +1630,6 @@ fn summarize_curve_capabilities(
         allowed_curve_bitmap: bitmap,
     }
 }
-
 fn curve_bitmap_from_ids(ids: &[u8]) -> Vec<u64> {
     if ids.is_empty() {
         return Vec::new();
@@ -1751,7 +1652,6 @@ fn curve_bitmap_from_ids(ids: &[u8]) -> Vec<u64> {
     }
     vec
 }
-
 fn compression_name(compression: Compression) -> &'static str {
     match compression {
         Compression::Identity => "identity",
@@ -1760,7 +1660,6 @@ fn compression_name(compression: Compression) -> &'static str {
         Compression::Zstd => "zstd",
     }
 }
-
 fn blob_class_name(blob_class: BlobClass) -> &'static str {
     match blob_class {
         BlobClass::TaikaiSegment => "taikai_segment",
@@ -1769,18 +1668,15 @@ fn blob_class_name(blob_class: BlobClass) -> &'static str {
         BlobClass::Custom(_) => "custom",
     }
 }
-
 fn blob_class_custom_id(blob_class: BlobClass) -> Option<u16> {
     match blob_class {
         BlobClass::Custom(id) => Some(id),
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod bitmap_tests {
     use super::curve_bitmap_from_ids;
-
     #[test]
     fn bitmap_handles_edges() {
         assert!(curve_bitmap_from_ids(&[]).is_empty());
@@ -1801,7 +1697,6 @@ mod bitmap_tests {
         assert_eq!(bitmap, vec![1, 0, 1, 1u64 << 63]);
     }
 }
-
 /// GET /v1/runtime/metrics — expose runtime metrics summary
 pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
@@ -1831,7 +1726,6 @@ pub async fn handle_runtime_metrics(
         },
     })
 }
-
 /// GET /v1/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
 pub async fn handle_runtime_abi_hash(
     _state: Arc<iroha_core::state::State>,
@@ -1843,7 +1737,6 @@ pub async fn handle_runtime_abi_hash(
         abi_hash_hex: hex::encode::<[u8; 32]>(h),
     })
 }
-
 /// GET /v1/runtime/upgrades
 ///
 /// # Errors
@@ -1868,19 +1761,15 @@ pub async fn handle_runtime_upgrades_list(
     });
     Ok(RuntimeUpgradesListResponse { items })
 }
-
 #[derive(Debug, JsonDeserialize, NoritoDeserialize)]
 pub struct ProposeUpgradeDto(pub iroha_data_model::runtime::RuntimeUpgradeManifest);
-
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 pub struct TxInstr {
     pub wire_id: String,
     pub payload_hex: String,
 }
-
 fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
     use iroha_data_model::isi::Instruction;
-
     let wire_id = Instruction::id(&*boxed).to_string();
     let payload = Instruction::dyn_encode(&*boxed);
     TxInstr {
@@ -1888,13 +1777,11 @@ fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> 
         payload_hex: hex::encode(payload),
     }
 }
-
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 pub struct ProposeUpgradeResponse {
     pub ok: bool,
     pub tx_instructions: Vec<TxInstr>,
 }
-
 /// POST /v1/runtime/upgrades/propose
 pub async fn handle_runtime_propose_upgrade(
     NoritoJson(ProposeUpgradeDto(manifest)): NoritoJson<ProposeUpgradeDto>,
@@ -1914,7 +1801,6 @@ pub async fn handle_runtime_propose_upgrade(
         tx_instructions,
     })
 }
-
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 /// Response payload describing the outcome of runtime activation/cancellation helpers.
 pub struct ActivateCancelResponse {
@@ -1923,13 +1809,11 @@ pub struct ActivateCancelResponse {
     /// Instructions (if any) that must be signed and submitted by the caller.
     pub tx_instructions: Vec<TxInstr>,
 }
-
 impl IntoResponse for ActivateCancelResponse {
     fn into_response(self) -> axum::response::Response {
         crate::JsonBody(self).into_response()
     }
 }
-
 /// POST /v1/runtime/upgrades/activate/{id}
 ///
 /// # Errors
@@ -1964,7 +1848,6 @@ pub async fn handle_runtime_activate_upgrade(
         tx_instructions,
     })
 }
-
 /// POST /v1/runtime/upgrades/cancel/{id}
 ///
 /// # Errors
@@ -1999,20 +1882,16 @@ pub async fn handle_runtime_cancel_upgrade(
         tx_instructions,
     })
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
-
-    use super::*;
-
     #[cfg(feature = "app_api")]
     fn checked_projection_ed25519_keypair(seed: u8) -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test projection fixture key derivation should succeed")
     }
-
     #[cfg(feature = "app_api")]
     fn checked_projection_account(seed: u8) -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(
@@ -2021,7 +1900,6 @@ mod tests {
                 .clone(),
         )
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn checked_projection_ed25519_keypair_uses_fallible_seed_derivation() {
@@ -2038,7 +1916,6 @@ mod tests {
             checked_projection_account(0x52)
         );
     }
-
     #[cfg(feature = "app_api")]
     fn projection_checkpoint_request_for_state(
         state: &std::sync::Arc<State>,
@@ -2088,7 +1965,6 @@ mod tests {
             shards,
         }
     }
-
     #[tokio::test]
     async fn runtime_abi_hash_matches_ivm() {
         // Build a minimal state (not used by the handler, but required by signature)
@@ -2096,7 +1972,6 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
         let state = State::new_for_testing(world, kura, query_handle);
-
         let resp = handle_runtime_abi_hash(std::sync::Arc::new(state))
             .await
             .expect("ok");
@@ -2106,14 +1981,12 @@ mod tests {
         let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         assert_eq!(resp.abi_hash_hex, hex::encode::<[u8; 32]>(expected));
     }
-
     #[tokio::test]
     async fn node_capabilities_reports_v1() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
         let state = State::new_for_testing(world, kura, query_handle);
-
         let resp = handle_node_capabilities(std::sync::Arc::new(state))
             .await
             .expect("ok");
@@ -2230,14 +2103,12 @@ mod tests {
             "expected ED25519 curve id to be advertised"
         );
     }
-
     #[tokio::test]
     async fn privacy_capabilities_are_built_from_one_committed_state_view() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
         let state = State::new_for_testing(world, kura, query_handle);
-
         let manifest = handle_privacy_capabilities(std::sync::Arc::new(state))
             .await
             .expect("valid committed Exact12 capability manifest");
@@ -2274,7 +2145,6 @@ mod tests {
         }
         manifest.validate().expect("manifest validates");
         assert!(!manifest.manifest_digest.is_zero());
-
         let json = norito::json::to_json(&manifest).expect("manifest JSON");
         assert!(json.contains("iroha-bootle-lantern-anoncred-v1"));
         assert!(json.contains("zk_x509_identity_presentation_v1"));
@@ -2282,7 +2152,6 @@ mod tests {
         assert!(!json.contains("iroha-bootle-genisis-ac-stark-v0"));
         assert!(!json.contains("production_ready"));
         assert!(!json.contains("production_gate"));
-
         let archive = manifest
             .canonical_bytes()
             .expect("canonical manifest Norito");
@@ -2294,7 +2163,6 @@ mod tests {
             norito::decode_from_bytes(&archive).expect("decode manifest Norito");
         assert_eq!(decoded, manifest);
         decoded.validate().expect("decoded manifest validates");
-
         let (parts, body) =
             crate::utils::respond_with_format(manifest, crate::utils::ResponseFormat::Norito)
                 .into_parts();
@@ -2312,7 +2180,6 @@ mod tests {
             .to_bytes();
         assert_eq!(response_bytes.as_ref(), archive.as_slice());
     }
-
     #[tokio::test]
     async fn node_capabilities_reports_projection_checkpoint_snapshot_when_present() {
         let kura = Kura::blank_kura_for_testing();
@@ -2333,7 +2200,6 @@ mod tests {
                 Vec::new(),
             ),
         ));
-
         let resp = handle_node_capabilities(std::sync::Arc::new(state))
             .await
             .expect("ok");
@@ -2370,21 +2236,18 @@ mod tests {
             Some(hex::encode(expected_hash.as_ref()))
         );
     }
-
     #[tokio::test]
     async fn node_query_projection_checkpoint_returns_none_when_absent() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
         let state = State::new_for_testing(world, kura, query_handle);
-
         assert!(
             handle_node_query_projection_checkpoint(std::sync::Arc::new(state))
                 .await
                 .is_none()
         );
     }
-
     #[tokio::test]
     async fn node_query_projection_checkpoint_returns_persisted_descriptor() {
         let kura = Kura::blank_kura_for_testing();
@@ -2413,7 +2276,6 @@ mod tests {
                 }],
             ),
         ));
-
         let resp = handle_node_query_projection_checkpoint(std::sync::Arc::new(state))
             .await
             .expect("checkpoint response");
@@ -2443,13 +2305,11 @@ mod tests {
         assert_eq!(resp.shards[0].storage_ticket_hex, hex::encode([0x22; 32]));
         assert_eq!(resp.shards[0].blob_hash_hex, hex::encode([0x33; 32]));
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_checkpoint_plan_rebuilds_uploaded_shards() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
-
         let authority_id = checked_projection_account(0x60);
         let alice_id = checked_projection_account(0x61);
         let domain_id = DomainId::try_new("projection-plan", "universal").expect("domain");
@@ -2497,11 +2357,9 @@ mod tests {
                     .expect("parse storage ticket"),
             )
             .expect("checkpoint shard");
-
         let response = handle_node_query_projection_checkpoint_plan(state.clone(), request)
             .await
             .expect("plan");
-
         assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
         assert_eq!(response.indexed_height, 0);
         assert_eq!(response.shards.len(), expected_total_shards);
@@ -2533,14 +2391,12 @@ mod tests {
         );
         assert!(state.query_projection_checkpoint_snapshot().is_none());
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_checkpoint_plan_rejects_incomplete_shard_set() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
         use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-
         let authority_id = checked_projection_account(0x62);
         let domain_id = DomainId::try_new("projection-plan-gap", "universal").expect("domain");
         let mut accounts = vec![Account::new(authority_id.clone()).build(&authority_id)];
@@ -2570,11 +2426,9 @@ mod tests {
             "expected more than one live checkpoint shard for completeness validation"
         );
         request.shards.pop();
-
         let err = handle_node_query_projection_checkpoint_plan(state, request)
             .await
             .expect_err("incomplete shard set must fail");
-
         let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
             message,
         ))) = err
@@ -2585,13 +2439,11 @@ mod tests {
         assert!(message.contains("canonical live shard catalog"));
         assert!(message.contains("missing"));
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_checkpoint_publish_persists_descriptor() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
-
         let authority_id = checked_projection_account(0x83);
         let alice_id = checked_projection_account(0x84);
         let domain_id = DomainId::try_new("projection-publish", "universal").expect("domain");
@@ -2617,11 +2469,9 @@ mod tests {
             0x41,
         );
         let expected_total_shards = request.shards.len();
-
         let response = handle_node_query_projection_checkpoint_publish(state.clone(), request)
             .await
             .expect("publish");
-
         assert_eq!(response.emitted_at_unix, checkpoint_emitted_at_unix);
         let persisted = state
             .query_projection_checkpoint_snapshot()
@@ -2636,18 +2486,15 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn build_query_projection_uploaded_archives_rejects_asset_holders_without_asset_definition() {
         use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
-
         let state = State::new_for_testing(
             iroha_core::state::World::default(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-
         let err = build_query_projection_uploaded_archives(
             &state,
             vec![NodeProjectionCheckpointPublishShardRef {
@@ -2660,7 +2507,6 @@ mod tests {
             }],
         )
         .expect_err("missing asset_definition_id must fail");
-
         let crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
             message,
         ))) = err
@@ -2672,13 +2518,11 @@ mod tests {
             "unexpected conversion error: {message}"
         );
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_shard_catalog_builds_accounts_entries() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
-
         let authority_id = checked_projection_account(0x85);
         let alice_id = checked_projection_account(0x86);
         let bob_id = checked_projection_account(0x87);
@@ -2697,7 +2541,6 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-
         let response = handle_node_query_projection_shard_catalog(
             std::sync::Arc::new(state),
             "accounts".to_string(),
@@ -2709,7 +2552,6 @@ mod tests {
         )
         .await
         .expect("catalog");
-
         assert_eq!(response.version, QUERY_PROJECTION_SHARD_CATALOG_VERSION);
         assert_eq!(response.resource, "accounts");
         assert_eq!(
@@ -2736,7 +2578,6 @@ mod tests {
         assert_eq!(response.total_entries, response.entries.len() as u64);
         assert!(response.next_offset.is_none());
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_shard_catalog_builds_asset_holder_entries() {
@@ -2745,7 +2586,6 @@ mod tests {
             Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
         };
         use iroha_primitives::numeric::Quantity;
-
         let authority_id = checked_projection_account(0x88);
         let alice_id = checked_projection_account(0x89);
         let bob_id = checked_projection_account(0x8A);
@@ -2802,7 +2642,6 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-
         let response = handle_node_query_projection_shard_catalog(
             std::sync::Arc::new(state),
             "asset_holders".to_string(),
@@ -2814,7 +2653,6 @@ mod tests {
         )
         .await
         .expect("catalog");
-
         assert_eq!(response.resource, "asset_holders");
         assert_eq!(response.limit, 1);
         assert!(response.total_entries >= 2);
@@ -2829,13 +2667,11 @@ mod tests {
             "holder catalog entries must represent non-empty shards"
         );
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_shard_export_builds_accounts_archive() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
-
         let authority_id = checked_projection_account(0x8B);
         let alice_id = checked_projection_account(0x8C);
         let domain_id = DomainId::try_new("projection", "universal").expect("domain");
@@ -2853,7 +2689,6 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         let partition_id = query_projection_default_partition_for_account(&alice_id.to_string());
-
         let archive = handle_node_query_projection_shard_export(
             std::sync::Arc::new(state),
             "accounts".to_string(),
@@ -2864,7 +2699,6 @@ mod tests {
         )
         .await
         .expect("export accounts shard");
-
         assert_eq!(archive.resource, QueryProjectionResourceKind::Accounts);
         assert_eq!(archive.partition_id, partition_id);
         let rowset: QueryProjectionShardRowSet =
@@ -2886,7 +2720,6 @@ mod tests {
             other => panic!("unexpected rowset variant: {other:?}"),
         }
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn node_query_projection_shard_export_builds_asset_holders_archive() {
@@ -2895,7 +2728,6 @@ mod tests {
             Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
         };
         use iroha_primitives::numeric::Quantity;
-
         let authority_id = checked_projection_account(0x8D);
         let alice_id = checked_projection_account(0x8E);
         let bob_id = checked_projection_account(0x8F);
@@ -2937,7 +2769,6 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         let partition_id = query_projection_default_partition_for_account(&alice_id.to_string());
-
         let archive = handle_node_query_projection_shard_export(
             std::sync::Arc::new(state),
             "asset_holders".to_string(),
@@ -2948,7 +2779,6 @@ mod tests {
         )
         .await
         .expect("export asset holders shard");
-
         assert_eq!(archive.resource, QueryProjectionResourceKind::AssetHolders);
         assert_eq!(archive.partition_id, partition_id);
         assert_eq!(archive.asset_definition_id, Some(definition_id.to_string()));
@@ -2972,14 +2802,12 @@ mod tests {
             other => panic!("unexpected rowset variant: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn runtime_metrics_defaults() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
         let state = State::new_for_testing(world, kura, query_handle);
-
         let resp = handle_runtime_metrics(std::sync::Arc::new(state))
             .await
             .expect("ok");

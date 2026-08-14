@@ -11,14 +11,12 @@ pub enum EvidenceViewerSigningPurposeV1 {
     /// Domain-separated compaction-archive head digest.
     CompactionArchive = 4,
 }
-
 impl EvidenceViewerSigningPurposeV1 {
     /// Immutable V1 wire identifier.
     #[must_use]
     pub const fn wire_id(self) -> u8 {
         self as u8
     }
-
     /// Decode one immutable V1 wire identifier without aliases.
     #[must_use]
     pub const fn try_from_wire_id(value: u8) -> Option<Self> {
@@ -31,11 +29,9 @@ impl EvidenceViewerSigningPurposeV1 {
         }
     }
 }
-
 /// Payload-free failure while validating one evidence-viewer signing message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvidenceViewerSigningMessageErrorV1;
-
 /// Validate the exact V1 message shape admitted for one signing purpose.
 ///
 /// The checkpoint-store-record and compaction-archive messages are already
@@ -68,11 +64,9 @@ pub fn validate_evidence_viewer_signing_message_v1(
         .then_some(())
         .ok_or(EvidenceViewerSigningMessageErrorV1)
 }
-
 fn exact_nonzero_evidence_signing_digest(bytes: &[u8]) -> bool {
     bytes.len() == 32 && bytes.iter().any(|byte| *byte != 0)
 }
-
 fn take_evidence_signing_bytes<'a>(input: &mut &'a [u8], count: usize) -> Option<&'a [u8]> {
     if input.len() < count {
         return None;
@@ -81,13 +75,11 @@ fn take_evidence_signing_bytes<'a>(input: &mut &'a [u8], count: usize) -> Option
     *input = remaining;
     Some(value)
 }
-
 fn take_evidence_signing_u64(input: &mut &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(
         take_evidence_signing_bytes(input, 8)?.try_into().ok()?,
     ))
 }
-
 fn take_evidence_signing_optional_digest(input: &mut &[u8]) -> Option<Option<[u8; 32]>> {
     match *take_evidence_signing_bytes(input, 1)?.first()? {
         0 => Some(None),
@@ -97,7 +89,6 @@ fn take_evidence_signing_optional_digest(input: &mut &[u8]) -> Option<Option<[u8
         _ => None,
     }
 }
-
 fn take_evidence_signing_text(input: &mut &[u8]) -> Option<String> {
     let length = usize::try_from(take_evidence_signing_u64(input)?).ok()?;
     if length == 0 || length > EVIDENCE_VIEWER_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1 {
@@ -109,7 +100,6 @@ fn take_evidence_signing_text(input: &mut &[u8]) -> Option<String> {
     }
     Some(value.to_owned())
 }
-
 fn validate_checkpoint_anchor_signing_message(
     message: &[u8],
     expected_signer_handle: &str,
@@ -180,12 +170,10 @@ fn validate_checkpoint_anchor_signing_message(
     };
     signer_handle == expected_signer_handle && signer_key == expected_public_key && input.is_empty()
 }
-
 /// Runtime-only Ed25519 receipt signer.
 pub trait EvidenceViewerReceiptSignerV1: EvidenceViewerRuntimeProviderV1 {
     /// Exact Ed25519 public key.
     fn public_key(&self) -> [u8; 32];
-
     /// Sign one exact canonical message for the declared purpose.
     fn sign(
         &self,
@@ -193,12 +181,10 @@ pub trait EvidenceViewerReceiptSignerV1: EvidenceViewerRuntimeProviderV1 {
         message: &[u8],
     ) -> Result<[u8; 64], EvidenceViewerExternalErrorV1>;
 }
-
 struct QualifiedEvidenceViewerReceiptSignerV1 {
     inner: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerReceiptSignerV1>,
     public_key: [u8; 32],
 }
-
 impl QualifiedEvidenceViewerReceiptSignerV1 {
     fn try_new(
         expected_handle: &str,
@@ -220,7 +206,6 @@ impl QualifiedEvidenceViewerReceiptSignerV1 {
             public_key: expected_public_key,
         })
     }
-
     fn read_qualified_public_key(
         inner: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerReceiptSignerV1>,
     ) -> Result<[u8; 32], EvidenceViewerRuntimeProviderQualificationErrorV1> {
@@ -229,7 +214,6 @@ impl QualifiedEvidenceViewerReceiptSignerV1 {
         inner.revalidate()?;
         Ok(public_key)
     }
-
     fn sign(
         &self,
         purpose: EvidenceViewerSigningPurposeV1,
@@ -249,7 +233,6 @@ impl QualifiedEvidenceViewerReceiptSignerV1 {
         result
     }
 }
-
 impl fmt::Debug for QualifiedEvidenceViewerReceiptSignerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

@@ -1,5 +1,4 @@
 //! Oracle data events for feed aggregation outcomes.
-
 use super::*;
 use crate::{
     oracle::{
@@ -9,7 +8,6 @@ use crate::{
     },
     prelude::{AccountId, Hash},
 };
-
 /// Record emitted after aggregating a feed slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -33,7 +31,6 @@ pub struct FeedEventRecord {
     #[cfg_attr(feature = "json", norito(default))]
     pub evidence_hashes: Vec<Hash>,
 }
-
 /// Event emitted when a twitter binding attestation is recorded.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -52,7 +49,6 @@ pub struct TwitterBindingRecorded {
     /// Recorded binding.
     pub record: TwitterBindingRecord,
 }
-
 /// Event emitted when a twitter binding is revoked.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -77,7 +73,6 @@ pub struct TwitterBindingRevoked {
     /// Timestamp (milliseconds) when the revocation was recorded.
     pub recorded_at_ms: u64,
 }
-
 /// Event emitted when an oracle change proposal is registered.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -104,7 +99,6 @@ pub struct OracleChangeProposed {
     /// Account that submitted the proposal.
     pub proposer: AccountId,
 }
-
 /// Event emitted whenever a pipeline stage records votes or reaches a terminal state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -134,7 +128,6 @@ pub struct OracleChangeStageUpdated {
     #[cfg_attr(feature = "json", norito(default))]
     pub evidence_hashes: Vec<Hash>,
 }
-
 /// Event emitted when a native `DeFi` oracle attestation is recorded.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -153,7 +146,6 @@ pub struct DefiOracleAttestationRecorded {
     /// Recorded attestation.
     pub attestation: DefiOracleAttestation,
 }
-
 /// Oracle lifecycle events.
 #[derive(
     Debug,
@@ -198,7 +190,6 @@ pub enum OracleEvent {
     /// Native `DeFi` compatibility oracle attestation recorded.
     DefiAttestationRecorded(DefiOracleAttestationRecorded),
 }
-
 /// Prelude exports.
 pub mod prelude {
     pub use super::{

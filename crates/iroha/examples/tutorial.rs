@@ -1,18 +1,14 @@
 //! This file contains examples from the Rust tutorial.
-
 use eyre::{Error, WrapErr};
 use iroha::config::{Config, LoadPath};
 use iroha::data_model::DomainId;
 // #region rust_config_crates
 // #endregion rust_config_crates
-
 fn main() {
     // #region rust_config_load
     let config = Config::load(LoadPath::Explicit("../../defaults/client.toml")).unwrap();
     // #endregion rust_config_load
-
     // Your code goes here…
-
     account_definition_test().expect("Account definition example is expected to work correctly");
     account_registration_test(config.clone())
         .expect("Account registration example is expected to work correctly");
@@ -25,11 +21,9 @@ fn main() {
     // output_visualising_test(&config).expect(msg: "Visualising outputs example is expected to work correctly");
     println!("Success!");
 }
-
 fn account_definition_test() -> Result<(), Error> {
     // #region account_definition_comparison
     use iroha::{crypto::KeyPair, data_model::prelude::AccountId};
-
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::try_random()
         .wrap_err("Failed to generate tutorial account keypair")?
@@ -43,15 +37,11 @@ fn account_definition_test() -> Result<(), Error> {
     let account_id = AccountId::parse_encoded(&canonical_account_id)
         .map(iroha::account_address::ParsedAccountId::into_account_id)
         .expect("Valid, because the I105 payload was generated from a valid AccountId");
-
     // Check that two ways to define an account match
     assert_eq!(account_id, longhand_account_id);
-
     // #endregion account_definition_comparison
-
     Ok(())
 }
-
 fn account_registration_test(config: Config) -> Result<(), Error> {
     // #region register_account_crates
     use iroha::{
@@ -63,10 +53,8 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
         },
     };
     // #endregion register_account_crates
-
     // Create an Iroha client
     let client = Client::new(config);
-
     // #region register_account_create
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::try_random()
@@ -75,14 +63,12 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // Materialize a scoped AccountId in the domain where this registration is performed
     let account_id = AccountId::new(public_key);
     // #endregion register_account_create
-
     // #region register_account_generate
     // Generate a new account
     let _account_domain: DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain id");
     let create_account = Register::account(Account::new(account_id.clone()));
     // #endregion register_account_generate
-
     // #region register_account_prepare_tx
     // Prepare a transaction using the
     // Account's RegisterBox
@@ -94,16 +80,13 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
         metadata,
     );
     // #endregion register_account_prepare_tx
-
     // #region register_account_submit_tx
     // Submit a prepared account registration transaction
     client.submit_transaction(&tx)?;
     // #endregion register_account_submit_tx
-
     // Finish the test successfully
     Ok(())
 }
-
 fn asset_registration_test(config: Config) -> Result<(), Error> {
     // #region register_asset_crates
     use iroha::{
@@ -114,10 +97,8 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
         },
     };
     // #endregion register_asset_crates
-
     // Create an Iroha client
     let client = Client::new(config);
-
     // #region register_asset_create_asset
     // Create an asset
     let asset_def_id = AssetDefinitionId::derive_from_components(
@@ -125,7 +106,6 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
         "time".parse().expect("valid asset identifier"),
     );
     // #endregion register_asset_create_asset
-
     // #region register_asset_init_submit
     // Initialise the registration time
     let register_time = Register::asset_definition(
@@ -137,39 +117,33 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
         )
         .mintable_once(),
     );
-
     // Submit a registration time
     client.submit(
         register_time,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // #endregion register_asset_init_submit
-
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::try_random()
         .wrap_err("Failed to generate tutorial asset-holder keypair")?
         .into_parts();
     // Materialize a scoped AccountId in the domain used for this minting example
     let account_id = AccountId::new(public_key);
-
     // #region register_asset_mint_submit
     // Create a MintBox using a previous asset and account
     let mint = Mint::asset_quantity(
         "12.34".parse::<Quantity>().expect("quantity"),
         AssetId::new(asset_def_id, account_id),
     );
-
     // Submit a minting transaction
     client.submit_all(
         [mint],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // #endregion register_asset_mint_submit
-
     // Finish the test successfully
     Ok(())
 }
-
 fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_crates
     use iroha::{
@@ -177,10 +151,8 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
         data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Mint},
     };
     // #endregion mint_asset_crates
-
     // Create an Iroha client
     let client = Client::new(config);
-
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
     let roses = AssetDefinitionId::derive_from_components(
@@ -193,12 +165,10 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
             .expect("Valid, because this is a valid public key literal"),
     );
     // #endregion mint_asset_define_asset_account
-
     // Mint the Asset instance
     // #region mint_asset_mint
     let mint_roses = Mint::asset_quantity(42u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion mint_asset_mint
-
     // #region mint_asset_submit_tx
     client
         .submit(
@@ -207,7 +177,6 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
         )
         .wrap_err("Failed to submit transaction")?;
     // #endregion mint_asset_submit_tx
-
     // #region mint_asset_mint_alt
     // Mint the Asset instance (alternate syntax).
     // AssetId textual representation uses the canonical internal balance-bucket
@@ -217,7 +186,6 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     let alice_roses: AssetId = alice_roses_literal.parse()?;
     let mint_roses_alt = Mint::asset_quantity(10u32, alice_roses);
     // #endregion mint_asset_mint_alt
-
     // #region mint_asset_submit_tx_alt
     client
         .submit(
@@ -226,11 +194,9 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
         )
         .wrap_err("Failed to submit transaction")?;
     // #endregion mint_asset_submit_tx_alt
-
     // Finish the test successfully
     Ok(())
 }
-
 fn asset_burning_test(config: Config) -> Result<(), Error> {
     // #region burn_asset_crates
     use iroha::{
@@ -238,10 +204,8 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
         data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Burn},
     };
     // #endregion burn_asset_crates
-
     // Create an Iroha client
     let client = Client::new(config);
-
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
     let roses = AssetDefinitionId::derive_from_components(
@@ -254,12 +218,10 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
             .expect("Valid, because this is a valid public key literal"),
     );
     // #endregion burn_asset_define_asset_account
-
     // #region burn_asset_burn
     // Burn the Asset instance
     let burn_roses = Burn::asset_quantity(10u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion burn_asset_burn
-
     // #region burn_asset_submit_tx
     client
         .submit(
@@ -268,7 +230,6 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
         )
         .wrap_err("Failed to submit transaction")?;
     // #endregion burn_asset_submit_tx
-
     // #region burn_asset_burn_alt
     // Burn the Asset instance (alternate syntax).
     // AssetId textual representation uses the canonical internal balance-bucket
@@ -278,7 +239,6 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     let alice_roses: AssetId = alice_roses_literal.parse()?;
     let burn_roses_alt = Burn::asset_quantity(10u32, alice_roses);
     // #endregion burn_asset_burn_alt
-
     // #region burn_asset_submit_tx_alt
     client
         .submit(
@@ -287,19 +247,15 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
         )
         .wrap_err("Failed to submit transaction")?;
     // #endregion burn_asset_submit_tx_alt
-
     // Finish the test successfully
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use iroha::crypto::{Algorithm, KeyPair};
-
     #[test]
     fn tutorial_key_generation_uses_checked_default_keypair() {
         let key_pair = KeyPair::try_random().expect("checked tutorial key generation");
-
         assert_eq!(
             key_pair
                 .public_key()

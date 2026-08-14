@@ -1,19 +1,15 @@
 //! Shared helpers for committed transaction predicates.
-
 #![allow(clippy::missing_errors_doc)]
-
+use crate::{
+    name::Name,
+    query::{CommittedTransaction, CommittedTxFilters},
+};
 use iroha_crypto::HashOf;
 use iroha_primitives::json::Json;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
-
-use crate::{
-    name::Name,
-    query::{CommittedTransaction, CommittedTxFilters},
-};
-
 /// Predicate tree over committed transactions.
 ///
 /// With the `json` feature, the canonical representation is an app expression
@@ -142,12 +138,10 @@ pub enum CommittedTxPredicate {
     /// Constant predicate returning the provided boolean value.
     Const(bool),
 }
-
 const MAX_COMMITTED_TX_PREDICATE_DEPTH: usize = 64;
 const MAX_COMMITTED_TX_PREDICATE_NODES: usize = 1_024;
 const MAX_COMMITTED_TX_MEMBERSHIP_VALUES: usize = 1_024;
 const MAX_COMMITTED_TX_TOTAL_MEMBERSHIP_VALUES: usize = 4_096;
-
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 enum CommittedTxPredicateValidationError {
     #[error("operator `{0}` requires at least one child")]
@@ -156,8 +150,6 @@ enum CommittedTxPredicateValidationError {
     EmptyMembership(&'static str),
     #[error("membership values for field `{0}` contain a duplicate literal")]
     DuplicateMembership(&'static str),
-    #[error("metadata predicate contains invalid JSON")]
-    InvalidMetadataJson,
     #[error("membership values for field `{field}` exceed the limit of {max}")]
     TooManyMembershipValues { field: &'static str, max: usize },
     #[error("committed transaction predicate membership literals exceed the limit of {0}")]
@@ -167,13 +159,11 @@ enum CommittedTxPredicateValidationError {
     #[error("committed transaction predicate nodes exceed the limit of {0}")]
     TooManyNodes(usize),
 }
-
 #[derive(Default)]
 struct PredicateValidationBudget {
     nodes: usize,
     membership_values: usize,
 }
-
 impl PredicateValidationBudget {
     fn enter_node(&mut self, depth: usize) -> Result<(), CommittedTxPredicateValidationError> {
         if depth > MAX_COMMITTED_TX_PREDICATE_DEPTH {
@@ -189,8 +179,7 @@ impl PredicateValidationBudget {
         }
         Ok(())
     }
-
-    fn validate_membership<T: Ord>(
+    fn validate_membership<T: PartialEq>(
         &mut self,
         field: &'static str,
         values: &[T],
@@ -206,9 +195,10 @@ impl PredicateValidationBudget {
                 },
             );
         }
-        let mut seen = std::collections::BTreeSet::new();
-        for value in values {
-            if !seen.insert(value) {
+        // Membership sets are protocol-bounded. Check uniqueness in place so validating a
+        // borrowed signed-query predicate cannot allocate a second attacker-sized container.
+        for (index, value) in values.iter().enumerate() {
+            if values[..index].contains(value) {
                 return Err(CommittedTxPredicateValidationError::DuplicateMembership(
                     field,
                 ));
@@ -225,14 +215,12 @@ impl PredicateValidationBudget {
         Ok(())
     }
 }
-
 fn validate_committed_tx_predicate_inner(
     predicate: &CommittedTxPredicate,
     depth: usize,
     budget: &mut PredicateValidationBudget,
 ) -> Result<(), CommittedTxPredicateValidationError> {
     use CommittedTxPredicate as P;
-
     budget.enter_node(depth)?;
     match predicate {
         P::And(children) => {
@@ -268,39 +256,21 @@ fn validate_committed_tx_predicate_inner(
             budget.validate_membership("result_ok", values)?;
         }
         P::MetadataIn { values, .. } | P::MetadataNin { values, .. } => {
+            // `Json` has a private representation and establishes canonical,
+            // size-bounded text at every public construction/decode boundary.
+            // Re-parsing it here would allocate an attacker-sized duplicate
+            // while validating an already-invariant-backed borrowed value.
             budget.validate_membership("metadata", values)?;
-            for value in values {
-                let parsed = value
-                    .try_into_any_norito::<norito::json::Value>()
-                    .map_err(|_| CommittedTxPredicateValidationError::InvalidMetadataJson)?;
-                let canonical = Json::from_norito_value_ref(&parsed)
-                    .map_err(|_| CommittedTxPredicateValidationError::InvalidMetadataJson)?;
-                if &canonical != value {
-                    return Err(CommittedTxPredicateValidationError::InvalidMetadataJson);
-                }
-            }
-        }
-        P::MetadataEq { value, .. } | P::MetadataNe { value, .. } => {
-            let parsed = value
-                .try_into_any_norito::<norito::json::Value>()
-                .map_err(|_| CommittedTxPredicateValidationError::InvalidMetadataJson)?;
-            let canonical = Json::from_norito_value_ref(&parsed)
-                .map_err(|_| CommittedTxPredicateValidationError::InvalidMetadataJson)?;
-            if &canonical != value {
-                return Err(CommittedTxPredicateValidationError::InvalidMetadataJson);
-            }
         }
         _ => {}
     }
     Ok(())
 }
-
 fn validate_committed_tx_predicate(
     predicate: &CommittedTxPredicate,
 ) -> Result<(), CommittedTxPredicateValidationError> {
     validate_committed_tx_predicate_inner(predicate, 1, &mut PredicateValidationBudget::default())
 }
-
 /// Validation error for the committed-transaction app-expression JSON codec.
 #[cfg(feature = "json")]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -398,14 +368,12 @@ pub(super) enum CommittedTxPredicateJsonError {
     #[error("invalid committed transaction predicate tree: {0}")]
     InvalidTree(String),
 }
-
 #[cfg(feature = "json")]
 #[derive(Default)]
 struct PredicateJsonBudget {
     nodes: usize,
     membership_values: usize,
 }
-
 #[cfg(feature = "json")]
 impl PredicateJsonBudget {
     fn enter_node(&mut self, depth: usize) -> Result<(), CommittedTxPredicateJsonError> {
@@ -422,7 +390,6 @@ impl PredicateJsonBudget {
         }
         Ok(())
     }
-
     fn add_membership_values(
         &mut self,
         field: &str,
@@ -448,7 +415,6 @@ impl PredicateJsonBudget {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 enum CommittedTxField {
     BlockHash,
@@ -458,7 +424,6 @@ enum CommittedTxField {
     ResultOk,
     Metadata(Name),
 }
-
 #[cfg(feature = "json")]
 fn parse_committed_tx_field(
     value: &Value,
@@ -489,7 +454,6 @@ fn parse_committed_tx_field(
         }
     }
 }
-
 #[cfg(feature = "json")]
 fn predicate_expr(op: &str, args: Vec<Value>) -> Value {
     let mut object = Map::new();
@@ -497,12 +461,10 @@ fn predicate_expr(op: &str, args: Vec<Value>) -> Value {
     object.insert("op".to_owned(), Value::String(op.to_owned()));
     Value::Object(object)
 }
-
 #[cfg(feature = "json")]
 fn binary_predicate_expr(op: &str, field: impl Into<String>, value: Value) -> Value {
     predicate_expr(op, vec![Value::String(field.into()), value])
 }
-
 #[cfg(feature = "json")]
 fn exact_args<'a>(
     op: &str,
@@ -526,7 +488,6 @@ fn exact_args<'a>(
     }
     Ok(args)
 }
-
 #[cfg(feature = "json")]
 fn invalid_value(op: &str, field: &str, expected: &'static str) -> CommittedTxPredicateJsonError {
     CommittedTxPredicateJsonError::InvalidValue {
@@ -535,7 +496,6 @@ fn invalid_value(op: &str, field: &str, expected: &'static str) -> CommittedTxPr
         expected,
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_account_literal(
     op: &str,
@@ -556,7 +516,6 @@ fn parse_account_literal(
     }
     Ok(account)
 }
-
 #[cfg(feature = "json")]
 fn parse_entrypoint_hash_literal(
     op: &str,
@@ -579,7 +538,6 @@ fn parse_entrypoint_hash_literal(
     }
     Ok(hash)
 }
-
 #[cfg(feature = "json")]
 fn parse_block_hash_literal(
     op: &str,
@@ -600,13 +558,11 @@ fn parse_block_hash_literal(
     }
     Ok(hash)
 }
-
 #[cfg(feature = "json")]
 fn parse_metadata_literal(value: &Value) -> Result<Json, CommittedTxPredicateJsonError> {
     Json::from_norito_value_ref(value)
         .map_err(|_| CommittedTxPredicateJsonError::InvalidMetadataJson)
 }
-
 #[cfg(feature = "json")]
 fn parse_equality_atom(
     op: &str,
@@ -615,7 +571,6 @@ fn parse_equality_atom(
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     use CommittedTxPredicate as P;
-
     Ok(match field {
         CommittedTxField::BlockHash => {
             let value = parse_block_hash_literal(op, field_path, value)?;
@@ -674,7 +629,6 @@ fn parse_equality_atom(
         }
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_ordering_atom(
     op: &str,
@@ -683,7 +637,6 @@ fn parse_ordering_atom(
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     use CommittedTxPredicate as P;
-
     if !matches!(field, CommittedTxField::Timestamp) {
         return Err(CommittedTxPredicateJsonError::OperatorFieldMismatch {
             op: op.to_owned(),
@@ -701,7 +654,6 @@ fn parse_ordering_atom(
         _ => unreachable!("caller restricts ordering operators"),
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_membership_atom(
     op: &str,
@@ -711,7 +663,6 @@ fn parse_membership_atom(
     budget: &mut PredicateJsonBudget,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     use CommittedTxPredicate as P;
-
     let values = value
         .as_array()
         .ok_or_else(|| invalid_value(op, field_path, "a non-empty array"))?;
@@ -799,7 +750,6 @@ fn parse_membership_atom(
         }
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_presence_atom(
     op: &str,
@@ -808,7 +758,6 @@ fn parse_presence_atom(
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     use CommittedTxPredicate as P;
-
     let flag = value
         .as_bool()
         .ok_or_else(|| invalid_value(op, field_path, "a boolean"))?;
@@ -828,7 +777,6 @@ fn parse_presence_atom(
         }),
     }
 }
-
 #[cfg(feature = "json")]
 #[allow(clippy::too_many_lines)]
 fn parse_committed_tx_predicate_inner(
@@ -837,7 +785,6 @@ fn parse_committed_tx_predicate_inner(
     budget: &mut PredicateJsonBudget,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
     use CommittedTxPredicate as P;
-
     budget.enter_node(depth)?;
     let object = value
         .as_object()
@@ -855,7 +802,6 @@ fn parse_committed_tx_predicate_inner(
     let args = object
         .get("args")
         .ok_or(CommittedTxPredicateJsonError::MissingField("args"))?;
-
     match op {
         "and" | "or" => {
             let Some(children) = args.as_array() else {
@@ -927,7 +873,6 @@ fn parse_committed_tx_predicate_inner(
         )),
     }
 }
-
 /// Parse a validated committed-transaction app-expression JSON value.
 #[cfg(feature = "json")]
 pub(super) fn committed_tx_predicate_from_value(
@@ -949,9 +894,6 @@ pub(super) fn committed_tx_predicate_from_value(
         CommittedTxPredicateValidationError::DuplicateMembership(field) => {
             CommittedTxPredicateJsonError::DuplicateMembership(field.to_owned())
         }
-        CommittedTxPredicateValidationError::InvalidMetadataJson => {
-            CommittedTxPredicateJsonError::InvalidMetadataJson
-        }
         CommittedTxPredicateValidationError::TooManyMembershipValues { field, max } => {
             CommittedTxPredicateJsonError::TooManyMembershipValues {
                 field: field.to_owned(),
@@ -970,24 +912,20 @@ pub(super) fn committed_tx_predicate_from_value(
     })?;
     Ok(predicate)
 }
-
 #[cfg(feature = "json")]
 fn metadata_field_path(key: &Name) -> String {
     format!("metadata.{key}")
 }
-
 #[cfg(feature = "json")]
 fn metadata_json_value(value: &Json) -> Value {
     value
         .try_into_any_norito::<Value>()
         .expect("Json values maintain their documented validity invariant")
 }
-
 #[cfg(feature = "json")]
 #[allow(clippy::too_many_lines)]
 fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -> Value {
     use CommittedTxPredicate as P;
-
     match predicate {
         P::And(children) => predicate_expr(
             "and",
@@ -1146,7 +1084,6 @@ fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -
         P::Const(value) => predicate_expr("const", vec![Value::Bool(*value)]),
     }
 }
-
 /// Convert a validated committed-transaction predicate to its canonical app-expression value.
 #[cfg(feature = "json")]
 pub(super) fn committed_tx_predicate_to_value(
@@ -1156,7 +1093,6 @@ pub(super) fn committed_tx_predicate_to_value(
         .map_err(|error| CommittedTxPredicateJsonError::InvalidTree(error.to_string()))?;
     Ok(committed_tx_predicate_to_value_unchecked(predicate))
 }
-
 /// Parse raw JSON and require the exact canonical app-expression encoding.
 #[cfg(feature = "json")]
 pub(super) fn committed_tx_predicate_from_canonical_json(
@@ -1172,7 +1108,6 @@ pub(super) fn committed_tx_predicate_from_canonical_json(
     }
     Ok(predicate)
 }
-
 /// Convert the generic builder schema into the typed committed-transaction tree.
 #[cfg(feature = "json")]
 pub(super) fn committed_tx_predicate_from_predicate_json(
@@ -1212,7 +1147,6 @@ pub(super) fn committed_tx_predicate_from_predicate_json(
             ));
         }
     }
-
     let mut children = Vec::with_capacity(child_count);
     children.extend(
         predicate.equals.iter().map(|condition| {
@@ -1232,26 +1166,256 @@ pub(super) fn committed_tx_predicate_from_predicate_json(
             .iter()
             .map(|field| binary_predicate_expr("exists", field, Value::Bool(true))),
     );
-
     match children.len() {
         0 => Ok(CommittedTxPredicate::Const(true)),
         1 => committed_tx_predicate_from_value(&children[0]),
         _ => committed_tx_predicate_from_value(&predicate_expr("and", children)),
     }
 }
-
 #[cfg(feature = "json")]
-impl JsonSerialize for CommittedTxPredicate {
-    fn json_serialize(&self, out: &mut String) {
-        match committed_tx_predicate_to_value(self) {
-            Ok(value) => value.json_serialize(out),
-            Err(_) => {
-                committed_tx_predicate_to_value_unchecked(&Self::Const(false)).json_serialize(out)
+fn write_predicate_expression_to(
+    operation: &str,
+    out: &mut dyn json::JsonWriteSink,
+    write_arguments: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    out.push_str("{\"args\":")?;
+    out.begin_container()?;
+    out.push('[')?;
+    write_arguments(out)?;
+    out.push(']')?;
+    out.end_container();
+    out.push_str(",\"op\":")?;
+    json::write_json_string_to(operation, out)?;
+    out.push('}')?;
+    out.end_container();
+    Ok(())
+}
+#[cfg(feature = "json")]
+fn write_binary_predicate_to(
+    operation: &str,
+    out: &mut dyn json::JsonWriteSink,
+    write_field: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
+    write_value: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
+) -> Result<(), json::BoundedJsonError> {
+    write_predicate_expression_to(operation, out, |out| {
+        write_field(out)?;
+        out.push(',')?;
+        write_value(out)
+    })
+}
+#[cfg(feature = "json")]
+fn write_named_predicate_to<T: JsonSerialize>(
+    operation: &str,
+    field: &str,
+    value: &T,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    write_binary_predicate_to(
+        operation,
+        out,
+        |out| json::write_json_string_to(field, out),
+        |out| value.json_serialize_to(out),
+    )
+}
+#[cfg(feature = "json")]
+fn write_json_slice_to<T: JsonSerialize>(
+    values: &[T],
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    out.push('[')?;
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(',')?;
+        }
+        value.json_serialize_to(out)?;
+    }
+    out.push(']')?;
+    out.end_container();
+    Ok(())
+}
+#[cfg(feature = "json")]
+fn write_metadata_field_to(
+    key: &Name,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    const PREFIX: &[u8] = b"metadata.";
+    const MAX_NAME_BYTES: usize = 255;
+    let name = key.as_ref().as_bytes();
+    if name.len() > MAX_NAME_BYTES {
+        return Err(json::BoundedJsonError::LengthMismatch);
+    }
+    let mut field = [0_u8; PREFIX.len() + MAX_NAME_BYTES];
+    field[..PREFIX.len()].copy_from_slice(PREFIX);
+    field[PREFIX.len()..PREFIX.len() + name.len()].copy_from_slice(name);
+    let field = core::str::from_utf8(&field[..PREFIX.len() + name.len()])
+        .map_err(|_| json::BoundedJsonError::LengthMismatch)?;
+    json::write_json_string_to(field, out)
+}
+#[cfg(feature = "json")]
+#[allow(clippy::too_many_lines)]
+fn write_committed_tx_predicate_to(
+    predicate: &CommittedTxPredicate,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    use CommittedTxPredicate as P;
+    match predicate {
+        P::And(children) => write_predicate_expression_to("and", out, |out| {
+            for (index, child) in children.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                write_committed_tx_predicate_to(child, out)?;
             }
+            Ok(())
+        }),
+        P::Or(children) => write_predicate_expression_to("or", out, |out| {
+            for (index, child) in children.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                write_committed_tx_predicate_to(child, out)?;
+            }
+            Ok(())
+        }),
+        P::Not(inner) => write_predicate_expression_to("not", out, |out| {
+            write_committed_tx_predicate_to(inner, out)
+        }),
+        P::BlockEq(value) => write_named_predicate_to("eq", "block_hash", value, out),
+        P::BlockNe(value) => write_named_predicate_to("ne", "block_hash", value, out),
+        P::BlockIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("block_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::BlockNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("block_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::BlockExists(value) => write_named_predicate_to("exists", "block_hash", value, out),
+        P::AuthorityEq(value) => write_named_predicate_to("eq", "authority", value, out),
+        P::AuthorityNe(value) => write_named_predicate_to("ne", "authority", value, out),
+        P::AuthorityIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("authority", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::AuthorityNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("authority", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::AuthorityExists(value) => write_named_predicate_to("exists", "authority", value, out),
+        P::TsEq(value) => write_named_predicate_to("eq", "timestamp_ms", value, out),
+        P::TsLt(value) => write_named_predicate_to("lt", "timestamp_ms", value, out),
+        P::TsLte(value) => write_named_predicate_to("lte", "timestamp_ms", value, out),
+        P::TsGt(value) => write_named_predicate_to("gt", "timestamp_ms", value, out),
+        P::TsGte(value) => write_named_predicate_to("gte", "timestamp_ms", value, out),
+        P::TsIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("timestamp_ms", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::TsNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("timestamp_ms", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::TsExists(value) => write_named_predicate_to("exists", "timestamp_ms", value, out),
+        P::EntryEq(value) => write_named_predicate_to("eq", "entrypoint_hash", value, out),
+        P::EntryNe(value) => write_named_predicate_to("ne", "entrypoint_hash", value, out),
+        P::EntryIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("entrypoint_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::EntryNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("entrypoint_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::EntryExists(value) => write_named_predicate_to("exists", "entrypoint_hash", value, out),
+        P::ResultEq(value) => write_named_predicate_to("eq", "result_ok", value, out),
+        P::ResultNe(value) => write_named_predicate_to("ne", "result_ok", value, out),
+        P::ResultIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("result_ok", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::ResultNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("result_ok", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::ResultExists(value) => write_named_predicate_to("exists", "result_ok", value, out),
+        P::MetadataEq { key, value } => write_binary_predicate_to(
+            "eq",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| value.json_serialize_to(out),
+        ),
+        P::MetadataNe { key, value } => write_binary_predicate_to(
+            "ne",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| value.json_serialize_to(out),
+        ),
+        P::MetadataIn { key, values } => write_binary_predicate_to(
+            "in",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::MetadataNin { key, values } => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::MetadataExists { key, exists } => write_binary_predicate_to(
+            "exists",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| exists.json_serialize_to(out),
+        ),
+        P::MetadataIsNull { key, is_null } => write_binary_predicate_to(
+            "is_null",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| is_null.json_serialize_to(out),
+        ),
+        P::Const(value) => {
+            write_predicate_expression_to("const", out, |out| value.json_serialize_to(out))
         }
     }
 }
-
+#[cfg(feature = "json")]
+impl JsonSerialize for CommittedTxPredicate {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_with_unbounded_sink(out, |sink| self.json_serialize_to(sink));
+    }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        if validate_committed_tx_predicate(self).is_err() {
+            return write_committed_tx_predicate_to(&Self::Const(false), out);
+        }
+        write_committed_tx_predicate_to(self, out)
+    }
+}
 #[cfg(feature = "json")]
 impl JsonDeserialize for CommittedTxPredicate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1260,13 +1424,11 @@ impl JsonDeserialize for CommittedTxPredicate {
             .map_err(|error| json::Error::Message(error.to_string()))
     }
 }
-
 /// Convert the legacy flat filter representation into the lossless predicate tree.
 pub(super) fn committed_tx_predicate_from_filters(
     filters: impl std::borrow::Borrow<CommittedTxFilters>,
 ) -> CommittedTxPredicate {
     use CommittedTxPredicate as P;
-
     let filters = filters.borrow();
     let mut parts = Vec::new();
     if let Some(value) = filters.block_eq.as_ref() {
@@ -1335,14 +1497,12 @@ pub(super) fn committed_tx_predicate_from_filters(
     if let Some(value) = filters.result_exists {
         parts.push(P::ResultExists(value));
     }
-
     match parts.len() {
         0 => P::Const(true),
         1 => parts.into_iter().next().expect("non-empty parts"),
         _ => P::And(parts),
     }
 }
-
 /// Recover the legacy flat filter view when a typed tree can be represented
 /// without dropping or weakening any condition.
 ///
@@ -1352,7 +1512,6 @@ pub(super) fn committed_tx_filters_from_predicate(
     predicate: &CommittedTxPredicate,
 ) -> Option<CommittedTxFilters> {
     use CommittedTxPredicate as P;
-
     fn set_same_or_empty<T: Clone + PartialEq>(slot: &mut Option<T>, value: &T) -> Option<()> {
         match slot {
             Some(current) if current != value => None,
@@ -1363,7 +1522,6 @@ pub(super) fn committed_tx_filters_from_predicate(
             }
         }
     }
-
     fn set_vec_same_or_empty<T: Clone + PartialEq>(slot: &mut Vec<T>, value: &[T]) -> Option<()> {
         if slot.is_empty() {
             slot.extend_from_slice(value);
@@ -1374,7 +1532,6 @@ pub(super) fn committed_tx_filters_from_predicate(
             None
         }
     }
-
     fn add(predicate: &P, filters: &mut CommittedTxFilters) -> Option<()> {
         match predicate {
             P::And(children) => {
@@ -1441,38 +1598,31 @@ pub(super) fn committed_tx_filters_from_predicate(
             | P::Const(false) => None,
         }
     }
-
     validate_committed_tx_predicate(predicate).ok()?;
     let mut filters = CommittedTxFilters::default();
     add(predicate, &mut filters)?;
     Some(filters)
 }
-
 impl CommittedTxPredicate {
     fn authority_of(tx: &CommittedTransaction) -> Option<crate::account::AccountId> {
         tx.entrypoint.authority_opt().cloned()
     }
-
     fn timestamp_ms_of(tx: &CommittedTransaction) -> Option<u64> {
         tx.entrypoint.creation_time_ms()
     }
-
     fn metadata_value<'tx>(tx: &'tx CommittedTransaction, key: &Name) -> Option<&'tx Json> {
         tx.entrypoint
             .metadata()
             .and_then(|metadata| metadata.get(key))
     }
-
     fn metadata_json_value(json: &Json) -> Option<norito::json::Value> {
         json.try_into_any_norito::<norito::json::Value>().ok()
     }
-
     /// Evaluate the predicate against the provided committed transaction.
     #[must_use]
     pub fn applies(&self, tx: &CommittedTransaction) -> bool {
         validate_committed_tx_predicate(self).is_ok() && self.applies_unchecked(tx)
     }
-
     fn applies_unchecked(&self, tx: &CommittedTransaction) -> bool {
         use CommittedTxPredicate as P;
         match self {
@@ -1480,14 +1630,12 @@ impl CommittedTxPredicate {
             P::And(list) => list.iter().all(|p| p.applies_unchecked(tx)),
             P::Or(list) => list.iter().any(|p| p.applies_unchecked(tx)),
             P::Not(inner) => !inner.applies_unchecked(tx),
-
             // Carrier block hash (always present)
             P::BlockEq(hash) => &tx.block_hash == hash,
             P::BlockNe(hash) => &tx.block_hash != hash,
             P::BlockIn(list) => list.iter().any(|hash| hash == &tx.block_hash),
             P::BlockNin(list) => !list.iter().any(|hash| hash == &tx.block_hash),
             P::BlockExists(required) => *required,
-
             // Authority
             P::AuthorityExists(req) => (Self::authority_of(tx).is_some()) == *req,
             P::AuthorityEq(a) => Self::authority_of(tx).as_ref() == Some(a),
@@ -1498,7 +1646,6 @@ impl CommittedTxPredicate {
             P::AuthorityNin(list) => Self::authority_of(tx)
                 .as_ref()
                 .is_none_or(|a| !list.iter().any(|x| x == a)),
-
             // Timestamp (None for triggers)
             P::TsEq(n) => Self::timestamp_ms_of(tx) == Some(*n),
             P::TsLt(n) => Self::timestamp_ms_of(tx).is_some_and(|m| m < *n),
@@ -1508,7 +1655,6 @@ impl CommittedTxPredicate {
             P::TsIn(list) => Self::timestamp_ms_of(tx).is_some_and(|m| list.contains(&m)),
             P::TsNin(list) => Self::timestamp_ms_of(tx).is_none_or(|m| !list.contains(&m)),
             P::TsExists(req) => (Self::timestamp_ms_of(tx).is_some()) == *req,
-
             // Entrypoint hash (always present)
             P::EntryEq(h) => &tx.entrypoint_hash == h,
             P::EntryNe(h) => &tx.entrypoint_hash != h,
@@ -1555,22 +1701,18 @@ impl CommittedTxPredicate {
         }
     }
 }
-
 mod wire {
-    use std::cell::Cell;
-
-    use iroha_crypto::HashOf;
-    use iroha_primitives::json::Json;
-    use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-    use norito::{NoritoDeserialize, NoritoSerialize, core::Error};
-
     use super::{
         CommittedTxPredicate, MAX_COMMITTED_TX_MEMBERSHIP_VALUES, MAX_COMMITTED_TX_PREDICATE_DEPTH,
         MAX_COMMITTED_TX_PREDICATE_NODES, MAX_COMMITTED_TX_TOTAL_MEMBERSHIP_VALUES,
         validate_committed_tx_predicate,
     };
     use crate::name::Name;
-
+    use iroha_crypto::HashOf;
+    use iroha_primitives::json::Json;
+    use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
+    use norito::{NoritoDeserialize, NoritoSerialize, core::Error};
+    use std::cell::Cell;
     thread_local! {
         /// Remaining aggregate membership literals while decoding one predicate.
         ///
@@ -1579,11 +1721,9 @@ mod wire {
         /// the allocator to materialize its vector.
         static MEMBERSHIP_DECODE_REMAINING: Cell<Option<usize>> = const { Cell::new(None) };
     }
-
     struct MembershipDecodeBudgetGuard {
         previous: Option<usize>,
     }
-
     impl MembershipDecodeBudgetGuard {
         fn enter() -> Self {
             let previous = MEMBERSHIP_DECODE_REMAINING.with(|remaining| {
@@ -1592,13 +1732,11 @@ mod wire {
             Self { previous }
         }
     }
-
     impl Drop for MembershipDecodeBudgetGuard {
         fn drop(&mut self) {
             MEMBERSHIP_DECODE_REMAINING.with(|remaining| remaining.set(self.previous));
         }
     }
-
     fn claim_membership_decode_budget(count: usize) -> Result<(), Error> {
         MEMBERSHIP_DECODE_REMAINING.with(|remaining| {
             let Some(available) = remaining.get() else {
@@ -1615,13 +1753,11 @@ mod wire {
             Ok(())
         })
     }
-
     fn archived_sequence_bytes<T>(
         archived: &norito::core::Archived<Vec<T>>,
     ) -> Result<&'static [u8], Error> {
         norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())
     }
-
     fn ensure_sequence_len_at_most<T>(
         archived: &norito::core::Archived<Vec<T>>,
         max: usize,
@@ -1636,30 +1772,24 @@ mod wire {
         }
         Ok(())
     }
-
     #[derive(Clone)]
     pub(super) struct MembershipValues<T>(Vec<T>);
-
     impl<T> From<Vec<T>> for MembershipValues<T> {
         fn from(values: Vec<T>) -> Self {
             Self(values)
         }
     }
-
     impl<T: NoritoSerialize> NoritoSerialize for MembershipValues<T> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
             self.0.serialize(writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             self.0.encoded_len_hint()
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             self.0.encoded_len_exact()
         }
     }
-
     impl<'de, T> NoritoDeserialize<'de> for MembershipValues<T>
     where
         T: NoritoSerialize + for<'a> NoritoDeserialize<'a>,
@@ -1668,7 +1798,6 @@ mod wire {
             Self::try_deserialize(archived)
                 .expect("CommittedTxPredicate membership values must deserialize")
         }
-
         fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, Error> {
             let archived = archived.cast::<Vec<T>>();
             ensure_sequence_len_at_most(
@@ -1683,7 +1812,6 @@ mod wire {
             Ok(Self(values))
         }
     }
-
     #[derive(Clone, NoritoSerialize, NoritoDeserialize)]
     pub(super) enum Node {
         And { child_count: u32 },
@@ -1725,23 +1853,19 @@ mod wire {
         BlockNin(MembershipValues<HashOf<crate::block::BlockHeader>>),
         BlockExists(bool),
     }
-
     impl TypeId for Node {
         fn id() -> iroha_schema::Ident {
             std::any::type_name::<Self>().to_owned()
         }
     }
-
     impl IntoSchema for Node {
         fn type_name() -> iroha_schema::Ident {
             "CommittedTxPredicateNode".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
         }
     }
-
     pub(super) fn flatten(root: &CommittedTxPredicate) -> Result<Vec<Node>, Error> {
         validate_committed_tx_predicate(root)
             .map_err(|error| Error::Message(format!("invalid CommittedTxPredicate: {error}")))?;
@@ -1749,7 +1873,142 @@ mod wire {
         flatten_inner(root, &mut nodes)?;
         Ok(nodes)
     }
-
+    fn visit_borrowed_nodes(
+        node: &CommittedTxPredicate,
+        visit: &mut impl FnMut(u32, &[&dyn NoritoSerialize]) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        use CommittedTxPredicate as P;
+        match node {
+            P::And(children) => {
+                let child_count = u32::try_from(children.len()).map_err(|_| {
+                    Error::Message("CommittedTxPredicate And arity overflow".into())
+                })?;
+                visit(0, &[&child_count])?;
+                for child in children {
+                    visit_borrowed_nodes(child, visit)?;
+                }
+            }
+            P::Or(children) => {
+                let child_count = u32::try_from(children.len())
+                    .map_err(|_| Error::Message("CommittedTxPredicate Or arity overflow".into()))?;
+                visit(1, &[&child_count])?;
+                for child in children {
+                    visit_borrowed_nodes(child, visit)?;
+                }
+            }
+            P::Not(inner) => {
+                visit(2, &[])?;
+                visit_borrowed_nodes(inner, visit)?;
+            }
+            P::AuthorityEq(value) => visit(3, &[value])?,
+            P::AuthorityNe(value) => visit(4, &[value])?,
+            P::AuthorityIn(values) => visit(5, &[values])?,
+            P::AuthorityNin(values) => visit(6, &[values])?,
+            P::AuthorityExists(value) => visit(7, &[value])?,
+            P::TsEq(value) => visit(8, &[value])?,
+            P::TsLt(value) => visit(9, &[value])?,
+            P::TsLte(value) => visit(10, &[value])?,
+            P::TsGt(value) => visit(11, &[value])?,
+            P::TsGte(value) => visit(12, &[value])?,
+            P::TsIn(values) => visit(13, &[values])?,
+            P::TsNin(values) => visit(14, &[values])?,
+            P::TsExists(value) => visit(15, &[value])?,
+            P::EntryEq(value) => visit(16, &[value])?,
+            P::EntryNe(value) => visit(17, &[value])?,
+            P::EntryIn(values) => visit(18, &[values])?,
+            P::EntryNin(values) => visit(19, &[values])?,
+            P::EntryExists(value) => visit(20, &[value])?,
+            P::ResultEq(value) => visit(21, &[value])?,
+            P::ResultNe(value) => visit(22, &[value])?,
+            P::ResultIn(values) => visit(23, &[values])?,
+            P::ResultNin(values) => visit(24, &[values])?,
+            P::ResultExists(value) => visit(25, &[value])?,
+            P::MetadataEq { key, value } => visit(26, &[key, value])?,
+            P::MetadataNe { key, value } => visit(27, &[key, value])?,
+            P::MetadataIn { key, values } => visit(28, &[key, values])?,
+            P::MetadataNin { key, values } => visit(29, &[key, values])?,
+            P::MetadataExists { key, exists } => visit(30, &[key, exists])?,
+            P::MetadataIsNull { key, is_null } => visit(31, &[key, is_null])?,
+            P::Const(value) => visit(32, &[value])?,
+            P::BlockEq(value) => visit(33, &[value])?,
+            P::BlockNe(value) => visit(34, &[value])?,
+            P::BlockIn(values) => visit(35, &[values])?,
+            P::BlockNin(values) => visit(36, &[values])?,
+            P::BlockExists(value) => visit(37, &[value])?,
+        }
+        Ok(())
+    }
+    fn borrowed_node_encoded_len(fields: &[&dyn NoritoSerialize]) -> Option<usize> {
+        let mut total = 4_usize;
+        for field in fields {
+            let field_len = field.encoded_len_exact()?;
+            total = total
+                .checked_add(norito::core::len_prefix_len(field_len))?
+                .checked_add(field_len)?;
+        }
+        Some(total)
+    }
+    fn serialize_borrowed_node(
+        index: u32,
+        fields: &[&dyn NoritoSerialize],
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> Result<(), Error> {
+        index.serialize(writer)?;
+        let mut field_buffer = norito::core::DeriveSmallBuf::new();
+        for field in fields {
+            if field.encoded_len_exact().is_none() {
+                return Err(Error::LengthMismatch);
+            }
+            norito::core::write_len_prefixed_exact(writer, *field, &mut field_buffer)?;
+        }
+        Ok(())
+    }
+    fn streamed_encoded_len_validated(root: &CommittedTxPredicate) -> Option<usize> {
+        if norito::core::use_packed_seq() || norito::core::use_packed_struct() {
+            return None;
+        }
+        let mut total = 8_usize;
+        visit_borrowed_nodes(root, &mut |_, fields| {
+            let node_len = borrowed_node_encoded_len(fields).ok_or(Error::LengthMismatch)?;
+            total = total
+                .checked_add(norito::core::len_prefix_len(node_len))
+                .and_then(|total| total.checked_add(node_len))
+                .ok_or(Error::LengthMismatch)?;
+            Ok(())
+        })
+        .ok()?;
+        Some(total)
+    }
+    pub(super) fn streamed_encoded_len(root: &CommittedTxPredicate) -> Option<usize> {
+        validate_committed_tx_predicate(root).ok()?;
+        streamed_encoded_len_validated(root)
+    }
+    pub(super) fn serialize_streaming(
+        root: &CommittedTxPredicate,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> Result<(), Error> {
+        validate_committed_tx_predicate(root)
+            .map_err(|error| Error::Message(format!("invalid CommittedTxPredicate: {error}")))?;
+        let total_len = streamed_encoded_len_validated(root).ok_or(Error::LengthMismatch)?;
+        let mut node_count = 0_usize;
+        visit_borrowed_nodes(root, &mut |_, _| {
+            node_count = node_count.checked_add(1).ok_or(Error::LengthMismatch)?;
+            Ok(())
+        })?;
+        let _ = total_len;
+        norito::core::write_seq_len(
+            writer,
+            u64::try_from(node_count).map_err(|_| Error::LengthMismatch)?,
+        )?;
+        visit_borrowed_nodes(root, &mut |index, fields| {
+            let node_len = borrowed_node_encoded_len(fields).ok_or(Error::LengthMismatch)?;
+            norito::core::write_len(
+                writer,
+                u64::try_from(node_len).map_err(|_| Error::LengthMismatch)?,
+            )?;
+            serialize_borrowed_node(index, fields, writer)
+        })
+    }
     pub(super) fn inflate(nodes: &[Node]) -> Result<CommittedTxPredicate, Error> {
         if nodes.is_empty() {
             return Err(Error::LengthMismatch);
@@ -1770,7 +2029,6 @@ mod wire {
             .map_err(|error| Error::Message(format!("invalid CommittedTxPredicate: {error}")))?;
         Ok(tree)
     }
-
     fn flatten_inner(node: &CommittedTxPredicate, out: &mut Vec<Node>) -> Result<(), Error> {
         use CommittedTxPredicate as P;
         match node {
@@ -1841,14 +2099,12 @@ mod wire {
         }
         Ok(())
     }
-
     fn inflate_inner(
         nodes: &[Node],
         cursor: &mut usize,
         depth: usize,
     ) -> Result<CommittedTxPredicate, Error> {
         use CommittedTxPredicate as P;
-
         if depth > MAX_COMMITTED_TX_PREDICATE_DEPTH {
             return Err(Error::Message(format!(
                 "CommittedTxPredicate depth exceeds the limit of {MAX_COMMITTED_TX_PREDICATE_DEPTH}"
@@ -1940,7 +2196,6 @@ mod wire {
             Node::Const(flag) => Ok(P::Const(*flag)),
         }
     }
-
     pub(super) fn decode_nodes(
         archived: &norito::core::Archived<Vec<Node>>,
     ) -> Result<Vec<Node>, Error> {
@@ -1951,23 +2206,25 @@ mod wire {
         Ok(nodes)
     }
 }
-
 impl norito::core::NoritoSerialize for CommittedTxPredicate {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        if !norito::core::use_packed_seq() && !norito::core::use_packed_struct() {
+            return wire::serialize_streaming(self, writer);
+        }
         let nodes = wire::flatten(self)?;
         norito::core::NoritoSerialize::serialize(&nodes, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
-        None
+        wire::streamed_encoded_len(self)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        wire::streamed_encoded_len(self)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for CommittedTxPredicate {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CommittedTxPredicate deserialization must succeed")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -1976,30 +2233,21 @@ impl<'de> norito::core::NoritoDeserialize<'de> for CommittedTxPredicate {
         wire::inflate(&nodes)
     }
 }
-
 impl TypeId for CommittedTxPredicate {
     fn id() -> iroha_schema::Ident {
         std::any::type_name::<Self>().to_owned()
     }
 }
-
 impl IntoSchema for CommittedTxPredicate {
     fn type_name() -> iroha_schema::Ident {
         "CommittedTxPredicate".to_owned()
     }
-
     fn update_schema_map(map: &mut MetaMap) {
         map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::str::FromStr;
-
-    use hex;
-    use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
-
     use super::*;
     use crate::{
         domain::DomainId,
@@ -2009,7 +2257,31 @@ mod tests {
             FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
     };
-
+    use hex;
+    use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
+    use std::str::FromStr;
+    fn bare_bytes(value: &dyn norito::core::NoritoSerialize) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let mut bytes = Vec::new();
+        let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
+        value.serialize(&mut encoder).expect("encode bare value");
+        bytes
+    }
+    #[test]
+    fn borrowed_node_stream_matches_owned_flattened_wire() {
+        let predicate = CommittedTxPredicate::And(vec![
+            CommittedTxPredicate::ResultEq(true),
+            CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::TsGte(42))),
+            CommittedTxPredicate::TsIn(vec![1, 7, 42]),
+        ]);
+        let owned = wire::flatten(&predicate).expect("valid owned node stream");
+        let streamed = bare_bytes(&predicate);
+        assert_eq!(streamed, bare_bytes(&owned));
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&predicate),
+            Some(streamed.len())
+        );
+    }
     fn sample_account(seed: u8) -> crate::account::AccountId {
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
@@ -2019,18 +2291,112 @@ mod tests {
                 .into_parts();
         crate::account::AccountId::new(public_key)
     }
-
     fn sample_hash_literal(seed: u8) -> String {
         let mut bytes = [seed; Hash::LENGTH];
         bytes[Hash::LENGTH - 1] |= 1;
         hex::encode(bytes)
     }
-
     fn zero_hash<T>() -> HashOf<T> {
         let zero = [0u8; 32];
         HashOf::from_untyped_unchecked(Hash::prehashed(zero))
     }
-
+    fn fixture_hash<T>(seed: u8) -> HashOf<T> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
+    }
+    #[test]
+    fn borrowed_node_stream_matches_every_owned_node_variant() {
+        use CommittedTxPredicate as P;
+        let authority_a = sample_account(0x31);
+        let authority_b = sample_account(0x32);
+        let block_a = fixture_hash::<crate::block::BlockHeader>(0x41);
+        let block_b = fixture_hash::<crate::block::BlockHeader>(0x42);
+        let entry_a = fixture_hash::<crate::transaction::signed::TransactionEntrypoint>(0x51);
+        let entry_b = fixture_hash::<crate::transaction::signed::TransactionEntrypoint>(0x52);
+        let key = Name::from_str("wire_parity").expect("metadata key");
+        let json_a = iroha_primitives::json::Json::new("alpha");
+        let json_b = iroha_primitives::json::Json::new("beta");
+        // The preorder contains every `wire::Node` discriminant (0 through
+        // 37), every field shape, and nested sibling ordering.
+        let predicate = P::And(vec![
+            P::Or(vec![P::Const(true), P::Const(false)]),
+            P::Not(Box::new(P::Const(true))),
+            P::AuthorityEq(authority_a.clone()),
+            P::AuthorityNe(authority_b.clone()),
+            P::AuthorityIn(vec![authority_a.clone(), authority_b.clone()]),
+            P::AuthorityNin(vec![authority_b.clone(), authority_a.clone()]),
+            P::AuthorityExists(true),
+            P::TsEq(1),
+            P::TsLt(2),
+            P::TsLte(3),
+            P::TsGt(4),
+            P::TsGte(5),
+            P::TsIn(vec![6, 7]),
+            P::TsNin(vec![8, 9]),
+            P::TsExists(false),
+            P::EntryEq(entry_a),
+            P::EntryNe(entry_b),
+            P::EntryIn(vec![entry_a, entry_b]),
+            P::EntryNin(vec![entry_b, entry_a]),
+            P::EntryExists(true),
+            P::ResultEq(true),
+            P::ResultNe(false),
+            P::ResultIn(vec![false, true]),
+            P::ResultNin(vec![true, false]),
+            P::ResultExists(true),
+            P::MetadataEq {
+                key: key.clone(),
+                value: json_a.clone(),
+            },
+            P::MetadataNe {
+                key: key.clone(),
+                value: json_b.clone(),
+            },
+            P::MetadataIn {
+                key: key.clone(),
+                values: vec![json_a.clone(), json_b.clone()],
+            },
+            P::MetadataNin {
+                key: key.clone(),
+                values: vec![json_b.clone(), json_a.clone()],
+            },
+            P::MetadataExists {
+                key: key.clone(),
+                exists: true,
+            },
+            P::MetadataIsNull {
+                key,
+                is_null: false,
+            },
+            P::Const(false),
+            P::BlockEq(block_a),
+            P::BlockNe(block_b),
+            P::BlockIn(vec![block_a, block_b]),
+            P::BlockNin(vec![block_b, block_a]),
+            P::BlockExists(true),
+        ]);
+        let owned = wire::flatten(&predicate).expect("valid exhaustive owned node stream");
+        let streamed = bare_bytes(&predicate);
+        assert_eq!(streamed, bare_bytes(&owned));
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&predicate),
+            Some(streamed.len())
+        );
+    }
+    #[test]
+    fn exact_length_rejects_over_depth_tree_before_streaming_walk() {
+        let mut predicate = CommittedTxPredicate::Const(true);
+        for _ in 0..=MAX_COMMITTED_TX_PREDICATE_DEPTH {
+            predicate = CommittedTxPredicate::Not(Box::new(predicate));
+        }
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&predicate),
+            None
+        );
+        let mut bytes = Vec::new();
+        let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
+        assert!(norito::core::NoritoSerialize::serialize(&predicate, &mut encoder).is_err());
+        assert!(bytes.is_empty(), "validation must happen before output");
+    }
     fn test_network_id() -> crate::NetworkId {
         crate::NetworkId::from_genesis_hash(
             HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -2038,13 +2404,11 @@ mod tests {
             )),
         )
     }
-
     fn frame_predicate_nodes(nodes: &[wire::Node]) -> Vec<u8> {
         let (payload, flags) = norito::codec::encode_with_header_flags(&nodes.to_vec());
         norito::core::frame_bare_with_header_flags::<CommittedTxPredicate>(&payload, flags)
             .expect("frame raw predicate node payload")
     }
-
     fn sample_committed_tx() -> CommittedTransaction {
         let mut metadata = Metadata::default();
         metadata.insert(Name::from_str("topic").expect("metadata key"), "example");
@@ -2075,11 +2439,9 @@ mod tests {
             merge_inclusion: None,
         }
     }
-
     #[test]
     fn predicate_matches_external_authority_and_metadata() {
         let tx = sample_committed_tx();
-
         assert!(CommittedTxPredicate::AuthorityExists(true).applies(&tx));
         assert!(CommittedTxPredicate::TsEq(77).applies(&tx));
         assert!(
@@ -2091,7 +2453,6 @@ mod tests {
         );
         assert!(!CommittedTxPredicate::AuthorityExists(false).applies(&tx));
     }
-
     #[test]
     fn predicate_applies_extended_atoms_and_boolean_forms() {
         let tx = sample_committed_tx();
@@ -2101,20 +2462,16 @@ mod tests {
         let other_block =
             HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(b"other block"));
         let other_entry = zero_hash::<crate::transaction::signed::TransactionEntrypoint>();
-
         assert!(CommittedTxPredicate::BlockNe(other_block).applies(&tx));
         assert!(CommittedTxPredicate::BlockNin(vec![other_block]).applies(&tx));
         assert!(!CommittedTxPredicate::BlockNin(vec![tx.block_hash]).applies(&tx));
-
         assert!(CommittedTxPredicate::TsGt(50).applies(&tx));
         assert!(!CommittedTxPredicate::TsGt(77).applies(&tx));
         assert!(CommittedTxPredicate::TsNin(vec![1, 2, 3]).applies(&tx));
         assert!(!CommittedTxPredicate::TsNin(vec![77]).applies(&tx));
-
         assert!(CommittedTxPredicate::EntryNe(other_entry).applies(&tx));
         assert!(CommittedTxPredicate::EntryNin(vec![other_entry]).applies(&tx));
         assert!(!CommittedTxPredicate::EntryNin(vec![tx.entrypoint_hash]).applies(&tx));
-
         assert!(
             CommittedTxPredicate::MetadataIn {
                 key: topic.clone(),
@@ -2150,14 +2507,12 @@ mod tests {
             }
             .applies(&tx)
         );
-
         assert!(
             CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::ResultEq(false))).applies(&tx)
         );
         assert!(CommittedTxPredicate::Const(true).applies(&tx));
         assert!(!CommittedTxPredicate::Const(false).applies(&tx));
     }
-
     #[test]
     fn predicate_norito_roundtrip_preserves_complex_boolean_tree() {
         let topic = Name::from_str("topic").expect("metadata key");
@@ -2174,11 +2529,9 @@ mod tests {
             },
             CommittedTxPredicate::Const(false),
         ]);
-
         let bytes = norito::to_bytes(&predicate).expect("encode predicate");
         let decoded: CommittedTxPredicate =
             norito::decode_from_bytes(&bytes).expect("decode predicate");
-
         match decoded {
             CommittedTxPredicate::Or(children) => {
                 assert_eq!(children.len(), 6);
@@ -2214,7 +2567,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn predicate_json_roundtrip_covers_every_atom_and_boolean_node() {
@@ -2235,7 +2587,6 @@ mod tests {
         let key = Name::from_str("topic").expect("metadata key");
         let scalar = Json::new("private");
         let structured = Json::new(norito::json!({"nested": [1, true, null]}));
-
         let predicates = vec![
             CommittedTxPredicate::And(vec![
                 CommittedTxPredicate::ResultEq(true),
@@ -2298,9 +2649,23 @@ mod tests {
             CommittedTxPredicate::Const(true),
             CommittedTxPredicate::Const(false),
         ];
-
         for predicate in predicates {
+            let legacy = norito::json::to_json(
+                &committed_tx_predicate_to_value(&predicate)
+                    .expect("valid predicate has legacy semantic JSON"),
+            )
+            .expect("encode legacy predicate value JSON");
             let raw = norito::json::to_json(&predicate).expect("encode predicate JSON");
+            assert_eq!(raw, legacy, "direct writer changed canonical JSON bytes");
+            assert_eq!(
+                norito::json::to_json_bounded(&predicate, raw.len())
+                    .expect("encode predicate at exact JSON bound"),
+                raw
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(&predicate, raw.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
             let decoded: CommittedTxPredicate =
                 norito::json::from_json(&raw).expect("decode predicate JSON");
             assert_eq!(decoded, predicate, "roundtrip failed for {raw}");
@@ -2310,7 +2675,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn predicate_json_rejects_closed_schema_arity_and_type_confusion() {
         let invalid = [
@@ -2340,7 +2704,6 @@ mod tests {
             norito::json!({"op": "eq", "args": ["result_ok", true], "extra": false}),
             norito::json!({"equals": [{"field": "result_ok", "value": true}]}),
         ];
-
         for value in invalid {
             assert!(
                 committed_tx_predicate_from_value(&value).is_err(),
@@ -2348,7 +2711,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn predicate_json_rejects_empty_duplicate_and_oversized_membership() {
         for op in ["in", "nin"] {
@@ -2358,7 +2720,6 @@ mod tests {
                 Err(CommittedTxPredicateJsonError::EmptyMembership(field))
                     if field == "timestamp_ms"
             ));
-
             let duplicate = binary_predicate_expr(
                 op,
                 "timestamp_ms",
@@ -2370,7 +2731,6 @@ mod tests {
                     if field == "timestamp_ms"
             ));
         }
-
         let oversized = binary_predicate_expr(
             "in",
             "timestamp_ms",
@@ -2384,7 +2744,6 @@ mod tests {
             committed_tx_predicate_from_value(&oversized),
             Err(CommittedTxPredicateJsonError::TooManyMembershipValues { .. })
         ));
-
         let aggregate = predicate_expr(
             "and",
             (0..5)
@@ -2408,7 +2767,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn predicate_json_rejects_excessive_depth_nodes_and_noncanonical_literals() {
         let mut too_deep = predicate_expr("const", vec![Value::Bool(true)]);
@@ -2419,7 +2777,6 @@ mod tests {
             committed_tx_predicate_from_value(&too_deep),
             Err(CommittedTxPredicateJsonError::TooDeep(_))
         ));
-
         let too_many_nodes = predicate_expr(
             "and",
             (0..MAX_COMMITTED_TX_PREDICATE_NODES)
@@ -2430,7 +2787,6 @@ mod tests {
             committed_tx_predicate_from_value(&too_many_nodes),
             Err(CommittedTxPredicateJsonError::TooManyNodes(_))
         ));
-
         let uppercase_hash = sample_hash_literal(0xab).to_ascii_uppercase();
         let noncanonical_hash =
             binary_predicate_expr("eq", "entrypoint_hash", Value::String(uppercase_hash));
@@ -2441,7 +2797,6 @@ mod tests {
                 ..
             })
         ));
-
         let padded_account = format!(" {} ", sample_account(0x52));
         let noncanonical_account =
             binary_predicate_expr("eq", "authority", Value::String(padded_account));
@@ -2453,12 +2808,10 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn predicate_json_wire_requires_unique_keys_and_exact_canonical_text() {
         let duplicate_key = r#"{"op":"const","op":"const","args":[true]}"#;
         assert!(norito::json::from_json::<CommittedTxPredicate>(duplicate_key).is_err());
-
         let predicate = CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::ResultEq(false)));
         let canonical = norito::json::to_json(&predicate).expect("canonical JSON");
         assert_eq!(
@@ -2471,7 +2824,6 @@ mod tests {
             Err(CommittedTxPredicateJsonError::NonCanonicalWireEncoding)
         ));
     }
-
     #[test]
     fn invalid_internal_predicates_serialize_and_fail_closed() {
         let mut too_deep = CommittedTxPredicate::Const(true);
@@ -2489,7 +2841,6 @@ mod tests {
         let fail_closed =
             norito::json::to_json(&CommittedTxPredicate::Const(false)).expect("const false JSON");
         let tx = sample_committed_tx();
-
         for predicate in invalid {
             assert!(validate_committed_tx_predicate(&predicate).is_err());
             assert!(!predicate.applies(&tx));
@@ -2500,7 +2851,6 @@ mod tests {
             assert!(norito::to_bytes(&predicate).is_err());
         }
     }
-
     #[test]
     fn flat_filter_index_view_roundtrips_losslessly_and_rejects_richer_trees() {
         let account_a = sample_account(0x61);
@@ -2543,7 +2893,6 @@ mod tests {
         };
         let tree = committed_tx_predicate_from_filters(&filters);
         assert_eq!(committed_tx_filters_from_predicate(&tree), Some(filters));
-
         assert!(
             committed_tx_filters_from_predicate(&CommittedTxPredicate::Or(vec![
                 CommittedTxPredicate::ResultEq(true),
@@ -2563,14 +2912,12 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn predicate_wire_inflate_rejects_missing_and_trailing_nodes() {
         assert!(wire::inflate(&[wire::Node::And { child_count: 1 }]).is_err());
         assert!(wire::inflate(&[wire::Node::Not]).is_err());
         assert!(wire::inflate(&[wire::Node::Const(true), wire::Node::Const(false)]).is_err());
     }
-
     #[test]
     fn predicate_wire_inflate_enforces_all_resource_and_set_invariants() {
         let hostile_arity = vec![wire::Node::And {
@@ -2603,11 +2950,9 @@ mod tests {
             )
         }));
         assert!(wire::inflate(&aggregate_membership).is_err());
-
         let too_many_wire = vec![wire::Node::Const(true); MAX_COMMITTED_TX_PREDICATE_NODES + 1];
         let too_many_wire_bytes = frame_predicate_nodes(&too_many_wire);
         assert!(norito::decode_from_bytes::<CommittedTxPredicate>(&too_many_wire_bytes).is_err());
-
         let oversized_membership_wire = vec![wire::Node::TsIn(
             (0..=MAX_COMMITTED_TX_MEMBERSHIP_VALUES as u64)
                 .collect::<Vec<_>>()
@@ -2617,12 +2962,10 @@ mod tests {
         assert!(
             norito::decode_from_bytes::<CommittedTxPredicate>(&oversized_membership_bytes).is_err()
         );
-
         let aggregate_membership_bytes = frame_predicate_nodes(&aggregate_membership);
         assert!(
             norito::decode_from_bytes::<CommittedTxPredicate>(&aggregate_membership_bytes).is_err()
         );
-
         let mut deep = vec![wire::Node::Not; MAX_COMMITTED_TX_PREDICATE_DEPTH];
         deep.push(wire::Node::Const(true));
         assert!(wire::inflate(&deep).is_err());
@@ -2630,7 +2973,6 @@ mod tests {
             norito::decode_from_bytes::<CommittedTxPredicate>(&frame_predicate_nodes(&deep))
                 .is_err()
         );
-
         let too_many = vec![wire::Node::Const(true); MAX_COMMITTED_TX_PREDICATE_NODES + 1];
         assert!(wire::inflate(&too_many).is_err());
     }

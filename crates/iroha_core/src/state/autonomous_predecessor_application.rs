@@ -16,7 +16,6 @@ impl State {
             .is_none()
             .then_some(session)
     }
-
     /// Check the predecessor according to the lane certificate's execution role.
     /// READY-bearing autonomous certificates may advance only from globally
     /// applied merge evidence; ordinary/control certificates retain their
@@ -35,7 +34,6 @@ impl State {
             )
         }
     }
-
     /// Require canonical economic application of an autonomous proposal.
     ///
     /// A lane ownership artifact proves payload routing, not WSV application.
@@ -69,7 +67,6 @@ impl State {
                 .kura
                 .autonomous_lane_block_merge_receipt_revalidates_without_sidecar_repair(proposal)
     }
-
     /// Require canonical economic application of the exact predecessor of an
     /// autonomous proposal.
     ///

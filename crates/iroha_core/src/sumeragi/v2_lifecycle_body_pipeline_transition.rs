@@ -1,5 +1,4 @@
 //! Sealed coordinator staging and publication for adjacent body-pipeline successors.
-
 use super::{
     AdapterEffectAdmissionError, AdmissionDecision, AdmissionRequest, CandidateAdmission,
     CapacityClass, CoordinatorFault, InitialLifecycleState, LifecycleCoordinator, LifecyclePhase,
@@ -19,14 +18,12 @@ use super::{
     },
 };
 use crate::sumeragi::v2::VerifiedHeightContext;
-
 #[cfg(test)]
 use crate::sumeragi::{
     v2::{AdapterEffect, SignRequest},
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
     v2_runtime::PendingRuntimeEffectBinding,
 };
-
 impl DurableContinuationEdge {
     const fn parent(self) -> (LifecycleWorkClass, LifecyclePhase, LifecycleStageKind) {
         match self {
@@ -74,7 +71,6 @@ impl DurableContinuationEdge {
             ),
         }
     }
-
     const fn child(self) -> (LifecycleWorkClass, LifecyclePhase, LifecycleStageKind) {
         match self {
             Self::FetchToStore => (
@@ -129,7 +125,6 @@ impl DurableContinuationEdge {
             ),
         }
     }
-
     fn preserves_lineage(self, parent: super::LifecycleKey, child: super::LifecycleKey) -> bool {
         if child.context() != parent.context()
             || child.round() != parent.round()
@@ -160,7 +155,6 @@ impl DurableContinuationEdge {
         }
     }
 }
-
 /// Return whether two durable rows form one exact adjacent body-pipeline edge.
 ///
 /// This is the shared authority for live transition staging and LedgerV1
@@ -204,7 +198,6 @@ pub(super) fn durable_continuation_successor_is_exact(
                 && edge.preserves_lineage(parent_key, child_key)
         }
 }
-
 /// Return whether one durable continuation preserves its exact body frame.
 ///
 /// A Ready Fetch and its Store successor retain the exact same fsynced frame.
@@ -241,7 +234,6 @@ pub(super) fn durable_continuation_payload_is_exact(
         }
     }
 }
-
 /// Return whether a Validate row retains one key-bound body frame.
 ///
 /// Live, waiting, claimed, and terminal Validate rows all name the same frame
@@ -254,7 +246,6 @@ pub(super) fn durable_validate_payload_is_exact(
     matches!(payload, DurablePayloadReference::BodyFrame(frame) if frame.matches_key(key))
         && key.phase() == LifecyclePhase::Validate
 }
-
 /// Closed pre-commit failure inventory for one staged body-pipeline edge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum BodyStageTransitionError {
@@ -292,7 +283,6 @@ pub(super) enum BodyStageTransitionError {
     /// The active lease does not carry the branch's exact output reservation.
     InvalidOutputReservation,
 }
-
 /// Fully checked staged state shared by adjacent body-stage wrappers.
 struct StagedBodyStageTransition {
     staged: LifecycleCoordinator,
@@ -302,7 +292,6 @@ struct StagedBodyStageTransition {
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 /// Fully checked staged state for one recovered Sign with two reducer children.
 ///
 /// The Broadcast remains the typed continuation of the claimed Sign. The
@@ -321,14 +310,12 @@ struct StagedRecoveredLifecycleSignBroadcastAndSignTransition {
     next_sign_slot: PhysicalSlotId,
     next_sign_digest: super::LifecycleDigest,
 }
-
 /// Fully checked staged state for one consumed Validate with no successor.
 struct StagedBodyNoSuccessorTransition {
     staged: LifecycleCoordinator,
     parent_ordinal: u128,
     released_consensus_reservation: bool,
 }
-
 /// One-shot authority minted only by the sealed no-successor entrypoint.
 ///
 /// The registry may consume this permit to bind its closed completion to an
@@ -337,13 +324,10 @@ struct StagedBodyNoSuccessorTransition {
 pub(super) struct SealedValidateNoSuccessorProjectionPermit {
     _linearity: SealedValidateNoSuccessorProjectionLinearity,
 }
-
 struct SealedValidateNoSuccessorProjectionLinearity;
-
 impl Drop for SealedValidateNoSuccessorProjectionLinearity {
     fn drop(&mut self) {}
 }
-
 impl SealedValidateNoSuccessorProjectionPermit {
     fn new() -> Self {
         Self {
@@ -351,7 +335,6 @@ impl SealedValidateNoSuccessorProjectionPermit {
         }
     }
 }
-
 /// One-shot authority minted only by the sealed invalid-report entrypoint.
 ///
 /// Candidate projection receives this non-Copy proof by shared reference
@@ -360,13 +343,10 @@ impl SealedValidateNoSuccessorProjectionPermit {
 pub(in crate::sumeragi) struct SealedInvalidBodyReportProjectionPermit {
     _linearity: SealedInvalidBodyReportProjectionLinearity,
 }
-
 struct SealedInvalidBodyReportProjectionLinearity;
-
 impl Drop for SealedInvalidBodyReportProjectionLinearity {
     fn drop(&mut self) {}
 }
-
 impl SealedInvalidBodyReportProjectionPermit {
     fn new() -> Self {
         Self {
@@ -374,7 +354,6 @@ impl SealedInvalidBodyReportProjectionPermit {
         }
     }
 }
-
 /// One-shot authority for projecting the already-bound post-WAL Sign child.
 ///
 /// The pre-WAL ordinary-to-Commit refinement has already consumed its opaque
@@ -384,13 +363,10 @@ impl SealedInvalidBodyReportProjectionPermit {
 pub(in crate::sumeragi) struct SealedValidateSignProjectionPermit {
     _linearity: SealedValidateSignProjectionLinearity,
 }
-
 struct SealedValidateSignProjectionLinearity;
-
 impl Drop for SealedValidateSignProjectionLinearity {
     fn drop(&mut self) {}
 }
-
 impl SealedValidateSignProjectionPermit {
     fn new() -> Self {
         Self {
@@ -398,7 +374,6 @@ impl SealedValidateSignProjectionPermit {
         }
     }
 }
-
 /// One-shot authority for reading the two admissions of a combined Sign result.
 ///
 /// WAL recovery retains both executable children in one opaque projection.
@@ -409,14 +384,11 @@ impl SealedValidateSignProjectionPermit {
 pub(super) struct RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
     _linearity: RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 struct RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1;
-
 impl Drop for RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1 {
     fn drop(&mut self) {}
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
     fn new() -> Self {
@@ -425,7 +397,6 @@ impl RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
         }
     }
 }
-
 /// Opaque registry-derived inputs for one no-successor Validate cut.
 ///
 /// Fields are private to this module. The registry can construct the value
@@ -436,7 +407,6 @@ pub(super) struct SealedValidateNoSuccessorProjection {
     parent_payload: DurablePayloadReference,
     release_consensus_reservation: bool,
 }
-
 impl SealedValidateNoSuccessorProjection {
     /// Close registry-derived coordinates under the transition permit.
     pub(super) fn from_registry(
@@ -452,7 +422,6 @@ impl SealedValidateNoSuccessorProjection {
         }
     }
 }
-
 /// Opaque registry/adapter-derived inputs for one invalid-body report cut.
 ///
 /// The candidate and body frame have no accessor surface. They are visible
@@ -464,7 +433,6 @@ pub(super) struct SealedInvalidBodyReportProjection {
     candidate: CandidateAdmission,
     parent_payload: DurablePayloadReference,
 }
-
 impl SealedInvalidBodyReportProjection {
     /// Close registry/adapter-derived coordinates under the transition permit.
     pub(super) fn from_registry(
@@ -480,7 +448,6 @@ impl SealedInvalidBodyReportProjection {
         }
     }
 }
-
 /// Opaque registry/adapter projection of one exact post-WAL Sign successor.
 ///
 /// Candidate and BodyFrame authority are visible only inside this transition
@@ -493,7 +460,6 @@ pub(super) struct SealedValidateSignProjection {
     candidate: CandidateAdmission,
     parent_payload: DurablePayloadReference,
 }
-
 impl SealedValidateSignProjection {
     /// Close registry-derived coordinates under the transition permit.
     pub(super) fn from_registry(
@@ -509,7 +475,6 @@ impl SealedValidateSignProjection {
         }
     }
 }
-
 /// Stage one exact Validate terminal with no emitted successor.
 ///
 /// Rejected Validate rows conservatively reserve one Consensus slot before
@@ -561,7 +526,6 @@ fn stage_validate_no_successor_transition(
             return Err(BodyStageTransitionError::InvalidOutputReservation);
         }
     }
-
     let parent = coordinator
         .records
         .get(&lease.ordinal())
@@ -629,7 +593,6 @@ fn stage_validate_no_successor_transition(
     {
         return Err(BodyStageTransitionError::StaleLease);
     }
-
     let effect_used_before = coordinator.capacity_used[&CapacityClass::Effect];
     let expected_effect_used = effect_used_before
         .checked_sub(1)
@@ -662,7 +625,6 @@ fn stage_validate_no_successor_transition(
             .capacity_generation
             .insert(CapacityClass::Consensus, expected_consensus_generation);
     }
-
     if staged.fault.is_some()
         || staged.active_lease.is_some()
         || staged.high_water != coordinator.high_water
@@ -704,14 +666,12 @@ fn stage_validate_no_successor_transition(
     {
         return Err(BodyStageTransitionError::InvalidCapacityTransition);
     }
-
     Ok(StagedBodyNoSuccessorTransition {
         staged,
         parent_ordinal: lease.ordinal(),
         released_consensus_reservation: release_consensus_reservation,
     })
 }
-
 /// Stage one already-authorized adjacent body lifecycle transition on a coordinator copy.
 ///
 /// The candidate must arrive with its canonical payload and replay authority
@@ -727,7 +687,6 @@ enum BodyStagePayloadRelationV1 {
     RecoveredDecisionFetch,
     RecoveredLifecycleSign,
 }
-
 fn stage_body_stage_transition(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
@@ -744,7 +703,6 @@ fn stage_body_stage_transition(
         BodyStagePayloadRelationV1::OrdinaryBodyFrame,
     )
 }
-
 fn stage_recovered_decision_fetch_store_transition(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
@@ -759,7 +717,6 @@ fn stage_recovered_decision_fetch_store_transition(
         BodyStagePayloadRelationV1::RecoveredDecisionFetch,
     )
 }
-
 fn stage_recovered_lifecycle_sign_broadcast_transition(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
@@ -801,7 +758,6 @@ fn stage_recovered_lifecycle_sign_broadcast_transition(
         BodyStagePayloadRelationV1::RecoveredLifecycleSign,
     )
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 fn recovered_broadcast_and_next_sign_are_exact(
     broadcast: &CandidateAdmission,
@@ -843,7 +799,6 @@ fn recovered_broadcast_and_next_sign_are_exact(
         && broadcast.key.proposal_round() == next_sign.key.proposal_round()
         && broadcast.key.subject() == next_sign.key.subject()
 }
-
 /// Stage one recovered `Signed` reducer result containing Broadcast plus Sign.
 ///
 /// The first child uses the ordinary typed Sign-to-Broadcast continuation and
@@ -883,7 +838,6 @@ fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
     {
         return Err(BodyStageTransitionError::InvalidChildProjection);
     }
-
     let capacity_used_before = coordinator.capacity_used.clone();
     let capacity_generation_before = coordinator.capacity_generation.clone();
     let records_before = coordinator.records.len();
@@ -916,7 +870,6 @@ fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
     {
         return Err(BodyStageTransitionError::InvalidChildOwner);
     }
-
     let next_record_is_exact = staged
         .records
         .get(&next_sign_ordinal)
@@ -965,7 +918,6 @@ fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
     {
         return Err(BodyStageTransitionError::InvalidStagedRecords);
     }
-
     Ok(StagedRecoveredLifecycleSignBroadcastAndSignTransition {
         staged,
         parent_ordinal,
@@ -979,7 +931,6 @@ fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
         next_sign_digest,
     })
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn stage_body_stage_transition_with_payload_relation(
     coordinator: &LifecycleCoordinator,
@@ -1068,7 +1019,6 @@ fn stage_body_stage_transition_with_payload_relation(
     {
         return Err(BodyStageTransitionError::StaleLease);
     }
-
     let child_payload = candidate.payload;
     let child_slot = PhysicalSlotId::for_capacity(child_capacity, 0);
     let (projected_slots, projected_universe, projected_consumed) = candidate
@@ -1146,7 +1096,6 @@ fn stage_body_stage_transition_with_payload_relation(
     ) {
         return Err(BodyStageTransitionError::ForeignSuccessorLineage);
     }
-
     let expected_child_ordinal = coordinator
         .high_water
         .checked_add(1)
@@ -1212,7 +1161,6 @@ fn stage_body_stage_transition_with_payload_relation(
         return Err(BodyStageTransitionError::InvalidStagedRecords);
     }
     parent_metadata.continuation = DurableContinuation::successor(edge, child_ordinal);
-
     let parent_is_advanced = staged.records.get(&lease.ordinal()).is_some_and(|record| {
         record.ordinal == lease.ordinal()
             && record.owner == lease.owner()
@@ -1303,7 +1251,6 @@ fn stage_body_stage_transition_with_payload_relation(
     if !capacity_is_exact {
         return Err(BodyStageTransitionError::InvalidCapacityTransition);
     }
-
     Ok(StagedBodyStageTransition {
         staged,
         parent_ordinal: lease.ordinal(),
@@ -1313,7 +1260,6 @@ fn stage_body_stage_transition_with_payload_relation(
         child_digest,
     })
 }
-
 /// Fully reduced coordinator copy for one adjacent body-pipeline transition.
 ///
 /// The live coordinator remains exclusively borrowed and untouched. The
@@ -1335,13 +1281,11 @@ pub(super) struct PreparedBodyStageTransition<'a> {
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedBodyStageSuccessor<'registry> {
     CertifiedFetchStore(PreparedCertifiedFetchStoreSuccessor<'registry>),
     DurableStoreValidate(PreparedDurableStoreValidateSuccessor<'registry>),
 }
-
 /// Fully reduced coordinator copy retaining its move-only registry successor.
 ///
 /// The candidate was projected inside the closed successor token before the
@@ -1360,7 +1304,6 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 /// Fully staged recovered WAL Fetch-to-Store publication.
 ///
 /// The Fetch parent remains payload-free; only the Store child owns the exact
@@ -1376,7 +1319,6 @@ pub(super) struct PreparedRecoveredDecisionFetchStoreTransition<'coordinator, 'r
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
     /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
     pub(super) fn persist_exact_successor(
@@ -1385,7 +1327,6 @@ impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
         self.coordinator
             .persist_exact_staged_successor(&self.staged)
     }
-
     /// Publish the already-fsynced coordinator, registry, and adapter tail.
     pub(super) fn commit_after_publication(self) {
         let Self {
@@ -1409,7 +1350,6 @@ impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
         adapter.commit_after_durable_settlement();
     }
 }
-
 /// Fully staged recovered Sign-to-Broadcast publication.
 ///
 /// The original Sign, adapter preview, and signed Broadcast projection remain
@@ -1429,7 +1369,6 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastTransition<
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 /// Fully staged recovered Proposal Broadcast-and-next-Sign publication.
 ///
 /// Both concrete child addresses have rejoined the opaque registry successor,
@@ -1459,7 +1398,6 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignTransition<
     broadcast_wait: WaitToken,
     publication_is_vote: bool,
 }
-
 impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
     /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
     pub(super) fn persist_exact_successor(
@@ -1468,7 +1406,6 @@ impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
         self.coordinator
             .persist_exact_staged_successor(&self.staged)
     }
-
     /// Publish the already-fsynced coordinator, registry, and adapter tail.
     pub(super) fn commit_after_publication(self) {
         let Self {
@@ -1492,7 +1429,6 @@ impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
         adapter.commit_after_durable_broadcast();
     }
 }
-
 impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
     /// Fsync the exact two-child LedgerV1 successor while all owners stay borrowed.
     pub(super) fn persist_exact_successor(
@@ -1501,7 +1437,6 @@ impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
         self.coordinator
             .persist_exact_staged_successor(&self.staged)
     }
-
     /// Publish both children under the preauthenticated output mode.
     pub(super) fn commit_after_publication(self) {
         let Self {
@@ -1544,7 +1479,6 @@ impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
                 })
         );
         assert!(staged.active_lease.is_none());
-
         let adapter = successor.commit_after_publication();
         *coordinator = staged;
         if publication_is_vote {
@@ -1580,7 +1514,6 @@ impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
         }
     }
 }
-
 fn map_sealed_successor_projection_error(
     error: SealedBodySuccessorProjectionError,
 ) -> BodyStageTransitionError {
@@ -1594,7 +1527,6 @@ fn map_sealed_successor_projection_error(
         }
     }
 }
-
 /// Fully reduced coordinator copy retaining the consumed no-successor preview.
 ///
 /// The staged copy has released the parent Effect capacity and records the
@@ -1611,13 +1543,11 @@ pub(super) struct PreparedSealedValidateNoSuccessorTransition<'coordinator, 'reg
     parent_ordinal: u128,
     released_consensus_reservation: bool,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateNoSuccessorTransitionFailure {
     Projection(SealedValidateTerminalProjectionError),
     Stage(BodyStageTransitionError),
 }
-
 /// Fail-stop no-successor staging error retaining both authority borrows.
 #[must_use = "failed no-successor staging still owns the sealed Validate preview"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1625,7 +1555,6 @@ pub(super) struct SealedValidateNoSuccessorTransitionError<'registry, 'adapter> 
     _preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
     _failure: SealedValidateNoSuccessorTransitionFailure,
 }
-
 /// Fully reduced Validate-to-report copy retaining every sealed authority cut.
 ///
 /// The report candidate was projected while nested inside the exact adapter
@@ -1645,7 +1574,6 @@ pub(super) struct PreparedSealedValidateReportTransition<'coordinator, 'registry
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 /// Fully staged live Validate-to-Sign transaction retaining every authority
 /// provider until LedgerV1 and in-memory publication commit as one cut.
 ///
@@ -1665,14 +1593,12 @@ pub(super) struct PreparedSealedValidateSignTransition<'coordinator, 'registry, 
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateSignTransitionFailure {
     MissingLedgerStore,
     Projection(SealedValidateTerminalProjectionError),
     Stage(BodyStageTransitionError),
 }
-
 /// Pre-publication error retaining the complete post-WAL fixed join.
 #[must_use = "failed Validate-to-Sign staging still owns post-WAL authority"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1680,7 +1606,6 @@ pub(super) struct SealedValidateSignTransitionError<'registry, 'adapter> {
     _publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
     _failure: SealedValidateSignTransitionFailure,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum LiveValidateSignPublicationFailure<'registry, 'adapter> {
     Registry(LiveValidateSignRegistryPublicationError<'registry, 'adapter>),
@@ -1689,7 +1614,6 @@ enum LiveValidateSignPublicationFailure<'registry, 'adapter> {
         _publication: PreparedLiveValidateSignRegistryPublication<'registry, 'adapter>,
     },
 }
-
 /// Restart-only publication error retaining the staged coordinator and every
 /// detached registry/adapter authority.
 ///
@@ -1703,13 +1627,11 @@ pub(super) struct LiveValidateSignPublicationError<'coordinator, 'registry, 'ada
     _staged: LifecycleCoordinator,
     _failure: LiveValidateSignPublicationFailure<'registry, 'adapter>,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateReportTransitionFailure {
     Projection(SealedValidateTerminalProjectionError),
     Stage(BodyStageTransitionError),
 }
-
 /// Fail-stop report staging error retaining the registry and adapter seals.
 #[must_use = "failed invalid-body report staging still owns all sealed authority"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1717,7 +1639,6 @@ pub(super) struct SealedValidateReportTransitionError<'registry, 'adapter> {
     _report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
     _failure: SealedValidateReportTransitionFailure,
 }
-
 impl LifecycleCoordinator {
     /// Stage the recovered payload-free Fetch and body-backed Store successor.
     pub(super) fn prepare_recovered_decision_fetch_store_transition<
@@ -1750,7 +1671,6 @@ impl LifecycleCoordinator {
             child_digest: transition.child_digest,
         })
     }
-
     /// Stage one recovered Sign and its adapter-authenticated Broadcast child.
     pub(super) fn prepare_recovered_lifecycle_sign_broadcast_transition<
         'coordinator,
@@ -1783,7 +1703,6 @@ impl LifecycleCoordinator {
             child_digest: transition.child_digest,
         })
     }
-
     /// Stage the exact two-child result of one recovered `Signed` event.
     ///
     /// Both opaque admissions fit one coordinator snapshot, and the registry
@@ -1847,7 +1766,6 @@ impl LifecycleCoordinator {
             publication_is_vote,
         })
     }
-
     /// Stage the sole live post-WAL Validate-to-Sign transaction.
     ///
     /// A first-release node must have an attached LedgerV1 store. The child is
@@ -1928,7 +1846,6 @@ impl LifecycleCoordinator {
             child_digest: transition.child_digest,
         })
     }
-
     /// Consume one sealed inactive or no-effect Validate preview into an inert
     /// no-successor coordinator cut.
     ///
@@ -1983,7 +1900,6 @@ impl LifecycleCoordinator {
             released_consensus_reservation: transition.released_consensus_reservation,
         })
     }
-
     /// Stage one sealed certified-Fetch retirement and exact Store admission.
     ///
     /// The move-only successor owns the installed Fetch address, exact durable
@@ -2020,7 +1936,6 @@ impl LifecycleCoordinator {
             child_digest: transition.child_digest,
         })
     }
-
     /// Stage one sealed Store retirement and exact Validate admission.
     ///
     /// The Store token retains its registry borrow while it projects the child
@@ -2057,7 +1972,6 @@ impl LifecycleCoordinator {
             child_digest: transition.child_digest,
         })
     }
-
     /// Consume one exact invalid-body replay seal into an inert report cut.
     ///
     /// Report effect, pending ownership, rejection evidence, and BodyFrame all
@@ -2116,7 +2030,6 @@ impl LifecycleCoordinator {
         })
     }
 }
-
 impl<'coordinator, 'registry, 'adapter>
     PreparedSealedValidateSignTransition<'coordinator, 'registry, 'adapter>
 {
@@ -2169,13 +2082,10 @@ impl<'coordinator, 'registry, 'adapter>
                 },
             });
         }
-
         *coordinator = staged;
         registry.publish_after_ledger_fsync();
         Ok(())
     }
 }
-
 include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
-
 include!("v2_lifecycle_body_pipeline_transition_tests.rs");

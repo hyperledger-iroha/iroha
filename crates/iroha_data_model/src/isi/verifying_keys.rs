@@ -1,6 +1,5 @@
 use super::*;
 use crate::proof::{VerifyingKeyId, VerifyingKeyRecord};
-
 isi! {
     /// Register a new verifying key record into the WSV.
     pub struct RegisterVerifyingKey {
@@ -10,7 +9,6 @@ isi! {
         pub record: VerifyingKeyRecord,
     }
 }
-
 isi! {
     /// Rotate an existing verifying key record to a higher version.
     ///
@@ -23,15 +21,12 @@ isi! {
         pub record: VerifyingKeyRecord,
     }
 }
-
 // Seal implementations so these types participate as instructions
 impl crate::seal::Instruction for RegisterVerifyingKey {}
 impl crate::seal::Instruction for UpdateVerifyingKey {}
-
 fn verifying_key_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_decode_verifying_key_instruction {
     ($ty:ident) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -40,7 +35,6 @@ macro_rules! impl_decode_verifying_key_instruction {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let id = super::decode_aos_canonical_field::<VerifyingKeyId>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -59,21 +53,16 @@ macro_rules! impl_decode_verifying_key_instruction {
         }
     };
 }
-
 impl_decode_verifying_key_instruction!(RegisterVerifyingKey);
 impl_decode_verifying_key_instruction!(UpdateVerifyingKey);
-
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{proof::VerifyingKeyRecord, zk::BackendTag};
-
+    use norito::core::DecodeFromSlice;
     fn key_id(name: &str) -> VerifyingKeyId {
         VerifyingKeyId::new("halo2/ipa", name)
     }
-
     fn record(version: u32) -> VerifyingKeyRecord {
         VerifyingKeyRecord::new(
             version,
@@ -84,7 +73,6 @@ mod tests {
             [0x22; 32],
         )
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -95,7 +83,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -113,7 +100,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn verifying_key_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterVerifyingKey {
@@ -125,13 +111,11 @@ mod tests {
             record: record(2),
         });
     }
-
     #[test]
     fn verifying_key_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<RegisterVerifyingKey>()
             .register_slice::<UpdateVerifyingKey>();
-
         assert_registry_decodes(
             &registry,
             RegisterVerifyingKey {

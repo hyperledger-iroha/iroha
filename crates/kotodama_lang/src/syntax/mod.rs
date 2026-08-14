@@ -4,12 +4,10 @@
 //! formatting, and editor tooling. The recovering CST parser preserves every
 //! input byte and inserts zero-width missing tokens for interactive use; the
 //! compiler lowers the same significant token stream directly into its AST.
-
 pub mod cst;
 pub mod kind;
 pub mod lexer;
 pub mod parser;
-
 pub use cst::{GreenElement, GreenNode, GreenToken, SyntaxTree};
 pub use kind::SyntaxKind;
 pub use lexer::{Lexed, lex};

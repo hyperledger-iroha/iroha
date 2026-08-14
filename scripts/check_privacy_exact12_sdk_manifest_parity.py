@@ -39,6 +39,22 @@ APPROVED_PRIVACY_EXPORTS = frozenset(
 )
 
 RUST_BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
+_RUST_BRIDGE_PLATFORM_JNI = "crates/connect_norito_bridge/src/platform_jni.rs"
+_RUST_BRIDGE_PLATFORM_JNI_PARTS = (
+    "crates/connect_norito_bridge/src/platform_jni/part_1.rs",
+    "crates/connect_norito_bridge/src/platform_jni/part_2.rs",
+    "crates/connect_norito_bridge/src/platform_jni/part_3.rs",
+)
+_RUST_BRIDGE_SOURCE_FILES = (
+    RUST_BRIDGE,
+    _RUST_BRIDGE_PLATFORM_JNI,
+    *_RUST_BRIDGE_PLATFORM_JNI_PARTS,
+)
+_RUST_BRIDGE_PLATFORM_JNI_INCLUDES = (
+    "platform_jni/part_1.rs",
+    "platform_jni/part_2.rs",
+    "platform_jni/part_3.rs",
+)
 C_HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 _JAVASCRIPT_CAPABILITIES = "javascript/iroha_js/src/privacyCapabilities.js"
 _JAVASCRIPT_NATIVE = "javascript/iroha_js/src/native.js"
@@ -125,7 +141,7 @@ SDK_CONTRACTS = (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            RUST_BRIDGE,
+            *_RUST_BRIDGE_SOURCE_FILES,
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt",
@@ -255,6 +271,34 @@ def _combined(root: Path, files: Iterable[str]) -> str:
     return "\n".join(_read(root, relative) for relative in files)
 
 
+def _read_required_source(root: Path, relative: str) -> str:
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        raise AuditError(f"required Rust bridge source is unavailable: {relative}")
+    return _read(root, relative)
+
+
+def _rust_bridge_source(root: Path) -> str:
+    """Read the exact split Rust bridge closure after authenticating its includes."""
+
+    bridge = _read_required_source(root, RUST_BRIDGE)
+    if len(re.findall(r"^mod platform_jni;$", bridge, flags=re.MULTILINE)) != 1:
+        raise AuditError("Rust bridge must own exactly one platform_jni module")
+    platform_jni = _read_required_source(root, _RUST_BRIDGE_PLATFORM_JNI)
+    observed_includes = tuple(
+        re.findall(r'^include!\("([^"]+)"\);$', platform_jni, flags=re.MULTILINE)
+    )
+    if observed_includes != _RUST_BRIDGE_PLATFORM_JNI_INCLUDES:
+        raise AuditError(
+            "Rust bridge platform_jni include closure differs from the exact "
+            f"three-part inventory: found {observed_includes}"
+        )
+    parts = tuple(
+        _read_required_source(root, path) for path in _RUST_BRIDGE_PLATFORM_JNI_PARTS
+    )
+    return "\n".join((bridge, platform_jni) + parts)
+
+
 def _rust_exports(source: str) -> frozenset[str]:
     return frozenset(
         re.findall(
@@ -274,7 +318,7 @@ def _header_exports(source: str) -> frozenset[str]:
 
 
 def _require_exact_abi22(root: Path) -> None:
-    rust = _rust_exports(_read(root, RUST_BRIDGE))
+    rust = _rust_exports(_rust_bridge_source(root))
     header = _header_exports(_read(root, C_HEADER))
     if rust != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
@@ -289,7 +333,7 @@ def _require_exact_abi22(root: Path) -> None:
 
 
 def _require_authority_boundary(root: Path) -> None:
-    bridge = _read(root, RUST_BRIDGE)
+    bridge = _rust_bridge_source(root)
     header = _read(root, C_HEADER)
     combined = bridge + "\n" + header
     forbidden = (
@@ -508,7 +552,7 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
     model = _read(root, _JVM_MODEL)
     kotlin_bridge = _read(root, _JVM_KOTLIN_BRIDGE)
     java_bridge = _read(root, _JVM_JAVA_BRIDGE)
-    rust_bridge = _read(root, RUST_BRIDGE)
+    rust_bridge = _rust_bridge_source(root)
     kotlin_transport = _read(root, _JVM_KOTLIN_TRANSPORT)
     java_transport = _read(root, _JVM_JAVA_TRANSPORT)
     kotlin_instruction = _read(root, _JVM_KOTLIN_INSTRUCTION)

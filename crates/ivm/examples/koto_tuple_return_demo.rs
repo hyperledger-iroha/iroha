@@ -1,7 +1,6 @@
 //! Kotodama tuple-return demo: compile a function returning pointer-backed integers.
 use iroha_primitives::numeric_abi::IntValueV1;
 use ivm::{IVM, PointerType, ProgramMetadata, kotodama::compiler::Compiler as KotodamaCompiler};
-
 fn returned_int(vm: &IVM, register: usize) -> i64 {
     let tlv = vm
         .validate_tlv(vm.register(register))
@@ -13,7 +12,6 @@ fn returned_int(vm: &IVM, register: usize) -> i64 {
         .try_to_i64()
         .expect("demo result fits i64")
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Inline Kotodama source: a main that returns a pair (a+1, b+1).
     let src = r#"
@@ -28,11 +26,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     "#;
-
     // 2) Compile to IVM bytecode
     let compiler = KotodamaCompiler::new();
     let code = compiler.compile_source(src).expect("compile tuple return");
-
     // 3) Select the public entrypoint and run.
     let mut vm = IVM::new(1_000_000);
     vm.load_program(&code).expect("load program");
@@ -50,7 +46,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .expect("select main entrypoint");
     vm.run().expect("run");
-
     // 4) Read canonical `IntValueV1` results from r10 and r11.
     let out0 = returned_int(&vm, 10);
     let out1 = returned_int(&vm, 11);

@@ -8,7 +8,6 @@ fn fcmp_output_to_native_v1(
     )
     .map_err(|_| "FCMP++ output tuple is not a canonical prime-order Edwards tuple")
 }
-
 fn fcmp_output_from_native_v1(
     output: crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1,
 ) -> PrivacyFcmpOutputTupleV1 {
@@ -19,14 +18,12 @@ fn fcmp_output_from_native_v1(
         amount_commitment,
     }
 }
-
 fn fcmp_root_to_native_v1(
     root: PrivacyFcmpTreeRootV1,
 ) -> Result<crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1, &'static str> {
     crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1::new(root.layers, root.point)
         .map_err(|_| "FCMP++ root is not canonical for its layer-selected curve")
 }
-
 fn fcmp_root_from_native_v1(
     root: crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1,
 ) -> PrivacyFcmpTreeRootV1 {
@@ -35,7 +32,6 @@ fn fcmp_root_from_native_v1(
         point: root.point(),
     }
 }
-
 /// Validator-owned alternating Selene/Helios frontier for one FCMP++ pool.
 ///
 /// The complete typed root, active `(O, I, C)` branch, and every mixed-radix

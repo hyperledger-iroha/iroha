@@ -11,7 +11,6 @@ pub fn keccak_f1600(state: &mut [u64; 25]) {
     }
     keccak_f1600_impl(state);
 }
-
 pub fn keccak_f1600_impl(state: &mut [u64; 25]) {
     const RC: [u64; 24] = [
         0x0000000000000001,
@@ -46,7 +45,6 @@ pub fn keccak_f1600_impl(state: &mut [u64; 25]) {
         [28, 55, 25, 21, 56],
         [27, 20, 39, 8, 14],
     ];
-
     for &rc in RC.iter() {
         // Theta
         let mut c = [0u64; 5];
@@ -83,7 +81,6 @@ pub fn keccak_f1600_impl(state: &mut [u64; 25]) {
         state[0] ^= rc;
     }
 }
-
 /// Absorb one 136-byte block and run the Keccak-f permutation.
 pub fn sha3_absorb_block(state: &mut [u64; 25], block: &[u8; 136]) {
     for i in 0..17 {

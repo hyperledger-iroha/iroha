@@ -1,16 +1,13 @@
 //! Audit commands for governance workflows.
-
 use crate::{Run, RunContext};
 use eyre::Result;
 use iroha::client::Client;
 use iroha_crypto::Hash;
 use norito::json::{Map, Value};
-
 use super::shared::{
     canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary,
     resolve_contract_address_target,
 };
-
 #[derive(clap::Args, Debug)]
 pub struct AuditDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]
@@ -18,7 +15,6 @@ pub struct AuditDeployArgs {
     #[arg(long, conflicts_with = "contract_address")]
     pub contract_alias: Option<String>,
 }
-
 impl Run for AuditDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -47,7 +43,6 @@ impl Run for AuditDeployArgs {
         print_with_summary(context, summary, &report)
     }
 }
-
 impl AuditDeployArgs {
     fn audit_contract(
         &self,
@@ -61,7 +56,6 @@ impl AuditDeployArgs {
             .unwrap_or(false);
         let dataspace = binding.get("dataspace").and_then(Value::as_str);
         let code_hash_raw = binding.get("code_hash_hex").and_then(Value::as_str);
-
         let mut record = Map::new();
         record.insert(
             "contract_address".into(),
@@ -72,12 +66,10 @@ impl AuditDeployArgs {
             "dataspace".into(),
             dataspace.map_or(Value::Null, Value::from),
         );
-
         let mut manifest_map = Map::new();
         let mut proposal_map = Map::new();
         let mut code_map = Map::new();
         let mut issues = Vec::new();
-
         let Some(code_hash_raw) = code_hash_raw else {
             manifest_map.insert("present".into(), Value::from(false));
             proposal_map.insert("expected_id".into(), Value::Null);
@@ -96,9 +88,7 @@ impl AuditDeployArgs {
                 issues,
             ));
         };
-
         record.insert("code_hash_input".into(), Value::from(code_hash_raw));
-
         let code_hash = match canonicalize_hex32(code_hash_raw) {
             Ok(hash) => hash,
             Err(err) => {
@@ -121,7 +111,6 @@ impl AuditDeployArgs {
             }
         };
         record.insert("code_hash".into(), Value::from(code_hash.clone()));
-
         let manifest_abi_hash =
             audit_manifest_map(client, &code_hash, &mut manifest_map, &mut issues);
         audit_code_map(client, &code_hash, &mut code_map, &mut issues);
@@ -133,7 +122,6 @@ impl AuditDeployArgs {
             &mut proposal_map,
             &mut issues,
         );
-
         Ok(finalize_record(
             record,
             manifest_map,
@@ -143,7 +131,6 @@ impl AuditDeployArgs {
         ))
     }
 }
-
 fn finalize_record(
     mut record: Map,
     manifest_map: Map,
@@ -164,7 +151,6 @@ fn finalize_record(
     record.insert("issue_count".into(), Value::from(issue_count as u64));
     Value::Object(record)
 }
-
 fn audit_manifest_map(
     client: &Client,
     code_hash: &str,
@@ -174,7 +160,6 @@ fn audit_manifest_map(
     let manifest_value = client.get_contract_manifest_json(code_hash);
     manifest_map.insert("present".into(), Value::from(manifest_value.is_ok()));
     let mut manifest_abi_hash: Option<String> = None;
-
     match manifest_value {
         Ok(manifest_v) => {
             if let Some(manifest_obj) = manifest_v.get("manifest").and_then(Value::as_object) {
@@ -199,7 +184,6 @@ fn audit_manifest_map(
                 } else {
                     manifest_map.insert("code_hash".into(), Value::Null);
                 }
-
                 if let Some(abi_hash_str) = manifest_obj.get("abi_hash").and_then(Value::as_str) {
                     match canonicalize_hex32(abi_hash_str) {
                         Ok(abi_hash) => {
@@ -229,10 +213,8 @@ fn audit_manifest_map(
             issues.push(format!("manifest_fetch_error: {err}"));
         }
     }
-
     manifest_abi_hash
 }
-
 fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: &mut Vec<String>) {
     match client.get_contract_code_bytes(code_hash) {
         Ok(bytes) => {
@@ -263,7 +245,6 @@ fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: 
         }
     }
 }
-
 fn audit_proposal_map(
     client: &Client,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
@@ -277,7 +258,6 @@ fn audit_proposal_map(
         proposal_map.insert("found".into(), Value::from(false));
         return;
     };
-
     if let Some(expected_id) = resolve_proposal_id(
         contract_address,
         code_hash,
@@ -297,7 +277,6 @@ fn audit_proposal_map(
         );
     }
 }
-
 fn resolve_proposal_id(
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
@@ -326,7 +305,6 @@ fn resolve_proposal_id(
         }
     }
 }
-
 fn fetch_proposal_json(
     client: &Client,
     proposal_id_hex: &str,
@@ -343,7 +321,6 @@ fn fetch_proposal_json(
         }
     }
 }
-
 fn process_proposal_json(
     proposal_json: &Value,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
@@ -361,11 +338,9 @@ fn process_proposal_json(
         issues.push("proposal_missing".into());
         return;
     }
-
     let Some(proposal_obj) = proposal_json.get("proposal").and_then(Value::as_object) else {
         return;
     };
-
     update_status(proposal_obj, proposal_map, issues);
     if let Some(kind_obj) = proposal_obj.get("kind").and_then(Value::as_object) {
         if let Some(deploy_obj) = kind_obj.get("DeployContract").and_then(Value::as_object) {
@@ -382,7 +357,6 @@ fn process_proposal_json(
         }
     }
 }
-
 fn update_status(proposal_obj: &Map, proposal_map: &mut Map, issues: &mut Vec<String>) {
     if let Some(status) = proposal_obj.get("status").and_then(Value::as_str) {
         proposal_map.insert("status".into(), Value::from(status));
@@ -393,7 +367,6 @@ fn update_status(proposal_obj: &Map, proposal_map: &mut Map, issues: &mut Vec<St
         issues.push("proposal_status_missing".into());
     }
 }
-
 fn audit_deploy_contract(
     deploy_obj: &Map,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
@@ -432,7 +405,6 @@ fn audit_deploy_contract(
         issues,
     );
 }
-
 fn check_contract_address(
     deploy_obj: &Map,
     expected: &iroha::data_model::smart_contract::ContractAddress,
@@ -449,7 +421,6 @@ fn check_contract_address(
         issues.push("proposal_contract_address_mismatch".into());
     }
 }
-
 #[derive(Clone, Copy)]
 struct HexFieldContext<'a> {
     source_key: &'a str,
@@ -460,7 +431,6 @@ struct HexFieldContext<'a> {
     mismatch_issue: &'static str,
     invalid_issue: &'static str,
 }
-
 fn check_hex_field(
     deploy_obj: &Map,
     ctx: &HexFieldContext<'_>,

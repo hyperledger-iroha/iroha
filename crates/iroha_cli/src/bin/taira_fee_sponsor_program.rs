@@ -1,10 +1,4 @@
 //! Provision one exact Taira fee sponsor program revision and isolated vault.
-
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use iroha::{
@@ -28,9 +22,12 @@ use iroha::{
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_primitives::numeric::Quantity;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use toml::Value;
 use url::Url;
-
 #[derive(Debug, Parser)]
 #[command(
     about = "Create, stage, fund, enroll, and activate an exact Taira fee sponsor program",
@@ -65,14 +62,12 @@ struct Args {
     #[arg(long, default_value_t = 600)]
     status_timeout_secs: u64,
 }
-
 fn table<'a>(value: &'a Value, key: &str) -> Result<&'a toml::value::Table> {
     value
         .get(key)
         .and_then(Value::as_table)
         .ok_or_else(|| eyre::eyre!("missing [{key}] table"))
 }
-
 fn string_at<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a str> {
     table
         .get(key)
@@ -80,7 +75,6 @@ fn string_at<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a str> {
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| eyre::eyre!("missing `{key}`"))
 }
-
 fn taira_profile_signer(path: &Path) -> Result<(String, String, NetworkId)> {
     let raw = std::fs::read_to_string(path)
         .wrap_err_with(|| format!("read Taira profile {}", path.display()))?;
@@ -124,7 +118,6 @@ fn taira_profile_signer(path: &Path) -> Result<(String, String, NetworkId)> {
     let private_key = private_key.to_owned();
     Ok((authority, private_key, network_id))
 }
-
 fn parse_taira_account(account: &str, discriminant: u16) -> Result<AccountId> {
     if account.contains('@') {
         bail!(
@@ -135,7 +128,6 @@ fn parse_taira_account(account: &str, discriminant: u16) -> Result<AccountId> {
         .and_then(|address| address.to_account_id())
         .wrap_err_with(|| format!("parse Taira account address `{account}`"))
 }
-
 fn default_alias_cache_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     sorafs_manifest::alias_cache::AliasCachePolicy::new(
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -148,7 +140,6 @@ fn default_alias_cache_policy() -> sorafs_manifest::alias_cache::AliasCachePolic
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
-
 fn read_norito_json<T>(path: &PathBuf, label: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize,
@@ -157,7 +148,6 @@ where
     norito::json::from_slice(&bytes)
         .wrap_err_with(|| format!("parse canonical {label} {}", path.display()))
 }
-
 fn provisioning_instructions(
     revision: FeeSponsorProgramRevision,
     payout_account: AccountId,
@@ -198,7 +188,6 @@ fn provisioning_instructions(
     ]);
     instructions
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.fund_amount.is_zero() {
@@ -218,7 +207,6 @@ fn main() -> Result<()> {
             "profile signer account `{signer}` does not match profile authority `{profile_account}`"
         );
     }
-
     let revision: FeeSponsorProgramRevision =
         read_norito_json(&args.revision_json, "program revision JSON")?;
     revision
@@ -241,7 +229,6 @@ fn main() -> Result<()> {
     fee_payment
         .validate()
         .wrap_err("invalid fee payment intent")?;
-
     let beneficiaries = if args.beneficiaries.is_empty() {
         vec![signer.clone()]
     } else {
@@ -257,7 +244,6 @@ fn main() -> Result<()> {
         args.fund_amount,
         args.activate_at_height,
     );
-
     let client = Client::new(Config {
         chain: args.chain_id,
         network_id,
@@ -276,7 +262,6 @@ fn main() -> Result<()> {
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::default(),
     });
-
     let mut payload = client.try_build_transaction_payload_from_items(
         instructions,
         fee_payment.clone(),
@@ -299,11 +284,9 @@ fn main() -> Result<()> {
     println!("{}", norito::json::to_json_pretty(&receipt)?);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, num::NonZeroU64, str::FromStr};
-
+    use super::*;
     use iroha::{
         crypto::{Algorithm, KeyPair},
         data_model::{
@@ -316,9 +299,7 @@ mod tests {
             },
         },
     };
-
-    use super::*;
-
+    use std::{fs, num::NonZeroU64, str::FromStr};
     fn sample_revision() -> FeeSponsorProgramRevision {
         let sponsor = AccountId::new(
             KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)
@@ -355,7 +336,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn fee_quote_selection_rejects_payer_gas_and_revision_substitution() {
         let authority = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10));
@@ -366,7 +346,6 @@ mod tests {
                 NonZeroU64::new(11)
             ))
         );
-
         let program_id = sample_revision().program_id;
         let sponsor =
             FeePaymentIntent::sponsor(program_id.clone(), 1, Vec::new(), NonZeroU64::new(10));
@@ -380,7 +359,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn provisioning_order_is_create_stage_enroll_fund_activate() {
         let revision = sample_revision();
@@ -410,7 +388,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn profile_signer_uses_structural_file_backed_onboarding() {
         let directory = tempfile::tempdir().expect("temporary profile directory");
@@ -429,7 +406,6 @@ expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42
 "#,
         )
         .expect("write structural profile");
-
         assert_eq!(
             taira_profile_signer(&profile_path).expect("read file-backed signer"),
             (
@@ -441,7 +417,6 @@ expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42
             )
         );
     }
-
     #[test]
     fn profile_signer_rejects_legacy_inline_private_key() {
         let directory = tempfile::tempdir().expect("temporary profile directory");
@@ -459,7 +434,6 @@ expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42
 "#,
         )
         .expect("write legacy profile");
-
         let error = taira_profile_signer(&profile_path)
             .expect_err("inline private key must be rejected")
             .to_string();

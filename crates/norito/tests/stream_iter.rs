@@ -1,17 +1,14 @@
 //! Streaming iterator regression coverage.
-
-use std::{
-    collections::{BTreeMap, HashMap},
-    io::Cursor,
-};
-
 use norito::core as norito_core;
 use norito::core::{DecodeFlagsGuard, header_flags};
 use norito::{
     Compression, Error, NoritoSerialize, StreamMapIter, serialize_into,
     stream_btreemap_collect_from_reader, stream_hashmap_collect_from_reader, stream_seq_iter,
 };
-
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Cursor,
+};
 #[cfg(feature = "packed-struct")]
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
@@ -19,27 +16,23 @@ struct PackedRow {
     id: u32,
     tag: u16,
 }
-
 fn overflow_varint() -> Vec<u8> {
     let mut bytes = vec![0x80; 9];
     bytes.push(0x02);
     bytes
 }
-
 fn frame_with_unchecked_flags<T: NoritoSerialize>(payload: &[u8], flags: u8) -> Vec<u8> {
     let mut bytes =
         norito_core::frame_bare_with_header_flags::<T>(payload, 0).expect("frame payload");
     bytes[norito_core::Header::SIZE - 1] = flags;
     bytes
 }
-
 #[test]
 fn stream_seq_iter_half_then_finish() {
     // Build a reasonably large Vec<u32>
     let v: Vec<u32> = (0..10_000u32).map(|i| i.wrapping_mul(7) + 3).collect();
     let mut buf = Vec::new();
     serialize_into(&mut buf, &v, Compression::None).unwrap();
-
     // Iterate half, then finish()
     let mut it = stream_seq_iter::<_, u32>(Cursor::new(buf.clone())).unwrap();
     let mut sum = 0u64;
@@ -54,7 +47,6 @@ fn stream_seq_iter_half_then_finish() {
     it.finish().unwrap();
     assert!(sum > 0);
 }
-
 #[test]
 fn stream_map_iter_partial_then_finish() {
     // HashMap<String,u32>
@@ -75,7 +67,6 @@ fn stream_map_iter_partial_then_finish() {
     }
     it.finish().unwrap();
     assert!(cnt == 1000);
-
     // BTreeMap<u64,String> compressed streaming, consume fully via finish()
     let mut bm: BTreeMap<u64, String> = BTreeMap::new();
     for i in 0..5000u64 {
@@ -87,7 +78,6 @@ fn stream_map_iter_partial_then_finish() {
     // Don't consume any entries; just finish and verify CRC
     it2.finish().unwrap();
 }
-
 #[test]
 fn stream_seq_iter_compact_len_roundtrip() {
     let values: Vec<u32> = (0..256u32).map(|i| i.wrapping_mul(3) + 1).collect();
@@ -100,14 +90,12 @@ fn stream_seq_iter_compact_len_roundtrip() {
     };
     let bytes =
         norito_core::frame_bare_with_header_flags::<Vec<u32>>(&payload, flags).expect("frame");
-
     let mut iter = stream_seq_iter::<_, u32>(Cursor::new(bytes)).expect("iter");
     let collected: Vec<u32> = iter.by_ref().map(|v| v.expect("value")).collect();
     iter.finish().expect("finish");
     assert_eq!(collected, values);
     norito_core::reset_decode_state();
 }
-
 #[cfg(feature = "packed-struct")]
 #[test]
 fn stream_seq_iter_packed_struct_roundtrip() {
@@ -125,14 +113,12 @@ fn stream_seq_iter_packed_struct_roundtrip() {
     };
     let bytes = norito_core::frame_bare_with_header_flags::<Vec<PackedRow>>(&payload, flags)
         .expect("frame");
-
     let mut iter = stream_seq_iter::<_, PackedRow>(Cursor::new(bytes)).expect("iter");
     let collected: Vec<PackedRow> = iter.by_ref().map(|v| v.expect("value")).collect();
     iter.finish().expect("finish");
     assert_eq!(collected, values);
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_compact_len_roundtrip() {
     let flags = header_flags::COMPACT_LEN;
@@ -156,7 +142,6 @@ fn stream_map_compact_len_roundtrip() {
     let collected =
         stream_hashmap_collect_from_reader::<_, String, u32>(Cursor::new(bytes)).expect("collect");
     assert_eq!(collected, hm);
-
     let mut bm: BTreeMap<u64, String> = BTreeMap::new();
     for i in 0..128u64 {
         bm.insert(i * 3 + 1, format!("v-{i}"));
@@ -174,7 +159,6 @@ fn stream_map_compact_len_roundtrip() {
     assert_eq!(collected, bm);
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_packed_fixed_offsets_roundtrip() {
     let flags = header_flags::PACKED_SEQ;
@@ -222,7 +206,6 @@ fn stream_map_packed_fixed_offsets_roundtrip() {
     assert_eq!(collected, expected);
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_seq_iter_rejects_short_seq_header() {
     let flags = 0;
@@ -235,7 +218,6 @@ fn stream_seq_iter_rejects_short_seq_header() {
     assert!(matches!(err, Error::LengthMismatch));
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_seq_iter_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
@@ -247,7 +229,6 @@ fn stream_seq_iter_rejects_reserved_flags() {
     assert!(matches!(err, Error::UnsupportedFeature(_)));
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_iter_rejects_short_entry_count_header() {
     let flags = 0;
@@ -260,7 +241,6 @@ fn stream_map_iter_rejects_short_entry_count_header() {
     assert!(matches!(err, Error::LengthMismatch));
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_iter_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
@@ -272,7 +252,6 @@ fn stream_map_iter_rejects_reserved_flags() {
     assert!(matches!(err, Error::UnsupportedFeature(_)));
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_collect_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
@@ -283,7 +262,6 @@ fn stream_map_collect_rejects_reserved_flags() {
     assert!(matches!(err, Error::UnsupportedFeature(_)));
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_iter_rejects_overflowing_key_len_varint() {
     let flags = header_flags::COMPACT_LEN;
@@ -297,7 +275,6 @@ fn stream_map_iter_rejects_overflowing_key_len_varint() {
     assert!(matches!(item, Err(Error::LengthMismatch)));
     norito_core::reset_decode_state();
 }
-
 #[test]
 fn stream_map_collect_rejects_overflowing_key_len_varint() {
     let flags = header_flags::COMPACT_LEN;

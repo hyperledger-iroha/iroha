@@ -1,8 +1,6 @@
 //! Kotodama pointer-type semantic restrictions: ensure pointer constructors
 //! cannot be used as integers in arithmetic.
-
 use ivm::kotodama::{compiler::Compiler, i18n::Language};
-
 #[test]
 fn pointer_cannot_participate_in_arithmetic() {
     let src = r#"

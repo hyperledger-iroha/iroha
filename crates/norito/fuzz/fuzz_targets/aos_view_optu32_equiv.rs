@@ -1,7 +1,6 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-
 #[derive(Clone, Debug, Arbitrary)]
 struct Row {
     id: u64,
@@ -9,7 +8,6 @@ struct Row {
     val: u32,
     flag: bool,
 }
-
 fuzz_target!(|rows: Vec<Row>| {
     let rows = rows.into_iter().take(128).collect::<Vec<_>>();
     let borrowed: Vec<(u64, Option<u32>, bool)> = rows

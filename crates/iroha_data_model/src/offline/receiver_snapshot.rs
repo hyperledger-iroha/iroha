@@ -1,12 +1,9 @@
 //! Portable, finality-bound active-receiver snapshot primitives.
-
+use super::KagemushaDevicePublicKeyV2;
+use crate::{account::AccountId, asset::AssetDefinitionId};
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
-use super::KagemushaDevicePublicKeyV2;
-use crate::{account::AccountId, asset::AssetDefinitionId};
-
 /// Current active-receiver snapshot format.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Maximum active or ambiguous receiver tuples committed by one block.
@@ -18,11 +15,9 @@ pub const KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_SIBLINGS_V1: usize = 256;
 /// Fixed synthetic execution-witness key committed by every post-upgrade block.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1: &[u8] =
     b"\xd3iroha:kagemusha:active-receiver:v1";
-
 const RECEIVER_LEAF_DOMAIN_V1: &[u8] = b"iroha:kagemusha:active-receiver:leaf:v1\0";
 const RECEIVER_EMPTY_DOMAIN_V1: &[u8] = b"iroha:kagemusha:active-receiver:empty:v1\0";
 const RECEIVER_NODE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:active-receiver:node:v1\0";
-
 /// Receiver identity used to select an active registration.
 ///
 /// The P-256 key is intentionally excluded. A second current registration for
@@ -42,7 +37,6 @@ pub struct KagemushaActiveReceiverKeyV1 {
     /// Canonical offline-cash asset definition.
     pub asset_definition_id: AssetDefinitionId,
 }
-
 /// Consensus-derived value for one unique active native registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -72,7 +66,6 @@ pub struct KagemushaActiveReceiverValueV1 {
     /// Consensus observed the canonical asset definition at end of block.
     pub asset_definition_exists: bool,
 }
-
 /// One receiver tuple committed by the canonical balanced snapshot tree.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -86,7 +79,6 @@ pub struct KagemushaActiveReceiverActiveEntryV1 {
     /// Authenticated registration projection.
     pub value: KagemushaActiveReceiverValueV1,
 }
-
 /// Ambiguity marker for a tuple with multiple current native registrations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -102,7 +94,6 @@ pub struct KagemushaActiveReceiverAmbiguousEntryV1 {
     /// Hash of their canonically sorted state hashes.
     pub candidates_digest: Hash,
 }
-
 /// One receiver tuple committed by the canonical balanced snapshot tree.
 #[expect(
     clippy::large_enum_variant,
@@ -127,7 +118,6 @@ pub enum KagemushaActiveReceiverEntryV1 {
     #[codec(index = 1)]
     Ambiguous(KagemushaActiveReceiverAmbiguousEntryV1),
 }
-
 impl KagemushaActiveReceiverEntryV1 {
     /// Return the tuple key shared by every entry variant.
     #[must_use]
@@ -137,7 +127,6 @@ impl KagemushaActiveReceiverEntryV1 {
             Self::Ambiguous(entry) => &entry.key,
         }
     }
-
     /// Return the active value, rejecting ambiguous entries.
     #[must_use]
     pub fn active_value(&self) -> Option<&KagemushaActiveReceiverValueV1> {
@@ -147,7 +136,6 @@ impl KagemushaActiveReceiverEntryV1 {
         }
     }
 }
-
 /// Availability state bound into every per-block receiver commitment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -168,7 +156,6 @@ pub enum KagemushaActiveReceiverSnapshotStatusV1 {
     #[codec(index = 1)]
     Unavailable(Hash),
 }
-
 /// Exact value stored under the fixed synthetic execution-witness key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -190,7 +177,6 @@ pub struct KagemushaActiveReceiverSnapshotCommitmentV1 {
     /// Root of the canonical balanced receiver tree.
     pub tree_root: Hash,
 }
-
 /// Balanced-tree membership proof for one exact receiver entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -206,7 +192,6 @@ pub struct KagemushaActiveReceiverMembershipProofV1 {
     /// Siblings from leaf level to root.
     pub siblings: Vec<Hash>,
 }
-
 /// Sparse-SMT proof that the fixed snapshot commitment is an ordinary write.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -222,7 +207,6 @@ pub struct KagemushaActiveReceiverWitnessProofV1 {
     /// Exactly 256 siblings from leaf level to the ordinary-write root.
     pub siblings: Vec<Hash>,
 }
-
 /// Complete derived snapshot used internally by consensus and proof serving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaActiveReceiverSnapshotV1 {
@@ -231,7 +215,6 @@ pub struct KagemushaActiveReceiverSnapshotV1 {
     /// Entries in canonical key order.
     pub entries: Vec<KagemushaActiveReceiverEntryV1>,
 }
-
 impl KagemushaActiveReceiverSnapshotV1 {
     /// Build and validate one canonical available snapshot.
     ///
@@ -277,7 +260,6 @@ impl KagemushaActiveReceiverSnapshotV1 {
             entries,
         })
     }
-
     /// Build a deterministic fail-closed snapshot for unusable governed state.
     ///
     /// # Errors
@@ -304,7 +286,6 @@ impl KagemushaActiveReceiverSnapshotV1 {
             entries: Vec::new(),
         })
     }
-
     /// Return one active entry and its exact canonical membership path.
     ///
     /// # Errors
@@ -338,7 +319,6 @@ impl KagemushaActiveReceiverSnapshotV1 {
         Ok((self.entries[index].clone(), proof))
     }
 }
-
 impl KagemushaActiveReceiverMembershipProofV1 {
     /// Verify one exact entry against a snapshot commitment.
     #[must_use]
@@ -384,7 +364,6 @@ impl KagemushaActiveReceiverMembershipProofV1 {
         current == commitment.tree_root
     }
 }
-
 impl KagemushaActiveReceiverWitnessProofV1 {
     /// Verify the fixed synthetic write against an ordinary-write SMT root.
     #[must_use]
@@ -421,7 +400,6 @@ impl KagemushaActiveReceiverWitnessProofV1 {
         }
         current == expected_ordinary_writes_root
     }
-
     /// Decode and return the exact canonical snapshot commitment.
     ///
     /// # Errors
@@ -438,7 +416,6 @@ impl KagemushaActiveReceiverWitnessProofV1 {
         })
     }
 }
-
 fn validate_entry(
     entry: &KagemushaActiveReceiverEntryV1,
     policy_hash: Hash,
@@ -475,7 +452,6 @@ fn validate_entry(
     }
     Ok(())
 }
-
 fn receiver_tree_root(entries: &[KagemushaActiveReceiverEntryV1]) -> Result<Hash, String> {
     if entries.is_empty() {
         return Ok(receiver_empty_hash());
@@ -499,7 +475,6 @@ fn receiver_tree_root(entries: &[KagemushaActiveReceiverEntryV1]) -> Result<Hash
         .copied()
         .ok_or_else(|| "active-receiver tree has no root".into())
 }
-
 fn receiver_membership_proof(
     entries: &[KagemushaActiveReceiverEntryV1],
     leaf_index: usize,
@@ -533,23 +508,19 @@ fn receiver_membership_proof(
         siblings,
     })
 }
-
 fn receiver_leaf_hash(entry: &KagemushaActiveReceiverEntryV1) -> Result<Hash, String> {
     let encoded = norito::encode_canonical(entry).map_err(|error| error.to_string())?;
     Ok(domain_hash(RECEIVER_LEAF_DOMAIN_V1, &[&encoded]))
 }
-
 fn receiver_empty_hash() -> Hash {
     domain_hash(RECEIVER_EMPTY_DOMAIN_V1, &[])
 }
-
 fn receiver_node_hash(level: u16, left: Hash, right: Hash) -> Hash {
     domain_hash(
         RECEIVER_NODE_DOMAIN_V1,
         &[&level.to_le_bytes(), left.as_ref(), right.as_ref()],
     )
 }
-
 fn ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
     preimage.push(1);
@@ -557,7 +528,6 @@ fn ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     preimage.extend_from_slice(right.as_ref());
     Hash::new(preimage)
 }
-
 fn domain_hash(domain: &[u8], chunks: &[&[u8]]) -> Hash {
     let capacity = domain.len() + chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
     let mut preimage = Vec::with_capacity(capacity);
@@ -567,16 +537,13 @@ fn domain_hash(domain: &[u8], chunks: &[&[u8]]) -> Hash {
     }
     Hash::new(preimage)
 }
-
 fn is_zero_hash(hash: Hash) -> bool {
     hash.as_ref().iter().all(|byte| *byte == 0)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::account::AccountId;
-
     fn key(device: &str) -> KagemushaActiveReceiverKeyV1 {
         let (public_key, _) =
             iroha_crypto::KeyPair::try_from_seed(vec![0xDA; 32], iroha_crypto::Algorithm::Ed25519)
@@ -591,7 +558,6 @@ mod tests {
             ),
         }
     }
-
     fn value(seed: u8, policy: Hash) -> KagemushaActiveReceiverValueV1 {
         KagemushaActiveReceiverValueV1 {
             registration_hash: Hash::new([seed, 1]),
@@ -613,7 +579,6 @@ mod tests {
             asset_definition_exists: true,
         }
     }
-
     fn witness_root(proof: &KagemushaActiveReceiverWitnessProofV1) -> Hash {
         let path = Hash::new(&proof.key);
         let value_hash = Hash::new(&proof.value);
@@ -634,7 +599,6 @@ mod tests {
         }
         current
     }
-
     #[test]
     fn membership_binds_canonical_order_and_rejects_tampering() {
         let policy = Hash::new(b"policy");
@@ -660,7 +624,6 @@ mod tests {
         tampered.siblings[0] = Hash::new(b"tampered");
         assert!(!tampered.verify(&entry, &snapshot.commitment));
     }
-
     #[test]
     fn duplicate_tuple_is_rejected_and_ambiguous_tuple_is_not_routable() {
         let policy = Hash::new(b"policy");
@@ -688,7 +651,6 @@ mod tests {
                 .expect("ambiguous snapshot");
         assert!(snapshot.active_membership(&key("same")).is_err());
     }
-
     #[test]
     fn witness_commitment_rejects_alternate_norito_layout() {
         let commitment = KagemushaActiveReceiverSnapshotV1::unavailable(
@@ -711,7 +673,6 @@ mod tests {
         );
         norito::decode_from_bytes::<KagemushaActiveReceiverSnapshotCommitmentV1>(&alternate)
             .expect("ordinary Norito accepts the advertised alternate layout");
-
         let canonical_proof = KagemushaActiveReceiverWitnessProofV1 {
             key: KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
             value: canonical,
@@ -725,7 +686,6 @@ mod tests {
             commitment
         );
         assert!(canonical_proof.verify(witness_root(&canonical_proof)));
-
         let alternate_proof = KagemushaActiveReceiverWitnessProofV1 {
             value: alternate,
             ..canonical_proof
@@ -738,7 +698,6 @@ mod tests {
         );
         assert!(!alternate_proof.verify(witness_root(&alternate_proof)));
     }
-
     #[test]
     fn receiver_identity_encoding_ignores_and_restores_ambient_flags() {
         let policy = Hash::new(b"policy");
@@ -755,7 +714,6 @@ mod tests {
             norito::to_bytes(&entry).expect("encode alternate-layout receiver entry")
         };
         assert_ne!(alternate, canonical);
-
         let (ambient_canonical, ambient_hash) = {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             let before =
@@ -775,7 +733,6 @@ mod tests {
         assert_eq!(ambient_canonical, canonical);
         assert_eq!(ambient_hash, baseline_hash);
     }
-
     #[test]
     fn unix_epoch_block_time_is_a_valid_consensus_snapshot_time() {
         let policy = Hash::new(b"policy");

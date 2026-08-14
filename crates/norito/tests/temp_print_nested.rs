@@ -1,8 +1,6 @@
 //! TEMP: print hex for nested alternation window fixture.
 #![cfg(feature = "json")]
-
 use norito::columnar as ncb;
-
 fn to_hex(bs: &[u8]) -> String {
     let mut s = String::with_capacity(bs.len() * 2);
     for b in bs {
@@ -11,7 +9,6 @@ fn to_hex(bs: &[u8]) -> String {
     }
     s
 }
-
 #[test]
 fn print_offsets_nested_window() {
     use ncb::EnumBorrow;

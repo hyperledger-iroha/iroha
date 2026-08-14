@@ -1,5 +1,4 @@
 // Missing-signature mutation coverage for persisted equivocation evidence.
-
 #[test]
 fn persist_record_rejects_missing_signature_mutation() {
     let ctx = test_context();

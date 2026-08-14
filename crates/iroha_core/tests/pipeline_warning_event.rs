@@ -1,9 +1,6 @@
 //! Pipeline warning delivery test: inject a mismatching DAG fingerprint sidecar
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! and assert that a Pipeline Warning event is emitted during block processing.
-
-use std::sync::Arc;
-
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::{
     governance::manifest::LaneManifestRegistry,
@@ -12,8 +9,8 @@ use iroha_core::{
     state::State,
 };
 use iroha_data_model::{events::EventBox, prelude::*};
+use std::sync::Arc;
 // unused
-
 #[test]
 fn pipeline_warning_emitted_on_dag_mismatch() {
     // Build a persistent Kura in a temp directory so sidecars are writable.
@@ -41,7 +38,6 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     )
     .expect("kura init");
     let query = LiveQueryStore::start_test();
-
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
@@ -68,7 +64,6 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     // Build a block with two txs (independent)
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -102,7 +97,6 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         .chain(0, None)
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
-
     // Inject a mismatching sidecar for this block height before validation
     let height = new_block.header().height().get();
     let block_hash = new_block.header().hash();
@@ -123,14 +117,12 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         sidecar_txs,
     );
     kura.write_pipeline_metadata(&sidecar);
-
     // Validate and apply; expect a Pipeline Warning event among returned events
     let mut sb = state.block(new_block.header());
     let vb =
         iroha_core::block::ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
-
     let warned = events.iter().any(|e| match e {
         EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)) => {
             w.kind == "dag_fingerprint_mismatch"
@@ -146,7 +138,6 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     });
     assert!(warned, "expected a pipeline warning event for DAG mismatch");
 }
-
 #[test]
 fn pipeline_warning_ignored_for_stale_sidecar() {
     // Build a persistent Kura in a temp directory so sidecars are writable.
@@ -174,7 +165,6 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     )
     .expect("kura init");
     let query = LiveQueryStore::start_test();
-
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
@@ -201,7 +191,6 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     // Build a block with two txs (independent)
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -235,7 +224,6 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         .chain(0, None)
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
-
     // Inject a stale sidecar (no tx hashes for this block height) before validation
     let height = new_block.header().height().get();
     let block_hash = new_block.header().hash();
@@ -251,14 +239,12 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         Vec::new(),
     );
     kura.write_pipeline_metadata(&sidecar);
-
     // Validate and apply; expect no DAG mismatch warning when sidecar txs do not match the block
     let mut sb = state.block(new_block.header());
     let vb =
         iroha_core::block::ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
-
     let warned = events.iter().any(|e| match e {
         EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)) => {
             w.kind == "dag_fingerprint_mismatch"

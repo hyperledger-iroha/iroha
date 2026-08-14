@@ -1,5 +1,4 @@
 // Runtime-provider operation, endpoint, ambiguity, and billing regressions.
-
 fn valid_governance_sign_request_payload() -> Vec<u8> {
     encode_canonical(
         &PurposeSignRequestWireV1 {
@@ -13,7 +12,6 @@ fn valid_governance_sign_request_payload() -> Vec<u8> {
     )
     .expect("encode governance sign request")
 }
-
 #[test]
 fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     let webauthn = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
@@ -53,7 +51,6 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     );
     validate_operation_request(&qualify_publisher)
         .expect("transparency publisher supports only its qualified slot");
-
     let now_unix_ms = u64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -93,7 +90,6 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
         evidence_viewer_checkpoint_record_limit(&checkpoint).expect("checkpoint record limit"),
     )
     .expect("encode checkpoint record");
-
     let mut mutating = Vec::new();
     mutating.push(validated_test_operation(
         webauthn.clone(),
@@ -199,7 +195,6 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
             request.operation
         );
     }
-
     let readonly = [
         validated_test_operation(
             grants,
@@ -261,7 +256,6 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
             request.operation
         );
     }
-
     let redacted = format!(
         "{:?}",
         EvidenceViewerVerifyAndConsumeRequestWireV1 {
@@ -276,7 +270,6 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     assert!(!redacted.contains("challenge-secret"));
     assert!(!redacted.contains("assertion-secret"));
 }
-
 #[test]
 fn provider_ingest_wire_roles_bind_exact_public_policy() {
     let source = ProviderBindingWireV1 {
@@ -348,7 +341,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_observation(&source, &source_observation),
         Err(BrokerError::BindingMismatch)
     );
-
     let exact_signer = ProviderIngestSignerBindingWireV1 {
         runtime_handle: "software://sorafs/provider-ingest/signer-primary".to_owned(),
         adapter_revision: 3,
@@ -409,14 +401,12 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_wire_binding(&below_minimum),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut leaf = resolver.clone();
     leaf.slot = IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner.wire_id();
     leaf.handle = exact_signer.runtime_handle.clone();
     leaf.revision = Some(exact_signer.adapter_revision);
     leaf.policy_digest = Some(exact_signer.signer_policy_digest);
     assert_eq!(validate_wire_binding(&leaf), Ok(()));
-
     let mut substituted = leaf.clone();
     substituted
         .provider_ingest_signer_binding
@@ -427,7 +417,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_wire_binding(&substituted),
         Err(BrokerError::Protocol)
     );
-
     let checkpoint = ProviderBindingWireV1 {
         slot: IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore.wire_id(),
         handle: "sealed://sorafs/provider-ingest/checkpoint-primary".to_owned(),
@@ -540,7 +529,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         validate_operation_request(&cross_slot_checkpoint_load),
         Err(BrokerError::BindingMismatch)
     );
-
     let retention = ProviderBindingWireV1 {
         slot: IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority.wire_id(),
         handle: "sealed://sorafs/provider-ingest/retention-primary".to_owned(),
@@ -580,7 +568,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         moderation_panel_notification_archive_binding: None,
     };
     assert_eq!(validate_wire_binding(&retention), Ok(()));
-
     for operation in [
         OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1,
         OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1,
@@ -634,7 +621,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
             "provider-ingest operation {operation} must stay within the process raw-frame ceiling"
         );
     }
-
     let signer_owner = iroha_data_model::account::AccountId::new(
         iroha_crypto::PublicKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &TEST_SIGNER_KEY)
             .expect("provider-ingest signer public key"),
@@ -735,7 +721,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let owner = iroha_data_model::account::AccountId::new(
         provider_ingest_completion_test_keypair()
             .public_key()
@@ -781,7 +766,6 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         Err(BrokerError::BindingMismatch)
     );
 }
-
 #[test]
 fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
     let owner = iroha_data_model::account::AccountId::new(
@@ -796,13 +780,11 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
         provider_ingest_signer_context_from_wire(&wire),
         Ok(context.clone())
     );
-
     let payload = provider_ingest_completion_test_payload(owner);
     assert_eq!(
         ensure_provider_ingest_completion_payload(&payload, &context, &server_test_network_id(),),
         Ok(())
     );
-
     let mut substituted = wire;
     substituted.expected_assignment_revision += 1;
     let substituted = provider_ingest_signer_context_from_wire(&substituted)
@@ -815,7 +797,6 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut zero = provider_ingest_signer_context_to_wire(&context)
         .expect("encode exact provider-ingest signer context");
     zero.expected_assignment_revision = 0;
@@ -824,7 +805,6 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
     let owner = iroha_data_model::account::AccountId::new(
@@ -838,7 +818,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(&exact, &context, &server_test_network_id(),),
         Ok(())
     );
-
     let other_executable = provider_ingest_completion_test_payload_with_executable(
         server_test_network_id(),
         owner.clone(),
@@ -854,7 +833,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::Rejected)
     );
-
     let wrong_instruction = provider_ingest_completion_test_payload_with_executable(
         server_test_network_id(),
         owner.clone(),
@@ -876,7 +854,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::Rejected)
     );
-
     let completion = provider_ingest_completion_test_instruction(owner.clone());
     let batch = provider_ingest_completion_test_payload_with_executable(
         server_test_network_id(),
@@ -894,7 +871,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(&batch, &context, &server_test_network_id(),),
         Err(BrokerError::Rejected)
     );
-
     let extra_instruction = provider_ingest_completion_test_payload_with_executable(
         server_test_network_id(),
         owner.clone(),
@@ -917,7 +893,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::Rejected)
     );
-
     let other_owner = iroha_data_model::account::AccountId::new(
         iroha_crypto::KeyPair::try_from_seed(vec![0x43; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("other provider-ingest owner key")
@@ -942,7 +917,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut wrong_authority = completion.clone();
     wrong_authority.expected_authority.provider_owner = other_owner;
     let wrong_authority = provider_ingest_completion_test_payload_with_executable(
@@ -960,7 +934,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut wrong_policy = completion.clone();
     wrong_policy.expected_authority.signer_policy.policy_digest[0] ^= 1;
     let wrong_policy = provider_ingest_completion_test_payload_with_executable(
@@ -978,7 +951,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut wrong_anchor = completion.clone();
     wrong_anchor.finalized_anchor.block_hash[0] ^= 1;
     let wrong_anchor = provider_ingest_completion_test_payload_with_executable(
@@ -996,7 +968,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut wrong_assignment_revision = completion.clone();
     wrong_assignment_revision.expected_assignment_revision =
         context.expected_assignment_revision + 1;
@@ -1018,7 +989,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut zero_order = completion.clone();
     zero_order.order_id = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0; 32]);
     let mut zero_provider = completion.clone();
@@ -1056,7 +1026,6 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         );
     }
 }
-
 #[test]
 fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
     let keypair = provider_ingest_completion_test_keypair();
@@ -1071,7 +1040,6 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         ensure_provider_ingest_completion_transaction(&exact, &context, &server_test_network_id(),),
         Ok(())
     );
-
     let attachments = iroha_data_model::proof::ProofAttachmentList::try_from(vec![
         iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
@@ -1093,7 +1061,6 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         ),
         Err(BrokerError::Rejected)
     );
-
     let mut multisig = exact;
     multisig.set_multisig_signatures(
         iroha_data_model::transaction::signed::MultisigSignatures::new(Vec::new()),
@@ -1107,12 +1074,10 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() {
     let unit = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1).expect("encode canonical unit");
     decode_canonical::<()>(&unit, MAX_OPERATION_FRAME_BYTES_V1).expect("decode canonical unit");
-
     let binding = signer_binding();
     let metadata_digest = observation(&binding).metadata_digest;
     let payload = valid_governance_sign_request_payload();
@@ -1136,7 +1101,6 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
     let response = operation_response(&request, STATUS_OK_V1, result);
     validate_operation_response(&request, &response, &server_test_network_id())
         .expect("validate exact operation response");
-
     for mutation in 0..11 {
         let mut confused = response.clone();
         match mutation {
@@ -1160,7 +1124,6 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
             "mutation {mutation} must fail"
         );
     }
-
     let mut wrong_result_digest = response.clone();
     wrong_result_digest.result_digest[0] ^= 1;
     reseal_response(&mut wrong_result_digest);
@@ -1181,14 +1144,12 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
         Err(BrokerError::Protocol),
         "provider diagnostics must never cross the broker boundary"
     );
-
     let mut corrupt_request = request;
     corrupt_request.payload.push(4);
     assert_eq!(
         validate_operation_request(&corrupt_request),
         Err(BrokerError::Protocol)
     );
-
     let load_payload = encode_canonical(
         &SealedLoadRequestWireV1 { slot: 1 },
         MAX_OPERATION_FRAME_BYTES_V1,
@@ -1208,7 +1169,6 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
         Err(BrokerError::BindingMismatch)
     );
 }
-
 #[test]
 fn production_endpoint_policy_pins_non_root_service_uid() {
     let policy =
@@ -1221,7 +1181,6 @@ fn production_endpoint_policy_pins_non_root_service_uid() {
         "supplementary-group access never substitutes for the pinned service UID"
     );
 }
-
 #[test]
 fn shipped_taira_validator_unit_owns_private_runtime_directory() {
     let unit = include_str!(concat!(
@@ -1240,7 +1199,6 @@ fn shipped_taira_validator_unit_owns_private_runtime_directory() {
         );
     }
 }
-
 #[test]
 fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
     let production = EndpointPolicy::production();
@@ -1251,14 +1209,11 @@ fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
     );
     assert_eq!(production.socket_mode, STOCK_BROKER_SOCKET_MODE_V1);
     assert!(production.verify_all_ancestors);
-
     let (_directory, path, policy, listener) = bind_fake_broker();
     let first = endpoint_identity(&policy).expect("accept hardened socket");
-
     fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("loosen test socket");
     assert_eq!(endpoint_identity(&policy), Err(BrokerError::Unavailable));
     set_socket_mode(&path).expect("restore test socket mode");
-
     let mut wrong_owner = policy.clone();
     wrong_owner.expected_service_uid = wrong_owner.expected_service_uid.wrapping_add(1);
     assert_eq!(
@@ -1273,14 +1228,12 @@ fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
         Err(BrokerError::Unavailable),
         "a substituted peer credential must fail closed"
     );
-
     let symlink_path = path.with_extension("link");
     symlink(&path, &symlink_path).expect("create test socket symlink");
     assert_eq!(
         endpoint_identity(&EndpointPolicy::for_test(symlink_path)),
         Err(BrokerError::Unavailable)
     );
-
     fs::remove_file(&path).expect("remove first test socket");
     let replacement = UnixListener::bind(&path).expect("bind replacement test socket");
     set_socket_mode(&path).expect("harden replacement test socket");
@@ -1288,14 +1241,12 @@ fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
     assert_ne!(first, second, "device/inode substitution must be visible");
     drop(listener);
     drop(replacement);
-
     let missing = EndpointPolicy::for_test(path.with_extension("missing"));
     assert!(matches!(
         connect_verified(&missing),
         Err(BrokerError::Unavailable)
     ));
 }
-
 #[test]
 fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1307,7 +1258,6 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         let (mut stream, _) = listener.accept().expect("accept fake broker client");
         let handshake = read_handshake(&mut stream);
         send_handshake(&mut stream, &handshake_response(&handshake));
-
         let qualify = read_operation(&mut stream);
         assert_eq!(qualify.request_id, 1);
         assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
@@ -1323,7 +1273,6 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
             &mut stream,
             &operation_response(&qualify, STATUS_OK_V1, qualification),
         );
-
         let sign = read_operation(&mut stream);
         assert_eq!(sign.request_id, 2);
         assert_eq!(sign.operation, OPERATION_SIGN_V1);
@@ -1348,7 +1297,6 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
             &mut stream,
             &operation_response(&sign, STATUS_OK_V1, signature),
         );
-
         let requalify = read_operation(&mut stream);
         assert_eq!(requalify.request_id, 3);
         assert_eq!(requalify.operation, OPERATION_QUALIFY_V1);
@@ -1365,7 +1313,6 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
             &operation_response(&requalify, STATUS_OK_V1, qualification),
         );
     });
-
     let binding = signer_binding();
     let (session, observations) = BrokerSession::connect(
         &policy,
@@ -1404,7 +1351,6 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
     sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer).expect("requalify signer");
     server.join().expect("join fake broker");
 }
-
 #[test]
 fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1417,7 +1363,6 @@ fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
         let handshake = read_handshake(&mut stream);
         assert_eq!(handshake.requested_catalog, vec![moderation_binding()]);
         send_handshake(&mut stream, &handshake_response(&handshake));
-
         for request_id in 1..=2 {
             let qualify = read_operation(&mut stream);
             assert_eq!(qualify.request_id, request_id);
@@ -1437,7 +1382,6 @@ fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
                 &operation_response(&qualify, STATUS_OK_V1, qualification),
             );
         }
-
         let wrap = read_operation(&mut stream);
         assert_eq!(wrap.request_id, 3);
         assert_eq!(wrap.operation, OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1);
@@ -1463,7 +1407,6 @@ fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
             &mut stream,
             &operation_response(&wrap, STATUS_OK_V1, wrapped),
         );
-
         let unwrap = read_operation(&mut stream);
         assert_eq!(unwrap.request_id, 4);
         assert_eq!(
@@ -1492,7 +1435,6 @@ fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
             &operation_response(&unwrap, STATUS_OK_V1, unwrapped),
         );
     });
-
     let dependencies = resolve(&moderation_server_test_catalog(), &policy)
         .expect("resolve moderation quarantine broker wrapper");
     let key_wrapper = dependencies
@@ -1523,7 +1465,6 @@ fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
     );
     server.join().expect("join fake moderation broker");
 }
-
 #[test]
 fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1534,7 +1475,6 @@ fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
         let handshake = read_handshake(&mut stream);
         assert_eq!(handshake.requested_catalog, vec![moderation_binding()]);
         send_handshake(&mut stream, &handshake_response(&handshake));
-
         let qualify = read_operation(&mut stream);
         server_seen.fetch_add(1, Ordering::SeqCst);
         let qualification = encode_canonical(
@@ -1549,7 +1489,6 @@ fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
             &mut stream,
             &operation_response(&qualify, STATUS_OK_V1, qualification),
         );
-
         let wrap = read_operation(&mut stream);
         server_seen.fetch_add(1, Ordering::SeqCst);
         assert_eq!(wrap.operation, OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1);
@@ -1557,7 +1496,6 @@ fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
             .shutdown(std::net::Shutdown::Both)
             .expect("drop wrap response after dispatch");
     });
-
     let dependencies =
         resolve(&moderation_server_test_catalog(), &policy).expect("resolve moderation wrapper");
     let key_wrapper = dependencies
@@ -1581,7 +1519,6 @@ fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
         "only qualification and the single dispatched wrap reach the provider"
     );
 }
-
 #[test]
 fn moderation_provider_unavailable_status_remains_definitive() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1589,7 +1526,6 @@ fn moderation_provider_unavailable_status_remains_definitive() {
         let (mut stream, _) = listener.accept().expect("accept fake broker client");
         let handshake = read_handshake(&mut stream);
         send_handshake(&mut stream, &handshake_response(&handshake));
-
         let qualify = read_operation(&mut stream);
         let qualification = encode_canonical(
             &QualificationResultWireV1 {
@@ -1603,7 +1539,6 @@ fn moderation_provider_unavailable_status_remains_definitive() {
             &mut stream,
             &operation_response(&qualify, STATUS_OK_V1, qualification),
         );
-
         let wrap = read_operation(&mut stream);
         let redacted = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
             .expect("encode payload-free unavailable result");
@@ -1612,7 +1547,6 @@ fn moderation_provider_unavailable_status_remains_definitive() {
             &operation_response(&wrap, STATUS_UNAVAILABLE_V1, redacted),
         );
     });
-
     let dependencies =
         resolve(&moderation_server_test_catalog(), &policy).expect("resolve moderation wrapper");
     let key_wrapper = dependencies
@@ -1625,7 +1559,6 @@ fn moderation_provider_unavailable_status_remains_definitive() {
     );
     server.join().expect("join unavailable broker");
 }
-
 #[test]
 fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1635,7 +1568,6 @@ fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
         let (mut stream, _) = listener.accept().expect("accept fake broker client");
         let handshake = read_handshake(&mut stream);
         send_handshake(&mut stream, &handshake_response(&handshake));
-
         let qualify = read_operation(&mut stream);
         server_seen.fetch_add(1, Ordering::SeqCst);
         assert_eq!(qualify.operation, OPERATION_QUALIFY_V1);
@@ -1655,7 +1587,6 @@ fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
             &mut stream,
             &operation_response(&qualify, STATUS_OK_V1, qualification),
         );
-
         let reconcile = read_operation(&mut stream);
         server_seen.fetch_add(1, Ordering::SeqCst);
         assert_eq!(
@@ -1666,7 +1597,6 @@ fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
             .shutdown(std::net::Shutdown::Both)
             .expect("drop reputation threshold response after dispatch");
     });
-
     let dependencies = resolve(
         &reputation_runtime_test_catalog(IrohaRuntimeProviderSlotV1::ReputationThresholdSigner),
         &policy,
@@ -1698,7 +1628,6 @@ fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
         "only qualification and one reconcile reach the provider"
     );
 }
-
 #[test]
 fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1717,7 +1646,6 @@ fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
             &operation_response(&qualify, STATUS_STALE_OR_REVOKED_V1, redacted),
         );
     });
-
     let binding = signer_binding();
     let (session, observations) = BrokerSession::connect(
         &policy,
@@ -1751,7 +1679,6 @@ fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
     server.join().expect("join fake broker");
     assert_eq!(seen.load(Ordering::SeqCst), 1);
 }
-
 #[test]
 fn fake_broker_reports_cas_ambiguity_and_never_retries() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1761,7 +1688,6 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
         let (mut stream, _) = listener.accept().expect("accept fake broker client");
         let handshake = read_handshake(&mut stream);
         send_handshake(&mut stream, &handshake_response(&handshake));
-
         let qualify = read_operation(&mut stream);
         server_seen.fetch_add(1, Ordering::SeqCst);
         let qualification = encode_canonical(
@@ -1776,7 +1702,6 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
             &mut stream,
             &operation_response(&qualify, STATUS_OK_V1, qualification),
         );
-
         let compare_and_swap = read_operation(&mut stream);
         server_seen.fetch_add(1, Ordering::SeqCst);
         assert_eq!(compare_and_swap.request_id, 2);
@@ -1786,7 +1711,6 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
         );
         drop(stream);
     });
-
     let binding = checkpoint_binding();
     let (session, observations) = BrokerSession::connect(
         &policy,
@@ -1823,7 +1747,6 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
         "the ambiguous mutation must not be replayed"
     );
 }
-
 #[test]
 fn fake_broker_rejects_substituted_handshake_catalog() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
@@ -1860,11 +1783,9 @@ fn fake_broker_rejects_substituted_handshake_catalog() {
     ));
     server.join().expect("join fake broker");
 }
-
 #[test]
 fn billing_catalog_requires_all_six_exact_backends() {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     let billing_slots = [
         Slot::BillingFinalizedQuery,
         Slot::BillingJournalVerifier,
@@ -1893,11 +1814,9 @@ fn billing_catalog_requires_all_six_exact_backends() {
         ));
     }
 }
-
 #[test]
 fn billing_runtime_operation_matrix_is_strict_and_bounded() {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     let billing_slots = [
         Slot::BillingFinalizedQuery,
         Slot::BillingJournalVerifier,
@@ -1927,7 +1846,6 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         validate_operation_request(&readiness)
             .expect("accept role-matched billing readiness request");
     }
-
     for operation in OPERATION_BILLING_IDENTITY_V1..=OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1 {
         assert!(operation_is_known(operation));
         assert!(operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1);
@@ -1948,7 +1866,6 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         operation_frame_limit(OPERATION_BILLING_IDENTITY_V1),
         MAX_BILLING_CONTROL_FRAME_BYTES_V1
     );
-
     let epoch_identity = billing_operation_request(
         Slot::BillingEpochWitnessStore,
         30,
@@ -1960,7 +1877,6 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         Err(BrokerError::BindingMismatch),
         "the witness store rejects another slot's fabricated identity operation"
     );
-
     let zero_digest = billing_operation_request(
         Slot::BillingStatementSigner,
         31,
@@ -1996,7 +1912,6 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         validate_operation_request(&substituted_role),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut publication = billing_operation_request(
         Slot::BillingStatementPublisher,
         34,
@@ -2024,7 +1939,6 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         Err(BrokerError::Protocol),
         "read-only publication lookup cannot be ambiguous"
     );
-
     let mut witness = billing_operation_request(
         Slot::BillingEpochWitnessStore,
         35,

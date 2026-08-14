@@ -3,12 +3,6 @@
 //! Pin intents are persisted into WSV during block application. This cache
 //! provides fast lookups for Torii/query paths and can be rebuilt from the
 //! block log or WSV indexes after restart.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Bound::{Excluded, Unbounded},
-};
-
 use iroha_data_model::{
     da::{
         commitment::DaCommitmentLocation,
@@ -17,7 +11,10 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Unbounded},
+};
 /// Simple index over DA pin intents with stable block locations.
 #[derive(Clone, Debug, Default)]
 pub struct DaPinStore {
@@ -28,7 +25,6 @@ pub struct DaPinStore {
     by_location: BTreeMap<(u64, u32), DaPinIntentWithLocation>,
     seen_keys: BTreeSet<(u32, u64, u64)>,
 }
-
 impl DaPinStore {
     /// Build a store from an existing set of intents, preserving deterministic order.
     #[must_use]
@@ -39,7 +35,6 @@ impl DaPinStore {
         }
         store
     }
-
     /// Insert a pin intent with its originating block location, updating alias mapping if present.
     ///
     /// Returns `true` when the intent was newly inserted and `false` when it was
@@ -47,7 +42,6 @@ impl DaPinStore {
     pub fn insert(&mut self, intent: DaPinIntent, location: DaCommitmentLocation) -> bool {
         self.insert_with_location(DaPinIntentWithLocation { intent, location })
     }
-
     /// Insert a pin intent that already carries its location metadata.
     ///
     /// Returns `true` when the intent was newly inserted.
@@ -63,12 +57,10 @@ impl DaPinStore {
             return false;
         }
         self.seen_keys.insert(key);
-
         let stored = DaPinIntentWithLocation {
             intent: intent.clone(),
             location,
         };
-
         if let Some(alias) = intent.alias.clone() {
             self.by_alias.insert(alias, intent.storage_ticket);
         }
@@ -80,16 +72,13 @@ impl DaPinStore {
             stored.clone(),
         );
         self.by_location.insert(location_key, stored);
-
         true
     }
-
     /// Lookup by storage ticket.
     #[must_use]
     pub fn get_by_ticket(&self, ticket: &StorageTicketId) -> Option<&DaPinIntentWithLocation> {
         self.by_ticket.get(ticket)
     }
-
     /// Lookup by alias.
     #[must_use]
     pub fn get_by_alias(
@@ -100,13 +89,11 @@ impl DaPinStore {
             .get(alias)
             .and_then(|ticket| self.by_ticket.get_key_value(ticket))
     }
-
     /// Lookup by manifest hash.
     #[must_use]
     pub fn get_by_manifest(&self, digest: &ManifestDigest) -> Option<&DaPinIntentWithLocation> {
         self.by_manifest.get(digest)
     }
-
     /// Lookup by `(lane_id, epoch, sequence)`.
     #[must_use]
     pub fn get_by_lane_epoch_sequence(
@@ -117,7 +104,6 @@ impl DaPinStore {
     ) -> Option<&DaPinIntentWithLocation> {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
-
     /// Return whether a pin intent collides with any committed pin intent identity.
     ///
     /// Aliases are intentionally excluded: they are mutable shortcuts and may
@@ -129,12 +115,10 @@ impl DaPinStore {
             || self.get_by_manifest(&intent.manifest_hash).is_some()
             || self.get_by_ticket(&intent.storage_ticket).is_some()
     }
-
     /// Return all intents ordered by `(block_height, index_in_bundle)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &DaPinIntentWithLocation> {
         self.by_location.values()
     }
-
     /// Return intents in canonical location order strictly after `cursor`.
     ///
     /// The ordered map seeks directly to the cursor in logarithmic time. Callers
@@ -152,20 +136,17 @@ impl DaPinStore {
             .range((lower_bound, Unbounded))
             .map(|(_, record)| record)
     }
-
     /// Return whether the active query index contains `location`.
     #[must_use]
     pub fn contains_query_location(&self, location: DaCommitmentLocation) -> bool {
         self.by_location
             .contains_key(&(location.block_height, location.index_in_bundle))
     }
-
     /// Number of currently queryable pin intents.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_location.len()
     }
-
     /// Drop pin intents belonging to retired lanes.
     pub fn prune_lanes(&mut self, retired: &BTreeSet<iroha_data_model::nexus::LaneId>) {
         if retired.is_empty() {
@@ -181,15 +162,11 @@ impl DaPinStore {
         *self = rebuilt;
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
-
-    use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::ManifestDigest};
-
     use super::*;
-
+    use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::ManifestDigest};
+    use std::convert::TryFrom;
     fn sample_intent(lane: u32, seq: u64, alias: Option<&str>) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");
         let seq_byte = u8::try_from(seq).expect("sequence fits in byte for test intent");
@@ -218,7 +195,6 @@ mod tests {
             ),
         }
     }
-
     fn located(intent: DaPinIntent, height: u64, idx: u32) -> DaPinIntentWithLocation {
         DaPinIntentWithLocation {
             intent,
@@ -228,7 +204,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn inserts_and_overwrites_alias() {
         let mut store = DaPinStore::default();
@@ -236,7 +211,6 @@ mod tests {
         let b = located(sample_intent(2, 2, Some("alias-b")), 5, 1);
         assert!(store.insert_with_location(a.clone()));
         assert!(store.insert_with_location(b.clone()));
-
         assert_eq!(store.all_sorted().count(), 2);
         assert_eq!(store.len(), 2);
         assert_eq!(
@@ -252,7 +226,6 @@ mod tests {
             Some((&b.intent.storage_ticket, &b.location))
         );
     }
-
     #[test]
     fn builds_from_intents() {
         let intents = vec![
@@ -273,7 +246,6 @@ mod tests {
             .collect();
         assert_eq!(ordered, vec![(1, 0), (2, 3)]);
     }
-
     #[test]
     fn seeks_strictly_after_query_location() {
         let intents = vec![
@@ -283,7 +255,6 @@ mod tests {
         ];
         let store = DaPinStore::from_intents(&intents);
         let cursor = intents[1].location;
-
         assert!(store.contains_query_location(cursor));
         let remaining = store
             .all_sorted_after(Some(cursor))
@@ -295,7 +266,6 @@ mod tests {
             index_in_bundle: 99,
         }));
     }
-
     #[test]
     fn prunes_retired_lanes() {
         let mut store = DaPinStore::default();
@@ -303,10 +273,8 @@ mod tests {
         let lane1 = located(sample_intent(1, 2, Some("drop-me")), 1, 1);
         assert!(store.insert_with_location(lane0.clone()));
         assert!(store.insert_with_location(lane1.clone()));
-
         let retired = BTreeSet::from([LaneId::new(1)]);
         store.prune_lanes(&retired);
-
         assert_eq!(store.len(), 1);
         assert!(store.get_by_alias("keep").is_some(), "lane 0 alias remains");
         assert!(
@@ -319,7 +287,6 @@ mod tests {
             .collect();
         assert_eq!(ordered, vec![0]);
     }
-
     #[test]
     fn ignores_duplicates_by_key() {
         let mut store = DaPinStore::default();
@@ -328,7 +295,6 @@ mod tests {
         second.intent.manifest_hash = ManifestDigest::new([0xAA; 32]);
         second.intent.storage_ticket = StorageTicketId::new([0xBB; 32]);
         second.location.index_in_bundle = 1;
-
         assert!(store.insert_with_location(first.clone()));
         assert!(!store.insert_with_location(second.clone()));
         let stored = store
@@ -344,14 +310,12 @@ mod tests {
             "conflicting ticket should be ignored"
         );
     }
-
     #[test]
     fn rejects_duplicate_ticket_without_index_skew() {
         let mut store = DaPinStore::default();
         let first = located(sample_intent(1, 1, None), 9, 0);
         let mut second = located(sample_intent(2, 2, None), 10, 0);
         second.intent.storage_ticket = first.intent.storage_ticket;
-
         assert!(store.insert_with_location(first.clone()));
         assert!(!store.insert_with_location(second.clone()));
         assert_eq!(store.all_sorted().count(), 1);
@@ -373,14 +337,12 @@ mod tests {
             "duplicate ticket must not leave a manifest index entry"
         );
     }
-
     #[test]
     fn rejects_duplicate_manifest_without_index_skew() {
         let mut store = DaPinStore::default();
         let first = located(sample_intent(1, 1, None), 9, 0);
         let mut second = located(sample_intent(2, 2, None), 10, 0);
         second.intent.manifest_hash = first.intent.manifest_hash;
-
         assert!(store.insert_with_location(first.clone()));
         assert!(!store.insert_with_location(second.clone()));
         assert_eq!(store.all_sorted().count(), 1);
@@ -400,13 +362,11 @@ mod tests {
             "duplicate manifest must not leave a lane/epoch index entry"
         );
     }
-
     #[test]
     fn rejects_duplicate_location_without_index_skew() {
         let mut store = DaPinStore::default();
         let first = located(sample_intent(1, 1, None), 9, 0);
         let second = located(sample_intent(2, 2, None), 9, 0);
-
         assert!(store.insert_with_location(first.clone()));
         assert!(!store.insert_with_location(second.clone()));
         assert_eq!(store.all_sorted().count(), 1);
@@ -422,28 +382,23 @@ mod tests {
             "duplicate location must not leave a manifest index entry"
         );
     }
-
     #[test]
     fn contains_intent_identity_detects_key_manifest_and_ticket_collisions() {
         let mut store = DaPinStore::default();
         let first = located(sample_intent(1, 1, Some("first-alias")), 9, 0);
         assert!(store.insert_with_location(first.clone()));
-
         let mut duplicate_key = sample_intent(1, 1, Some("fresh-alias"));
         duplicate_key.storage_ticket = StorageTicketId::new([0x90; 32]);
         duplicate_key.manifest_hash = ManifestDigest::new([0x91; 32]);
         assert!(store.contains_intent_identity(&duplicate_key));
-
         let mut duplicate_ticket = sample_intent(2, 2, Some("fresh-ticket-alias"));
         duplicate_ticket.storage_ticket = first.intent.storage_ticket;
         duplicate_ticket.manifest_hash = ManifestDigest::new([0x92; 32]);
         assert!(store.contains_intent_identity(&duplicate_ticket));
-
         let mut duplicate_manifest = sample_intent(3, 3, Some("fresh-manifest-alias"));
         duplicate_manifest.storage_ticket = StorageTicketId::new([0x93; 32]);
         duplicate_manifest.manifest_hash = first.intent.manifest_hash;
         assert!(store.contains_intent_identity(&duplicate_manifest));
-
         let mut alias_reassignment = sample_intent(4, 4, Some("first-alias"));
         alias_reassignment.storage_ticket = StorageTicketId::new([0x94; 32]);
         alias_reassignment.manifest_hash = ManifestDigest::new([0x95; 32]);

@@ -4,20 +4,6 @@
 //! (`sorafsMultiFetchLocal`, FFI bindings) so that parity checks can rely on a
 //! single source of truth for converting plan/metadata JSON into orchestrator
 //! inputs.
-
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    num::{NonZeroU32, NonZeroUsize},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
-use norito::json::Value;
-use sorafs_chunker::ChunkProfile;
-use thiserror::Error;
-
 use crate::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, FilePlan, chunker_registry,
     fetch_plan::{FetchPlanError, chunk_fetch_plan_from_json},
@@ -27,7 +13,17 @@ use crate::{
     },
     scoreboard::{self, Eligibility, ProviderTelemetry, ScoreboardConfig},
 };
-
+use norito::json::Value;
+use sorafs_chunker::ChunkProfile;
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    num::{NonZeroU32, NonZeroUsize},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use thiserror::Error;
 /// Provider specification accepted by the local fetch harness.
 #[derive(Debug, Clone)]
 pub struct LocalProviderInput {
@@ -37,7 +33,6 @@ pub struct LocalProviderInput {
     pub weight: Option<u32>,
     pub metadata: Option<ProviderMetadataInput>,
 }
-
 /// Provider metadata fields mirrored from discovery adverts.
 #[derive(Debug, Clone, Default)]
 pub struct ProviderMetadataInput {
@@ -58,7 +53,6 @@ pub struct ProviderMetadataInput {
     pub stream_budget: Option<StreamBudgetInput>,
     pub transport_hints: Option<Vec<TransportHintInput>>,
 }
-
 /// Range capability description supplied by providers.
 #[derive(Debug, Clone)]
 pub struct RangeCapabilityInput {
@@ -68,7 +62,6 @@ pub struct RangeCapabilityInput {
     pub requires_alignment: Option<bool>,
     pub supports_merkle_proof: Option<bool>,
 }
-
 /// Stream quota information supplied by providers.
 #[derive(Debug, Clone)]
 pub struct StreamBudgetInput {
@@ -76,7 +69,6 @@ pub struct StreamBudgetInput {
     pub max_bytes_per_sec: u64,
     pub burst_bytes: Option<u64>,
 }
-
 /// Transport hints describing how to reach a provider.
 #[derive(Debug, Clone)]
 pub struct TransportHintInput {
@@ -84,7 +76,6 @@ pub struct TransportHintInput {
     pub protocol_id: u8,
     pub priority: u8,
 }
-
 /// Telemetry snapshot entry used for scoreboard weighting.
 #[derive(Debug, Clone)]
 pub struct TelemetryEntryInput {
@@ -98,7 +89,6 @@ pub struct TelemetryEntryInput {
     pub penalty: Option<bool>,
     pub last_updated_unix: Option<u64>,
 }
-
 /// Optional tuning knobs for local multi-fetch execution.
 #[derive(Debug, Default, Clone)]
 pub struct LocalFetchOptions {
@@ -117,7 +107,6 @@ pub struct LocalFetchOptions {
     pub boost_providers: Vec<(String, i64)>,
     pub return_scoreboard: Option<bool>,
 }
-
 /// Scoreboard entry exported by the harness.
 #[derive(Debug, Clone)]
 pub struct LocalFetchScoreboardEntry {
@@ -127,13 +116,11 @@ pub struct LocalFetchScoreboardEntry {
     pub normalized_weight: f64,
     pub eligibility: String,
 }
-
 type ScoreboardSummary = (
     Option<Vec<LocalFetchScoreboardEntry>>,
     HashSet<String>,
     HashMap<String, NonZeroU32>,
 );
-
 /// Successful local fetch outcome.
 #[derive(Debug)]
 pub struct LocalFetchResult {
@@ -142,7 +129,6 @@ pub struct LocalFetchResult {
     pub scoreboard: Option<Vec<LocalFetchScoreboardEntry>>,
     pub telemetry_region: Option<String>,
 }
-
 /// Errors surfaced by the local fetch harness.
 #[derive(Debug, Error)]
 pub enum LocalFetchError {
@@ -175,7 +161,6 @@ pub enum LocalFetchError {
     #[error("{0} must remain enabled for first-release SoraFS fetch integrity")]
     IntegrityVerificationDisabled(&'static str),
 }
-
 /// Execute a local multi-provider fetch using preloaded provider descriptors.
 pub fn execute_local_fetch(
     plan_json: &Value,
@@ -185,10 +170,8 @@ pub fn execute_local_fetch(
     if providers.is_empty() {
         return Err(LocalFetchError::NoProviders);
     }
-
     let mut processed = process_providers(providers)?;
     let mut path_lookup = build_path_lookup(&processed);
-
     let parsed_plan = chunk_fetch_plan_from_json(plan_json)?;
     let plan_payload_digest = parsed_plan.payload_digest;
     let specs = parsed_plan.chunk_fetch_specs;
@@ -197,14 +180,11 @@ pub fn execute_local_fetch(
             "chunk fetch plan must contain at least one chunk".into(),
         ));
     }
-
     let chunk_profile = resolve_chunk_profile(options.chunker_handle.as_deref())?;
     let plan = build_plan(&specs, plan_payload_digest, chunk_profile);
-
     let telemetry_snapshot = telemetry_snapshot(&options.telemetry);
     let telemetry_provided = !options.telemetry.is_empty();
     let scoreboard_requested = options.use_scoreboard.unwrap_or(false) || telemetry_provided;
-
     let mut alias_by_provider_id = HashMap::new();
     let include_scoreboard = options.return_scoreboard.unwrap_or(scoreboard_requested);
     let (scoreboard_entries, eligible_aliases, weight_by_alias) = if scoreboard_requested {
@@ -223,7 +203,6 @@ pub fn execute_local_fetch(
     } else {
         (None, HashSet::new(), HashMap::new())
     };
-
     let fetch_providers = build_fetch_providers(
         processed,
         &eligible_aliases,
@@ -231,7 +210,6 @@ pub fn execute_local_fetch(
         scoreboard_requested,
         options.max_peers,
     )?;
-
     let fetch_options = build_fetch_options(&options)?;
     let outcome = run_fetch(&plan, fetch_providers, path_lookup, fetch_options)?;
     let mut payload_hasher = blake3::Hasher::new();
@@ -243,7 +221,6 @@ pub fn execute_local_fetch(
             "assembled payload digest does not match canonical chunk fetch plan".into(),
         ));
     }
-
     Ok(LocalFetchResult {
         chunk_count: specs.len(),
         outcome,
@@ -251,9 +228,7 @@ pub fn execute_local_fetch(
         telemetry_region: options.telemetry_region.clone(),
     })
 }
-
 // --- internal helpers ----------------------------------------------------
-
 struct ProcessedProvider {
     name: String,
     path: PathBuf,
@@ -261,7 +236,6 @@ struct ProcessedProvider {
     weight: Option<NonZeroU32>,
     metadata: Option<ProviderMetadataInput>,
 }
-
 fn process_providers(
     providers: Vec<LocalProviderInput>,
 ) -> Result<Vec<ProcessedProvider>, LocalFetchError> {
@@ -300,11 +274,9 @@ fn process_providers(
     }
     Ok(processed)
 }
-
 fn is_regular_file(path: &Path) -> bool {
     path.is_file()
 }
-
 fn build_path_lookup(providers: &[ProcessedProvider]) -> HashMap<String, PathBuf> {
     let mut map = HashMap::new();
     for provider in providers {
@@ -312,7 +284,6 @@ fn build_path_lookup(providers: &[ProcessedProvider]) -> HashMap<String, PathBuf
     }
     map
 }
-
 fn resolve_chunk_profile(handle: Option<&str>) -> Result<ChunkProfile, LocalFetchError> {
     if let Some(handle) = handle {
         if let Some(entry) = chunker_registry::lookup_by_handle(handle) {
@@ -322,7 +293,6 @@ fn resolve_chunk_profile(handle: Option<&str>) -> Result<ChunkProfile, LocalFetc
     }
     Ok(ChunkProfile::DEFAULT)
 }
-
 fn build_plan(
     specs: &[ChunkFetchSpec],
     payload_digest: [u8; 32],
@@ -354,7 +324,6 @@ fn build_plan(
         }],
     }
 }
-
 fn telemetry_snapshot(entries: &[TelemetryEntryInput]) -> scoreboard::TelemetrySnapshot {
     let records = entries
         .iter()
@@ -373,7 +342,6 @@ fn telemetry_snapshot(entries: &[TelemetryEntryInput]) -> scoreboard::TelemetryS
         .collect::<Vec<_>>();
     scoreboard::TelemetrySnapshot::from_records(records)
 }
-
 fn ensure_scoreboard_metadata(
     providers: &mut [ProcessedProvider],
     path_lookup: &mut HashMap<String, PathBuf>,
@@ -397,7 +365,6 @@ fn ensure_scoreboard_metadata(
     }
     Ok(list)
 }
-
 fn extract_scoreboard(
     scoreboard: &scoreboard::Scoreboard,
     alias_by_provider_id: &HashMap<String, String>,
@@ -440,7 +407,6 @@ fn extract_scoreboard(
         Ok((None, eligible_aliases, weight_by_alias))
     }
 }
-
 fn build_fetch_providers(
     providers: Vec<ProcessedProvider>,
     eligible_aliases: &HashSet<String>,
@@ -468,21 +434,17 @@ fn build_fetch_providers(
         }
         list.push(fetch_provider);
     }
-
     if list.is_empty() {
         return Err(LocalFetchError::ScoreboardExcludedAll);
     }
-
     if let Some(limit) = max_peers {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         if list.len() > limit {
             list.truncate(limit.max(1));
         }
     }
-
     Ok(list)
 }
-
 fn build_fetch_options(options: &LocalFetchOptions) -> Result<FetchOptions, LocalFetchError> {
     let mut fetch_options = FetchOptions::default();
     if matches!(options.verify_digests, Some(false)) {
@@ -513,7 +475,6 @@ fn build_fetch_options(options: &LocalFetchOptions) -> Result<FetchOptions, Loca
     }
     Ok(fetch_options)
 }
-
 fn run_fetch(
     plan: &CarBuildPlan,
     providers: Vec<FetchProvider>,
@@ -538,7 +499,6 @@ fn run_fetch(
             Ok::<ChunkResponse, std::io::Error>(ChunkResponse::new(buf))
         }
     };
-
     match futures::executor::block_on(multi_fetch::fetch_plan_parallel(
         plan,
         providers,
@@ -549,12 +509,10 @@ fn run_fetch(
         Err(err) => Err(LocalFetchError::Fetch(err.to_string())),
     }
 }
-
 struct LocalScorePolicy {
     deny: HashSet<String>,
     boosts: HashMap<String, i64>,
 }
-
 impl LocalScorePolicy {
     fn new(deny: Vec<String>, boosts: Vec<(String, i64)>) -> Self {
         let deny_set = deny.into_iter().collect();
@@ -565,7 +523,6 @@ impl LocalScorePolicy {
         }
     }
 }
-
 impl ScorePolicy for LocalScorePolicy {
     fn score(&self, ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision {
         let provider = ctx.provider.id().as_str();
@@ -582,7 +539,6 @@ impl ScorePolicy for LocalScorePolicy {
         }
     }
 }
-
 impl ProviderMetadataInput {
     pub fn into_provider_metadata(
         self,
@@ -626,7 +582,6 @@ impl ProviderMetadataInput {
         }
         Ok(metadata)
     }
-
     pub fn from_metadata(metadata: &crate::multi_fetch::ProviderMetadata) -> Self {
         Self {
             provider_id: metadata.provider_id.clone(),
@@ -648,7 +603,6 @@ impl ProviderMetadataInput {
         }
     }
 }
-
 impl From<RangeCapabilityInput> for crate::multi_fetch::RangeCapability {
     fn from(value: RangeCapabilityInput) -> Self {
         Self {
@@ -660,7 +614,6 @@ impl From<RangeCapabilityInput> for crate::multi_fetch::RangeCapability {
         }
     }
 }
-
 impl From<&crate::multi_fetch::RangeCapability> for RangeCapabilityInput {
     fn from(value: &crate::multi_fetch::RangeCapability) -> Self {
         Self {
@@ -672,7 +625,6 @@ impl From<&crate::multi_fetch::RangeCapability> for RangeCapabilityInput {
         }
     }
 }
-
 impl From<StreamBudgetInput> for crate::multi_fetch::StreamBudget {
     fn from(value: StreamBudgetInput) -> Self {
         Self {
@@ -682,7 +634,6 @@ impl From<StreamBudgetInput> for crate::multi_fetch::StreamBudget {
         }
     }
 }
-
 impl From<&crate::multi_fetch::StreamBudget> for StreamBudgetInput {
     fn from(value: &crate::multi_fetch::StreamBudget) -> Self {
         Self {
@@ -692,7 +643,6 @@ impl From<&crate::multi_fetch::StreamBudget> for StreamBudgetInput {
         }
     }
 }
-
 impl From<TransportHintInput> for crate::multi_fetch::TransportHint {
     fn from(value: TransportHintInput) -> Self {
         Self {
@@ -702,7 +652,6 @@ impl From<TransportHintInput> for crate::multi_fetch::TransportHint {
         }
     }
 }
-
 impl From<&crate::multi_fetch::TransportHint> for TransportHintInput {
     fn from(value: &crate::multi_fetch::TransportHint) -> Self {
         Self {
@@ -712,11 +661,9 @@ impl From<&crate::multi_fetch::TransportHint> for TransportHintInput {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn build_fetch_options_rejects_disabled_integrity_verification() {
         for (field, options) in [

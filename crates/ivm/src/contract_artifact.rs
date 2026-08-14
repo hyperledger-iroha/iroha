@@ -1,11 +1,4 @@
 //! Native preparation adapter for the shared artifact-admission crate.
-
-use std::sync::Arc;
-
-pub use ivm_artifact_admission::{
-    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
-};
-
 use crate::{
     ProgramMetadata, SyscallPolicy,
     ivm::{
@@ -15,7 +8,10 @@ use crate::{
     metadata::{EmbeddedContractInterfaceV1, ParsedProgramMetadata},
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
-
+pub use ivm_artifact_admission::{
+    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+};
+use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
 ///
 /// Admission is delegated to [`ivm_artifact_admission`]. This module only
@@ -24,7 +20,6 @@ use crate::{
 pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare(artifact)
 }
-
 /// Prepare a compiler-produced Kotodama test-suite artifact for local execution.
 pub(crate) fn prepare_koto_test_contract(
     artifact: Arc<[u8]>,
@@ -32,14 +27,12 @@ pub(crate) fn prepare_koto_test_contract(
 ) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare_koto_test_harness(artifact, contract_interface)
 }
-
 impl PreparedContract {
     /// Admit through the shared production verifier, then build native runtime indexes.
     pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
         let verified = ivm_artifact_admission::verify_contract_artifact(artifact.as_ref())?;
         Self::prepare_shared_verified(artifact, verified)
     }
-
     fn prepare_koto_test_harness(
         artifact: Arc<[u8]>,
         contract_interface: EmbeddedContractInterfaceV1,
@@ -50,7 +43,6 @@ impl PreparedContract {
         )?;
         Self::prepare_shared_verified(artifact, verified)
     }
-
     fn prepare_shared_verified(
         artifact: Arc<[u8]>,
         verified: VerifiedContractArtifact,
@@ -102,7 +94,6 @@ impl PreparedContract {
             PreparedControlFlow::from_decoded(decoded.as_ref()).map_err(|error| {
                 ContractArtifactError::invalid(format!("control-flow preparation failed: {error}"))
             })?;
-
         PreparedContract::from_parts(PreparedContractParts {
             artifact,
             metadata: verified.metadata,
@@ -121,7 +112,6 @@ impl PreparedContract {
         })
     }
 }
-
 fn ensure_shared_offsets_match(
     parsed: &ParsedProgramMetadata,
     verified: &VerifiedContractArtifact,
@@ -133,7 +123,6 @@ fn ensure_shared_offsets_match(
     }
     Ok(())
 }
-
 fn decode_instruction_stream(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,

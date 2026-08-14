@@ -1,8 +1,6 @@
 //! TEMP: print hex for additional offsets+code-delta small datasets.
 #![cfg(feature = "json")]
-
 use norito::columnar as ncb;
-
 fn to_hex(bs: &[u8]) -> String {
     let mut s = String::with_capacity(bs.len() * 2);
     for b in bs {
@@ -11,7 +9,6 @@ fn to_hex(bs: &[u8]) -> String {
     }
     s
 }
-
 #[test]
 fn print_offsets_code_delta_variant1() {
     use ncb::EnumBorrow;
@@ -26,7 +23,6 @@ fn print_offsets_code_delta_variant1() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, false, false, true);
     println!("OFFSETS_CODE_DELTA_VARIANT1:{}", to_hex(&bytes));
 }
-
 #[test]
 fn print_offsets_code_delta_variant2() {
     use ncb::EnumBorrow;

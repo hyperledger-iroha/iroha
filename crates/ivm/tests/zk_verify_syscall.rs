@@ -1,9 +1,7 @@
 use ivm::{IVMHost, syscalls};
-
 #[test]
 fn zk_verify_ballot_default_host_rejects_invalid_envelope() {
     let payload = vec![0xAA, 0xBB];
-
     // Build a TLV envelope: type(0x0009)=NoritoBytes, ver=1, len=payload.len(), hash=Hash(payload)
     let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     tlv.extend_from_slice(&u16::to_be_bytes(ivm::PointerType::NoritoBytes as u16));
@@ -12,7 +10,6 @@ fn zk_verify_ballot_default_host_rejects_invalid_envelope() {
     tlv.extend_from_slice(payload.as_ref());
     let hash: [u8; 32] = iroha_crypto::Hash::new(&payload).into();
     tlv.extend_from_slice(&hash);
-
     // Allocate TLV in VM input region and invoke the verify syscall
     let mut vm = ivm::IVM::new(1_000_000);
     let mut host = ivm::host::DefaultHost::new();

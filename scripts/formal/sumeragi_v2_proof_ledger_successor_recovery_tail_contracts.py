@@ -1560,9 +1560,21 @@ def _persistent_recovery_cut_source_fidelity_errors(
     if errors:
         return errors
 
-    sources = {
-        name: path.read_text(encoding="utf-8") for name, path in paths.items()
-    }
+    sources: dict[str, str] = {}
+    for name, path in tuple(paths.items()):
+        if path.suffix == ".rs":
+            loaded_path, source = _read_reviewed_rust_source(
+                repo_root,
+                path.relative_to(repo_root).as_posix(),
+                errors,
+                f"persistent recovery-cut {name} source",
+            )
+            paths[name] = loaded_path
+            sources[name] = source
+        else:
+            sources[name] = path.read_text(encoding="utf-8")
+    if errors:
+        return errors
 
     def require_context_item(
         source_name: str,
@@ -2294,6 +2306,11 @@ if decided_subject.is_some() {
             "runtime",
             "body_available_rebind_rejects_two_persistent_roots_before_mutation",
             "rejects two durable roots before either serialized owner changes",
+        ),
+        (
+            "runtime",
+            "body_available_rebind_rejects_busy_source_and_restored_ingress_destination_before_mutation",
+            "rejects Busy and restored-ingress durable roots before either carrier changes",
         ),
         (
             "store",

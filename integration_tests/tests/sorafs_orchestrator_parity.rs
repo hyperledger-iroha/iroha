@@ -1,14 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JS host parity helpers (requires `js_host_parity` feature to compile).
-
 #[cfg(feature = "js_host_parity")]
 mod js_host_parity {
     //! SoraFS orchestrator parity coverage across Rust, JS, and FFI bridges.
-
-    use core::ffi::c_ulong;
-    use std::{collections::HashMap, convert::TryFrom, mem, path::Path, time::Instant};
-
     use connect_norito_bridge::{connect_norito_free, connect_norito_sorafs_local_fetch};
+    use core::ffi::c_ulong;
     use iroha_js_host::{
         JsLocalProviderSpec, JsMultiFetchChunkReceipt, JsMultiFetchOptions,
         JsMultiFetchProviderReport, JsProviderMetadata, JsRangeCapability, JsStreamBudget,
@@ -22,8 +18,8 @@ mod js_host_parity {
             ProviderMetadataInput,
         },
     };
+    use std::{collections::HashMap, convert::TryFrom, mem, path::Path, time::Instant};
     use tempfile::tempdir;
-
     fn js_metadata_from_provider(
         metadata: &sorafs_car::multi_fetch::ProviderMetadata,
     ) -> JsProviderMetadata {
@@ -72,7 +68,6 @@ mod js_host_parity {
             ),
         }
     }
-
     fn providers_json_from_metadata(
         metadata: &sorafs_car::multi_fetch::ProviderMetadata,
         path: &Path,
@@ -88,7 +83,6 @@ mod js_host_parity {
         );
         obj.insert("max_concurrent".into(), norito::json::Value::from(2u32));
         obj.insert("weight".into(), norito::json::Value::from(1u32));
-
         let meta = ProviderMetadataInput::from_metadata(metadata);
         let mut meta_obj = norito::json::Map::new();
         if let Some(id) = meta.provider_id {
@@ -220,11 +214,9 @@ mod js_host_parity {
             }
             meta_obj.insert("transport_hints".into(), norito::json::Value::Array(list));
         }
-
         obj.insert("metadata".into(), norito::json::Value::Object(meta_obj));
         norito::json::Value::Object(obj)
     }
-
     fn provider_input_from_metadata(
         metadata: &sorafs_car::multi_fetch::ProviderMetadata,
         path: &Path,
@@ -237,7 +229,6 @@ mod js_host_parity {
             metadata: Some(ProviderMetadataInput::from_metadata(metadata)),
         }
     }
-
     fn scoreboard_map_from_js(
         entries: &[iroha_js_host::JsScoreboardEntry],
     ) -> HashMap<String, (f64, String)> {
@@ -251,7 +242,6 @@ mod js_host_parity {
             })
             .collect()
     }
-
     fn scoreboard_map_from_result(
         entries: Option<&[LocalFetchScoreboardEntry]>,
     ) -> HashMap<String, (f64, String)> {
@@ -266,7 +256,6 @@ mod js_host_parity {
             })
             .collect()
     }
-
     fn scoreboard_map_from_json(value: &norito::json::Value) -> HashMap<String, (f64, String)> {
         match value {
             norito::json::Value::Array(entries) => entries
@@ -282,25 +271,20 @@ mod js_host_parity {
             _ => HashMap::new(),
         }
     }
-
     #[test]
     fn orchestrator_parity_across_runtimes() {
         let fixture = MultiPeerFixture::with_providers(2);
         let tempdir = tempdir().expect("tempdir");
-
         let plan = fixture.plan();
         let plan_json = try_chunk_fetch_plan_to_json(&plan).expect("canonical plan JSON");
         let plan_json_string = chunk_fetch_plan_to_string(&plan).expect("canonical plan string");
-
         let mut local_inputs = Vec::new();
         let mut js_inputs = Vec::new();
         let mut ffi_inputs = Vec::new();
-
         for (idx, metadata) in fixture.providers().iter().enumerate() {
             let name = metadata.provider_id.clone().expect("provider id");
             let path = tempdir.path().join(format!("{name}.bin"));
             std::fs::write(&path, &fixture.provider_payloads()[idx]).expect("write payload");
-
             local_inputs.push(provider_input_from_metadata(metadata, &path));
             js_inputs.push(JsLocalProviderSpec {
                 name,
@@ -311,7 +295,6 @@ mod js_host_parity {
             });
             ffi_inputs.push(providers_json_from_metadata(metadata, &path));
         }
-
         let local_options = LocalFetchOptions {
             verify_digests: Some(true),
             verify_lengths: Some(true),
@@ -319,7 +302,6 @@ mod js_host_parity {
             return_scoreboard: Some(true),
             ..Default::default()
         };
-
         let rust_start = Instant::now();
         let baseline = local_fetch::execute_local_fetch(
             &plan_json,
@@ -328,7 +310,6 @@ mod js_host_parity {
         )
         .expect("rust baseline");
         let rust_duration = rust_start.elapsed();
-
         let js_options = JsMultiFetchOptions {
             verify_digests: Some(true),
             verify_lengths: Some(true),
@@ -344,17 +325,14 @@ mod js_host_parity {
         )
         .expect("js fetch");
         let js_duration = js_start.elapsed();
-
         assert_eq!(
             js_result.payload.to_vec(),
             baseline.outcome.assemble_payload(),
             "JS payload mismatch"
         );
-
         let rust_scoreboard = scoreboard_map_from_result(baseline.scoreboard.as_deref());
         let js_scoreboard = scoreboard_map_from_js(js_result.scoreboard.as_deref().unwrap_or(&[]));
         assert_eq!(rust_scoreboard, js_scoreboard, "JS scoreboard mismatch");
-
         let rust_reports: HashMap<_, _> = baseline
             .outcome
             .provider_reports
@@ -381,7 +359,6 @@ mod js_host_parity {
             })
             .collect();
         assert_eq!(rust_reports, js_reports, "JS provider reports mismatch");
-
         let rust_receipts: Vec<_> = baseline
             .outcome
             .chunk_receipts
@@ -406,7 +383,6 @@ mod js_host_parity {
             })
             .collect();
         assert_eq!(rust_receipts, js_receipts, "JS chunk receipts mismatch");
-
         let ffi_plan = plan_json_string.clone();
         let ffi_providers = norito::json::Value::Array(ffi_inputs.clone());
         let ffi_providers_str =
@@ -418,12 +394,10 @@ mod js_host_parity {
             "return_scoreboard": true,
         });
         let ffi_options_str = norito::json::to_string(&ffi_options).expect("options json string");
-
         let mut out_payload_ptr: *mut u8 = std::ptr::null_mut();
         let mut out_payload_len: c_ulong = 0;
         let mut out_report_ptr: *mut u8 = std::ptr::null_mut();
         let mut out_report_len: c_ulong = 0;
-
         let ffi_start = Instant::now();
         let ffi_rc = {
             #[allow(unsafe_code)]
@@ -444,7 +418,6 @@ mod js_host_parity {
         };
         let ffi_duration = ffi_start.elapsed();
         assert_eq!(ffi_rc, 0, "FFI fetch returned error {ffi_rc}");
-
         let ffi_payload = {
             #[allow(unsafe_code)]
             unsafe {
@@ -459,7 +432,6 @@ mod js_host_parity {
             baseline.outcome.assemble_payload(),
             "FFI payload mismatch"
         );
-
         let ffi_report_json = {
             #[allow(unsafe_code)]
             unsafe {
@@ -469,7 +441,6 @@ mod js_host_parity {
                 json
             }
         };
-
         let ffi_report_value: norito::json::Value =
             norito::json::from_str(&ffi_report_json).expect("ffi report json");
         let ffi_scoreboard = scoreboard_map_from_json(
@@ -478,7 +449,6 @@ mod js_host_parity {
                 .unwrap_or(&norito::json::Value::Null),
         );
         assert_eq!(rust_scoreboard, ffi_scoreboard, "FFI scoreboard mismatch");
-
         let ffi_reports_map: HashMap<_, _> = ffi_report_value
             .get("provider_reports")
             .and_then(norito::json::Value::as_array)
@@ -510,7 +480,6 @@ mod js_host_parity {
             rust_reports, ffi_reports_map,
             "FFI provider reports mismatch"
         );
-
         let ffi_receipts: Vec<_> = ffi_report_value
             .get("chunk_receipts")
             .and_then(norito::json::Value::as_array)
@@ -535,15 +504,12 @@ mod js_host_parity {
             })
             .collect();
         assert_eq!(rust_receipts, ffi_receipts, "FFI chunk receipts mismatch");
-
         assert!(rust_duration > std::time::Duration::ZERO);
         assert!(js_duration > std::time::Duration::ZERO);
         assert!(ffi_duration > std::time::Duration::ZERO);
-
         let rust_ms = rust_duration.as_micros() as f64 / 1000.0;
         let js_ms = js_duration.as_micros() as f64 / 1000.0;
         let ffi_ms = ffi_duration.as_micros() as f64 / 1000.0;
-
         assert!(
             js_ms <= rust_ms * 10.0,
             "JS path is unexpectedly slow: {js_ms}ms vs Rust {rust_ms}ms"

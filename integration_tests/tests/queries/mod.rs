@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests covering Torii query APIs.
-
-use std::time::Duration;
-
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, QueryError},
@@ -12,13 +9,11 @@ use iroha::{
     },
 };
 use iroha_test_network::*;
-
+use std::time::Duration;
 const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
-
 fn query_network_builder() -> NetworkBuilder {
     NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2))
 }
-
 fn query_client(network: &Network) -> Client {
     let mut client = network.client();
     let status_timeout = client
@@ -34,7 +29,6 @@ fn query_client(network: &Network) -> Client {
     }
     client
 }
-
 /// Account query scenarios.
 mod account;
 /// Asset query regression coverage.
@@ -49,7 +43,6 @@ mod query_errors;
 mod role;
 /// Smart contract query scenarios.
 mod smart_contract;
-
 #[test]
 fn query_basic_scenarios() -> eyre::Result<()> {
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
@@ -60,7 +53,6 @@ fn query_basic_scenarios() -> eyre::Result<()> {
         return Ok(());
     };
     let client = query_client(&network);
-
     // too_big_fetch_size_is_not_allowed
     {
         let err = client
@@ -75,7 +67,6 @@ fn query_basic_scenarios() -> eyre::Result<()> {
             ))
         ));
     }
-
     // find_blocks_reversed
     {
         submit_ensure_domain_for_network(
@@ -84,14 +75,12 @@ fn query_basic_scenarios() -> eyre::Result<()> {
             Domain::new(DomainId::try_new("domain1-blocks", "universal")?),
         )?;
         rt.block_on(async { network.ensure_blocks(2).await })?;
-
         submit_ensure_domain_for_network(
             &network,
             &client,
             Domain::new(DomainId::try_new("domain2-blocks", "universal")?),
         )?;
         rt.block_on(async { network.ensure_blocks(3).await })?;
-
         let blocks = client.query(FindBlocks).execute_all()?;
         assert!(
             blocks.len() >= 3,
@@ -109,7 +98,6 @@ fn query_basic_scenarios() -> eyre::Result<()> {
             );
         }
     }
-
     // find_transactions_reversed
     {
         let domain_id: DomainId = DomainId::try_new("domain1-txs", "universal")?;
@@ -118,7 +106,6 @@ fn query_basic_scenarios() -> eyre::Result<()> {
             register_domain.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let txs = client.query(FindTransactions).execute_all()?;
         let TransactionEntrypoint::External(entrypoint) = txs[0].entrypoint() else {
             eyre::bail!("entrypoint should be external transaction");
@@ -129,6 +116,5 @@ fn query_basic_scenarios() -> eyre::Result<()> {
         assert_eq!(instructions.len(), 1);
         assert_eq!(instructions[0], register_domain);
     }
-
     Ok(())
 }

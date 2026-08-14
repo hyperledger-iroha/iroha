@@ -2,11 +2,9 @@
 #[allow(clippy::too_many_lines)]
 async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     use iroha_data_model::events::time::{ExecutionTime, TimeEventFilter};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     // Prepare world and a simple pre-commit time trigger that sets account metadata
     let block = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(1).unwrap());
@@ -38,11 +36,9 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         .expect("trigger action fixture satisfies validation invariants"),
     );
     Register::trigger(t).execute(&ALICE_ID, &mut stx).unwrap();
-
     stx.apply();
     let _ = state_block.apply_without_execution(&block, Vec::new());
     state_block.commit().unwrap();
-
     // Apply a new block: time trigger should fire during apply
     let block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
@@ -50,7 +46,6 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     });
     let mut state_block2 = state.block(block2.as_ref().header());
     let mut events = state_block2.apply(&block2, Vec::new());
-
     // Exactly one Time event and a single TriggerCompleted notification
     let time_count = events
         .iter()
@@ -79,7 +74,6 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         completion.outcome(),
         TriggerCompletedOutcome::Success
     ));
-
     // Data event: account metadata inserted for ALICE (tick=1)
     let meta_insert_count = events
         .iter()
@@ -100,7 +94,6 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         meta_insert_count, 1,
         "expected exactly one MetadataInserted event for tick"
     );
-
     // Negative cases: no asset add/remove events should be present
     assert!(events.iter().all(|e| {
         if let EventBox::Data(ev) = e
@@ -146,7 +139,6 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
     // Drop the mutable block scope before we borrow a view; otherwise
     // the view lock blocks waiting for this block to finish applying.
     state_block2.commit().unwrap();
-
     // And the effect should be visible
     let tick_val = state
         .view()
@@ -154,10 +146,8 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         .map_account(&ALICE_ID, |a| a.value().metadata().get(&tkey).cloned())
         .unwrap();
     assert_eq!(tick_val, Some(Json::from(norito::json!(1))));
-
     // Drain any remaining events to keep tests isolated
     events.clear();
-
     Ok(())
 }
 fn persist_committed_test_block(kura: &Kura, block: &CommittedBlock) {
@@ -165,12 +155,10 @@ fn persist_committed_test_block(kura: &Kura, block: &CommittedBlock) {
     kura.store_block(block_arc)
         .expect("store committed block in kura");
 }
-
 #[test]
 fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
@@ -189,7 +177,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         [],
     );
     let state = State::new(world, kura.clone(), query_handle);
-
     let block1 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 0;
@@ -219,7 +206,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let _ = state_block1.apply_without_execution(&block1, Vec::new());
     state_block1.commit().unwrap();
     persist_committed_test_block(&kura, &block1);
-
     let block2 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(2).unwrap());
         header.creation_time_ms = 6;
@@ -251,7 +237,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     ));
     state_block2.commit().unwrap();
     persist_committed_test_block(&kura, &block2);
-
     {
         let view = state.view();
         let action = view
@@ -269,7 +254,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
             })
         );
     }
-
     let block3 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(3).unwrap());
         header.creation_time_ms = 8;
@@ -290,7 +274,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let _ = state_block3.apply_without_execution(&block3, Vec::new());
     state_block3.commit().unwrap();
     persist_committed_test_block(&kura, &block3);
-
     let block4 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(4).unwrap());
         header.creation_time_ms = 12;
@@ -311,7 +294,6 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     ));
     state_block4.commit().unwrap();
     persist_committed_test_block(&kura, &block4);
-
     let view = state.view();
     let alice_asset = view
         .world
@@ -323,12 +305,10 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         "one-shot trigger should be removed after successful retry"
     );
 }
-
 #[test]
 fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
@@ -347,7 +327,6 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         [],
     );
     let state = State::new(world, kura.clone(), query_handle);
-
     let block1 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 0;
@@ -377,7 +356,6 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     let _ = state_block1.apply_without_execution(&block1, Vec::new());
     state_block1.commit().unwrap();
     persist_committed_test_block(&kura, &block1);
-
     let block2 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(2).unwrap());
         header.creation_time_ms = 6;
@@ -409,7 +387,6 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     ));
     state_block2.commit().unwrap();
     persist_committed_test_block(&kura, &block2);
-
     {
         let view = state.view();
         let action = view
@@ -427,7 +404,6 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
             })
         );
     }
-
     let block3 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(3).unwrap());
         header.creation_time_ms = 12;
@@ -448,7 +424,6 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     ));
     state_block3.commit().unwrap();
     persist_committed_test_block(&kura, &block3);
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_none(),
@@ -459,12 +434,10 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         "failed trigger must not mint any asset"
     );
 }
-
 #[test]
 fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
@@ -488,7 +461,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         parameters.sumeragi.block_cadence_ms = nonzero!(1_u64);
         parameters.commit();
     }
-
     let block1 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 0;
@@ -519,7 +491,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     let _ = state_block1.apply_without_execution(&block1, Vec::new());
     state_block1.commit().unwrap();
     persist_committed_test_block(&kura, &block1);
-
     let block2 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(2).unwrap());
         header.creation_time_ms = 2;
@@ -551,7 +522,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     ));
     state_block2.commit().unwrap();
     persist_committed_test_block(&kura, &block2);
-
     {
         let view = state.view();
         let action = view
@@ -569,7 +539,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
             })
         );
     }
-
     let block3 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(3).unwrap());
         header.creation_time_ms = 6;
@@ -601,7 +570,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     );
     state_block3.commit().unwrap();
     persist_committed_test_block(&kura, &block3);
-
     {
         let view = state.view();
         let action = view
@@ -619,7 +587,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
             })
         );
     }
-
     let block4 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(4).unwrap());
         header.creation_time_ms = 8;
@@ -640,7 +607,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     ));
     state_block4.commit().unwrap();
     persist_committed_test_block(&kura, &block4);
-
     {
         let view = state.view();
         let alice_asset = view
@@ -657,7 +623,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         assert_eq!(action.repeats, Repeats::Exactly(2));
         assert_eq!(action.retry_state, None);
     }
-
     let block5 = new_dummy_block_with_payload(|header| {
         header.set_height(NonZeroU64::new(5).unwrap());
         header.creation_time_ms = 10;
@@ -682,7 +647,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     ));
     state_block5.commit().unwrap();
     persist_committed_test_block(&kura, &block5);
-
     let view = state.view();
     let alice_asset = view
         .world
@@ -698,7 +662,6 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     assert_eq!(action.repeats, Repeats::Exactly(1));
     assert_eq!(action.retry_state, None);
 }
-
 #[test]
 fn ivm_trigger_respects_pipeline_cycle_cap() {
     use iroha_data_model::{
@@ -709,19 +672,15 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
             action::{Action, Repeats},
         },
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), kura, query_handle);
-
     let mut pipeline = state.pipeline.clone();
     pipeline.ivm_max_cycles_upper_bound = NonZeroU64::new(1).expect("one is non-zero");
     state.set_pipeline(pipeline);
-
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
@@ -729,7 +688,6 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     let trigger_id: TriggerId = "ivm_gas_guard".parse().unwrap();
     let mut raw = Vec::new();
     // Two ADD instructions cost two cycles in total, exceeding the configured cap of one.
@@ -752,10 +710,8 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     stx.apply();
     state_block.commit().unwrap();
-
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
     let evt = ExecuteTriggerEvent {
@@ -773,7 +729,6 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         other => panic!("unexpected rejection: {other:?}"),
     }
 }
-
 #[test]
 fn ivm_time_trigger_reuses_cache_across_blocks() {
     use iroha_data_model::{
@@ -784,11 +739,9 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
             action::{Action, Repeats},
         },
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let block1 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(1).unwrap());
         h.creation_time_ms = 1;
@@ -803,7 +756,6 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     let trigger_id: TriggerId = "ivm_time_cache".parse().unwrap();
     let mut raw = Vec::new();
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -824,7 +776,6 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
     stx.apply();
     let _ = state_block.apply_without_execution(&block1, Vec::new());
     state_block.commit().unwrap();
-
     let block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
         h.creation_time_ms = 2;
@@ -834,7 +785,6 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
     let _ = state_block2.apply_without_execution(&block2, Vec::new());
     state_block2.commit().unwrap();
     let after_first = state.trigger_ivm_cache.lock().stats();
-
     let block3 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(3).unwrap());
         h.creation_time_ms = 3;
@@ -843,7 +793,6 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
     state_block3.execute_time_triggers(&block3.as_ref().header());
     let _ = state_block3.apply_without_execution(&block3, Vec::new());
     state_block3.commit().unwrap();
-
     let after_second = state.trigger_ivm_cache.lock().stats();
     assert!(
         after_second.metadata_hits > after_first.metadata_hits,
@@ -870,16 +819,13 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
         "warm generic trigger must not reconstruct its runtime template"
     );
 }
-
 #[test]
 fn contract_query_cache_isolated_and_reuses_owned_runtime() {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
     const GAS_LIMIT: u64 = 10_000;
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let mut program = ivm::ProgramMetadata::default().encode();
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "QueryCacheFixture".to_owned(),
@@ -909,7 +855,6 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
     program.extend_from_slice(&interface.encode_section());
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let code_hash = ivm::contract_code_hash(&program);
-
     let first = state
         .prepare_contract_query_program(code_hash, &program)
         .expect("cold preparation");
@@ -929,7 +874,6 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
             .expect("dirty input page");
         allocation
     };
-
     // A trusted content-addressed hit neither reads nor reparses the byte
     // slice. The empty slice makes accidental fallback validation fail.
     let second = state
@@ -956,7 +900,6 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
         &[0]
     );
     drop(runtime);
-
     let summary_stats = state.contract_query_ivm_cache_stats();
     let prepared_stats = state.contract_query_prepared_cache_stats();
     assert_eq!(summary_stats.metadata_misses, 1);
@@ -972,7 +915,6 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
         "public query preparation must not churn the consensus trigger cache"
     );
 }
-
 #[test]
 fn execute_called_trigger_fails_closed_on_missing_bytecode_with_warm_prepared_artifact() {
     use iroha_data_model::{
@@ -983,11 +925,9 @@ fn execute_called_trigger_fails_closed_on_missing_bytecode_with_warm_prepared_ar
             action::{Action, Repeats},
         },
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "missing_bytecode_by_call".parse().unwrap();
     let program = ivm::KotodamaCompiler::new()
         .compile_source(
@@ -1008,7 +948,6 @@ let _marker = marker;
         .expect("prewarm authenticated trigger artifact");
     let bytecode = IvmBytecode::from_compiled(program);
     let blob_hash = HashOf::new(&bytecode);
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1021,7 +960,6 @@ let _marker = marker;
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let action = Action::new(
             Executable::Ivm(bytecode),
             Repeats::Exactly(1),
@@ -1037,7 +975,6 @@ let _marker = marker;
         stx.apply();
     }
     state_block.commit().unwrap();
-
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
@@ -1050,7 +987,6 @@ let _marker = marker;
             .is_some(),
         "adversarial fixture must retain a warm prepared artifact"
     );
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1069,14 +1005,12 @@ let _marker = marker;
     );
     drop(stx);
     state_block.commit().unwrap();
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),
         "failed execution should not unregister the trigger in the rolled-back transaction"
     );
 }
-
 #[test]
 fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
     use iroha_data_model::{
@@ -1086,13 +1020,10 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
             action::{Action, Repeats},
         },
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "depleted_by_call".parse().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1105,7 +1036,6 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let action = Action::new(
             Vec::<InstructionBox>::new(),
             Repeats::Exactly(1),
@@ -1121,7 +1051,6 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     {
         let mut trigger_block = state.world.triggers.block();
         let mut trigger_tx = trigger_block.transaction();
@@ -1135,7 +1064,6 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
         trigger_tx.apply();
         trigger_block.commit();
     }
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1155,26 +1083,19 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
     }
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_none(),
         "depleted trigger should be removed"
     );
 }
-
 #[test]
 fn execute_called_trigger_rejects_disabled_trigger() {
-    use iroha_data_model::events::execute_trigger::{
-        ExecuteTriggerEvent, ExecuteTriggerEventFilter,
-    };
-
+    use iroha_data_model::events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "disabled_by_call".parse().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1187,7 +1108,6 @@ fn execute_called_trigger_rejects_disabled_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let mut metadata = Metadata::default();
         metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
@@ -1211,7 +1131,6 @@ fn execute_called_trigger_rejects_disabled_trigger() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1231,26 +1150,19 @@ fn execute_called_trigger_rejects_disabled_trigger() {
     }
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),
         "disabled trigger should remain registered"
     );
 }
-
 #[test]
 fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
-    use iroha_data_model::events::execute_trigger::{
-        ExecuteTriggerEvent, ExecuteTriggerEventFilter,
-    };
-
+    use iroha_data_model::events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "numeric_zero_by_call".parse().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1263,7 +1175,6 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let mut metadata = Metadata::default();
         metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
@@ -1287,7 +1198,6 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1307,7 +1217,6 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
     }
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     let trigger = view
         .world
@@ -1325,19 +1234,13 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
         "numeric-zero enabled trigger must not appear active"
     );
 }
-
 #[test]
 fn execute_called_trigger_rejects_malformed_enabled_trigger() {
-    use iroha_data_model::events::execute_trigger::{
-        ExecuteTriggerEvent, ExecuteTriggerEventFilter,
-    };
-
+    use iroha_data_model::events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "malformed_enabled_by_call".parse().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1350,7 +1253,6 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let mut metadata = Metadata::default();
         metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
@@ -1374,7 +1276,6 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1394,7 +1295,6 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
     }
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     let trigger = view
         .world
@@ -1412,18 +1312,14 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
         "malformed enabled trigger must not appear active"
     );
 }
-
 #[test]
 fn execute_data_triggers_dfs_skips_disabled_trigger() {
     use iroha_data_model::prelude::DataEvent;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "disabled_data_trigger".parse().unwrap();
     let flag_key: Name = "flag".parse().expect("valid name");
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1436,7 +1332,6 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let mut metadata = Metadata::default();
         metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
@@ -1462,7 +1357,6 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1472,14 +1366,12 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
     stx.world
         .internal_event_buf
         .push(Arc::new(DataEvent::Domain(event)));
-
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("disabled trigger should be skipped");
     assert!(steps.is_empty(), "disabled trigger should not execute");
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),
@@ -1493,15 +1385,12 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
         .unwrap();
     assert!(flag_val.is_none(), "disabled trigger must not mutate state");
 }
-
 #[test]
 fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers() {
     use iroha_data_model::prelude::DataEvent;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let numeric_trigger_id: TriggerId = "numeric_zero_data_trigger".parse().unwrap();
     let malformed_trigger_id: TriggerId = "malformed_enabled_data_trigger".parse().unwrap();
     let numeric_flag: Name = "numeric_data_flag".parse().expect("valid name");
@@ -1509,7 +1398,6 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     let enabled_key = crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
         .parse::<Name>()
         .expect("valid metadata key");
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1522,7 +1410,6 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         for (trigger_id, flag_key, enabled_value) in [
             (
                 numeric_trigger_id.clone(),
@@ -1556,7 +1443,6 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1566,7 +1452,6 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     stx.world
         .internal_event_buf
         .push(Arc::new(DataEvent::Domain(event)));
-
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("disabled data triggers should be skipped");
@@ -1576,7 +1461,6 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     );
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     let account = view.world.account(&ALICE_ID).expect("alice account");
     assert!(
@@ -1605,18 +1489,14 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         );
     }
 }
-
 #[test]
 fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
     use iroha_data_model::prelude::DataEvent;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "depleted_data_trigger".parse().unwrap();
     let flag_key: Name = "depleted_data_flag".parse().expect("valid name");
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1629,7 +1509,6 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let action = Action::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 ALICE_ID.clone(),
@@ -1647,7 +1526,6 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     {
         let mut trigger_block = state.world.triggers.block();
         let mut trigger_tx = trigger_block.transaction();
@@ -1661,7 +1539,6 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         trigger_tx.apply();
         trigger_block.commit();
     }
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1671,14 +1548,12 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
     stx.world
         .internal_event_buf
         .push(Arc::new(DataEvent::Domain(event)));
-
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("depleted trigger should be pruned without error");
     assert!(steps.is_empty(), "depleted trigger must not execute");
     stx.apply();
     state_block.commit().unwrap();
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_none(),
@@ -1695,13 +1570,11 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         "depleted data trigger must not mutate state"
     );
 }
-
 #[test]
 fn execute_data_triggers_dfs_clears_events_without_triggers() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
@@ -1717,7 +1590,6 @@ fn execute_data_triggers_dfs_clears_events_without_triggers() {
     SetKeyValue::account(ALICE_ID.clone(), flag_key, Json::from(norito::json!(true)))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     assert!(
         !stx.world.internal_event_buf.is_empty(),
         "expected data events from metadata update"
@@ -1726,7 +1598,6 @@ fn execute_data_triggers_dfs_clears_events_without_triggers() {
         stx.world.triggers.data_triggers().is_empty(),
         "test should run without data triggers"
     );
-
     let steps = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect("no triggers should yield ok result");
@@ -1735,20 +1606,16 @@ fn execute_data_triggers_dfs_clears_events_without_triggers() {
         stx.world.internal_event_buf.is_empty(),
         "buffered events should be cleared when no triggers are registered"
     );
-
     stx.apply();
     state_block.commit().unwrap();
 }
-
 #[test]
 fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1757,7 +1624,6 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let flag_key: Name = "trigger_authority".parse().unwrap();
     let trigger_id: TriggerId = "data_trigger_registered_authority".parse().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1781,7 +1647,6 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         ))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
         let data_trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -1804,7 +1669,6 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1812,16 +1676,13 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let steps = stx
             .execute_data_triggers_dfs(&ALICE_ID)
             .expect("data trigger should run under its registered authority");
         assert_eq!(steps.len(), 1, "expected one data trigger execution");
-
         stx.apply();
     }
     state_block.commit().unwrap();
-
     let flag_value = state
         .view()
         .world
@@ -1831,7 +1692,6 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         .unwrap();
     assert_eq!(flag_value, Some(Json::from(norito::json!("ok"))));
 }
-
 #[test]
 fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
     use iroha_data_model::{
@@ -1842,17 +1702,14 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
             action::{Action, Repeats},
         },
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(World::default(), kura, query_handle);
-
     let trigger_id: TriggerId = "missing_bytecode_data".parse().unwrap();
     let mut raw = Vec::new();
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
     let blob_hash = HashOf::new(&bytecode);
-
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     {
@@ -1865,7 +1722,6 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let action = Action::new(
             Executable::Ivm(bytecode),
             Repeats::Indefinitely,
@@ -1879,16 +1735,13 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         stx.apply();
     }
     state_block.commit().unwrap();
-
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
     );
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
-
     let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();
     let beta_domain: DomainId = DomainId::try_new("beta", "universal").unwrap();
     let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
@@ -1899,7 +1752,6 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
     stx.world
         .internal_event_buf
         .push(Arc::new(DataEvent::Domain(event_b)));
-
     let err = stx
         .execute_data_triggers_dfs(&ALICE_ID)
         .expect_err("missing bytecode should reject data-trigger execution");
@@ -1910,7 +1762,6 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
     );
     drop(stx);
     state_block.commit().unwrap();
-
     let view = state.view();
     assert!(
         view.world.triggers().ids().get(&trigger_id).is_some(),

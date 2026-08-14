@@ -3,7 +3,6 @@
 // Kura root. No current root-level publication owns that namespace: retaining
 // one would silently evade both exact intent recovery and disk accounting.
 const LEGACY_CANONICAL_PRUNE_RANDOM_TEMP_PREFIX: &str = ".kura-sidecar-";
-
 /// One authenticated canonical-prune publication name.
 #[derive(Debug)]
 struct CanonicalPruneIntentArtifact {
@@ -14,14 +13,12 @@ struct CanonicalPruneIntentArtifact {
     intent: KuraPruneIntentV2,
     links: u64,
 }
-
 /// Exact allowlisted canonical-prune publication inventory.
 #[derive(Debug, Default)]
 struct CanonicalPruneIntentArtifactInventory {
     stable: Option<CanonicalPruneIntentArtifact>,
     temporary: Option<CanonicalPruneIntentArtifact>,
 }
-
 impl CanonicalPruneIntentArtifactInventory {
     fn tracked_bytes(&self) -> Result<u64> {
         // `tempfile::persist_noclobber` may crash after creating the stable
@@ -44,7 +41,6 @@ impl CanonicalPruneIntentArtifactInventory {
                 })
             })
     }
-
     fn same_physical_object(
         stable: &CanonicalPruneIntentArtifact,
         temporary: &CanonicalPruneIntentArtifact,
@@ -52,12 +48,10 @@ impl CanonicalPruneIntentArtifactInventory {
         Kura::sidecar_metadata_same_object(&stable.metadata, &temporary.metadata)
     }
 }
-
 impl Kura {
     fn prune_intent_path_for(store_root: &Path) -> PathBuf {
         store_root.join(PRUNE_INTENT_FILE_NAME)
     }
-
     fn decode_prune_intent(path: &Path, bytes: &[u8]) -> Result<KuraPruneIntentV2> {
         if bytes.is_empty() || bytes.len() > PRUNE_INTENT_MAX_BYTES {
             return Err(Error::PruneIntentConflict(format!(
@@ -90,11 +84,9 @@ impl Kura {
         }
         Ok(intent)
     }
-
     fn read_prune_intent(store_root: &Path) -> Result<Option<KuraPruneIntentV2>> {
         Self::recover_canonical_prune_intent_artifacts(store_root)
     }
-
     fn persist_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
         let bytes = norito::encode_canonical(intent).map_err(Error::NoritoFrame)?;
         if bytes.is_empty() || bytes.len() > PRUNE_INTENT_MAX_BYTES {
@@ -145,7 +137,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn clear_prune_intent(&self) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let before =
@@ -167,13 +158,11 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn finish_prune_intent(&self) -> Result<()> {
         self.clear_prune_intent()?;
         self.prune_recovery_required.store(false, Ordering::Release);
         Ok(())
     }
-
     fn block_hash_from_store(
         block_store: &mut BlockStore,
         height: u64,
@@ -186,7 +175,6 @@ impl Kura {
             .into_iter()
             .next())
     }
-
     fn apply_prune_intent_to_block_store(
         block_store: &mut BlockStore,
         intent: &KuraPruneIntentV2,
@@ -223,7 +211,6 @@ impl Kura {
         block_store.prune(intent.target_height)?;
         Ok(())
     }
-
     /// Configured-capacity bytes kept available for a canonical prune intent.
     ///
     /// Normal publications and reservations include this once. Canonical prune
@@ -232,11 +219,9 @@ impl Kura {
     const fn canonical_prune_intent_maintenance_headroom_bytes() -> u64 {
         PRUNE_INTENT_MAX_BYTES as u64
     }
-
     fn prune_intent_temp_path_for(store_root: &Path) -> PathBuf {
         store_root.join(PRUNE_INTENT_TEMP_FILE_NAME)
     }
-
     fn invalid_canonical_prune_intent_artifact(
         path: &Path,
         detail: impl std::fmt::Display,
@@ -246,7 +231,6 @@ impl Kura {
             path.display()
         ))
     }
-
     fn canonical_prune_intent_namespace_for(store_root: &Path) -> Result<BoundProgressNamespace> {
         let stable = Self::prune_intent_path_for(store_root);
         let temporary = Self::prune_intent_temp_path_for(store_root);
@@ -257,7 +241,6 @@ impl Kura {
             directories: vec![directory],
         })
     }
-
     #[cfg(unix)]
     fn canonical_prune_intent_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -265,7 +248,6 @@ impl Kura {
         links: u64,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.nlink() == links
             && right.nlink() == links
@@ -275,7 +257,6 @@ impl Kura {
             && left.ctime() == right.ctime()
             && left.ctime_nsec() == right.ctime_nsec()
     }
-
     #[cfg(windows)]
     fn canonical_prune_intent_metadata_unchanged(
         left: &std::fs::Metadata,
@@ -283,7 +264,6 @@ impl Kura {
         links: u64,
     ) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         u32::try_from(links).ok().is_some_and(|links| {
             Self::sidecar_metadata_same_object(left, right)
                 && left.number_of_links() == Some(links)
@@ -293,7 +273,6 @@ impl Kura {
                 && left.creation_time() == right.creation_time()
         })
     }
-
     #[cfg(all(not(unix), not(windows)))]
     fn canonical_prune_intent_metadata_unchanged(
         _left: &std::fs::Metadata,
@@ -302,7 +281,6 @@ impl Kura {
     ) -> bool {
         false
     }
-
     fn canonical_prune_intent_link_count(metadata: &std::fs::Metadata) -> Option<u64> {
         if Self::sidecar_has_link_count(metadata, 1) {
             Some(1)
@@ -312,7 +290,6 @@ impl Kura {
             None
         }
     }
-
     fn validate_canonical_prune_intent_reserved_names(
         store_root: &Path,
         namespace: &BoundProgressNamespace,
@@ -343,7 +320,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn read_canonical_prune_intent_artifact(
         namespace: &BoundProgressNamespace,
         path: &Path,
@@ -388,7 +364,6 @@ impl Kura {
         let name = path.file_name().ok_or_else(|| {
             Self::invalid_canonical_prune_intent_artifact(path, "has no direct entry name")
         })?;
-
         #[cfg(unix)]
         let mut file = std::fs::File::from(
             rustix::fs::openat(
@@ -402,7 +377,6 @@ impl Kura {
             .map_err(std::io::Error::from)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?,
         );
-
         #[cfg(not(unix))]
         let mut file = {
             let mut options = std::fs::OpenOptions::new();
@@ -410,7 +384,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -459,7 +432,6 @@ impl Kura {
             links,
         }))
     }
-
     fn canonical_prune_intent_artifact_inventory(
         store_root: &Path,
     ) -> Result<CanonicalPruneIntentArtifactInventory> {
@@ -504,7 +476,6 @@ impl Kura {
         }
         Ok(CanonicalPruneIntentArtifactInventory { stable, temporary })
     }
-
     fn remove_canonical_prune_intent_artifact(
         namespace: &BoundProgressNamespace,
         artifact: &CanonicalPruneIntentArtifact,
@@ -535,7 +506,6 @@ impl Kura {
                 "changed before exact-object removal",
             ));
         }
-
         #[cfg(unix)]
         {
             let current =
@@ -558,7 +528,6 @@ impl Kura {
                 .map_err(std::io::Error::from)
                 .map_err(|error| Error::IO(error, artifact.path.clone()))?;
         }
-
         #[cfg(not(unix))]
         {
             let current = std::fs::symlink_metadata(&artifact.path)
@@ -581,7 +550,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn sync_canonical_prune_intent_root(namespace: &BoundProgressNamespace) -> Result<()> {
         let root = namespace.directories.first().ok_or_else(|| {
             Error::PruneIntentConflict(
@@ -599,7 +567,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn recover_canonical_prune_intent_artifacts(
         store_root: &Path,
     ) -> Result<Option<KuraPruneIntentV2>> {
@@ -647,7 +614,6 @@ impl Kura {
             }
         }
     }
-
     fn publish_canonical_prune_intent_exact(
         &self,
         intent: &KuraPruneIntentV2,
@@ -730,7 +696,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn prune_indexed_sidecar_has_exact_temp_residue(
         data_path: &Path,
         index_path: &Path,
@@ -760,7 +725,6 @@ impl Kura {
         }
         Ok(present)
     }
-
     fn project_prune_indexed_sidecar_pair(
         data_path: &Path,
         index_path: &Path,
@@ -847,7 +811,6 @@ impl Kura {
             retained_index_bytes,
         })
     }
-
     /// Reconcile at most one sequential rewrite crash residue and project the
     /// exact remaining retained data/index pairs. The caller holds
     /// `sidecar_lock`; both namespaces are preflighted before the first rename
@@ -920,7 +883,6 @@ impl Kura {
         }
         Ok(projection)
     }
-
     fn canonical_prune_capacity_admission_snapshot(
         &self,
         pending_blocks: u64,
@@ -945,7 +907,6 @@ impl Kura {
             admitted_peak_bytes: 0,
         })
     }
-
     fn canonical_prune_commit_marker_projection(&self, target_height: u64) -> Result<(u64, u64)> {
         let mut store = self.block_store.lock();
         let _ = store.read_commit_marker()?;
@@ -995,7 +956,6 @@ impl Kura {
             marker_temporary_bytes.saturating_sub(marker_stable_bytes),
         ))
     }
-
     fn seal_and_validate_canonical_prune_capacity_admission(
         &self,
         mut intent: KuraPruneIntentV2,
@@ -1038,7 +998,6 @@ impl Kura {
         }
         Ok(intent)
     }
-
     /// Recheck the exact remaining authenticated stages without consuming the
     /// capacity envelopes that were outstanding when the intent was admitted.
     fn validate_recovered_prune_capacity(

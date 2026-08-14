@@ -16,17 +16,6 @@
 //! depends on a second mutable-or-missing copy of the same authority. Their
 //! response signature uses their current P2P identity, so validator key
 //! rotation does not make a retired height unservable.
-
-use core::fmt;
-use std::{
-    collections::{BTreeMap, VecDeque},
-    num::NonZeroUsize,
-};
-
-use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
-use thiserror::Error;
-
 #[cfg(test)]
 use super::v2::verify_historical_quorum_certificate;
 #[cfg(test)]
@@ -50,7 +39,14 @@ use super::{
     v2_effects::CommitCertificateReducerAdmission,
 };
 use crate::kura::Kura;
-
+use core::fmt;
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    num::NonZeroUsize,
+};
+use thiserror::Error;
 /// One authenticated CommitQC ready for ordinary reducer ingress.
 ///
 /// The request remains outstanding until the caller confirms that
@@ -61,7 +57,6 @@ pub(crate) struct DiscoveredCommitCertificate {
     request_hash: HashOf<wire::CommitCertificateRequest>,
     response: wire::CommitCertificateResponse,
 }
-
 impl DiscoveredCommitCertificate {
     /// Build the only consensus input produced by v2 block sync.
     ///
@@ -72,14 +67,12 @@ impl DiscoveredCommitCertificate {
             self.response.certificate.clone(),
         ))
     }
-
     /// Borrow the authenticated transport response for diagnostics/tests.
     #[cfg(test)]
     pub(crate) const fn response(&self) -> &wire::CommitCertificateResponse {
         &self.response
     }
 }
-
 impl From<AuthenticatedCommitCertificateResponse> for DiscoveredCommitCertificate {
     fn from(authenticated: AuthenticatedCommitCertificateResponse) -> Self {
         Self {
@@ -88,7 +81,6 @@ impl From<AuthenticatedCommitCertificateResponse> for DiscoveredCommitCertificat
         }
     }
 }
-
 /// Bounded current-height CommitQC discovery state.
 ///
 /// Construct a fresh instance for each active height. Because a request names
@@ -100,7 +92,6 @@ pub(crate) struct V2BlockSyncDiscovery {
     requester: PeerId,
     outstanding: OutstandingCommitCertificateRequests,
 }
-
 /// Chain-scoped bounded server state for historical CommitQC discovery.
 ///
 /// Exact retransmissions reuse the signed cached response without another disk
@@ -121,7 +112,6 @@ pub(crate) struct V2BlockSyncServer {
     body_identities: BTreeMap<HistoricalBodyRequestIdentity, HashOf<wire::CertifiedBodyRequest>>,
     body_order: VecDeque<HashOf<wire::CertifiedBodyRequest>>,
 }
-
 impl V2BlockSyncServer {
     /// Construct an empty bounded server for one exact network identity.
     pub(crate) fn new(network_id: NetworkId, capacity: usize) -> Result<Self, V2BlockSyncError> {
@@ -139,7 +129,6 @@ impl V2BlockSyncServer {
             body_order: VecDeque::new(),
         })
     }
-
     /// Authenticate and answer one exact request from canonical Kura history.
     pub(crate) fn serve(
         &mut self,
@@ -157,7 +146,6 @@ impl V2BlockSyncServer {
             )
         })
     }
-
     /// Serve an exact historical canonical body only when this node belongs to
     /// that height's frozen roster and its durable history contains the applied
     /// block and matching finality artifact.
@@ -189,7 +177,6 @@ impl V2BlockSyncServer {
             },
         )
     }
-
     fn serve_historical_body_with<Build>(
         &mut self,
         request: wire::CertifiedBodyRequest,
@@ -218,7 +205,6 @@ impl V2BlockSyncServer {
                 incoming: request_hash,
             });
         }
-
         let Some(response) = build(&request)? else {
             return Ok(None);
         };
@@ -239,7 +225,6 @@ impl V2BlockSyncServer {
         self.body_order.push_back(request_hash);
         Ok(Some(response))
     }
-
     fn serve_with<Build>(
         &mut self,
         request: wire::CommitCertificateRequest,
@@ -269,7 +254,6 @@ impl V2BlockSyncServer {
             }
             self.remove(request_hash);
         }
-
         let identity = CommitCertificateServerIdentity::from(&request);
         if let Some(existing) = self.identities.get(&identity) {
             return Err(V2BlockSyncError::ConflictingServerRequest {
@@ -277,7 +261,6 @@ impl V2BlockSyncServer {
                 incoming: request_hash,
             });
         }
-
         let Some(response) = build(&request)? else {
             return Ok(None);
         };
@@ -292,7 +275,6 @@ impl V2BlockSyncServer {
         self.order.push_back(request_hash);
         Ok(Some(response))
     }
-
     fn remove(&mut self, request_hash: HashOf<wire::CommitCertificateRequest>) {
         let Some(message) = self.responses.remove(&request_hash) else {
             return;
@@ -308,7 +290,6 @@ impl V2BlockSyncServer {
             .retain(|_, hash| *hash != response.request_hash);
         self.order.retain(|hash| *hash != request_hash);
     }
-
     fn remove_body(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) {
         if self.body_responses.remove(&request_hash).is_none() {
             return;
@@ -316,31 +297,26 @@ impl V2BlockSyncServer {
         self.body_identities.retain(|_, hash| *hash != request_hash);
         self.body_order.retain(|hash| *hash != request_hash);
     }
-
     #[cfg(test)]
     fn len(&self) -> usize {
         self.responses.len()
     }
-
     #[cfg(test)]
     fn body_len(&self) -> usize {
         self.body_responses.len()
     }
 }
-
 #[derive(Clone, Debug)]
 struct CachedHistoricalBodyResponse {
     responder: PeerId,
     message: wire::ConsensusMessageV2,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HistoricalBodyRequestIdentity {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     requester: PeerId,
 }
-
 impl From<&wire::CertifiedBodyRequest> for HistoricalBodyRequestIdentity {
     fn from(request: &wire::CertifiedBodyRequest) -> Self {
         Self {
@@ -350,7 +326,6 @@ impl From<&wire::CertifiedBodyRequest> for HistoricalBodyRequestIdentity {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CommitCertificateServerIdentity {
     protocol_version: u16,
@@ -358,7 +333,6 @@ struct CommitCertificateServerIdentity {
     height: wire::Height,
     requester: PeerId,
 }
-
 impl From<&wire::CommitCertificateRequest> for CommitCertificateServerIdentity {
     fn from(request: &wire::CommitCertificateRequest) -> Self {
         Self {
@@ -369,7 +343,6 @@ impl From<&wire::CommitCertificateRequest> for CommitCertificateServerIdentity {
         }
     }
 }
-
 impl V2BlockSyncDiscovery {
     /// Construct discovery state for one validated active context.
     pub(crate) fn new(
@@ -384,7 +357,6 @@ impl V2BlockSyncDiscovery {
             outstanding: OutstandingCommitCertificateRequests::new(max_outstanding)?,
         })
     }
-
     /// Sign and register the exact current-height request.
     ///
     /// A duplicate call is rejected rather than replacing outstanding state;
@@ -416,7 +388,6 @@ impl V2BlockSyncDiscovery {
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
         ))
     }
-
     /// Rebuild the exact registered envelope for deterministic retransmission.
     pub(crate) fn retransmit(
         &self,
@@ -431,7 +402,6 @@ impl V2BlockSyncDiscovery {
                 )
             })
     }
-
     /// Authenticate a response without consuming its outstanding request.
     ///
     /// The caller next submits [`DiscoveredCommitCertificate::message`] via
@@ -448,12 +418,10 @@ impl V2BlockSyncDiscovery {
             .map(Into::into)
             .map_err(Into::into)
     }
-
     /// Acknowledge one response after its CommitQC entered reducer ingress.
     pub(crate) fn complete(&mut self, discovered: DiscoveredCommitCertificate) -> bool {
         self.outstanding.complete(discovered.request_hash)
     }
-
     /// Enqueue the ordinary CommitQC message and atomically retire discovery
     /// state only after the enqueue callback succeeds.
     ///
@@ -544,14 +512,12 @@ impl V2BlockSyncDiscovery {
         }
         Ok(())
     }
-
     /// Number of bounded outstanding requests.
     #[cfg(test)]
     pub(crate) fn outstanding_len(&self) -> usize {
         self.outstanding.len()
     }
 }
-
 fn historical_typed_identity<T>(
     domain: u8,
     kind: u8,
@@ -559,7 +525,6 @@ fn historical_typed_identity<T>(
 ) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
-
 /// Serve a signed request from a canonical historical Kura finality artifact.
 ///
 /// Identity authentication happens before disk access. A missing artifact is
@@ -586,7 +551,6 @@ fn serve_commit_certificate_from_kura(
     )
     .map(Some)
 }
-
 /// Build a response from an already-loaded, immutable finality artifact.
 ///
 /// This factored form supports deterministic adversarial tests. Production
@@ -619,7 +583,6 @@ fn serve_commit_certificate_from_artifact(
         wire::ConsensusMessageV2Payload::CommitCertificateResponse(response),
     ))
 }
-
 fn build_historical_body_response(
     kura: &Kura,
     request: wire::CertifiedBodyRequest,
@@ -643,7 +606,6 @@ fn build_historical_body_response(
     if request.subject != artifact.subject {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
     }
-
     let responder_peer = PeerId::new(responder_key.public_key().clone());
     let Some(responder_position) = context
         .roster
@@ -697,14 +659,12 @@ fn build_historical_body_response(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
     )))
 }
-
 fn ensure_key_identity(key: &KeyPair, peer: &PeerId) -> Result<(), V2BlockSyncError> {
     if key.public_key() != peer.public_key() {
         return Err(V2BlockSyncError::LocalKeyMismatch);
     }
     Ok(())
 }
-
 /// Failures at the v2-only sequential sync boundary.
 #[derive(Debug, Error)]
 pub(crate) enum V2BlockSyncError {
@@ -770,7 +730,6 @@ pub(crate) enum V2BlockSyncError {
         incoming: HashOf<wire::CertifiedBodyRequest>,
     },
 }
-
 /// Failure while handing an authenticated discovered CommitQC to reducer ingress.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CommitCertificateAdmissionError<E> {
@@ -783,7 +742,6 @@ pub(crate) enum CommitCertificateAdmissionError<E> {
     /// The authenticated discovery handoff failed its shared pure refinement gate.
     RefinementRejected,
 }
-
 impl<E: fmt::Display> fmt::Display for CommitCertificateAdmissionError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -798,27 +756,21 @@ impl<E: fmt::Display> fmt::Display for CommitCertificateAdmissionError<E> {
         }
     }
 }
-
 impl<E> std::error::Error for CommitCertificateAdmissionError<E> where E: std::error::Error + 'static
 {}
-
 #[cfg(test)]
 /// Shared deterministic fixtures for sibling Sumeragi v2 unit tests.
 pub(super) mod tests {
-    use std::{cell::Cell, num::NonZeroU64, sync::Arc};
-
-    use iroha_crypto::{Algorithm, Hash};
-    use iroha_data_model::{NetworkId, block::BlockHeader};
-
     use super::*;
     use crate::{block::ValidBlock, sumeragi::v2_transport::OutstandingCertifiedBodyRequests};
-
+    use iroha_crypto::{Algorithm, Hash};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
+    use std::{cell::Cell, num::NonZeroU64, sync::Arc};
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     struct Fixture {
         context: wire::HeightContext,
         old_validators: Vec<KeyPair>,
@@ -827,7 +779,6 @@ pub(super) mod tests {
         rotated_responder: KeyPair,
         artifact: wire::finality::V2FinalityArtifact,
     }
-
     impl Fixture {
         fn new() -> Self {
             let mut old_validators = (1_u8..=4)
@@ -914,12 +865,10 @@ pub(super) mod tests {
                 artifact,
             }
         }
-
         fn discovery(&self) -> V2BlockSyncDiscovery {
             V2BlockSyncDiscovery::new(self.context.clone(), peer(&self.requester), 1)
                 .expect("valid discovery")
         }
-
         fn signed_request(
             &self,
             discovery: &mut V2BlockSyncDiscovery,
@@ -932,7 +881,6 @@ pub(super) mod tests {
             };
             request
         }
-
         fn response(
             &self,
             request: wire::CommitCertificateRequest,
@@ -951,7 +899,6 @@ pub(super) mod tests {
             };
             response
         }
-
         fn body_request(&self, certificate: wire::QuorumCertificate) -> wire::CertifiedBodyRequest {
             let mut request = wire::CertifiedBodyRequest {
                 round: certificate.proposal_round,
@@ -967,19 +914,15 @@ pub(super) mod tests {
             request
         }
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).expect("deterministic BLS key")
     }
-
     fn peer(key: &KeyPair) -> PeerId {
         PeerId::new(key.public_key().clone())
     }
-
     fn block_hash(seed: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
-
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 1]),
@@ -989,7 +932,6 @@ pub(super) mod tests {
             Hash::new([seed, 4]),
         )
     }
-
     fn aggregate_certificate(certificate: &wire::QuorumCertificate, keys: &[KeyPair]) -> Vec<u8> {
         let preimage = wire::Vote {
             round: certificate.round,
@@ -1016,19 +958,16 @@ pub(super) mod tests {
         let refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         iroha_crypto::bls_normal_aggregate_signatures(&refs).expect("aggregate QC")
     }
-
     fn resign_request(request: &mut wire::CommitCertificateRequest, key: &KeyPair) {
         request.signature = Signature::new(key.private_key(), &request.signature_preimage())
             .payload()
             .to_vec();
     }
-
     fn resign_response(response: &mut wire::CommitCertificateResponse, key: &KeyPair) {
         response.signature = Signature::new(key.private_key(), &response.signature_preimage())
             .payload()
             .to_vec();
     }
-
     /// Exact historical source and responses shared with worker rollover tests.
     pub(in crate::sumeragi) struct DurableHistoryFixture {
         /// Kura containing the canonical block and finality artifact.
@@ -1044,7 +983,6 @@ pub(super) mod tests {
         /// Signed body response reconstructed from the canonical block.
         pub(in crate::sumeragi) body_response: wire::ConsensusMessageV2,
     }
-
     /// Build exact Kura-backed historical responses for worker rollover tests.
     pub(in crate::sumeragi) fn durable_history_fixture() -> DurableHistoryFixture {
         let fixture = Fixture::new();
@@ -1112,14 +1050,12 @@ pub(super) mod tests {
             fixture.proofs_of_possession.clone(),
         );
         artifact.validate().expect("valid history-fixture finality");
-
         let kura = Kura::blank_kura_for_testing();
         kura.store_block(block)
             .expect("store history-fixture block");
         let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("store history-fixture finality");
-
         let requester = peer(&fixture.requester);
         let mut commit_request = wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1155,7 +1091,6 @@ pub(super) mod tests {
             body_response,
         }
     }
-
     #[test]
     fn discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue() {
         let fixture = Fixture::new();
@@ -1169,7 +1104,6 @@ pub(super) mod tests {
                 wire::ConsensusMessageV2Payload::CommitCertificateRequest(request.clone())
             ))
         );
-
         let response = fixture.response(request.clone());
         let late_replay = response.clone();
         let discovered = discovery
@@ -1181,7 +1115,6 @@ pub(super) mod tests {
             wire::ConsensusMessageV2Payload::QuorumCertificate(ref certificate)
                 if certificate == &fixture.artifact.commit_qc
         ));
-
         let rejected = discovery.enqueue_and_complete(discovered.clone(), |_| {
             Err::<CommitCertificateReducerAdmission, _>("runtime backpressure")
         });
@@ -1192,7 +1125,6 @@ pub(super) mod tests {
             ))
         );
         assert_eq!(discovery.outstanding_len(), 1);
-
         let foreign_admission =
             CommitCertificateReducerAdmission::for_test(&wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::CommitCertificateRequest(request.clone()),
@@ -1209,7 +1141,6 @@ pub(super) mod tests {
             1,
             "foreign reducer ownership must not retire authenticated discovery"
         );
-
         let mut enqueued = None;
         discovery
             .enqueue_and_complete(discovered, |message| {
@@ -1230,7 +1161,6 @@ pub(super) mod tests {
             ))
         ));
     }
-
     #[test]
     fn historical_artifact_is_served_by_rotated_current_identity() {
         let fixture = Fixture::new();
@@ -1243,19 +1173,16 @@ pub(super) mod tests {
         let mut discovery = fixture.discovery();
         let request = fixture.signed_request(&mut discovery);
         let response = fixture.response(request);
-
         assert_eq!(response.responder, peer(&fixture.rotated_responder));
         let _ = discovery
             .authenticate_response(response, &peer(&fixture.rotated_responder))
             .expect("current identity can serve a historical QC");
     }
-
     #[test]
     fn cross_chain_context_and_spoofed_requests_are_rejected() {
         let fixture = Fixture::new();
         let mut discovery = fixture.discovery();
         let request = fixture.signed_request(&mut discovery);
-
         let mut cross_chain = request.clone();
         cross_chain.network_id = test_network_id(0x82);
         resign_request(&mut cross_chain, &fixture.requester);
@@ -1270,7 +1197,6 @@ pub(super) mod tests {
                 wire::ValidationError::WrongHeightContext
             )))
         ));
-
         let spoof = peer(&fixture.old_validators[0]);
         assert!(matches!(
             serve_commit_certificate_from_artifact(
@@ -1286,7 +1212,6 @@ pub(super) mod tests {
                 }
             ))
         ));
-
         let mut wrong_context = request;
         wrong_context.context_id =
             wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(b"wrong context")));
@@ -1301,7 +1226,6 @@ pub(super) mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn unsolicited_spoofed_and_invalid_qc_responses_leave_request_live() {
         let fixture = Fixture::new();
@@ -1309,7 +1233,6 @@ pub(super) mod tests {
         let request = fixture.signed_request(&mut discovery);
         let request_hash = HashOf::new(&request);
         let valid = fixture.response(request);
-
         let mut unsolicited = valid.clone();
         unsolicited.request_hash = HashOf::from_untyped_unchecked(Hash::new(b"unsolicited"));
         resign_response(&mut unsolicited, &fixture.rotated_responder);
@@ -1320,7 +1243,6 @@ pub(super) mod tests {
             ))
         ));
         assert!(discovery.outstanding.contains(request_hash));
-
         let spoof = peer(&fixture.old_validators[0]);
         assert!(matches!(
             discovery.authenticate_response(valid.clone(), &spoof),
@@ -1332,7 +1254,6 @@ pub(super) mod tests {
             ))
         ));
         assert!(discovery.outstanding.contains(request_hash));
-
         let invalid_aggregate = discovery
             .authenticate_response(valid.clone(), &peer(&fixture.rotated_responder))
             .expect("transport authenticates before ordinary QC ingress");
@@ -1345,7 +1266,6 @@ pub(super) mod tests {
             ))
         );
         assert!(discovery.outstanding.contains(request_hash));
-
         let mut prepare = valid;
         prepare.certificate.phase = wire::GlobalPhase::Prepare;
         resign_response(&mut prepare, &fixture.rotated_responder);
@@ -1356,7 +1276,6 @@ pub(super) mod tests {
         );
         assert!(discovery.outstanding.contains(request_hash));
     }
-
     #[test]
     fn catch_up_is_strictly_sequential_across_contexts() {
         let fixture = Fixture::new();
@@ -1371,7 +1290,6 @@ pub(super) mod tests {
                 Ok::<_, &'static str>(CommitCertificateReducerAdmission::for_test(&message))
             })
             .expect("height one reducer admission");
-
         let mut context_two = fixture.context.clone();
         context_two.height = 2;
         context_two.parent_commit_qc = Some(fixture.artifact.commit_qc.clone());
@@ -1408,14 +1326,12 @@ pub(super) mod tests {
         let mut height_two = V2BlockSyncDiscovery::new(context_two, peer(&fixture.requester), 1)
             .expect("height-two discovery");
         let request_two = fixture.signed_request(&mut height_two);
-
         assert!(matches!(
             height_two.authenticate_response(response_one, &peer(&fixture.rotated_responder)),
             Err(V2BlockSyncError::Transport(
                 V2TransportError::UnsolicitedCommitCertificateResponse(_)
             ))
         ));
-
         let response_two = serve_commit_certificate_from_artifact(
             &artifact_two,
             request_two,
@@ -1436,7 +1352,6 @@ pub(super) mod tests {
             artifact_two.commit_qc
         );
     }
-
     #[test]
     fn local_key_mismatch_and_duplicate_request_fail_without_replacement() {
         let fixture = Fixture::new();
@@ -1455,7 +1370,6 @@ pub(super) mod tests {
         ));
         assert_eq!(discovery.outstanding_len(), 1);
     }
-
     #[test]
     fn server_cache_is_bounded_replay_safe_and_key_rotation_aware() {
         let fixture = Fixture::new();
@@ -1464,7 +1378,6 @@ pub(super) mod tests {
         let mut server =
             V2BlockSyncServer::new(fixture.context.network_id.clone(), 1).expect("server");
         let builds = Cell::new(0_u32);
-
         let first = server
             .serve_with(
                 request.clone(),
@@ -1485,7 +1398,6 @@ pub(super) mod tests {
             .expect("artifact exists");
         assert_eq!(builds.get(), 1);
         assert_eq!(server.len(), 1);
-
         let replay = server
             .serve_with(
                 request.clone(),
@@ -1497,7 +1409,6 @@ pub(super) mod tests {
             .expect("cached response");
         assert_eq!(replay, first);
         assert_eq!(builds.get(), 1);
-
         let new_responder = key(92);
         let rotated = server
             .serve_with(
@@ -1524,7 +1435,6 @@ pub(super) mod tests {
             panic!("response payload")
         };
         assert_eq!(rotated.responder, peer(&new_responder));
-
         let second_requester = key(93);
         let mut second_discovery =
             V2BlockSyncDiscovery::new(fixture.context.clone(), peer(&second_requester), 1)
@@ -1555,7 +1465,6 @@ pub(super) mod tests {
             .expect("second response");
         assert_eq!(server.len(), 1);
     }
-
     #[test]
     fn server_returns_none_for_missing_canonical_artifact_without_caching() {
         let fixture = Fixture::new();
@@ -1564,7 +1473,6 @@ pub(super) mod tests {
         let kura = Kura::blank_kura_for_testing();
         let mut server =
             V2BlockSyncServer::new(fixture.context.network_id.clone(), 2).expect("server");
-
         assert!(
             server
                 .serve(
@@ -1578,7 +1486,6 @@ pub(super) mod tests {
         );
         assert_eq!(server.len(), 0);
     }
-
     #[test]
     fn server_rejects_spoof_and_cross_chain_request_before_history_lookup() {
         let fixture = Fixture::new();
@@ -1586,7 +1493,6 @@ pub(super) mod tests {
         let request = fixture.signed_request(&mut discovery);
         let mut server =
             V2BlockSyncServer::new(fixture.context.network_id.clone(), 2).expect("server");
-
         let spoof = peer(&fixture.old_validators[0]);
         assert!(matches!(
             server.serve_with(
@@ -1601,7 +1507,6 @@ pub(super) mod tests {
                 V2TransportError::OuterIdentityMismatch { .. }
             ))
         ));
-
         let mut cross_chain = request;
         cross_chain.network_id = test_network_id(0x83);
         resign_request(&mut cross_chain, &fixture.requester);
@@ -1620,7 +1525,6 @@ pub(super) mod tests {
         ));
         assert_eq!(server.len(), 0);
     }
-
     #[test]
     fn historical_body_server_rejects_spoof_before_history_lookup() {
         let fixture = Fixture::new();
@@ -1642,7 +1546,6 @@ pub(super) mod tests {
         ));
         assert_eq!(server.body_len(), 0);
     }
-
     #[test]
     fn authenticated_prepare_qc_serves_only_exact_finalized_kura_body() {
         let history = durable_history_fixture();
@@ -1663,7 +1566,6 @@ pub(super) mod tests {
                     .to_vec();
             request
         };
-
         let mut prepare_qc = history.artifact.commit_qc.clone();
         prepare_qc.phase = wire::GlobalPhase::Prepare;
         prepare_qc.aggregate_signature = aggregate_certificate(&prepare_qc, &history.validators);
@@ -1697,7 +1599,6 @@ pub(super) mod tests {
         assert_eq!(response.manifest.subject, history.artifact.subject);
         assert_eq!(response.responder, 3);
         assert_eq!(server.body_len(), 1);
-
         let mut mismatched_qc = prepare_qc.clone();
         mismatched_qc.subject.payload_hash = Hash::new(b"non-canonical historical payload");
         mismatched_qc.aggregate_signature =
@@ -1714,7 +1615,6 @@ pub(super) mod tests {
             Err(V2BlockSyncError::HistoricalSubjectMismatch { height: 1 })
         ));
         assert_eq!(mismatch_server.body_len(), 0);
-
         let mut invalid_qc = prepare_qc;
         invalid_qc.aggregate_signature = vec![0xEE; 96];
         let mut invalid_server =
@@ -1732,7 +1632,6 @@ pub(super) mod tests {
         ));
         assert_eq!(invalid_server.body_len(), 0);
     }
-
     #[test]
     fn historical_body_uses_self_contained_kura_finality_without_context_store() {
         let fixture = Fixture::new();
@@ -1801,7 +1700,6 @@ pub(super) mod tests {
             certificate.clone(),
             fixture.proofs_of_possession.clone(),
         );
-
         let kura = Kura::blank_kura_for_testing();
         kura.store_block(block).expect("store canonical block");
         let _ = kura
@@ -1811,7 +1709,6 @@ pub(super) mod tests {
             !kura.sumeragi_v2_storage_root().join("contexts").exists(),
             "the regression must not create a duplicate historical context record"
         );
-
         let request = fixture.body_request(certificate.clone());
         let request_hash = HashOf::new(&request);
         let mut server =
@@ -1854,7 +1751,6 @@ pub(super) mod tests {
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(ref cached)
                 if cached == &response
         ));
-
         let authenticated_request = authenticate_certified_body_request(
             &context,
             request.clone(),
@@ -1880,7 +1776,6 @@ pub(super) mod tests {
         assert!(outstanding.contains(request_hash));
         assert!(outstanding.complete(request_hash));
         assert!(outstanding.is_empty());
-
         let archive_response = server
             .serve_historical_body(
                 kura.as_ref(),
@@ -1952,7 +1847,6 @@ pub(super) mod tests {
                 .is_none()
         );
         assert_eq!(server.body_len(), 0);
-
         let mut forged = request;
         forged.certificate.aggregate_signature = vec![0xEE; 96];
         forged.signature = Signature::new(

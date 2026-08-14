@@ -1,12 +1,3 @@
-use core::cmp::Ordering;
-
-use iroha_crypto::{Hash, HashOf};
-use iroha_schema::IntoSchema;
-use norito::{
-    codec::{Decode, Encode},
-    to_bytes,
-};
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -18,7 +9,13 @@ use crate::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
-
+use core::cmp::Ordering;
+use iroha_crypto::{Hash, HashOf};
+use iroha_schema::IntoSchema;
+use norito::{
+    codec::{Decode, Encode},
+    to_bytes,
+};
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -42,7 +39,6 @@ pub struct DaPinIntent {
     /// decode and there is no unsigned sidecar representation.
     pub authorization: DaIngestAuthorizationV1,
 }
-
 impl DaPinIntent {
     /// Construct a fully authorised pin intent.
     #[must_use]
@@ -65,7 +61,6 @@ impl DaPinIntent {
         }
     }
 }
-
 /// Bundle of pin intents embedded into a block payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -75,11 +70,9 @@ pub struct DaPinIntentBundle {
     /// Ordered pin intent entries.
     pub intents: Vec<DaPinIntent>,
 }
-
 impl DaPinIntentBundle {
     /// Initial version identifier for on-chain pin intent bundles.
     pub const VERSION_V1: u16 = 1;
-
     /// Construct a bundle using the latest supported version.
     #[must_use]
     pub fn new(intents: Vec<DaPinIntent>) -> Self {
@@ -101,13 +94,11 @@ impl DaPinIntentBundle {
             intents,
         }
     }
-
     /// Returns `true` if there are no pin intents in the bundle.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.intents.is_empty()
     }
-
     /// Canonical Merkle root over the bundled pin intents.
     ///
     /// Leaves and internal nodes use distinct, versioned hash domains. Odd
@@ -118,9 +109,7 @@ impl DaPinIntentBundle {
         if self.intents.is_empty() {
             return None;
         }
-
         let mut layer: Vec<Hash> = self.intents.iter().map(pin_intent_leaf_hash).collect();
-
         while layer.len() > 1 {
             let mut next = Vec::with_capacity(layer.len().div_ceil(2));
             let mut iter = layer.chunks(2);
@@ -134,10 +123,8 @@ impl DaPinIntentBundle {
             }
             layer = next;
         }
-
         layer.pop()
     }
-
     /// Header commitment to the V1 tree shape, leaf count, and Merkle root.
     #[must_use]
     pub fn merkle_commitment(&self) -> Option<HashOf<Self>> {
@@ -150,19 +137,16 @@ impl DaPinIntentBundle {
         ))
     }
 }
-
 impl Default for DaPinIntentBundle {
     fn default() -> Self {
         Self::new(Vec::new())
     }
 }
-
 impl PartialOrd for DaPinIntentBundle {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for DaPinIntentBundle {
     fn cmp(&self, other: &Self) -> Ordering {
         self.version
@@ -170,7 +154,6 @@ impl Ord for DaPinIntentBundle {
             .then_with(|| self.intents.cmp(&other.intents))
     }
 }
-
 /// Pin intent annotated with its position inside a block payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -180,7 +163,6 @@ pub struct DaPinIntentWithLocation {
     /// Block height and index of the intent within the bundled payload.
     pub location: DaCommitmentLocation,
 }
-
 /// Merkle membership proof for a DA pin intent inside a committed block bundle.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -198,12 +180,10 @@ pub struct DaPinIntentProof {
     /// Merkle path connecting the intent leaf to `root`.
     pub path: Vec<MerklePathItem>,
 }
-
 const DA_PIN_INTENT_MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha:da:pin-intent-merkle:leaf:v1\0";
 const DA_PIN_INTENT_MERKLE_INTERNAL_DOMAIN_V1: &[u8] = b"iroha:da:pin-intent-merkle:internal:v1\0";
 const DA_PIN_INTENT_MERKLE_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha:da:pin-intent-merkle:commitment:v1\0";
-
 /// Hash a pin intent into its domain-separated Merkle leaf value.
 #[must_use]
 pub fn pin_intent_leaf_hash(intent: &DaPinIntent) -> Hash {
@@ -214,7 +194,6 @@ pub fn pin_intent_leaf_hash(intent: &DaPinIntent) -> Hash {
     preimage.extend_from_slice(&encoded);
     Hash::new(preimage)
 }
-
 /// Hash two child nodes into a domain-separated pin-intent Merkle node.
 #[must_use]
 pub fn pin_intent_internal_hash(left: &Hash, right: &Hash) -> Hash {
@@ -225,7 +204,6 @@ pub fn pin_intent_internal_hash(left: &Hash, right: &Hash) -> Hash {
     preimage.extend_from_slice(right.as_ref());
     Hash::new(preimage)
 }
-
 /// Reconstruct the header commitment for a DA pin-intent Merkle tree.
 #[must_use]
 pub fn pin_intent_merkle_commitment(
@@ -245,12 +223,9 @@ pub fn pin_intent_merkle_commitment(
     preimage.extend_from_slice(root.as_ref());
     HashOf::from_untyped_unchecked(Hash::new(preimage))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
-
     use crate::{
         NetworkId,
         account::AccountId,
@@ -262,7 +237,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
-
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
     fn test_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
         let key_pair = KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
             .expect("valid deterministic pin-intent key");
@@ -286,7 +261,6 @@ mod tests {
         });
         authorization
     }
-
     #[test]
     fn bundle_sorts_intents_deterministically() {
         let mut first = DaPinIntent::new(
@@ -315,7 +289,6 @@ mod tests {
             ManifestDigest::new([3; 32]),
             test_authorization(LaneId::new(1), 1, 9),
         );
-
         let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone(), third.clone()]);
         let ordered: Vec<(u32, u64, u64, StorageTicketId)> = bundle
             .intents
@@ -329,7 +302,6 @@ mod tests {
                 )
             })
             .collect();
-
         assert_eq!(
             ordered,
             vec![
@@ -354,7 +326,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn pin_intent_merkle_domains_are_disjoint() {
         let intent = DaPinIntent::new(
@@ -367,7 +338,6 @@ mod tests {
         );
         let encoded = to_bytes(&intent).expect("encode pin intent");
         assert_ne!(pin_intent_leaf_hash(&intent), Hash::new(encoded));
-
         let left = Hash::new(b"left");
         let right = Hash::new(b"right");
         let mut untagged = Vec::with_capacity(Hash::LENGTH * 2);
@@ -375,12 +345,10 @@ mod tests {
         untagged.extend_from_slice(right.as_ref());
         assert_ne!(pin_intent_internal_hash(&left, &right), Hash::new(untagged));
     }
-
     #[test]
     fn pin_intent_merkle_commitment_binds_version_leaf_count_and_root() {
         let root = Hash::new(b"root");
         let baseline = pin_intent_merkle_commitment(DaPinIntentBundle::VERSION_V1, 3, &root);
-
         assert_ne!(
             baseline,
             pin_intent_merkle_commitment(DaPinIntentBundle::VERSION_V1 + 1, 3, &root)

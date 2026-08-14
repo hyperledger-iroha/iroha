@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Happy-path NPoS coverage for canonical v2 data availability and telemetry.
-
-use std::{num::NonZeroU64, time::Duration};
-
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -12,8 +9,8 @@ use iroha::data_model::{
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
+use std::{num::NonZeroU64, time::Duration};
 use tokio::time::sleep;
-
 const BLOCK_TARGET: u64 = 6;
 const METRIC_ATTEMPTS: usize = 40;
 const METRIC_INTERVAL: Duration = Duration::from_millis(250);
@@ -23,20 +20,17 @@ const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
-
 fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     let inflated = payload_bytes.saturating_mul(12);
     let with_headroom = payload_bytes.saturating_add(TORII_CONTENT_HEADROOM_BYTES);
     i64::try_from(inflated.max(with_headroom)).unwrap_or(i64::MAX)
 }
-
 fn tx_limit_for_payload(payload_bytes: usize) -> NonZeroU64 {
     NonZeroU64::new(
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX),
     )
     .expect("payload-driven transaction limit must be non-zero")
 }
-
 fn npos_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(4)
@@ -69,11 +63,9 @@ fn npos_builder() -> NetworkBuilder {
                 );
         })
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     init_instruction_registry();
-
     let Some(network) = sandbox::start_network_async_or_skip(
         npos_builder(),
         stringify!(npos_happy_path_enforces_da_and_metrics_bounds),
@@ -82,7 +74,6 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..BLOCK_TARGET {
@@ -94,7 +85,6 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     network
         .ensure_blocks_with(|height| height.total >= BLOCK_TARGET)
         .await?;
-
     let status = client.get_status()?;
     ensure!(
         status.blocks >= BLOCK_TARGET,
@@ -113,14 +103,12 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         diagnostics.npos.is_some(),
         "NPoS happy path must expose NPoS diagnostics"
     );
-
     let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
     let telemetry_url = torii
         .join("v1/sumeragi/telemetry")
         .wrap_err("compose Sumeragi telemetry URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
-
     ensure_vrf_collectors(&http, &telemetry_url).await?;
     ensure_metrics_within_bounds(
         &http,
@@ -129,15 +117,12 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         BG_QUEUE_DEPTH_BUDGET,
     )
     .await?;
-
     network.shutdown().await;
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Result<()> {
     init_instruction_registry();
-
     let tx_limit = tx_limit_for_payload(LARGE_PAYLOAD_BYTES);
     let builder = npos_builder()
         .with_config_layer(|layer| {
@@ -152,7 +137,6 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxDecompressedBytes(tx_limit),
         )));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_large_da_payload_commits_with_consistent_v2_subject),
@@ -161,7 +145,6 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
     else {
         return Ok(());
     };
-
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
@@ -177,14 +160,12 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
     })
     .await
     .wrap_err("join large NPoS DA submission")??;
-
     tokio::time::timeout(
         COMMIT_WAIT_BUDGET,
         network.ensure_blocks_with(|height| height.total >= expected_height),
     )
     .await
     .wrap_err("large NPoS DA payload did not commit within the budget")??;
-
     let required = network.peers().len().saturating_sub(1).max(1);
     let mut committed_subjects = Vec::new();
     for peer in network.peers() {
@@ -213,11 +194,9 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
             .all(|subject| *subject == expected_subject),
         "quorum peers must agree on the NPoS DA subject: {committed_subjects:?}"
     );
-
     network.shutdown().await;
     Ok(())
 }
-
 async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::Result<()> {
     let response = http
         .get(url.clone())
@@ -264,7 +243,6 @@ async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> ey
     );
     Ok(())
 }
-
 async fn ensure_metrics_within_bounds(
     http: &reqwest::Client,
     url: &reqwest::Url,
@@ -273,7 +251,6 @@ async fn ensure_metrics_within_bounds(
 ) -> eyre::Result<()> {
     let mut last_snapshot = String::new();
     let mut last_summary = String::new();
-
     for attempt in 0..METRIC_ATTEMPTS {
         let response = http
             .get(url.clone())
@@ -306,7 +283,6 @@ async fn ensure_metrics_within_bounds(
         let phases_ok = phase_values
             .iter()
             .all(|(_, value)| *value > 0.0 && *value <= phase_budget_ms);
-
         last_summary = format!(
             "queue_depth={queue_depth}, queue_depth_max={queue_depth_max}, phases={phase_values:?}"
         );
@@ -318,12 +294,10 @@ async fn ensure_metrics_within_bounds(
             sleep(METRIC_INTERVAL).await;
         }
     }
-
     Err(eyre!(
         "telemetry thresholds not satisfied after {METRIC_ATTEMPTS} polls; last summary: {last_summary}\nmetrics snapshot:\n{last_snapshot}"
     ))
 }
-
 #[test]
 fn payload_limits_include_transport_headroom() {
     let content_limit = torii_max_content_len_for_payload(LARGE_PAYLOAD_BYTES);

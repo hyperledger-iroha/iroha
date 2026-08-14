@@ -1,9 +1,6 @@
 //! Exact-network governance ballot tool schemas.
-
-use norito::json::Value;
-
 use super::{ToolSpec, iroha_gov_post_tool_with_fields};
-
+use norito::json::Value;
 pub(super) fn governance_selector_v1_schema(description: &str) -> Value {
     norito::json!({
         "type": "string",
@@ -13,7 +10,6 @@ pub(super) fn governance_selector_v1_schema(description: &str) -> Value {
         "description": description
     })
 }
-
 fn exact_network_governance_ballot_tool(
     name: &str,
     description: &str,
@@ -77,7 +73,6 @@ fn exact_network_governance_ballot_tool(
     );
     tool
 }
-
 /// Build the exact-network ZK envelope ballot tool.
 pub(super) fn iroha_gov_ballots_zk_v1_tool() -> ToolSpec {
     exact_network_governance_ballot_tool(
@@ -90,7 +85,6 @@ pub(super) fn iroha_gov_ballots_zk_v1_tool() -> ToolSpec {
         ),
     )
 }
-
 /// Build the exact-network ZK proof ballot tool.
 pub(super) fn iroha_gov_ballots_zk_v1_ballot_proof_tool() -> ToolSpec {
     exact_network_governance_ballot_tool(
@@ -103,7 +97,6 @@ pub(super) fn iroha_gov_ballots_zk_v1_ballot_proof_tool() -> ToolSpec {
         ),
     )
 }
-
 /// Build the exact-network plain ballot tool.
 pub(super) fn iroha_gov_ballots_plain_tool() -> ToolSpec {
     exact_network_governance_ballot_tool(

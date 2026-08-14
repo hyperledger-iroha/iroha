@@ -6,25 +6,6 @@
 //! canonical public intent and witness-free transaction plan before entering a
 //! native Rust closure, decodes the exact owner bundle there, builds and
 //! self-inspects one signed transaction, and returns public signed wire only.
-
-use std::{
-    collections::HashMap,
-    fs::{self, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    num::NonZeroU32,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
-use iroha_crypto::Algorithm;
-use iroha_data_model::{
-    metadata::Metadata, prelude::AccountId, privacy::PrivacyProtocolIdV1,
-    transaction::FeePaymentIntent,
-};
-use rand_core_06::{OsRng, RngCore};
-use sha2::{Digest, Sha256};
-use zeroize::{Zeroize, Zeroizing};
-
 use crate::{
     privacy_native_actions::{
         PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1, PrivacyActionTransactionContextV1,
@@ -37,7 +18,22 @@ use crate::{
         decode_privacy_wallet_execution_bundle_v1, inspect_privacy_wallet_execution_bundle_v1,
     },
 };
-
+use iroha_crypto::Algorithm;
+use iroha_data_model::{
+    metadata::Metadata, prelude::AccountId, privacy::PrivacyProtocolIdV1,
+    transaction::FeePaymentIntent,
+};
+use rand_core_06::{OsRng, RngCore};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+    io::{self, Read, Seek, SeekFrom, Write},
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use zeroize::{Zeroize, Zeroizing};
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const MAX_FRAME_BYTES: usize = 34 * 1_024 * 1_024;
 pub const MAX_CREDENTIAL_BYTES: u64 = 8_388_608;
@@ -46,7 +42,6 @@ pub const MAX_CANONICAL_EXECUTION_PLAN_BYTES: usize = 2 * 1_024 * 1_024;
 pub const MAX_HANDLES: usize = 1_024;
 pub const MIN_TTL_MILLIS: u64 = 1_000;
 pub const MAX_TTL_MILLIS: u64 = 15 * 60 * 1_000;
-
 const MAGIC: &[u8; 4] = b"IPWW";
 const AUTH_TAG_BYTES: usize = 32;
 const HANDLE_BYTES: usize = 32;
@@ -57,7 +52,6 @@ const MAX_PROTOCOL_BYTES: usize = 96;
 const MAX_PATH_BYTES: usize = 4_096;
 const PUBLIC_INTENT_DIGEST_DOMAIN: &[u8] = b"iroha-privacy-wallet-binding-v1\0";
 const COMPILED_PROFILE_DIGEST_DOMAIN: &[u8] = b"iroha-privacy-compiled-profile-binding-v1\0";
-
 const PUBLIC_INTENT_BASE_FIELDS: &[&str] = &[
     "algorithm_id",
     "operation_schema",
@@ -74,26 +68,21 @@ const PRIVACY_FEATURE_FIELDS: &[&str] = &[
     "hide_asset_type",
     "post_quantum",
 ];
-
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct WitnessHandle([u8; HANDLE_BYTES]);
-
 impl WitnessHandle {
     #[must_use]
     pub const fn from_bytes(bytes: [u8; HANDLE_BYTES]) -> Self {
         Self(bytes)
     }
-
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; HANDLE_BYTES] {
         &self.0
     }
-
     #[must_use]
     pub fn encode_hex(&self) -> String {
         hex::encode(self.0)
     }
-
     pub fn decode_hex(value: &str) -> Result<Self, WorkerError> {
         if value.len() != HANDLE_BYTES * 2
             || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -106,7 +95,6 @@ impl WitnessHandle {
         Ok(Self(bytes))
     }
 }
-
 #[derive(Clone, Eq, PartialEq)]
 pub struct WitnessBinding {
     pub network_id: [u8; DIGEST_BYTES],
@@ -118,7 +106,6 @@ pub struct WitnessBinding {
     /// Digest of a separately verified signed authority, never the IPC key.
     pub signed_release_authority_digest: [u8; DIGEST_BYTES],
 }
-
 impl WitnessBinding {
     pub fn validate(&self) -> Result<(), WorkerError> {
         validate_text("signer", &self.signer, MAX_SIGNER_BYTES)?;
@@ -137,7 +124,6 @@ impl WitnessBinding {
         }
         Ok(())
     }
-
     #[must_use]
     fn digest(&self) -> [u8; DIGEST_BYTES] {
         let mut encoded = Vec::with_capacity(512);
@@ -151,7 +137,6 @@ impl WitnessBinding {
         sha256(&encoded)
     }
 }
-
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompiledProfileBinding {
     pub parameter_id: [u8; DIGEST_BYTES],
@@ -160,7 +145,6 @@ pub struct CompiledProfileBinding {
     pub statement_schema_digest: [u8; DIGEST_BYTES],
     pub engine_manifest_digest: [u8; DIGEST_BYTES],
 }
-
 impl CompiledProfileBinding {
     fn validate(&self) -> Result<(), WorkerError> {
         if [
@@ -179,7 +163,6 @@ impl CompiledProfileBinding {
         Ok(())
     }
 }
-
 pub fn compiled_profile_digest(
     protocol: &str,
     binding: &CompiledProfileBinding,
@@ -200,7 +183,6 @@ pub fn compiled_profile_digest(
     digest.update(binding.engine_manifest_digest);
     Ok(digest.finalize().into())
 }
-
 #[must_use]
 pub fn canonical_public_intent_digest(canonical_public_intent: &[u8]) -> [u8; DIGEST_BYTES] {
     let mut digest = Sha256::new();
@@ -208,13 +190,11 @@ pub fn canonical_public_intent_digest(canonical_public_intent: &[u8]) -> [u8; DI
     digest.update(canonical_public_intent);
     digest.finalize().into()
 }
-
 pub struct ImportRequest {
     pub credential_path: PathBuf,
     pub binding: WitnessBinding,
     pub ttl_millis: u64,
 }
-
 #[derive(Clone, Eq, PartialEq)]
 pub struct WitnessLease {
     pub handle: WitnessHandle,
@@ -222,7 +202,6 @@ pub struct WitnessLease {
     pub manifest: PrivacyWalletExecutionBundleManifestV1,
     pub public_action_digest: [u8; DIGEST_BYTES],
 }
-
 struct StoredWitness {
     binding: WitnessBinding,
     binding_digest: [u8; DIGEST_BYTES],
@@ -230,18 +209,15 @@ struct StoredWitness {
     inspection: InspectedPrivacyWalletExecutionBundleV1,
     material: Zeroizing<Vec<u8>>,
 }
-
 pub struct WitnessVault {
     entries: HashMap<WitnessHandle, StoredWitness>,
     maximum_handles: usize,
 }
-
 impl Default for WitnessVault {
     fn default() -> Self {
         Self::new(MAX_HANDLES)
     }
 }
-
 impl Drop for WitnessVault {
     fn drop(&mut self) {
         for witness in self.entries.values_mut() {
@@ -250,7 +226,6 @@ impl Drop for WitnessVault {
         self.entries.clear();
     }
 }
-
 impl WitnessVault {
     #[must_use]
     pub fn new(maximum_handles: usize) -> Self {
@@ -259,7 +234,6 @@ impl WitnessVault {
             maximum_handles: maximum_handles.clamp(1, MAX_HANDLES),
         }
     }
-
     pub fn import_credential(
         &mut self,
         request: ImportRequest,
@@ -267,7 +241,6 @@ impl WitnessVault {
         let now_millis = unix_time_millis()?;
         self.import_credential_at(request, now_millis)
     }
-
     fn import_credential_at(
         &mut self,
         request: ImportRequest,
@@ -309,7 +282,6 @@ impl WitnessVault {
             public_action_digest: inspection.public_action_digest,
         })
     }
-
     pub fn inspect(
         &mut self,
         handle: WitnessHandle,
@@ -318,7 +290,6 @@ impl WitnessVault {
         let now_millis = unix_time_millis()?;
         self.inspect_at(handle, expected_binding, now_millis)
     }
-
     fn inspect_at(
         &mut self,
         handle: WitnessHandle,
@@ -338,7 +309,6 @@ impl WitnessVault {
             public_action_digest: stored.inspection.public_action_digest,
         })
     }
-
     pub fn cancel(
         &mut self,
         handle: WitnessHandle,
@@ -347,7 +317,6 @@ impl WitnessVault {
         let now_millis = unix_time_millis()?;
         self.cancel_at(handle, expected_binding, now_millis)
     }
-
     fn cancel_at(
         &mut self,
         handle: WitnessHandle,
@@ -369,7 +338,6 @@ impl WitnessVault {
         removed.material.zeroize();
         Ok(())
     }
-
     /// Atomically removes a witness and lends it to one native operation.
     ///
     /// Removal happens before `operation` runs. Success, failure, and panic
@@ -384,7 +352,6 @@ impl WitnessVault {
         let now_millis = unix_time_millis().map_err(ConsumeError::Custody)?;
         self.consume_with_at(handle, expected_binding, now_millis, operation)
     }
-
     fn consume_with_at<T, E>(
         &mut self,
         handle: WitnessHandle,
@@ -408,28 +375,23 @@ impl WitnessVault {
         stored.material.zeroize();
         result
     }
-
     pub fn purge_expired(&mut self) -> Result<usize, WorkerError> {
         Ok(self.purge_expired_at(unix_time_millis()?))
     }
-
     fn purge_expired_at(&mut self, now_millis: u64) -> usize {
         let before = self.entries.len();
         self.entries
             .retain(|_, witness| witness.expires_at_millis > now_millis);
         before - self.entries.len()
     }
-
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
-
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
     fn unique_handle(&self) -> Result<WitnessHandle, WorkerError> {
         for _ in 0..32 {
             let mut bytes = [0_u8; HANDLE_BYTES];
@@ -446,13 +408,11 @@ impl WitnessVault {
         Err(WorkerError::EntropyUnavailable)
     }
 }
-
 #[derive(Debug)]
 pub enum ConsumeError<E> {
     Custody(WorkerError),
     Operation(E),
 }
-
 #[derive(Clone, Copy, Eq, PartialEq)]
 #[repr(u8)]
 pub enum CommandKind {
@@ -462,10 +422,8 @@ pub enum CommandKind {
     Cancel = 4,
     Execute = 5,
 }
-
 impl TryFrom<u8> for CommandKind {
     type Error = WorkerError;
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Ping),
@@ -477,13 +435,11 @@ impl TryFrom<u8> for CommandKind {
         }
     }
 }
-
 pub struct AuthenticatedFrame {
     pub kind: CommandKind,
     pub sequence: u64,
     pub payload: Vec<u8>,
 }
-
 pub fn encode_frame(
     frame: &AuthenticatedFrame,
     auth_key: &[u8; DIGEST_BYTES],
@@ -510,7 +466,6 @@ pub fn encode_frame(
     encoded.extend_from_slice(&authenticated);
     Ok(encoded)
 }
-
 pub fn decode_frame(
     encoded: &[u8],
     auth_key: &[u8; DIGEST_BYTES],
@@ -562,7 +517,6 @@ pub fn decode_frame(
         payload: authenticated[18..].to_vec(),
     })
 }
-
 pub fn read_frame(
     reader: &mut impl Read,
     auth_key: &[u8; DIGEST_BYTES],
@@ -591,7 +545,6 @@ pub fn read_frame(
         .map_err(|error| WorkerError::Io(error.kind()))?;
     decode_frame(&encoded, auth_key).map(Some)
 }
-
 pub fn write_frame(
     writer: &mut impl Write,
     frame: &AuthenticatedFrame,
@@ -605,7 +558,6 @@ pub fn write_frame(
         .flush()
         .map_err(|error| WorkerError::Io(error.kind()))
 }
-
 pub fn run_pipe_session(
     reader: &mut impl Read,
     writer: &mut impl Write,
@@ -636,7 +588,6 @@ pub fn run_pipe_session(
     }
     Ok(())
 }
-
 enum CommandResponse {
     Pong,
     Lease(WitnessLease),
@@ -644,7 +595,6 @@ enum CommandResponse {
     SignedAction(SignedActionResponseV1),
     Error(WorkerError),
 }
-
 struct SignedActionResponseV1 {
     protocol_id: String,
     operation_schema: String,
@@ -665,25 +615,21 @@ struct SignedActionResponseV1 {
     adaptive_signed_transaction_bytes: u32,
     submitted_versioned_transaction_bytes: u32,
 }
-
 struct ExecuteRequestV1 {
     handle: WitnessHandle,
     binding: WitnessBinding,
     canonical_public_intent: Vec<u8>,
     canonical_execution_plan: Vec<u8>,
 }
-
 struct ValidatedPublicIntentV1 {
     operation_schema: String,
     public_action: Vec<u8>,
 }
-
 struct ValidatedExecutionPlanV1 {
     context: PrivacyActionTransactionContextV1,
     public_action: Vec<u8>,
     operation_schema: String,
 }
-
 fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> CommandResponse {
     let result = match kind {
         CommandKind::Ping => {
@@ -709,7 +655,6 @@ fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> Comm
     };
     result.unwrap_or_else(CommandResponse::Error)
 }
-
 pub fn encode_import_payload(request: &ImportRequest) -> Result<Vec<u8>, WorkerError> {
     request.binding.validate()?;
     let path = request
@@ -723,7 +668,6 @@ pub fn encode_import_payload(request: &ImportRequest) -> Result<Vec<u8>, WorkerE
     payload.extend_from_slice(&request.ttl_millis.to_be_bytes());
     Ok(payload)
 }
-
 pub fn encode_handle_payload(
     handle: WitnessHandle,
     binding: &WitnessBinding,
@@ -734,7 +678,6 @@ pub fn encode_handle_payload(
     encode_binding(&mut payload, binding);
     Ok(payload)
 }
-
 pub fn encode_execute_payload(
     handle: WitnessHandle,
     binding: &WitnessBinding,
@@ -760,7 +703,6 @@ pub fn encode_execute_payload(
     put_bytes_u32(&mut payload, canonical_execution_plan)?;
     Ok(payload)
 }
-
 fn decode_import(payload: &[u8]) -> Result<ImportRequest, WorkerError> {
     let mut cursor = Cursor::new(payload);
     let path = cursor.text(MAX_PATH_BYTES)?;
@@ -774,7 +716,6 @@ fn decode_import(payload: &[u8]) -> Result<ImportRequest, WorkerError> {
         ttl_millis,
     })
 }
-
 fn decode_handle_request(payload: &[u8]) -> Result<(WitnessHandle, WitnessBinding), WorkerError> {
     let mut cursor = Cursor::new(payload);
     let handle = WitnessHandle(cursor.array()?);
@@ -782,7 +723,6 @@ fn decode_handle_request(payload: &[u8]) -> Result<(WitnessHandle, WitnessBindin
     cursor.finish()?;
     Ok((handle, binding))
 }
-
 fn decode_execute_payload(payload: &[u8]) -> Result<ExecuteRequestV1, WorkerError> {
     let mut cursor = Cursor::new(payload);
     let handle = WitnessHandle(cursor.array()?);
@@ -801,7 +741,6 @@ fn decode_execute_payload(payload: &[u8]) -> Result<ExecuteRequestV1, WorkerErro
         canonical_execution_plan,
     })
 }
-
 fn execute_native_action_v1(
     vault: &mut WitnessVault,
     request: ExecuteRequestV1,
@@ -855,7 +794,6 @@ fn execute_native_action_v1(
         })?;
     signed_action_response_v1(signed, &manifest, network_id)
 }
-
 fn signed_action_response_v1(
     signed: SignedPrivacyActionV1,
     manifest: &PrivacyWalletExecutionBundleManifestV1,
@@ -926,7 +864,6 @@ fn signed_action_response_v1(
         submitted_versioned_transaction_bytes: signed.versioned_signed_transaction_bytes(),
     })
 }
-
 fn encode_binding(output: &mut Vec<u8>, binding: &WitnessBinding) {
     output.extend_from_slice(&binding.network_id);
     put_text(output, &binding.signer);
@@ -936,7 +873,6 @@ fn encode_binding(output: &mut Vec<u8>, binding: &WitnessBinding) {
     output.extend_from_slice(&binding.nonce);
     output.extend_from_slice(&binding.signed_release_authority_digest);
 }
-
 fn decode_binding(cursor: &mut Cursor<'_>) -> Result<WitnessBinding, WorkerError> {
     let binding = WitnessBinding {
         network_id: cursor.array()?,
@@ -950,7 +886,6 @@ fn decode_binding(cursor: &mut Cursor<'_>) -> Result<WitnessBinding, WorkerError
     binding.validate()?;
     Ok(binding)
 }
-
 fn encode_response(response: CommandResponse) -> Vec<u8> {
     let mut output = Vec::with_capacity(128);
     match response {
@@ -999,17 +934,14 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
     }
     output
 }
-
 struct Cursor<'a> {
     source: &'a [u8],
     offset: usize,
 }
-
 impl<'a> Cursor<'a> {
     const fn new(source: &'a [u8]) -> Self {
         Self { source, offset: 0 }
     }
-
     fn take(&mut self, count: usize) -> Result<&'a [u8], WorkerError> {
         let end = self
             .offset
@@ -1022,25 +954,20 @@ impl<'a> Cursor<'a> {
         self.offset = end;
         Ok(value)
     }
-
     fn array<const N: usize>(&mut self) -> Result<[u8; N], WorkerError> {
         self.take(N)?
             .try_into()
             .map_err(|_| WorkerError::InvalidPayload)
     }
-
     fn u16(&mut self) -> Result<u16, WorkerError> {
         Ok(u16::from_be_bytes(self.array()?))
     }
-
     fn u32(&mut self) -> Result<u32, WorkerError> {
         Ok(u32::from_be_bytes(self.array()?))
     }
-
     fn u64(&mut self) -> Result<u64, WorkerError> {
         Ok(u64::from_be_bytes(self.array()?))
     }
-
     fn text(&mut self, maximum_bytes: usize) -> Result<String, WorkerError> {
         let length = usize::from(self.u16()?);
         if length == 0 || length > maximum_bytes {
@@ -1051,7 +978,6 @@ impl<'a> Cursor<'a> {
         validate_text("payload text", value, maximum_bytes)?;
         Ok(value.to_owned())
     }
-
     fn bytes_u32(&mut self, maximum_bytes: usize) -> Result<&'a [u8], WorkerError> {
         let length = usize::try_from(self.u32()?).map_err(|_| WorkerError::InvalidPayload)?;
         if length == 0 || length > maximum_bytes {
@@ -1059,7 +985,6 @@ impl<'a> Cursor<'a> {
         }
         self.take(length)
     }
-
     fn finish(self) -> Result<(), WorkerError> {
         if self.offset == self.source.len() {
             Ok(())
@@ -1068,7 +993,6 @@ impl<'a> Cursor<'a> {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkerError {
     AuthenticationFailed,
@@ -1101,7 +1025,6 @@ pub enum WorkerError {
     UnsupportedProtocol,
     WrongBinding,
 }
-
 impl WorkerError {
     #[must_use]
     pub const fn code(self) -> u16 {
@@ -1137,7 +1060,6 @@ impl WorkerError {
             Self::WrongBinding => 22,
         }
     }
-
     #[must_use]
     pub const fn message(self) -> &'static str {
         match self {
@@ -1179,14 +1101,12 @@ impl WorkerError {
         }
     }
 }
-
 fn unix_time_millis() -> Result<u64, WorkerError> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| WorkerError::ClockUnavailable)?;
     u64::try_from(elapsed.as_millis()).map_err(|_| WorkerError::ClockUnavailable)
 }
-
 fn validate_clock_and_ttl(now_millis: u64, ttl_millis: u64) -> Result<(), WorkerError> {
     if now_millis == 0
         || !(MIN_TTL_MILLIS..=MAX_TTL_MILLIS).contains(&ttl_millis)
@@ -1196,7 +1116,6 @@ fn validate_clock_and_ttl(now_millis: u64, ttl_millis: u64) -> Result<(), Worker
     }
     Ok(())
 }
-
 fn validate_expected_binding(
     stored: &StoredWitness,
     expected: &WitnessBinding,
@@ -1208,7 +1127,6 @@ fn validate_expected_binding(
     }
     Ok(())
 }
-
 fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError> {
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol)
         .ok_or(WorkerError::UnsupportedProtocol)?;
@@ -1232,7 +1150,6 @@ fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError>
         .ok_or(WorkerError::UnsupportedProtocol)?;
     Ok(protocol_id)
 }
-
 fn feature_bit(field: &str) -> Option<u8> {
     Some(match field {
         "hide_amount" => 1,
@@ -1243,7 +1160,6 @@ fn feature_bit(field: &str) -> Option<u8> {
         _ => return None,
     })
 }
-
 fn validate_feature_contract(
     value: Option<&norito::json::Value>,
     feature_mask: u8,
@@ -1263,7 +1179,6 @@ fn validate_feature_contract(
     }
     Ok(())
 }
-
 /// Validate the public transport representation before the single-use native
 /// bundle decoder and action dispatcher enter `WitnessVault::consume_with`.
 fn validate_canonical_public_intent(
@@ -1333,7 +1248,6 @@ fn validate_canonical_public_intent(
         public_action,
     })
 }
-
 fn validate_canonical_json_bytes(
     bytes: &[u8],
     maximum: usize,
@@ -1350,7 +1264,6 @@ fn validate_canonical_json_bytes(
     }
     Ok(value)
 }
-
 fn validate_execution_plan_v1(
     canonical_execution_plan: &[u8],
     binding: &WitnessBinding,
@@ -1490,7 +1403,6 @@ fn validate_execution_plan_v1(
         operation_schema: operation_schema.to_owned(),
     })
 }
-
 fn validate_text(
     _label: &'static str,
     value: &str,
@@ -1507,13 +1419,11 @@ fn validate_text(
     }
     Ok(())
 }
-
 fn put_text(output: &mut Vec<u8>, value: &str) {
     let length = u16::try_from(value.len()).expect("validated text length fits u16");
     output.extend_from_slice(&length.to_be_bytes());
     output.extend_from_slice(value.as_bytes());
 }
-
 fn put_bytes_u16(output: &mut Vec<u8>, value: &[u8]) -> Result<(), WorkerError> {
     let length = u16::try_from(value.len()).map_err(|_| WorkerError::InvalidPayload)?;
     if length == 0 {
@@ -1523,7 +1433,6 @@ fn put_bytes_u16(output: &mut Vec<u8>, value: &[u8]) -> Result<(), WorkerError> 
     output.extend_from_slice(value);
     Ok(())
 }
-
 fn put_bytes_u32(output: &mut Vec<u8>, value: &[u8]) -> Result<(), WorkerError> {
     let length = u32::try_from(value.len()).map_err(|_| WorkerError::InvalidPayload)?;
     if length == 0 {
@@ -1533,7 +1442,6 @@ fn put_bytes_u32(output: &mut Vec<u8>, value: &[u8]) -> Result<(), WorkerError> 
     output.extend_from_slice(value);
     Ok(())
 }
-
 fn read_credential_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, WorkerError> {
     if !path.is_absolute() {
         return Err(WorkerError::InvalidCredentialPath);
@@ -1619,7 +1527,6 @@ fn read_credential_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, WorkerError> 
     }
     Ok(material)
 }
-
 #[cfg(unix)]
 fn validate_file_security(metadata: &fs::Metadata) -> Result<(), WorkerError> {
     use std::os::unix::fs::MetadataExt;
@@ -1628,12 +1535,10 @@ fn validate_file_security(metadata: &fs::Metadata) -> Result<(), WorkerError> {
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_file_security(_metadata: &fs::Metadata) -> Result<(), WorkerError> {
     Err(WorkerError::CredentialFileInsecure)
 }
-
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -1642,24 +1547,20 @@ fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.uid() == right.uid()
         && left.mode() == right.mode()
 }
-
 #[cfg(not(unix))]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
         && left.created().ok() == right.created().ok()
         && left.modified().ok() == right.modified().ok()
 }
-
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
 }
-
 fn sha256(input: &[u8]) -> [u8; DIGEST_BYTES] {
     Sha256::digest(input).into()
 }
-
 fn hmac_sha256(key: &[u8; DIGEST_BYTES], message: &[u8]) -> [u8; AUTH_TAG_BYTES] {
     const BLOCK_BYTES: usize = 64;
     let mut inner_key = Zeroizing::new([0x36_u8; BLOCK_BYTES]);
@@ -1677,7 +1578,6 @@ fn hmac_sha256(key: &[u8; DIGEST_BYTES], message: &[u8]) -> [u8; AUTH_TAG_BYTES]
     outer.update(inner_digest);
     outer.finalize().into()
 }
-
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
@@ -1688,9 +1588,12 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     }
     difference == 0
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_crypto::{PrivateKey, PublicKey};
+    use iroha_data_model::transaction::SignedTransaction;
+    use iroha_version::codec::DecodeVersioned;
     use std::{
         io::Cursor as IoCursor,
         path::Path,
@@ -1699,21 +1602,13 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         },
     };
-
-    use iroha_crypto::{PrivateKey, PublicKey};
-    use iroha_data_model::transaction::SignedTransaction;
-    use iroha_version::codec::DecodeVersioned;
     use tempfile::TempDir;
-
-    use super::*;
-
     const NOW: u64 = 1_800_000_000_000;
     const KEY: [u8; 32] = [0x51; 32];
     const TEST_SIGNER_SEED: [u8; 32] = [7; 32];
     const JINDO_PUBLIC_ACTION: &[u8] = br#"{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
     const JINDO_WITNESS: &[u8] = br#"{"polynomials_hex":[["0000000000000000000000000000000000000000000000000000000000000000"]]}"#;
     const CANONICAL_JINDO_PUBLIC_INTENT: &[u8] = br#"{"algorithm_id":"iroha-jindo-polynomial-commitment-v0","operation_schema":"jindo_polynomial_evaluation_v1","protocol_id":"iroha-jindo-polynomial-commitment-v0","public_action":{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"},"selected_criteria":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"selected_features":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"signer_wallet_id":"alice@wonderland"}"#;
-
     fn binding() -> WitnessBinding {
         WitnessBinding {
             network_id: [1; 32],
@@ -1725,7 +1620,6 @@ mod tests {
             signed_release_authority_digest: [5; 32],
         }
     }
-
     fn credential_file(directory: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {
         let path = directory.path().join(name);
         fs::write(&path, bytes).expect("write credential");
@@ -1737,7 +1631,6 @@ mod tests {
         }
         path
     }
-
     fn test_signer() -> (PrivateKey, PublicKey, AccountId) {
         let private_key =
             PrivateKey::from_bytes(Algorithm::Ed25519, &TEST_SIGNER_SEED).expect("private key");
@@ -1745,7 +1638,6 @@ mod tests {
         let authority = AccountId::new(public_key.clone());
         (private_key, public_key, authority)
     }
-
     fn execution_bundle(protocol_witness: &[u8]) -> Vec<u8> {
         let (_, _, authority) = test_signer();
         let mut output = Vec::new();
@@ -1760,11 +1652,9 @@ mod tests {
         put_bytes_u32(&mut output, protocol_witness).expect("protocol witness");
         output
     }
-
     fn execution_bundle_file(directory: &TempDir, name: &str, protocol_witness: &[u8]) -> PathBuf {
         credential_file(directory, name, &execution_bundle(protocol_witness))
     }
-
     #[test]
     fn generic_worker_registry_rejects_the_separate_zk_x509_path() {
         assert!(matches!(
@@ -1787,7 +1677,6 @@ mod tests {
             assert!(retained_protocol(protocol).is_ok(), "{protocol}");
         }
     }
-
     fn canonical_execution_plan() -> Vec<u8> {
         let (_, public_key, authority) = test_signer();
         let now = unix_time_millis().expect("native clock");
@@ -1816,7 +1705,6 @@ mod tests {
             .expect("canonical execution plan")
             .into_bytes()
     }
-
     fn import(vault: &mut WitnessVault, path: &Path) -> WitnessLease {
         vault
             .import_credential_at(
@@ -1829,7 +1717,6 @@ mod tests {
             )
             .expect("import")
     }
-
     fn import_now(vault: &mut WitnessVault, path: &Path) -> WitnessLease {
         vault
             .import_credential(ImportRequest {
@@ -1839,7 +1726,6 @@ mod tests {
             })
             .expect("import")
     }
-
     #[test]
     fn handles_are_random_opaque_and_single_use() {
         let directory = TempDir::new().expect("temp dir");
@@ -1862,7 +1748,6 @@ mod tests {
             Err(ConsumeError::Custody(WorkerError::UnknownHandle))
         ));
     }
-
     #[test]
     fn callback_failure_still_consumes_the_handle() {
         let directory = TempDir::new().expect("temp dir");
@@ -1881,7 +1766,6 @@ mod tests {
             Err(WorkerError::UnknownHandle)
         ));
     }
-
     #[test]
     fn panic_unwind_removes_handle_without_reinsertion() {
         let directory = TempDir::new().expect("temp dir");
@@ -1898,7 +1782,6 @@ mod tests {
             Err(WorkerError::UnknownHandle)
         ));
     }
-
     #[test]
     fn all_binding_dimensions_are_enforced() {
         let directory = TempDir::new().expect("temp dir");
@@ -1924,7 +1807,6 @@ mod tests {
             assert_eq!(vault.len(), 1, "mismatch must not consume the handle");
         }
     }
-
     #[test]
     fn expiry_and_cancel_are_atomic_terminal_states() {
         let directory = TempDir::new().expect("temp dir");
@@ -1945,7 +1827,6 @@ mod tests {
             Err(WorkerError::UnknownHandle)
         ));
     }
-
     #[test]
     fn capacity_is_bounded_and_expiry_releases_capacity() {
         let directory = TempDir::new().expect("temp dir");
@@ -1978,7 +1859,6 @@ mod tests {
                 .is_ok()
         );
     }
-
     #[test]
     fn ttl_and_binding_validation_fail_closed() {
         let directory = TempDir::new().expect("temp dir");
@@ -2016,7 +1896,6 @@ mod tests {
             Err(WorkerError::InvalidBinding(_))
         ));
     }
-
     #[test]
     fn relative_symlink_empty_and_oversized_files_are_rejected() {
         let directory = TempDir::new().expect("temp dir");
@@ -2051,7 +1930,6 @@ mod tests {
             ));
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn group_or_world_readable_files_are_rejected() {
@@ -2064,7 +1942,6 @@ mod tests {
             Err(WorkerError::CredentialFileInsecure)
         ));
     }
-
     #[test]
     fn authenticated_frame_round_trip_is_canonical() {
         let frame = AuthenticatedFrame {
@@ -2079,7 +1956,6 @@ mod tests {
         assert!(decoded.payload.is_empty());
         assert_eq!(encode_frame(&decoded, &KEY).expect("re-encode"), encoded);
     }
-
     #[test]
     fn tampering_wrong_key_trailing_bytes_and_bad_lengths_are_rejected() {
         let frame = AuthenticatedFrame {
@@ -2120,7 +1996,6 @@ mod tests {
             Err(WorkerError::UnknownCommand)
         ));
     }
-
     #[test]
     fn oversized_frames_are_rejected_before_allocation() {
         let mut input = IoCursor::new(((MAX_FRAME_BYTES as u32) + 1).to_be_bytes());
@@ -2138,7 +2013,6 @@ mod tests {
             Err(WorkerError::FrameTooLarge)
         ));
     }
-
     #[test]
     fn truncated_prefix_and_zero_session_key_fail_closed() {
         let mut truncated = IoCursor::new(vec![0_u8, 0]);
@@ -2153,7 +2027,6 @@ mod tests {
             Err(WorkerError::AuthenticationFailed)
         ));
     }
-
     #[test]
     fn duplicate_and_out_of_order_sequences_terminate_the_session() {
         let ping = |sequence| {
@@ -2176,7 +2049,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn opcode_five_executes_one_exact_self_inspected_signed_wire_and_consumes_once() {
         let directory = TempDir::new().expect("temp dir");
@@ -2209,7 +2081,6 @@ mod tests {
             encode_frame(&decoded_frame, &KEY).expect("re-encode execute"),
             authenticated_execute
         );
-
         let response = dispatch(
             &mut vault,
             decoded_frame.kind,
@@ -2237,7 +2108,6 @@ mod tests {
             signed.versioned_signed_transaction.len(),
             signed.submitted_versioned_transaction_bytes as usize
         );
-
         let adaptive: SignedTransaction =
             norito::codec::decode_adaptive(&signed.adaptive_signed_transaction)
                 .expect("decode adaptive signed transaction");
@@ -2265,7 +2135,6 @@ mod tests {
             norito::codec::encode_adaptive(&versioned),
             signed.adaptive_signed_transaction
         );
-
         let response_wire = encode_response(CommandResponse::SignedAction(signed));
         assert_eq!(response_wire.first(), Some(&3));
         assert!(
@@ -2288,7 +2157,6 @@ mod tests {
             "successful native execution must consume the handle exactly once"
         );
     }
-
     #[test]
     fn public_validation_failures_do_not_consume_but_native_bundle_failure_is_terminal() {
         let directory = TempDir::new().expect("temp dir");
@@ -2324,7 +2192,6 @@ mod tests {
         vault
             .cancel(valid_lease.handle, &binding())
             .expect("cancel preserved handle");
-
         let malformed_bundle =
             execution_bundle_file(&directory, "malformed-witness", br#"{"unexpected":true}"#);
         let malformed_lease = import_now(&mut vault, &malformed_bundle);
@@ -2347,7 +2214,6 @@ mod tests {
             "a native callback failure must remain terminal and non-retryable"
         );
     }
-
     #[test]
     fn forged_ipc_time_never_releases_or_consumes() {
         let directory = TempDir::new().expect("temp dir");
@@ -2364,7 +2230,6 @@ mod tests {
                 now,
             )
             .expect("import");
-
         let mut forged_time =
             encode_handle_payload(lease.handle, &binding()).expect("handle payload");
         forged_time.extend_from_slice(&1_u64.to_be_bytes());
@@ -2372,7 +2237,6 @@ mod tests {
         assert_eq!(response[0], 255);
         assert!(vault.inspect_at(lease.handle, &binding(), now + 1).is_ok());
     }
-
     #[test]
     fn canonical_public_intent_is_exact_and_bound_to_wire_execution() {
         assert_eq!(
@@ -2383,13 +2247,11 @@ mod tests {
         );
         validate_canonical_public_intent(CANONICAL_JINDO_PUBLIC_INTENT, &binding())
             .expect("canonical typed transport intent");
-
         let noncanonical = [b" ".as_slice(), CANONICAL_JINDO_PUBLIC_INTENT].concat();
         assert!(matches!(
             validate_canonical_public_intent(&noncanonical, &binding()),
             Err(WorkerError::InvalidPublicIntent)
         ));
-
         let altered = std::str::from_utf8(CANONICAL_JINDO_PUBLIC_INTENT)
             .expect("utf8")
             .replace(
@@ -2400,7 +2262,6 @@ mod tests {
             validate_canonical_public_intent(altered.as_bytes(), &binding()),
             Err(WorkerError::PublicIntentDigestMismatch)
         ));
-
         let wrong_signer = std::str::from_utf8(CANONICAL_JINDO_PUBLIC_INTENT)
             .expect("utf8")
             .replace("alice@wonderland", "mallory@wonderland");
@@ -2409,7 +2270,6 @@ mod tests {
             Err(WorkerError::InvalidPublicIntent)
         ));
     }
-
     #[test]
     fn compiled_profile_digest_binds_protocol_and_all_five_digests() {
         let profile = CompiledProfileBinding {
@@ -2454,7 +2314,6 @@ mod tests {
                 .expect("changed protocol digest")
         );
     }
-
     #[test]
     fn drop_path_is_exercised_without_cloning_or_debugging_secret_storage() {
         let directory = TempDir::new().expect("temp dir");

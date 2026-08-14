@@ -1,5 +1,4 @@
 //! Taira public testnet diagnostics and write canaries.
-
 use std::{
     fs,
     io::Read as _,
@@ -7,12 +6,12 @@ use std::{
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Context, Result, eyre};
 use iroha::{
     client::{Client as IrohaClient, TransactionWaitOptions, TransactionWaitTerminalStatus},
     config::Config,
     data_model::{
+        NetworkId,
         account::{AccountId, address::ChainDiscriminantGuard},
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
@@ -30,9 +29,7 @@ use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest, Sha256};
 use url::Url;
 use zeroize::Zeroizing;
-
 use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
-
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
@@ -40,25 +37,22 @@ const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_ALIAS_PREFIX: &str = "taira-rollout-canary";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
 const DEFAULT_WRITE_STATUS_TIMEOUT_MS: u64 = 120_000;
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
+const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v2";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
 const ACCOUNT_ONBOARDING_TOKEN_HEADER: &str = "x-iroha-onboarding-token";
-
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
-    "iroha.sumeragi.status",
     "iroha.musubi.queries.exact_package",
     "iroha.musubi.queries.exact_release",
     "iroha.musubi.instructions.release_yank_set",
     "iroha.transactions.submit",
     "iroha.transactions.submit_and_wait",
 ];
-
 #[derive(Clone, Copy)]
 enum RouteCheckMethod {
     Get,
     PostEmptyObject,
 }
-
 const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
     ("status", RouteCheckMethod::Get, "/status", &[200]),
     ("time_now", RouteCheckMethod::Get, "/v1/time/now", &[200]),
@@ -66,7 +60,7 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "sumeragi_status",
         RouteCheckMethod::Get,
         "/v1/sumeragi/status",
-        &[200],
+        &[401],
     ),
     (
         "pipeline_transaction_status",
@@ -96,7 +90,7 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "validator_sets",
         RouteCheckMethod::Get,
         "/v1/sumeragi/validator-sets",
-        &[200],
+        &[401],
     ),
     (
         "public_lane_validators",
@@ -113,17 +107,16 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "/v1/contracts/state",
         &[400],
     ),
-    // The V1 directory is POST-only. An empty object must reach the mounted
-    // typed handler and fail schema validation, distinguishing it from the
-    // retired pre-release GET search route without depending on registry data.
+    // The V1 directory is POST-only and authenticates before typed body decode.
+    // An unsigned malformed object must therefore fail at the mounted canonical
+    // account boundary, independently of registry data.
     (
         "musubi_ordered_prefix",
         RouteCheckMethod::PostEmptyObject,
         "/v1/musubi/queries/ordered-prefix",
-        &[400],
+        &[401],
     ),
 ];
-
 /// Taira public testnet helpers.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -132,7 +125,6 @@ pub enum Command {
     /// Onboard, faucet, submit, wait, and verify a signed ping canary.
     WriteCanary(WriteCanary),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -141,7 +133,6 @@ impl Run for Command {
         }
     }
 }
-
 /// Read-only Taira public endpoint diagnostics.
 #[derive(clap::Args, Debug)]
 pub struct Doctor {
@@ -152,7 +143,6 @@ pub struct Doctor {
     #[arg(long)]
     pub json: bool,
 }
-
 impl Run for Doctor {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let report = run_doctor(&self.public_root)?;
@@ -163,7 +153,6 @@ impl Run for Doctor {
         Ok(())
     }
 }
-
 /// Signed Taira write canary.
 #[derive(clap::Args, Debug)]
 pub struct WriteCanary {
@@ -189,7 +178,6 @@ pub struct WriteCanary {
     #[arg(long)]
     pub json: bool,
 }
-
 impl Run for WriteCanary {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let fee_payment = context.transaction_fee_payment()?;
@@ -198,28 +186,24 @@ impl Run for WriteCanary {
         ensure_write_canary_succeeded(&receipt)
     }
 }
-
 #[derive(Debug)]
 struct HttpJson {
     status: u16,
     body: Option<Value>,
     text: String,
 }
-
 #[derive(Debug)]
 struct CanarySigner {
     key_pair: KeyPair,
     account_id: AccountId,
     generated: bool,
 }
-
 fn run_doctor(public_root: &str) -> Result<Value> {
     let public_root = normalize_root_url(public_root)?;
     let http = http_client()?;
     let mut checks = Vec::new();
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
-
     let empty_object = norito::json!({});
     for (name, method, path, expected_statuses) in ROUTE_CHECKS {
         let url = join_url(&public_root, path)?;
@@ -261,7 +245,6 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             collect_status_warnings(result.body.as_ref(), &mut warnings);
         }
     }
-
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
     let mcp_get = http_json(&http, reqwest::Method::GET, mcp_url.as_str(), None)?;
     let mcp_get_ok = (200..300).contains(&mcp_get.status);
@@ -269,7 +252,6 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     if !mcp_get_ok {
         failures.push(format!("mcp_get returned HTTP {}", mcp_get.status));
     }
-
     let initialize = norito::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -297,7 +279,6 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     if !mcp_init_ok {
         failures.push(format!("mcp_initialize returned HTTP {}", mcp_init.status));
     }
-
     let tools_payload = norito::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -358,7 +339,6 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             );
         }
     }
-
     let status = if failures.is_empty() { "ok" } else { "fail" };
     report_value(
         "taira_doctor",
@@ -370,7 +350,6 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         Map::new(),
     )
 }
-
 fn run_write_canary(
     config: &Config,
     args: &WriteCanary,
@@ -393,7 +372,6 @@ fn run_write_canary(
     let mut warnings = Vec::new();
     let mut checks = Vec::new();
     let mut failures = Vec::new();
-
     let onboarding_plan = plan_canary_onboarding(
         &http,
         &public_root,
@@ -550,8 +528,7 @@ fn run_write_canary(
             extra,
         );
     }
-
-    let faucet = claim_faucet(&http, &public_root, &signer.account_id)?;
+    let faucet = claim_faucet(&http, &public_root, &signer.account_id, &config.network_id)?;
     let faucet_contract = validate_faucet_response(
         faucet.body.as_ref(),
         &signer.account_id,
@@ -621,7 +598,6 @@ fn run_write_canary(
             extra,
         );
     }
-
     let mut canary_config = config.clone();
     canary_config.chain = DEFAULT_CHAIN_ID.into();
     canary_config.torii_api_url = Url::parse(&format!("{public_root}/"))
@@ -633,11 +609,9 @@ fn run_write_canary(
     canary_config.transaction_status_timeout =
         Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS);
     canary_config.transaction_add_nonce = false;
-
     if let Some(path) = &args.write_config {
         write_runtime_config(path, &canary_config)?;
     }
-
     let client = IrohaClient::new(canary_config.clone());
     let mut metadata = Metadata::default();
     insert_string_metadata(&mut metadata, "taira_canary", "write-canary")?;
@@ -649,7 +623,6 @@ fn run_write_canary(
             .wrap_err("failed to quote and sign Taira canary transaction")?;
     let signed_hash = transaction.hash();
     let entrypoint_hash = TransactionEntrypoint::External(transaction.clone()).hash();
-
     client
         .submit_transaction(&transaction)
         .map_err(hint_submit_error)?;
@@ -669,7 +642,6 @@ fn run_write_canary(
             wait.terminal_kind, wait.hash
         ));
     }
-
     let tx_query_verified = match client.query(FindTransactions).execute_all() {
         Ok(transactions) => transactions
             .iter()
@@ -682,7 +654,6 @@ fn run_write_canary(
     if !tx_query_verified {
         warnings.push("write canary reached pipeline terminal status but transaction query did not return the entry yet".to_owned());
     }
-
     let status = if failures.is_empty() { "ok" } else { "fail" };
     let mut extra = Map::new();
     insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
@@ -713,7 +684,6 @@ fn run_write_canary(
             Value::String(path.display().to_string()),
         );
     }
-
     report_value(
         "taira_write_canary",
         status,
@@ -724,7 +694,6 @@ fn run_write_canary(
         extra,
     )
 }
-
 fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> Result<()> {
     if json || context.output_format() == CliOutputFormat::Json {
         context.print_data(report)
@@ -780,21 +749,18 @@ fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> 
         Ok(())
     }
 }
-
 fn report_status(report: &Value) -> Option<&str> {
     report
         .as_object()
         .and_then(|object| object.get("status"))
         .and_then(Value::as_str)
 }
-
 fn ensure_write_canary_succeeded(report: &Value) -> Result<()> {
     if report_status(report) == Some("ok") {
         return Ok(());
     }
     eyre::bail!("Taira write canary found hard failures")
 }
-
 fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<()> {
     const RECEIPT_FIELDS: &[&str] = &[
         "chain",
@@ -822,7 +788,6 @@ fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<
     }
     Ok(())
 }
-
 fn display_json_scalar(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
@@ -830,7 +795,6 @@ fn display_json_scalar(value: &Value) -> String {
         _ => compact_json(value),
     }
 }
-
 fn report_value(
     command: &str,
     status: &str,
@@ -858,7 +822,6 @@ fn report_value(
     }
     Ok(Value::Object(root))
 }
-
 fn push_check(
     checks: &mut Vec<Value>,
     name: &str,
@@ -875,7 +838,6 @@ fn push_check(
     }
     checks.push(Value::Object(object));
 }
-
 fn route_check_detail(expected_statuses: &[u16]) -> Option<String> {
     (expected_statuses.len() == 1 && expected_statuses[0] != 200).then(|| {
         format!(
@@ -884,7 +846,6 @@ fn route_check_detail(expected_statuses: &[u16]) -> Option<String> {
         )
     })
 }
-
 fn normalize_root_url(raw: &str) -> Result<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -896,7 +857,6 @@ fn normalize_root_url(raw: &str) -> Result<String> {
         other => eyre::bail!("unsupported URL scheme `{other}`"),
     }
 }
-
 fn join_url(root: &str, path: &str) -> Result<Url> {
     let root = format!("{}/", root.trim_end_matches('/'));
     let suffix = path.trim_start_matches('/');
@@ -904,7 +864,6 @@ fn join_url(root: &str, path: &str) -> Result<Url> {
         .and_then(|url| url.join(suffix))
         .wrap_err_with(|| format!("failed to build URL from `{root}` and `{path}`"))
 }
-
 fn validate_onboarding_token(token: &str) -> Result<&str> {
     let bytes = token.as_bytes();
     if !(32..=256).contains(&bytes.len()) || !bytes.iter().all(|byte| (0x21..=0x7e).contains(byte))
@@ -915,11 +874,9 @@ fn validate_onboarding_token(token: &str) -> Result<&str> {
     }
     Ok(token)
 }
-
 #[cfg(unix)]
 fn validate_onboarding_token_file_metadata(metadata: &fs::Metadata) -> Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
     if metadata.uid() != rustix::process::geteuid().as_raw() {
         eyre::bail!("account onboarding token file must be owned by the current user");
     }
@@ -932,12 +889,10 @@ fn validate_onboarding_token_file_metadata(metadata: &fs::Metadata) -> Result<()
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_onboarding_token_file_metadata(_metadata: &fs::Metadata) -> Result<()> {
     Ok(())
 }
-
 fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
     let before =
         fs::symlink_metadata(path).wrap_err("failed to inspect account onboarding token file")?;
@@ -945,7 +900,6 @@ fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
         eyre::bail!("account onboarding token file must be a regular non-symlink file");
     }
     validate_onboarding_token_file_metadata(&before)?;
-
     #[cfg(unix)]
     let mut file = {
         let descriptor = rustix::fs::open(
@@ -961,7 +915,6 @@ fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
         .read(true)
         .open(path)
         .wrap_err("failed to open account onboarding token file")?;
-
     let opened = file
         .metadata()
         .wrap_err("failed to inspect opened account onboarding token file")?;
@@ -976,7 +929,6 @@ fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
             eyre::bail!("account onboarding token file changed during secure open");
         }
     }
-
     let mut raw = Zeroizing::new(Vec::with_capacity(257));
     file.by_ref()
         .take(257)
@@ -990,7 +942,6 @@ fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
     validate_onboarding_token(token)?;
     Ok(Zeroizing::new(token.to_owned()))
 }
-
 fn http_client() -> Result<HttpClient> {
     HttpClient::builder()
         .timeout(Duration::from_secs(30))
@@ -999,7 +950,6 @@ fn http_client() -> Result<HttpClient> {
         .build()
         .wrap_err("failed to build HTTP client")
 }
-
 fn http_json(
     http: &HttpClient,
     method: reqwest::Method,
@@ -1020,7 +970,6 @@ fn http_json(
         .wrap_err_with(|| format!("request failed for {url}"))?;
     decode_http_json_response(response)
 }
-
 fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
     let status = response.status().as_u16();
     let text = response.text().unwrap_or_default();
@@ -1035,7 +984,6 @@ fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<Ht
         text,
     })
 }
-
 fn redact_sensitive_json(value: &mut Value, sensitive_value: &str) {
     match value {
         Value::String(text) => {
@@ -1058,7 +1006,6 @@ fn redact_sensitive_json(value: &mut Value, sensitive_value: &str) {
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
-
 fn redact_http_json(response: &mut HttpJson, sensitive_value: &str) {
     if response.text.contains(sensitive_value) {
         response.text = response.text.replace(sensitive_value, "<redacted>");
@@ -1071,7 +1018,6 @@ fn redact_http_json(response: &mut HttpJson, sensitive_value: &str) {
         response.text = "<invalid JSON response>".to_owned();
     }
 }
-
 fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
     let Some(status) = status else {
         warnings.push("/status returned a non-JSON body".to_owned());
@@ -1095,22 +1041,18 @@ fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
         warnings.push(format!("public queue has {queue} pending transaction(s)"));
     }
 }
-
 fn value_path<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     for key in path {
         value = value.as_object()?.get(*key)?;
     }
     Some(value)
 }
-
 fn value_path_u64(value: &Value, path: &[&str]) -> Option<u64> {
     value_path(value, path).and_then(Value::as_u64)
 }
-
 fn value_path_bool(value: &Value, path: &[&str]) -> Option<bool> {
     value_path(value, path).and_then(Value::as_bool)
 }
-
 fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
     let snapshot = snapshot
         .and_then(Value::as_object)
@@ -1154,7 +1096,6 @@ fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn mcp_tool_names(payload: Option<&Value>) -> Vec<String> {
     payload
         .and_then(|value| value_path(value, &["result", "tools"]))
@@ -1169,7 +1110,6 @@ fn mcp_tool_names(payload: Option<&Value>) -> Vec<String> {
         })
         .collect()
 }
-
 fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<CanarySigner> {
     let key_pair = if use_config_signer {
         config.key_pair.clone()
@@ -1191,7 +1131,6 @@ fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<Can
         generated: !use_config_signer,
     })
 }
-
 fn insert_write_receipt_identity(
     extra: &mut Map,
     signer: &CanarySigner,
@@ -1214,7 +1153,6 @@ fn insert_write_receipt_identity(
         Value::String(faucet_asset_id.to_owned()),
     );
 }
-
 fn build_alias(prefix: &str, public_key: &iroha_crypto::PublicKey, domain: &str) -> String {
     let label_prefix = sanitize_alias_part(prefix).unwrap_or_else(|| "tairacanary".to_owned());
     let public_key = public_key.to_string();
@@ -1230,7 +1168,6 @@ fn build_alias(prefix: &str, public_key: &iroha_crypto::PublicKey, domain: &str)
         .to_ascii_lowercase();
     format!("{label_prefix}{suffix}@{dataspace}")
 }
-
 fn sanitize_alias_part(raw: &str) -> Option<String> {
     let sanitized: String = raw
         .chars()
@@ -1239,7 +1176,6 @@ fn sanitize_alias_part(raw: &str) -> Option<String> {
         .collect();
     (!sanitized.is_empty()).then_some(sanitized)
 }
-
 fn post_sponsored_onboarding_json(
     http: &HttpClient,
     public_root: &str,
@@ -1267,7 +1203,6 @@ fn post_sponsored_onboarding_json(
     redact_http_json(&mut response, onboarding_token);
     Ok(response)
 }
-
 fn plan_canary_onboarding(
     http: &HttpClient,
     public_root: &str,
@@ -1288,7 +1223,6 @@ fn plan_canary_onboarding(
         onboarding_token,
     )
 }
-
 fn apply_canary_onboarding(
     http: &HttpClient,
     public_root: &str,
@@ -1303,7 +1237,6 @@ fn apply_canary_onboarding(
         onboarding_token,
     )
 }
-
 fn validate_onboarding_plan_receipt(
     response: Option<&Value>,
     expected_account: &AccountId,
@@ -1357,13 +1290,11 @@ fn validate_onboarding_plan_receipt(
     }
     Ok(response.expect("validated receipt response").clone())
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OnboardingApplyResult {
     tx_hash_hex: Option<String>,
     unchanged: bool,
 }
-
 fn validate_onboarding_apply_response(
     response: Option<&Value>,
     expected_account: &AccountId,
@@ -1416,7 +1347,6 @@ fn validate_onboarding_apply_response(
         )),
     }
 }
-
 fn validate_faucet_response(
     response: Option<&Value>,
     expected_account: &AccountId,
@@ -1465,7 +1395,6 @@ fn validate_faucet_response(
     }
     Ok(tx_hash.to_owned())
 }
-
 fn pipeline_status_kind(response: Option<&Value>) -> Option<String> {
     let status = response
         .and_then(Value::as_object)
@@ -1476,7 +1405,6 @@ fn pipeline_status_kind(response: Option<&Value>) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
 }
-
 fn wait_for_pipeline_terminal_status(
     http: &HttpClient,
     public_root: &str,
@@ -1507,8 +1435,12 @@ fn wait_for_pipeline_terminal_status(
         std::thread::sleep(Duration::from_millis(500));
     }
 }
-
-fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) -> Result<HttpJson> {
+fn claim_faucet(
+    http: &HttpClient,
+    public_root: &str,
+    account_id: &AccountId,
+    expected_network_id: &NetworkId,
+) -> Result<HttpJson> {
     let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
     let puzzle = http_json(http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
     if puzzle.status != 200 {
@@ -1524,7 +1456,8 @@ fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) ->
             text: puzzle.text,
         });
     };
-    let claim_body = solve_faucet_puzzle(&account_id.to_string(), puzzle_body)?;
+    let claim_body =
+        solve_faucet_puzzle(&account_id.to_string(), expected_network_id, puzzle_body)?;
     let claim_url = join_url(public_root, "/v1/accounts/faucet")?;
     http_json(
         http,
@@ -1533,15 +1466,46 @@ fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) ->
         Some(&claim_body),
     )
 }
-
-fn solve_faucet_puzzle(account_id: &str, puzzle: &Value) -> Result<Value> {
+fn solve_faucet_puzzle(
+    account_id: &str,
+    expected_network_id: &NetworkId,
+    puzzle: &Value,
+) -> Result<Value> {
+    let algorithm = required_str(puzzle, "algorithm")?;
+    if algorithm != FAUCET_POW_ALGORITHM {
+        eyre::bail!(
+            "unsupported faucet puzzle algorithm `{algorithm}`; expected `{FAUCET_POW_ALGORITHM}`"
+        );
+    }
+    let network_id_literal = required_str(puzzle, "network_id")?;
+    let network_id = network_id_literal
+        .parse::<NetworkId>()
+        .wrap_err("faucet puzzle network_id is not a canonical NetworkId")?;
+    if network_id.to_string() != network_id_literal {
+        eyre::bail!("faucet puzzle network_id is not canonically encoded");
+    }
+    if &network_id != expected_network_id {
+        eyre::bail!(
+            "faucet puzzle network_id `{network_id}` does not match configured network `{expected_network_id}`"
+        );
+    }
+    let chain_discriminant = u16::try_from(required_u64(puzzle, "chain_discriminant")?)
+        .map_err(|_| eyre!("faucet puzzle chain_discriminant is too large"))?;
+    if chain_discriminant != DEFAULT_CHAIN_DISCRIMINANT {
+        eyre::bail!(
+            "faucet puzzle chain_discriminant `{chain_discriminant}` does not match Taira `{DEFAULT_CHAIN_DISCRIMINANT}`"
+        );
+    }
     let difficulty_bits = required_u64(puzzle, "difficulty_bits")?;
+    if difficulty_bits == 0 {
+        eyre::bail!("faucet puzzle difficulty_bits must be positive");
+    }
     let mut body = Map::new();
     body.insert("account_id".into(), Value::String(account_id.to_owned()));
-    if difficulty_bits == 0 {
-        return Ok(Value::Object(body));
-    }
     let anchor_height = required_u64(puzzle, "anchor_height")?;
+    if anchor_height == 0 {
+        eyre::bail!("faucet puzzle anchor_height must be positive");
+    }
     let anchor_hash_hex = required_str(puzzle, "anchor_block_hash_hex")?;
     let challenge_salt_hex = optional_str(puzzle, "challenge_salt_hex");
     let log_n = u8::try_from(required_u64(puzzle, "scrypt_log_n")?)
@@ -1552,6 +1516,7 @@ fn solve_faucet_puzzle(account_id: &str, puzzle: &Value) -> Result<Value> {
         .map_err(|_| eyre!("faucet puzzle scrypt_p is too large"))?;
     let challenge = build_faucet_challenge(
         account_id,
+        &network_id,
         anchor_height,
         anchor_hash_hex,
         challenge_salt_hex,
@@ -1565,7 +1530,6 @@ fn solve_faucet_puzzle(account_id: &str, puzzle: &Value) -> Result<Value> {
     body.insert("pow_nonce_hex".into(), Value::String(hex::encode(nonce)));
     Ok(Value::Object(body))
 }
-
 fn required_u64(value: &Value, key: &str) -> Result<u64> {
     value
         .as_object()
@@ -1573,7 +1537,6 @@ fn required_u64(value: &Value, key: &str) -> Result<u64> {
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre!("faucet puzzle missing numeric `{key}`"))
 }
-
 fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     value
         .as_object()
@@ -1581,34 +1544,44 @@ fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("faucet puzzle missing string `{key}`"))
 }
-
 fn optional_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value
         .as_object()
         .and_then(|obj| obj.get(key))
         .and_then(Value::as_str)
 }
-
 fn build_faucet_challenge(
     account_id: &str,
+    network_id: &NetworkId,
     anchor_height: u64,
     anchor_hash_hex: &str,
     challenge_salt_hex: Option<&str>,
 ) -> Result<[u8; 32]> {
-    let anchor_hash = hex::decode(anchor_hash_hex)
-        .wrap_err_with(|| format!("invalid faucet anchor hash `{anchor_hash_hex}`"))?;
+    let anchor_hash = decode_exact_lower_hex(anchor_hash_hex, "anchor_block_hash_hex", 32)?;
     let mut hasher = Sha256::new();
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(network_id.as_bytes());
     hasher.update(account_id.as_bytes());
     hasher.update(anchor_height.to_be_bytes());
     hasher.update(anchor_hash);
-    if let Some(salt) = challenge_salt_hex.filter(|value| !value.is_empty()) {
-        let salt = hex::decode(salt).wrap_err("invalid faucet challenge salt")?;
+    if let Some(salt) = challenge_salt_hex {
+        let salt = decode_exact_lower_hex(salt, "challenge_salt_hex", 32)?;
         hasher.update(salt);
     }
     Ok(hasher.finalize().into())
 }
-
+fn decode_exact_lower_hex(value: &str, field: &str, byte_length: usize) -> Result<Vec<u8>> {
+    if value.len() != byte_length.saturating_mul(2)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        eyre::bail!(
+            "faucet puzzle {field} must be an exact lowercase {byte_length}-byte hex string"
+        );
+    }
+    hex::decode(value).wrap_err_with(|| format!("invalid faucet puzzle {field}"))
+}
 fn solve_faucet_pow(
     challenge: &[u8; 32],
     params: &ScryptParams,
@@ -1625,7 +1598,6 @@ fn solve_faucet_pow(
     }
     eyre::bail!("faucet PoW nonce space exhausted")
 }
-
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0_u32;
     for byte in bytes {
@@ -1638,12 +1610,10 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     }
     total
 }
-
 fn insert_string_metadata(metadata: &mut Metadata, key: &str, value: &str) -> Result<()> {
     metadata.insert(Name::from_str(key)?, IrohaJson::new(value.to_owned()));
     Ok(())
 }
-
 fn canary_message() -> String {
     let unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1651,7 +1621,6 @@ fn canary_message() -> String {
         .unwrap_or(0);
     format!("taira-write-canary-{unix_ms}")
 }
-
 fn write_runtime_config(path: &PathBuf, config: &Config) -> Result<()> {
     let parent = path
         .parent()
@@ -1675,7 +1644,6 @@ fn write_runtime_config(path: &PathBuf, config: &Config) -> Result<()> {
         )
     })
 }
-
 fn render_runtime_config(config: &Config) -> Result<String> {
     let private_key = ExposedPrivateKey(config.key_pair.private_key().clone()).to_string();
     let public_key = config.key_pair.public_key().to_string();
@@ -1690,11 +1658,9 @@ fn render_runtime_config(config: &Config) -> Result<String> {
         DEFAULT_WRITE_STATUS_TIMEOUT_MS,
     ))
 }
-
 fn escape_toml(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
-
 fn hint_submit_error(err: eyre::Report) -> eyre::Report {
     let text = format!("{err:#}");
     if text.contains("fee intent") || text.contains("fee_payment") {
@@ -1713,7 +1679,6 @@ fn hint_submit_error(err: eyre::Report) -> eyre::Report {
         err
     }
 }
-
 fn hint_wait_error(err: eyre::Report) -> eyre::Report {
     let text = format!("{err:#}");
     if text.contains("Expired") || text.contains("expired") {
@@ -1724,7 +1689,6 @@ fn hint_wait_error(err: eyre::Report) -> eyre::Report {
         err
     }
 }
-
 fn faucet_failure_hint(response: &HttpJson) -> String {
     let body = response
         .body
@@ -1740,18 +1704,15 @@ fn faucet_failure_hint(response: &HttpJson) -> String {
         format!("faucet claim failed with HTTP {}: {body}", response.status)
     }
 }
-
 fn compact_json(value: &Value) -> String {
     json::to_json(value).unwrap_or_else(|_| format!("{value:?}"))
 }
-
 fn error_value(code: &str, message: &str) -> Value {
     let mut error = Map::new();
     error.insert("error_code".into(), Value::String(code.to_owned()));
     error.insert("message".into(), Value::String(message.to_owned()));
     Value::Object(error)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1770,9 +1731,7 @@ mod tests {
         thread,
     };
     use tempfile::NamedTempFile;
-
     const TEST_ONBOARDING_TOKEN: &str = "0123456789abcdef0123456789ABCDEF";
-
     fn test_onboarding_token_file() -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("create onboarding token file");
         file.write_all(TEST_ONBOARDING_TOKEN.as_bytes())
@@ -1786,7 +1745,6 @@ mod tests {
         }
         file
     }
-
     #[derive(Clone)]
     struct MockRequest {
         method: String,
@@ -1794,7 +1752,6 @@ mod tests {
         headers: Vec<(String, String)>,
         body: String,
     }
-
     impl std::fmt::Debug for MockRequest {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter
@@ -1813,7 +1770,6 @@ mod tests {
                 .finish()
         }
     }
-
     impl MockRequest {
         fn header_values(&self, name: &str) -> Vec<&str> {
             self.headers
@@ -1823,25 +1779,21 @@ mod tests {
                 .collect()
         }
     }
-
     struct MockResponse {
         status: u16,
         content_type: &'static str,
         headers: Vec<(&'static str, String)>,
         body: String,
     }
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     struct TextContext {
         cfg: Config,
         i18n: Localizer,
         lines: Vec<String>,
     }
-
     impl TextContext {
         fn new() -> Self {
             Self {
@@ -1851,32 +1803,25 @@ mod tests {
             }
         }
     }
-
     impl RunContext for TextContext {
         fn config(&self) -> &Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn output_format(&self) -> CliOutputFormat {
             CliOutputFormat::Text
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: norito::json::JsonSerialize + ?Sized,
@@ -1884,13 +1829,11 @@ mod tests {
             let _value = norito::json::to_value(data)?;
             Ok(())
         }
-
         fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
             self.lines.push(data.to_string());
             Ok(())
         }
     }
-
     impl MockResponse {
         fn json(status: u16, value: Value) -> Self {
             Self {
@@ -1900,7 +1843,6 @@ mod tests {
                 body: json::to_json(&value).expect("mock JSON response"),
             }
         }
-
         fn text(status: u16, body: impl Into<String>) -> Self {
             Self {
                 status,
@@ -1910,14 +1852,12 @@ mod tests {
             }
         }
     }
-
     struct MockHttpServer {
         base_url: String,
         requests: Arc<Mutex<Vec<MockRequest>>>,
         stop: Arc<AtomicBool>,
         handle: thread::JoinHandle<()>,
     }
-
     fn spawn_mock_http<F>(expected_requests: usize, responder: F) -> MockHttpServer
     where
         F: Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
@@ -1963,7 +1903,6 @@ mod tests {
             handle,
         }
     }
-
     fn read_mock_request(stream: &mut TcpStream) -> MockRequest {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -2014,17 +1953,16 @@ mod tests {
             body,
         }
     }
-
     fn find_header_end(raw: &[u8]) -> Option<usize> {
         raw.windows(4).position(|window| window == b"\r\n\r\n")
     }
-
     fn write_mock_response(stream: &mut TcpStream, response: MockResponse) {
         let reason = match response.status {
             200 => "OK",
             202 => "Accepted",
             307 => "Temporary Redirect",
             400 => "Bad Request",
+            401 => "Unauthorized",
             404 => "Not Found",
             503 => "Service Unavailable",
             _ => "OK",
@@ -2045,7 +1983,6 @@ mod tests {
         write!(stream, "\r\n").expect("finish mock response headers");
         stream.write_all(body).expect("write mock response body");
     }
-
     fn finish_mock(server: MockHttpServer) -> Vec<MockRequest> {
         server.stop.store(true, Ordering::Release);
         server.handle.join().expect("mock server thread");
@@ -2054,11 +1991,9 @@ mod tests {
             .into_inner()
             .expect("requests")
     }
-
     fn path_only(path: &str) -> &str {
         path.split_once('?').map_or(path, |(path, _)| path)
     }
-
     fn doctor_mock_response(request: &MockRequest, omit_tool: Option<&str>) -> MockResponse {
         match (request.method.as_str(), path_only(&request.path)) {
             ("GET", "/status") => MockResponse::json(
@@ -2093,9 +2028,13 @@ mod tests {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
             ("GET", "/v1/transactions/status") => MockResponse::text(404, "not found"),
-            ("POST", "/v1/musubi/queries/ordered-prefix") => {
-                MockResponse::json(400, norito::json!({"error": "missing typed request"}))
-            }
+            ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
+                401,
+                norito::json!({
+                    "code": "canonical_authentication_required",
+                    "message": "canonical account request authentication is required"
+                }),
+            ),
             ("GET", "/v1/mcp") => MockResponse::json(200, norito::json!({"ok": true})),
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
@@ -2128,7 +2067,6 @@ mod tests {
             _ => MockResponse::text(404, "not found"),
         }
     }
-
     fn write_canary_mock_response(request: &MockRequest, onboarding_status: u16) -> MockResponse {
         // Account formatting is guarded per thread.  The mock responder runs
         // on its own thread, so mirror the Taira discriminant used by the
@@ -2217,9 +2155,21 @@ mod tests {
                     }),
                 )
             }
-            ("GET", "/v1/accounts/faucet/puzzle") => {
-                MockResponse::json(200, norito::json!({ "difficulty_bits": 0 }))
-            }
+            ("GET", "/v1/accounts/faucet/puzzle") => MockResponse::json(
+                200,
+                norito::json!({
+                    "algorithm": FAUCET_POW_ALGORITHM,
+                    "network_id": (crate::fallback_config().network_id.to_string()),
+                    "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
+                    "difficulty_bits": 1,
+                    "anchor_height": 1,
+                    "anchor_block_hash_hex": ("11".repeat(32)),
+                    "challenge_salt_hex": null,
+                    "scrypt_log_n": 1,
+                    "scrypt_r": 1,
+                    "scrypt_p": 1
+                }),
+            ),
             ("POST", "/v1/accounts/faucet") => {
                 let request_body =
                     json::from_str::<Value>(&request.body).expect("decode faucet request");
@@ -2289,13 +2239,11 @@ mod tests {
             _ => MockResponse::text(404, "not found"),
         }
     }
-
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
         let server = spawn_mock_http(14, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
-
         assert_eq!(report_status(&report), Some("ok"));
         assert!(
             requests
@@ -2323,7 +2271,6 @@ mod tests {
                 && request.body == "{}"
         }));
     }
-
     #[test]
     fn render_report_text_includes_route_check_detail() {
         let mut checks = Vec::new();
@@ -2345,16 +2292,13 @@ mod tests {
         )
         .expect("report");
         let mut context = TextContext::new();
-
         render_report(&mut context, false, &report).expect("render report");
-
         let output = context.lines.join("\n");
         assert!(
             output
                 .contains("contracts_state HTTP 400 (mounted route is expected to return HTTP 400")
         );
     }
-
     #[test]
     fn time_snapshot_requires_network_time_and_every_health_axis() {
         let healthy = norito::json!({
@@ -2373,7 +2317,6 @@ mod tests {
             }
         });
         validate_time_snapshot(Some(&healthy)).expect("healthy network time");
-
         for (label, mutation) in [
             ("fallback", "/v1/time/now is using the local-clock fallback"),
             (
@@ -2414,7 +2357,6 @@ mod tests {
         }
         assert!(validate_time_snapshot(None).is_err());
     }
-
     #[test]
     fn write_canary_exit_gate_fails_closed() {
         ensure_write_canary_succeeded(&norito::json!({"status": "ok"}))
@@ -2428,7 +2370,6 @@ mod tests {
                 .expect_err("non-success canary reports must produce a failing process exit");
         }
     }
-
     #[test]
     fn onboarding_token_validation_is_byte_exact_and_redacted() {
         assert_eq!(
@@ -2449,7 +2390,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn onboarding_response_redaction_covers_text_keys_and_values() {
         let escaped_token = "\"".repeat(32);
@@ -2465,16 +2405,13 @@ mod tests {
             text: encoded,
             body: Some(Value::Object(body)),
         };
-
         redact_http_json(&mut response, &escaped_token);
-
         let rendered = compact_json(response.body.as_ref().expect("redacted body"));
         assert!(!response.text.contains(&escaped_token));
         assert!(!rendered.contains(&escaped_token));
         assert!(!response.text.contains(&"\\\"".repeat(32)));
         assert!(rendered.contains("<redacted>"));
     }
-
     #[test]
     fn onboarding_token_file_is_exact_owner_only_regular_and_not_cached() {
         let file = test_onboarding_token_file();
@@ -2484,7 +2421,6 @@ mod tests {
                 .as_str(),
             TEST_ONBOARDING_TOKEN
         );
-
         let replacement = "Z".repeat(32);
         fs::write(file.path(), &replacement).expect("replace token bytes");
         assert_eq!(
@@ -2493,23 +2429,19 @@ mod tests {
                 .as_str(),
             replacement
         );
-
         fs::write(file.path(), format!("{TEST_ONBOARDING_TOKEN}\n")).expect("write newline token");
         let error = read_onboarding_token_file(file.path())
             .expect_err("newline must not be trimmed from token file");
         assert!(format!("{error:#}").contains("printable ASCII"));
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::{PermissionsExt as _, symlink};
-
             fs::write(file.path(), TEST_ONBOARDING_TOKEN).expect("restore token");
             fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640))
                 .expect("set unsafe permissions");
             let error = read_onboarding_token_file(file.path())
                 .expect_err("group-readable token file must fail closed");
             assert!(format!("{error:#}").contains("group or other"));
-
             fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))
                 .expect("restore safe permissions");
             let directory = tempfile::tempdir().expect("token symlink directory");
@@ -2519,13 +2451,11 @@ mod tests {
                 read_onboarding_token_file(&link).expect_err("token symlink must fail closed");
             assert!(format!("{error:#}").contains("non-symlink"));
         }
-
         let directory = tempfile::tempdir().expect("token directory");
         let error = read_onboarding_token_file(directory.path())
             .expect_err("directory token path must fail closed");
         assert!(format!("{error:#}").contains("regular non-symlink"));
     }
-
     #[test]
     fn onboarding_plan_refuses_redirect_without_forwarding_token() {
         let destination = spawn_mock_http(1, |_request| {
@@ -2541,7 +2471,6 @@ mod tests {
         let http = http_client().expect("HTTP client");
         let key_pair = fixture_key_pair(12);
         let account_id = AccountId::new(key_pair.public_key().clone());
-
         let response = plan_canary_onboarding(
             &http,
             &redirect.base_url,
@@ -2552,7 +2481,6 @@ mod tests {
         .expect("redirect remains an HTTP response");
         let redirect_requests = finish_mock(redirect);
         let destination_requests = finish_mock(destination);
-
         assert_eq!(response.status, 307);
         assert_eq!(response.text, "<invalid JSON response>");
         assert!(!response.text.contains(TEST_ONBOARDING_TOKEN));
@@ -2571,7 +2499,6 @@ mod tests {
         );
         assert!(destination_requests.is_empty());
     }
-
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
@@ -2585,7 +2512,6 @@ mod tests {
             .and_then(|object| object.get("failures"))
             .and_then(Value::as_array)
             .expect("failures");
-
         assert_eq!(report_status(&report), Some("fail"));
         assert!(
             failures
@@ -2594,7 +2520,6 @@ mod tests {
                 .any(|failure| failure.contains(missing_tool))
         );
     }
-
     #[test]
     fn write_canary_mock_success_returns_redacted_receipt() {
         let onboarding_token_file = test_onboarding_token_file();
@@ -2616,7 +2541,6 @@ mod tests {
         .expect("write canary");
         let requests = finish_mock(server);
         let rendered = compact_json(&report);
-
         assert_eq!(report_status(&report), Some("ok"), "{rendered}");
         assert!(rendered.contains(&"cd".repeat(32)));
         assert!(rendered.contains(DEFAULT_CHAIN_ID));
@@ -2707,7 +2631,6 @@ mod tests {
                 && request.path.contains(&"cd".repeat(32))
         }));
     }
-
     #[test]
     fn faucet_response_rejects_retired_synchronous_shape() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -2720,13 +2643,10 @@ mod tests {
             "tx_hash_hex": "faucetabc",
             "status": "Applied"
         });
-
         let error = validate_faucet_response(Some(&response), &account_id, DEFAULT_GAS_ASSET_ID)
             .expect_err("retired synchronous faucet response must fail closed");
-
         assert!(format!("{error:#}").contains("expected QUEUED"));
     }
-
     #[test]
     fn faucet_response_rejects_wrong_asset_and_short_hash() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -2741,18 +2661,15 @@ mod tests {
                 "status": "QUEUED"
             })
         };
-
         let wrong_asset = response("wrong-asset", &"cd".repeat(32));
         let error = validate_faucet_response(Some(&wrong_asset), &account_id, DEFAULT_GAS_ASSET_ID)
             .expect_err("a different funded asset cannot satisfy the canary");
         assert!(format!("{error:#}").contains("unexpected asset_definition_id"));
-
         let short_hash = response(DEFAULT_GAS_ASSET_ID, "cd");
         let error = validate_faucet_response(Some(&short_hash), &account_id, DEFAULT_GAS_ASSET_ID)
             .expect_err("a short transaction hash must fail closed");
         assert!(format!("{error:#}").contains("must encode 32 bytes"));
     }
-
     #[test]
     fn pipeline_status_requires_current_nested_shape() {
         let current = norito::json!({"status": {"kind": "Applied"}});
@@ -2760,18 +2677,15 @@ mod tests {
             pipeline_status_kind(Some(&current)).as_deref(),
             Some("Applied")
         );
-
         let retired = norito::json!({"status": "Applied"});
         assert_eq!(pipeline_status_kind(Some(&retired)), None);
     }
-
     #[test]
     fn pipeline_status_poll_fails_fast_on_noncanonical_http_error() {
         let server = spawn_mock_http(1, |_request| {
             MockResponse::json(503, norito::json!({"error": "route unavailable"}))
         });
         let http = http_client().expect("HTTP client");
-
         let response = wait_for_pipeline_terminal_status(
             &http,
             &server.base_url,
@@ -2780,11 +2694,9 @@ mod tests {
         )
         .expect("HTTP error remains a typed canary result");
         let requests = finish_mock(server);
-
         assert_eq!(response.status, 503);
         assert_eq!(requests.len(), 1);
     }
-
     #[test]
     fn write_canary_mock_onboarding_400_does_not_attempt_faucet() {
         let onboarding_token_file = test_onboarding_token_file();
@@ -2810,7 +2722,6 @@ mod tests {
             .and_then(|object| object.get("failures"))
             .and_then(Value::as_array)
             .expect("failures");
-
         assert_eq!(report_status(&report), Some("fail"));
         assert!(
             failures
@@ -2823,16 +2734,13 @@ mod tests {
                 && path_only(&request.path) == "/v1/accounts/faucet")
         );
     }
-
     #[test]
     fn submit_failure_hints_cover_invalid_fee_intent_and_route_unavailable() {
         let invalid_fee = hint_submit_error(eyre!("invalid fee_payment intent"));
         assert!(format!("{invalid_fee:#}").contains("/v1/fees/quote"));
-
         let route = hint_submit_error(eyre!("route_unavailable"));
         assert!(format!("{route:#}").contains("ingress or lane routing"));
     }
-
     #[test]
     fn faucet_asset_failure_points_at_bootstrap() {
         let response = HttpJson {
@@ -2842,18 +2750,18 @@ mod tests {
         };
         assert!(faucet_failure_hint(&response).contains("not bootstrapped"));
     }
-
     #[test]
     fn leading_zero_bits_counts_prefix() {
         assert_eq!(leading_zero_bits(&[0x00, 0x0f]), 12);
         assert_eq!(leading_zero_bits(&[0x80]), 0);
         assert_eq!(leading_zero_bits(&[0x40]), 1);
     }
-
     #[test]
     fn faucet_challenge_matches_python_fixture_shape() {
+        let network_id = crate::fallback_config().network_id;
         let challenge = build_faucet_challenge(
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &network_id,
             7,
             &"11".repeat(32),
             Some(&"22".repeat(32)),
@@ -2862,44 +2770,65 @@ mod tests {
         assert_eq!(challenge.len(), 32);
         assert_ne!(challenge, [0_u8; 32]);
     }
-
     #[test]
-    fn solve_faucet_puzzle_handles_zero_difficulty_without_pow_fields() {
+    fn faucet_challenge_rejects_same_label_different_genesis_replay() {
+        let first_network = crate::fallback_config().network_id;
+        let second_network =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"foreign-faucet-genesis"),
+            ));
+        let account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+        let first = build_faucet_challenge(
+            account_id,
+            &first_network,
+            7,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+        )
+        .expect("first challenge");
+        let second = build_faucet_challenge(
+            account_id,
+            &second_network,
+            7,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+        )
+        .expect("second challenge");
+        assert_ne!(first, second);
+    }
+    #[test]
+    fn solve_faucet_puzzle_rejects_zero_difficulty() {
+        let network_id = crate::fallback_config().network_id;
         let puzzle = norito::json!({
+            "algorithm": FAUCET_POW_ALGORITHM,
+            "network_id": (network_id.to_string()),
+            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
             "difficulty_bits": 0,
         });
-        let body = solve_faucet_puzzle(
+        let error = solve_faucet_puzzle(
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &network_id,
             &puzzle,
         )
-        .expect("claim body");
-        let body = body.as_object().expect("object");
-        assert_eq!(
-            body.get("account_id").and_then(Value::as_str),
-            Some("testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        );
-        assert!(!body.contains_key("pow_nonce_hex"));
+        .expect_err("zero-difficulty faucet puzzle must fail closed");
+        assert!(format!("{error:#}").contains("difficulty_bits must be positive"));
     }
-
     #[test]
     fn resolve_canary_signer_derives_account() {
         let key_pair = fixture_key_pair(3);
         let mut config = crate::fallback_config();
         config.key_pair = key_pair.clone();
         let signer = resolve_canary_signer(&config, true).expect("config signer");
-
         assert!(!signer.generated);
         assert_eq!(
             signer.account_id,
             AccountId::new(key_pair.public_key().clone())
         );
     }
-
     #[test]
     fn resolve_canary_signer_generates_checked_ed25519_signer() {
         let config = crate::fallback_config();
         let signer = resolve_canary_signer(&config, false).expect("generated signer");
-
         assert!(signer.generated);
         assert_eq!(signer.key_pair.algorithm(), Algorithm::Ed25519);
         assert_eq!(
@@ -2907,7 +2836,6 @@ mod tests {
             AccountId::new(signer.key_pair.public_key().clone())
         );
     }
-
     #[test]
     fn onboarding_apply_rejects_the_retired_synchronous_shape() {
         let key_pair = fixture_key_pair(11);
@@ -2919,7 +2847,6 @@ mod tests {
             "status": "Applied",
             "disposition": { "kind": "create" }
         });
-
         let error =
             validate_onboarding_apply_response(Some(&stale), &account_id, "canary@universal")
                 .expect_err("retired apply response must fail closed");
@@ -2929,7 +2856,6 @@ mod tests {
                 .contains("unexpected onboarding apply status")
         );
     }
-
     #[test]
     fn write_canary_receipt_identity_is_redacted() {
         let key_pair = fixture_key_pair(5);
@@ -2956,14 +2882,12 @@ mod tests {
         )
         .expect("report");
         let rendered = compact_json(&report);
-
         assert!(rendered.contains(DEFAULT_CHAIN_ID));
         assert!(rendered.contains("tairacanary123@universal"));
         assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));
         assert!(!rendered.contains("private_key"));
         assert!(!rendered.contains("public_key_raw_hex"));
     }
-
     #[test]
     fn build_alias_is_stable_and_sanitized() {
         let key_pair = fixture_key_pair(7);
@@ -2980,7 +2904,6 @@ mod tests {
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@')
         );
     }
-
     #[test]
     fn render_runtime_config_redacts_nothing_only_when_explicitly_called() {
         let key_pair = fixture_key_pair(9);
@@ -2995,7 +2918,6 @@ mod tests {
         assert!(rendered.contains("chain_discriminant = 369"));
         assert!(rendered.contains("nonce = false"));
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(11).algorithm(), Algorithm::Ed25519);

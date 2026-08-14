@@ -4,26 +4,6 @@
 //! An isolated `--output-dir PATH` remains an implicit write for the fixture
 //! parity workflow, and may also be paired with an explicit mode. Secure
 //! fixture reads and publication are currently Unix-only.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env,
-    error::Error,
-    ffi::OsString,
-    fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
-    path::{Component, Path, PathBuf},
-    sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-#[cfg(unix)]
-use std::os::{fd::AsRawFd as _, unix::fs::MetadataExt as _};
-
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::encode;
 use iroha_crypto::{Algorithm, KeyPair, Signature, sha256};
@@ -57,7 +37,23 @@ use sorafs_manifest::{
     validate_governance_log_node_bytes,
 };
 use soranet_pq::{HedgedRngSeed, MlDsaSuite, deterministic_chacha20_rng, sign_mldsa};
-
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+#[cfg(unix)]
+use std::os::{fd::AsRawFd as _, unix::fs::MetadataExt as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    error::Error,
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 const GOVERNANCE_FIXTURE_SIGNING_SEED: [u8; 32] = [0xC7; 32];
 const GOVERNANCE_SDK_INVENTORY_SCHEMA: &str =
     "sorafs.reference_sdk.governance_fixture_inventory.v1";
@@ -86,7 +82,6 @@ fn require_secure_fixture_filesystem() -> io::Result<()> {
         Err(unsupported_secure_fixture_filesystem_error())
     }
 }
-
 #[cfg(not(unix))]
 fn unsupported_secure_fixture_filesystem_error() -> io::Error {
     // Non-Unix generation fails closed: handle-relative identity and no-follow are required.
@@ -95,13 +90,11 @@ fn unsupported_secure_fixture_filesystem_error() -> io::Error {
         "secure SoraFS fixture generation requires Unix file identities and handle-relative directory binding",
     )
 }
-
 struct BoundDirectory {
     display_path: PathBuf,
     canonical_path: PathBuf,
     handle: File,
 }
-
 impl BoundDirectory {
     fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
         require_secure_fixture_filesystem()?;
@@ -145,7 +138,6 @@ impl BoundDirectory {
             handle,
         })
     }
-
     fn open_child(&self, name: &str, label: &str) -> Result<Self, Box<dyn Error>> {
         let relative = Path::new(name);
         if relative.components().count() != 1
@@ -159,7 +151,6 @@ impl BoundDirectory {
             label,
         )
     }
-
     fn open_bound_child(
         bound_path: &Path,
         display_path: &Path,
@@ -212,11 +203,9 @@ impl BoundDirectory {
             handle,
         })
     }
-
     fn handle(&self) -> &File {
         &self.handle
     }
-
     fn verify(&self, label: &str) -> Result<(), Box<dyn Error>> {
         require_real_directory_ancestry(&self.display_path, label)?;
         let lexical = fs::symlink_metadata(&self.display_path).map_err(|error| {
@@ -247,9 +236,7 @@ impl BoundDirectory {
         Ok(())
     }
 }
-
 static WORKING_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
-
 /// Process-wide guard that anchors every relative generator path to one open
 /// output-root directory.
 ///
@@ -265,7 +252,6 @@ struct BoundWorkingDirectory {
     active: bool,
     _lock: MutexGuard<'static, ()>,
 }
-
 impl BoundWorkingDirectory {
     fn enter(root: &BoundDirectory) -> Result<Self, Box<dyn Error>> {
         require_secure_fixture_filesystem()?;
@@ -294,14 +280,12 @@ impl BoundWorkingDirectory {
             unreachable!("non-Unix fixture generation failed before directory binding")
         }
     }
-
     fn restore(mut self) -> Result<(), Box<dyn Error>> {
         self.restore_inner()
             .map_err(|error| format!("failed to restore generator working directory: {error}"))?;
         self.active = false;
         Ok(())
     }
-
     fn restore_inner(&self) -> io::Result<()> {
         #[cfg(unix)]
         {
@@ -316,7 +300,6 @@ impl BoundWorkingDirectory {
         }
     }
 }
-
 impl Drop for BoundWorkingDirectory {
     fn drop(&mut self) {
         if self.active {
@@ -324,15 +307,12 @@ impl Drop for BoundWorkingDirectory {
         }
     }
 }
-
 #[cfg(unix)]
 fn set_working_directory_handle(directory: &File) -> io::Result<()> {
     use std::os::raw::c_int;
-
     unsafe extern "C" {
         fn fchdir(fd: c_int) -> c_int;
     }
-
     // SAFETY: `directory` owns a live descriptor for a directory, and `fchdir`
     // only borrows the integer descriptor for the duration of this call.
     if unsafe { fchdir(directory.as_raw_fd()) } == 0 {
@@ -341,7 +321,6 @@ fn set_working_directory_handle(directory: &File) -> io::Result<()> {
         Err(io::Error::last_os_error())
     }
 }
-
 struct GeneratorDirectories {
     root: BoundDirectory,
     por: BoundDirectory,
@@ -352,7 +331,6 @@ struct GeneratorDirectories {
     moderation: BoundDirectory,
     reference_sdk: BoundDirectory,
 }
-
 impl GeneratorDirectories {
     fn open(path: &Path) -> Result<Self, Box<dyn Error>> {
         let root = BoundDirectory::open(path, "SoraFS fixture output root")?;
@@ -376,7 +354,6 @@ impl GeneratorDirectories {
             reference_sdk,
         })
     }
-
     fn verify(&self) -> Result<(), Box<dyn Error>> {
         self.por.verify("PoR fixture output directory")?;
         self.potr.verify("PoTR fixture output directory")?;
@@ -392,7 +369,6 @@ impl GeneratorDirectories {
         self.root.verify("SoraFS fixture output root")
     }
 }
-
 fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -427,24 +403,20 @@ fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<d
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn same_directory_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[derive(Debug, Eq, PartialEq)]
 struct Args {
     fixtures_root: PathBuf,
     mode: Mode,
     help: bool,
 }
-
 const MANAGED_DIRECTORIES: [&str; 6] = [
     "governance",
     "moderation",
@@ -471,13 +443,11 @@ const MAX_PATH_BYTES: usize = 4 << 10;
 const MAX_PATH_COMPONENTS: usize = 64;
 const MAX_TEMP_ATTEMPTS: u64 = 64;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Check,
     Write,
 }
-
 #[derive(Clone, norito::JsonSerialize)]
 struct GovernanceSdkPayloadInventoryEntryV1 {
     path: String,
@@ -487,7 +457,6 @@ struct GovernanceSdkPayloadInventoryEntryV1 {
     byte_length: u64,
     sha256: String,
 }
-
 #[derive(Clone, norito::JsonSerialize)]
 struct GovernanceSdkOutcomeInventoryEntryV1 {
     path: String,
@@ -497,7 +466,6 @@ struct GovernanceSdkOutcomeInventoryEntryV1 {
     byte_length: u64,
     sha256: String,
 }
-
 #[derive(Clone, norito::JsonSerialize)]
 struct GovernanceSdkUnsignedInventoryV1 {
     schema: String,
@@ -506,7 +474,6 @@ struct GovernanceSdkUnsignedInventoryV1 {
     payloads: Vec<GovernanceSdkPayloadInventoryEntryV1>,
     outcomes: Vec<GovernanceSdkOutcomeInventoryEntryV1>,
 }
-
 #[derive(norito::JsonSerialize)]
 struct GovernanceSdkInventorySignatureV1 {
     algorithm: String,
@@ -515,7 +482,6 @@ struct GovernanceSdkInventorySignatureV1 {
     public_key_fingerprint_sha256: String,
     signature_hex: String,
 }
-
 #[derive(norito::JsonSerialize)]
 struct GovernanceSdkFixtureInventoryV1 {
     schema: String,
@@ -525,7 +491,6 @@ struct GovernanceSdkFixtureInventoryV1 {
     outcomes: Vec<GovernanceSdkOutcomeInventoryEntryV1>,
     signature: GovernanceSdkInventorySignatureV1,
 }
-
 #[derive(Clone, norito::JsonSerialize)]
 struct ReferenceSdkPayloadInventoryEntryV1 {
     path: String,
@@ -536,7 +501,6 @@ struct ReferenceSdkPayloadInventoryEntryV1 {
     byte_length: u64,
     sha256: String,
 }
-
 #[derive(Clone, norito::JsonSerialize)]
 struct ReferenceSdkOutcomeInventoryEntryV1 {
     path: String,
@@ -547,7 +511,6 @@ struct ReferenceSdkOutcomeInventoryEntryV1 {
     byte_length: u64,
     sha256: String,
 }
-
 #[derive(Clone, norito::JsonSerialize)]
 struct ReferenceSdkUnsignedInventoryV1 {
     schema: String,
@@ -556,7 +519,6 @@ struct ReferenceSdkUnsignedInventoryV1 {
     payloads: Vec<ReferenceSdkPayloadInventoryEntryV1>,
     outcomes: Vec<ReferenceSdkOutcomeInventoryEntryV1>,
 }
-
 #[derive(norito::JsonSerialize)]
 struct ReferenceSdkFixtureInventoryV1 {
     schema: String,
@@ -816,11 +778,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 }
-
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn Error>> {
     const USAGE: &str = "usage: generate_por_fixtures (--write | --check) [--output-dir PATH] \
          (exactly one mode is required unless --output-dir implies --write)";
-
     let args = args.into_iter().collect::<Vec<_>>();
     if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
         return Ok(Args {
@@ -835,7 +795,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
     {
         return Err("`--help` must be used by itself".into());
     }
-
     let mut fixtures_root = None;
     let mut mode = None;
     let mut args = args.into_iter();
@@ -889,7 +848,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
             None => return Err(format!("{USAGE}; arguments must be valid UTF-8").into()),
         }
     }
-
     let mode = match (mode, fixtures_root.is_some()) {
         (Some(mode), _) => mode,
         (None, true) => Mode::Write,
@@ -901,7 +859,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
         help: false,
     })
 }
-
 fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     let mut has_normal_component = false;
     for component in path.components() {
@@ -921,7 +878,6 @@ fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn print_usage() {
     println!(
         "Usage: generate_por_fixtures (--write | --check) [--output-dir PATH]\n\
@@ -934,7 +890,6 @@ fn print_usage() {
          before inspecting the fixture tree."
     );
 }
-
 fn generate_fixtures(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
     let directories = GeneratorDirectories::open(fixtures_root)?;
     let working_directory = BoundWorkingDirectory::enter(&directories.root)?;
@@ -945,7 +900,6 @@ fn generate_fixtures(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
     restoration?;
     verification
 }
-
 fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Box<dyn Error>> {
     let fixtures_root = Path::new(".");
     let por_dir = Path::new("por");
@@ -971,7 +925,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
     );
     let challenge_id =
         derive_challenge_id(&seed, &manifest_digest, &provider_id, epoch_id, drand_round);
-
     let challenge = PorChallengeV1 {
         version: POR_CHALLENGE_VERSION_V1,
         challenge_id,
@@ -993,7 +946,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         deadline_at: 1_700_000_900,
     };
     challenge.validate()?;
-
     let proof_samples = vec![
         PorProofSampleV1 {
             sample_index: 1,
@@ -1017,7 +969,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
             leaf_digest: [0xBD; 32],
         },
     ];
-
     let provider_signing_key = SigningKey::from_bytes(&[0x31; 32]);
     let mut proof = PorProofV1 {
         version: POR_PROOF_VERSION_V1,
@@ -1041,7 +992,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
     proof.validate()?;
     proof.verify_signature()?;
     let proof_digest = proof.proof_digest();
-
     let auditor_signing_key = SigningKey::from_bytes(&[0x32; 32]);
     let mut verdict = AuditVerdictV1 {
         version: AUDIT_VERDICT_VERSION_V1,
@@ -1069,7 +1019,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         .to_vec();
     verdict.validate()?;
     verdict.verify_signatures()?;
-
     write_norito_pair(
         &por_dir.join("challenge_v1"),
         &challenge,
@@ -1085,7 +1034,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &verdict,
         verdict_json(&verdict),
     )?;
-
     let potr_receipt = PotrReceiptV1 {
         version: POTR_RECEIPT_VERSION_V1,
         manifest_digest,
@@ -1113,7 +1061,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &potr_receipt,
         potr_receipt_json(&potr_receipt),
     )?;
-
     let repair_task = RepairTaskRecordV1 {
         version: REPAIR_TASK_VERSION_V1,
         ticket_id: RepairTicketId("REP-900".to_owned()),
@@ -1151,7 +1098,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &provider_unassigned_task,
         repair_task_json(&provider_unassigned_task),
     )?;
-
     // Governance node sample (wrap proof).
     let mut node = GovernanceLogNodeV1 {
         version: GOVERNANCE_LOG_VERSION_V1,
@@ -1177,13 +1123,11 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
     sign_governance_log_node_mldsa(&mut node, b"sorafs-fixture-governance-mldsa-v1")?;
     node.validate()?;
     node.verify_publisher_signature()?;
-
     write_norito_pair(
         &gov_dir.join("node_v1"),
         &node,
         governance_node_json(&node, proof_digest),
     )?;
-
     let moderation_event = SoraFsModerationBallotGovernanceEventV1 {
         version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
         sequence: 6,
@@ -1234,7 +1178,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &moderation_dir.join("governance_node_validation_outcome_v1.json"),
         &moderation_outcome,
     )?;
-
     let appeal_finance_dir = fixtures_root.join("appeal_finance");
     let cancel_asset_lock_bytes = fs::read(appeal_finance_dir.join("cancel_asset_lock_v1.to"))?;
     let cancel_asset_lock_outcome =
@@ -1263,7 +1206,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &cancel_asset_lock_zero_outcome,
         "SFS-VAL-001",
     )?;
-
     let first_dag_node = governance_dag_node(proof.clone(), None, 1_700_000_790)?;
     let second_dag_node =
         governance_dag_node(proof, Some(first_dag_node.node_cid.clone()), 1_700_000_850)?;
@@ -1308,7 +1250,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &gov_dir.join("dag_block_validation_outcome_v1.json"),
         &outcome,
     )?;
-
     let expected_mismatch_cid = [0x7F; 32];
     let outcome = sorafs_manifest::validate_governance_dag_block_bytes(
         &block_bytes[0],
@@ -1321,7 +1262,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &outcome,
         "SFS-GOV-004",
     )?;
-
     let outcome =
         validate_governance_dag_head_chain_bytes(&head_bytes, "dag_head_v1.to", &block_inputs, 123);
     if !outcome.is_ok() {
@@ -1333,7 +1273,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &gov_dir.join("dag_head_validation_outcome_v1.json"),
         format!("{}\n", to_string_pretty(&outcome)?).as_bytes(),
     )?;
-
     let mut bad_block_signature = blocks[0].clone();
     *bad_block_signature
         .block_signature
@@ -1357,7 +1296,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &outcome,
         "SFS-SIG-006",
     )?;
-
     let mut bad_head_signature = head.clone();
     *bad_head_signature
         .head_signature
@@ -1381,7 +1319,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &outcome,
         "SFS-SIG-007",
     )?;
-
     let bad_predecessor_block =
         governance_dag_block(second_dag_node, Some(vec![0xDD; 32]), 1, 1_700_000_860)?;
     let bad_predecessor_blocks = [blocks[0].clone(), bad_predecessor_block.clone()];
@@ -1416,7 +1353,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &outcome,
         "SFS-GOV-006",
     )?;
-
     let mut trailing_block_bytes = block_bytes[0].clone();
     trailing_block_bytes.push(0);
     write_new_regular_file(
@@ -1434,7 +1370,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
         &outcome,
         "SFS-NORITO-001",
     )?;
-
     let reordered_inputs = [
         (
             block_bytes[1].as_slice(),
@@ -1463,7 +1398,6 @@ fn generate_bound_fixtures(_directories: &GeneratorDirectories) -> Result<(), Bo
 
     Ok(())
 }
-
 fn ensure_no_publication_lock(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
     match fs::symlink_metadata(fixtures_root.join(PUBLICATION_LOCK)) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -1474,12 +1408,10 @@ fn ensure_no_publication_lock(fixtures_root: &Path) -> Result<(), Box<dyn Error>
         Err(error) => Err(error.into()),
     }
 }
-
 struct RenderedFixtureSet {
     managed: BTreeMap<PathBuf, Vec<u8>>,
     inputs: BTreeMap<PathBuf, Vec<u8>>,
 }
-
 fn render_managed_fixtures(fixtures_root: &Path) -> Result<RenderedFixtureSet, Box<dyn Error>> {
     ensure_existing_real_directory(fixtures_root)?;
     let fixtures_parent = fixtures_root
@@ -1508,7 +1440,6 @@ fn render_managed_fixtures(fixtures_root: &Path) -> Result<RenderedFixtureSet, B
     validate_fixture_map(&managed)?;
     Ok(RenderedFixtureSet { managed, inputs })
 }
-
 fn validate_fixture_map(fixtures: &BTreeMap<PathBuf, Vec<u8>>) -> Result<(), Box<dyn Error>> {
     if fixtures.len() != EXPECTED_MANAGED_FIXTURE_COUNT {
         return Err(format!(
@@ -1551,10 +1482,8 @@ fn validate_fixture_map(fixtures: &BTreeMap<PathBuf, Vec<u8>>) -> Result<(), Box
     }
     Ok(())
 }
-
 fn validate_managed_relative_path(path: &Path) -> Result<(), Box<dyn Error>> {
     use std::path::Component;
-
     if path.as_os_str().len() > MAX_PATH_BYTES || path.is_absolute() {
         return Err(format!(
             "managed fixture path `{}` must be bounded and relative",
@@ -1597,7 +1526,6 @@ fn validate_managed_relative_path(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn read_rendered_fixture_map(
     staging_root: &Path,
 ) -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
@@ -1617,7 +1545,6 @@ fn read_rendered_fixture_map(
         )
         .into());
     }
-
     let mut fixtures = BTreeMap::new();
     for directory in MANAGED_DIRECTORIES {
         collect_rendered_files(staging_root, &staging_root.join(directory), &mut fixtures)?;
@@ -1629,7 +1556,6 @@ fn read_rendered_fixture_map(
     );
     Ok(fixtures)
 }
-
 fn collect_rendered_files(
     root: &Path,
     directory: &Path,
@@ -1672,7 +1598,6 @@ fn collect_rendered_files(
     }
     Ok(())
 }
-
 fn check_managed_fixtures(
     fixtures_root: &Path,
     fixtures: &BTreeMap<PathBuf, Vec<u8>>,
@@ -1687,7 +1612,6 @@ fn check_managed_fixtures(
             .collect::<Vec<_>>();
         return Err(format!("managed fixture path set differs; missing={missing:?}").into());
     }
-
     let mut differing = Vec::new();
     for (relative, expected) in fixtures {
         if read_regular_file(&fixtures_root.join(relative))? != *expected {
@@ -1706,7 +1630,6 @@ fn check_managed_fixtures(
     }
     Ok(())
 }
-
 fn scan_managed_fixture_paths(
     fixtures_root: &Path,
     expected_paths: &BTreeSet<PathBuf>,
@@ -1738,7 +1661,6 @@ fn scan_managed_fixture_paths(
             Err(error) => return Err(error.into()),
         }
     }
-
     let inventory = fixtures_root.join(ROOT_INVENTORY);
     match fs::symlink_metadata(&inventory) {
         Ok(metadata) => {
@@ -1766,7 +1688,6 @@ fn scan_managed_fixture_paths(
     }
     Ok(actual_paths)
 }
-
 fn expected_fixture_directories(expected_paths: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
     let mut directories = MANAGED_DIRECTORIES
         .into_iter()
@@ -1784,7 +1705,6 @@ fn expected_fixture_directories(expected_paths: &BTreeSet<PathBuf>) -> BTreeSet<
     }
     directories
 }
-
 #[allow(clippy::too_many_arguments)]
 fn scan_managed_directory(
     fixtures_root: &Path,
@@ -1838,13 +1758,11 @@ fn scan_managed_directory(
     }
     Ok(())
 }
-
 fn is_managed_readme(relative: &Path) -> bool {
     MANAGED_DIRECTORIES
         .iter()
         .any(|directory| relative == Path::new(directory).join("README.md"))
 }
-
 fn read_generation_input_map(
     fixtures_root: &Path,
 ) -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
@@ -1866,7 +1784,6 @@ fn read_generation_input_map(
     }
     Ok(inputs)
 }
-
 fn collect_generation_inputs(
     fixtures_root: &Path,
     directory: &Path,
@@ -1905,7 +1822,6 @@ fn collect_generation_inputs(
     }
     Ok(())
 }
-
 fn ensure_generation_inputs_match(
     fixtures_root: &Path,
     expected: &BTreeMap<PathBuf, Vec<u8>>,
@@ -1917,13 +1833,11 @@ fn ensure_generation_inputs_match(
         Err("generation inputs changed while rendering or publishing fixtures".into())
     }
 }
-
 fn sorted_directory_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, Box<dyn Error>> {
     let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(fs::DirEntry::file_name);
     Ok(entries)
 }
-
 fn ensure_real_directory(path: &Path) -> Result<(), Box<dyn Error>> {
     validate_output_path(path)?;
     if path.as_os_str().is_empty() {
@@ -1948,7 +1862,6 @@ fn ensure_real_directory(path: &Path) -> Result<(), Box<dyn Error>> {
         Err(error) => Err(error.into()),
     }
 }
-
 fn ensure_existing_real_directory(path: &Path) -> Result<(), Box<dyn Error>> {
     validate_output_path(path)?;
     if path.as_os_str().is_empty() {
@@ -1963,7 +1876,6 @@ fn ensure_existing_real_directory(path: &Path) -> Result<(), Box<dyn Error>> {
     let metadata = fs::symlink_metadata(path)?;
     ensure_directory_metadata(&metadata, path)
 }
-
 fn validate_output_path(path: &Path) -> Result<(), Box<dyn Error>> {
     if path.as_os_str().len() > MAX_PATH_BYTES {
         return Err(format!("path `{}` exceeds the byte bound", path.display()).into());
@@ -1980,20 +1892,17 @@ fn validate_output_path(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn ensure_directory_metadata(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(format!("`{}` must be a real directory", path.display()).into());
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileIdentity {
     volume: u64,
     file: u64,
 }
-
 #[cfg(unix)]
 fn file_identity(metadata: &fs::Metadata, _path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
     Ok(FileIdentity {
@@ -2001,12 +1910,10 @@ fn file_identity(metadata: &fs::Metadata, _path: &Path) -> Result<FileIdentity, 
         file: metadata.ino(),
     })
 }
-
 #[cfg(not(unix))]
 fn file_identity(_metadata: &fs::Metadata, _path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
     Err(unsupported_secure_fixture_filesystem_error().into())
 }
-
 #[cfg(unix)]
 fn ensure_single_hard_link(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
     if metadata.nlink() != 1 {
@@ -2018,22 +1925,18 @@ fn ensure_single_hard_link(metadata: &fs::Metadata, path: &Path) -> Result<(), B
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn ensure_single_hard_link(_metadata: &fs::Metadata, _path: &Path) -> Result<(), Box<dyn Error>> {
     Err(unsupported_secure_fixture_filesystem_error().into())
 }
-
 #[derive(Clone)]
 struct FileSnapshot {
     identity: FileIdentity,
     bytes: Vec<u8>,
 }
-
 fn read_regular_file(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(read_regular_file_snapshot(path)?.bytes)
 }
-
 fn read_regular_file_snapshot(path: &Path) -> Result<FileSnapshot, Box<dyn Error>> {
     let before = fs::symlink_metadata(path)?;
     validate_regular_metadata(&before, path)?;
@@ -2076,7 +1979,6 @@ fn read_regular_file_snapshot(path: &Path) -> Result<FileSnapshot, Box<dyn Error
         bytes,
     })
 }
-
 fn validate_regular_metadata(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(format!(
@@ -2087,7 +1989,6 @@ fn validate_regular_metadata(metadata: &fs::Metadata, path: &Path) -> Result<(),
     }
     ensure_single_hard_link(metadata, path)
 }
-
 fn write_new_regular_file(path: &Path, bytes: &[u8]) -> Result<FileIdentity, Box<dyn Error>> {
     if u64::try_from(bytes.len())? > MAX_FIXTURE_BYTES {
         return Err(format!(
@@ -2145,7 +2046,6 @@ fn write_new_regular_file(path: &Path, bytes: &[u8]) -> Result<FileIdentity, Box
     cleanup.disarm();
     Ok(identity)
 }
-
 fn sync_directory(path: &Path) -> Result<(), Box<dyn Error>> {
     #[cfg(unix)]
     {
@@ -2158,12 +2058,10 @@ fn sync_directory(path: &Path) -> Result<(), Box<dyn Error>> {
         Err(unsupported_secure_fixture_filesystem_error().into())
     }
 }
-
 struct TemporaryFileGuard {
     path: Option<PathBuf>,
     identity: FileIdentity,
 }
-
 impl TemporaryFileGuard {
     fn new(path: PathBuf, identity: FileIdentity) -> Self {
         Self {
@@ -2171,12 +2069,10 @@ impl TemporaryFileGuard {
             identity,
         }
     }
-
     fn disarm(&mut self) {
         self.path = None;
     }
 }
-
 impl Drop for TemporaryFileGuard {
     fn drop(&mut self) {
         if let Some(path) = self.path.take() {
@@ -2194,14 +2090,12 @@ impl Drop for TemporaryFileGuard {
         }
     }
 }
-
 struct TemporaryDirectory {
     path: PathBuf,
     parent: PathBuf,
     identity: FileIdentity,
     cleanup: bool,
 }
-
 impl TemporaryDirectory {
     fn create(parent: &Path, prefix: &str) -> Result<Self, Box<dyn Error>> {
         ensure_existing_real_directory(parent)?;
@@ -2227,16 +2121,13 @@ impl TemporaryDirectory {
         }
         Err(format!("could not allocate private fixture staging directory for `{prefix}`").into())
     }
-
     fn path(&self) -> &Path {
         &self.path
     }
-
     fn preserve(&mut self) {
         self.cleanup = false;
     }
 }
-
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
         if !self.cleanup {
@@ -2256,14 +2147,12 @@ impl Drop for TemporaryDirectory {
         }
     }
 }
-
 struct PublicationLock {
     path: PathBuf,
     parent: PathBuf,
     identity: FileIdentity,
     release: bool,
 }
-
 impl PublicationLock {
     fn acquire(fixtures_root: &Path) -> Result<Self, Box<dyn Error>> {
         ensure_existing_real_directory(fixtures_root)?;
@@ -2283,12 +2172,10 @@ impl PublicationLock {
             release: true,
         })
     }
-
     fn preserve(&mut self) {
         self.release = false;
     }
 }
-
 impl Drop for PublicationLock {
     fn drop(&mut self) {
         if !self.release {
@@ -2309,12 +2196,10 @@ impl Drop for PublicationLock {
         }
     }
 }
-
 struct CreatedDirectoryGuard {
     directories: Vec<PathBuf>,
     committed: bool,
 }
-
 impl CreatedDirectoryGuard {
     fn create(
         fixtures_root: &Path,
@@ -2349,12 +2234,10 @@ impl CreatedDirectoryGuard {
             committed: false,
         })
     }
-
     fn commit(&mut self) {
         self.committed = true;
     }
 }
-
 impl Drop for CreatedDirectoryGuard {
     fn drop(&mut self) {
         if self.committed {
@@ -2369,10 +2252,8 @@ impl Drop for CreatedDirectoryGuard {
         }
     }
 }
-
 fn validate_managed_directory_path(path: &Path) -> Result<(), Box<dyn Error>> {
     use std::path::Component;
-
     if path.as_os_str().is_empty() || path.is_absolute() {
         return Err("managed fixture directory must be non-empty and relative".into());
     }
@@ -2403,14 +2284,12 @@ fn validate_managed_directory_path(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PublicationState {
     Prepared,
     OriginalMoved,
     Published,
 }
-
 struct PublicationEntry {
     relative: PathBuf,
     expected: Vec<u8>,
@@ -2420,7 +2299,6 @@ struct PublicationEntry {
     staged_identity: FileIdentity,
     state: PublicationState,
 }
-
 struct PublicationRollbackGuard<'a> {
     fixtures_root: &'a Path,
     entries: &'a mut [PublicationEntry],
@@ -2428,7 +2306,6 @@ struct PublicationRollbackGuard<'a> {
     publication_lock: &'a mut PublicationLock,
     committed: bool,
 }
-
 impl<'a> PublicationRollbackGuard<'a> {
     fn new(
         fixtures_root: &'a Path,
@@ -2444,11 +2321,9 @@ impl<'a> PublicationRollbackGuard<'a> {
             committed: false,
         }
     }
-
     fn entries_mut(&mut self) -> &mut [PublicationEntry] {
         self.entries
     }
-
     fn rollback(&mut self) -> Result<(), Box<dyn Error>> {
         let result = rollback_entries(self.fixtures_root, self.entries);
         self.committed = true;
@@ -2458,16 +2333,13 @@ impl<'a> PublicationRollbackGuard<'a> {
         }
         result
     }
-
     fn commit(&mut self) {
         self.committed = true;
     }
-
     fn recovery_path(&self) -> &Path {
         self.transaction.path()
     }
 }
-
 impl Drop for PublicationRollbackGuard<'_> {
     fn drop(&mut self) {
         if !self.committed && rollback_entries(self.fixtures_root, self.entries).is_err() {
@@ -2476,7 +2348,6 @@ impl Drop for PublicationRollbackGuard<'_> {
         }
     }
 }
-
 fn publish_managed_fixtures(
     fixtures_root: &Path,
     fixtures: &BTreeMap<PathBuf, Vec<u8>>,
@@ -2495,7 +2366,6 @@ fn publish_managed_fixtures(
             read_regular_file_snapshot(&fixtures_root.join(relative))?,
         );
     }
-
     let mut changed = fixtures
         .iter()
         .filter(|(relative, expected)| {
@@ -2515,7 +2385,6 @@ fn publish_managed_fixtures(
         created_directories.commit();
         return Ok(());
     }
-
     let fixtures_parent = fixtures_root
         .parent()
         .ok_or("fixture root must have a parent directory")?;
@@ -2525,7 +2394,6 @@ fn publish_managed_fixtures(
     let old_dir = transaction.path().join("old");
     ensure_real_directory(&new_dir)?;
     ensure_real_directory(&old_dir)?;
-
     let mut entries = Vec::with_capacity(changed.len());
     for (index, (relative, expected)) in changed.into_iter().enumerate() {
         let staged_path = new_dir.join(format!("{index:04}.fixture"));
@@ -2544,7 +2412,6 @@ fn publish_managed_fixtures(
     sync_directory(&new_dir)?;
     sync_directory(&old_dir)?;
     sync_directory(transaction.path())?;
-
     let mut rollback_guard = PublicationRollbackGuard::new(
         fixtures_root,
         &mut entries,
@@ -2571,20 +2438,17 @@ fn publish_managed_fixtures(
             }
         };
     }
-
     rollback_guard.commit();
     drop(rollback_guard);
     created_directories.commit();
     Ok(())
 }
-
 fn publish_entries(
     fixtures_root: &Path,
     entries: &mut [PublicationEntry],
 ) -> Result<(), Box<dyn Error>> {
     publish_entries_with_hook(fixtures_root, entries, |_| Ok(()))
 }
-
 fn publish_entries_with_hook(
     fixtures_root: &Path,
     entries: &mut [PublicationEntry],
@@ -2608,7 +2472,6 @@ fn publish_entries_with_hook(
             }
             None => ensure_path_absent(&destination)?,
         }
-
         entry.state = PublicationState::Published;
         move_regular_file_no_replace(&entry.staged_path, &destination, entry.staged_identity)?;
         let published = read_regular_file_snapshot(&destination)?;
@@ -2622,7 +2485,6 @@ fn publish_entries_with_hook(
     }
     Ok(())
 }
-
 fn rollback_entries(
     fixtures_root: &Path,
     entries: &mut [PublicationEntry],
@@ -2642,7 +2504,6 @@ fn rollback_entries(
         Err(errors.join("; ").into())
     }
 }
-
 fn rollback_entry(
     fixtures_root: &Path,
     entry: &mut PublicationEntry,
@@ -2662,7 +2523,6 @@ fn rollback_entry(
     if staged.identity != entry.staged_identity || staged.bytes != entry.expected {
         return Err("staged replacement changed identity or bytes during rollback".into());
     }
-
     match &entry.original {
         Some(original) => match destination_snapshot {
             Some(current)
@@ -2695,7 +2555,6 @@ fn rollback_entry(
     entry.state = PublicationState::Prepared;
     Ok(())
 }
-
 fn read_optional_regular_file_snapshot(
     path: &Path,
 ) -> Result<Option<FileSnapshot>, Box<dyn Error>> {
@@ -2705,7 +2564,6 @@ fn read_optional_regular_file_snapshot(
         Err(error) => Err(error.into()),
     }
 }
-
 fn ensure_path_absent(path: &Path) -> Result<(), Box<dyn Error>> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -2717,7 +2575,6 @@ fn ensure_path_absent(path: &Path) -> Result<(), Box<dyn Error>> {
         Err(error) => Err(error.into()),
     }
 }
-
 fn move_regular_file_no_replace(
     source: &Path,
     destination: &Path,
@@ -2741,7 +2598,6 @@ fn move_regular_file_no_replace(
         .into());
     }
     ensure_path_absent(destination)?;
-
     fs::hard_link(source, destination)?;
     let destination_metadata = fs::symlink_metadata(destination)?;
     if destination_metadata.file_type().is_symlink()
@@ -2779,7 +2635,6 @@ fn move_regular_file_no_replace(
     }
     Ok(())
 }
-
 fn restore_failed_move(
     source: &Path,
     destination: &Path,
@@ -2810,7 +2665,6 @@ fn restore_failed_move(
     }
     Ok(())
 }
-
 fn remove_matching_path(path: &Path, expected_identity: FileIdentity) {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return;
@@ -2822,17 +2676,14 @@ fn remove_matching_path(path: &Path, expected_identity: FileIdentity) {
         let _ = fs::remove_file(path);
     }
 }
-
 #[cfg(unix)]
 fn hard_link_count(metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
     Ok(metadata.nlink())
 }
-
 #[cfg(not(unix))]
 fn hard_link_count(_metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
     Err(unsupported_secure_fixture_filesystem_error().into())
 }
-
 fn sign_governance_log_node_mldsa(
     node: &mut GovernanceLogNodeV1,
     seed: &[u8],
@@ -2864,7 +2715,6 @@ fn sign_governance_log_node_mldsa(
     };
     Ok(())
 }
-
 fn sign_potr_receipt_fixture_v1(
     mut receipt: PotrReceiptV1,
     gateway_key: &KeyPair,
@@ -2877,7 +2727,6 @@ fn sign_potr_receipt_fixture_v1(
         return Err("PoTR fixture gateway key must use Ed25519".into());
     }
     let gateway_public_key = gateway_public_key.to_vec();
-
     let (provider_algorithm, provider_public_key) = provider_key.public_key().try_to_bytes()?;
     if provider_algorithm != Algorithm::MlDsa {
         return Err("PoTR fixture provider key must use ML-DSA-65".into());
@@ -2887,7 +2736,6 @@ fn sign_potr_receipt_fixture_v1(
     if provider_private_algorithm != Algorithm::MlDsa {
         return Err("PoTR fixture provider private key must use ML-DSA-65".into());
     }
-
     receipt.gateway_signature = None;
     receipt.provider_signature = None;
     let payload = receipt.signing_payload_bytes()?;
@@ -2916,7 +2764,6 @@ fn sign_potr_receipt_fixture_v1(
     receipt.validate()?;
     Ok(receipt)
 }
-
 fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
     GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -2924,7 +2771,6 @@ fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn signed_governance_node(
     payload: GovernanceLogPayloadV1,
     prev_cid: Option<Vec<u8>>,
@@ -2960,7 +2806,6 @@ fn signed_governance_node(
     node.verify_publisher_signature()?;
     Ok(node)
 }
-
 fn governance_dag_node(
     proof: PorProofV1,
     prev_cid: Option<Vec<u8>>,
@@ -2973,7 +2818,6 @@ fn governance_dag_node(
         b"12D3KooWGovernanceDagPublisher",
     )
 }
-
 fn governance_dag_block(
     node: GovernanceLogNodeV1,
     prev_block_cid: Option<Vec<u8>>,
@@ -3008,7 +2852,6 @@ fn governance_dag_block(
     block.validate()?;
     Ok(block)
 }
-
 fn governance_dag_head(
     blocks: &[GovernanceDagBlockV1],
 ) -> Result<GovernanceDagHeadV1, Box<dyn Error>> {
@@ -3035,7 +2878,6 @@ fn governance_dag_head(
     head.validate()?;
     Ok(head)
 }
-
 fn write_norito_pair<T>(
     base_path: &Path,
     value: &T,
@@ -3050,7 +2892,6 @@ where
     write_new_regular_file(&base_path.with_extension("json"), json.as_bytes())?;
     Ok(())
 }
-
 fn write_expected_success_validation_outcome(
     path: &Path,
     outcome: &sorafs_manifest::ValidationOutcomeV1,
@@ -3065,7 +2906,6 @@ fn write_expected_success_validation_outcome(
     write_new_regular_file(path, format!("{}\n", to_string_pretty(outcome)?).as_bytes())?;
     Ok(())
 }
-
 fn write_expected_validation_outcome(
     path: &Path,
     outcome: &sorafs_manifest::ValidationOutcomeV1,
@@ -3111,7 +2951,6 @@ fn write_governance_sdk_fixture_inventory(
             sha256: digest,
         });
     }
-
     let unsigned = GovernanceSdkUnsignedInventoryV1 {
         schema: GOVERNANCE_SDK_INVENTORY_SCHEMA.to_owned(),
         scope: GOVERNANCE_SDK_INVENTORY_SCOPE.to_owned(),
@@ -3126,7 +2965,6 @@ fn write_governance_sdk_fixture_inventory(
     signing_payload.extend_from_slice(GOVERNANCE_SDK_INVENTORY_SCHEMA.as_bytes());
     signing_payload.push(0);
     signing_payload.extend_from_slice(canonical_unsigned.as_bytes());
-
     // This seed is checked-in fixture material only. Production release keys
     // remain runtime-only and never pass through this generator.
     let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
@@ -3139,7 +2977,6 @@ fn write_governance_sdk_fixture_inventory(
         return Err("Governance DAG fixture key identity changed unexpectedly".into());
     }
     let signature_hex = encode(signing_key.sign(&signing_payload).to_bytes());
-
     let inventory = GovernanceSdkFixtureInventoryV1 {
         schema: GOVERNANCE_SDK_INVENTORY_SCHEMA.to_owned(),
         scope: GOVERNANCE_SDK_INVENTORY_SCOPE.to_owned(),
@@ -3160,12 +2997,10 @@ fn write_governance_sdk_fixture_inventory(
     )?;
     Ok(())
 }
-
 fn governance_sdk_fixture_binding(path: &Path) -> Result<(u64, String), Box<dyn Error>> {
     let bytes = read_regular_file(path)?;
     Ok((u64::try_from(bytes.len())?, encode(sha256(&bytes))))
 }
-
 fn write_reference_sdk_bundle_outcomes(
     fixtures_root: &Path,
     output_dir: &Path,
@@ -3237,7 +3072,6 @@ fn write_reference_sdk_fixture_inventory(
             sha256: digest,
         });
     }
-
     let unsigned = ReferenceSdkUnsignedInventoryV1 {
         schema: REFERENCE_SDK_INVENTORY_SCHEMA.to_owned(),
         scope: REFERENCE_SDK_INVENTORY_SCOPE.to_owned(),
@@ -3252,7 +3086,6 @@ fn write_reference_sdk_fixture_inventory(
     signing_payload.extend_from_slice(REFERENCE_SDK_INVENTORY_SCHEMA.as_bytes());
     signing_payload.push(0);
     signing_payload.extend_from_slice(canonical_unsigned.as_bytes());
-
     // This deterministic seed is checked-in fixture material only. Production
     // signing keys remain runtime-only and are never accepted by this profile.
     let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
@@ -3265,7 +3098,6 @@ fn write_reference_sdk_fixture_inventory(
         return Err("reference SDK fixture key identity changed unexpectedly".into());
     }
     let signature_hex = encode(signing_key.sign(&signing_payload).to_bytes());
-
     let inventory = ReferenceSdkFixtureInventoryV1 {
         schema: REFERENCE_SDK_INVENTORY_SCHEMA.to_owned(),
         scope: REFERENCE_SDK_INVENTORY_SCOPE.to_owned(),
@@ -3286,7 +3118,6 @@ fn write_reference_sdk_fixture_inventory(
     )?;
     Ok(())
 }
-
 fn challenge_json(challenge: &PorChallengeV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(challenge.version));
@@ -3349,7 +3180,6 @@ fn challenge_json(challenge: &PorChallengeV1) -> Value {
     map.insert("deadline_at".into(), Value::from(challenge.deadline_at));
     Value::Object(map)
 }
-
 fn proof_json(proof: &PorProofV1, digest: [u8; 32]) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(proof.version));
@@ -3414,7 +3244,6 @@ fn proof_json(proof: &PorProofV1, digest: [u8; 32]) -> Value {
     map.insert("proof_digest_hex".into(), Value::from(encode(digest)));
     Value::Object(map)
 }
-
 fn verdict_json(verdict: &AuditVerdictV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(verdict.version));
@@ -3485,7 +3314,6 @@ fn verdict_json(verdict: &AuditVerdictV1) -> Value {
     map.insert("metadata".into(), Value::Array(metadata));
     Value::Object(map)
 }
-
 fn potr_receipt_json(receipt: &PotrReceiptV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(receipt.version));
@@ -3552,7 +3380,6 @@ fn potr_receipt_json(receipt: &PotrReceiptV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn repair_task_json(task: &RepairTaskRecordV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(task.version));
@@ -3595,7 +3422,6 @@ fn repair_task_json(task: &RepairTaskRecordV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn repair_state_json(state: &RepairTaskStateV1) -> Value {
     let mut map = Map::new();
     match state {
@@ -3673,7 +3499,6 @@ fn repair_state_json(state: &RepairTaskStateV1) -> Value {
     }
     Value::Object(map)
 }
-
 fn proof_stream_tier(tier: ProofStreamTier) -> &'static str {
     match tier {
         ProofStreamTier::Hot => "hot",
@@ -3681,7 +3506,6 @@ fn proof_stream_tier(tier: ProofStreamTier) -> &'static str {
         ProofStreamTier::Archive => "archive",
     }
 }
-
 fn potr_status(status: PotrStatus) -> &'static str {
     match status {
         PotrStatus::Success => "success",
@@ -3691,7 +3515,6 @@ fn potr_status(status: PotrStatus) -> &'static str {
         PotrStatus::ClientCancelled => "client_cancelled",
     }
 }
-
 fn governance_submission_provenance_json(node: &GovernanceLogNodeV1) -> Value {
     node.submission_provenance
         .as_ref()
@@ -3706,7 +3529,6 @@ fn governance_submission_provenance_json(node: &GovernanceLogNodeV1) -> Value {
         })
         .unwrap_or(Value::Null)
 }
-
 fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(node.version));
@@ -3749,7 +3571,6 @@ fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> V
     );
     Value::Object(map)
 }
-
 fn moderation_governance_node_json(node: &GovernanceLogNodeV1) -> Result<Value, Box<dyn Error>> {
     let GovernanceLogPayloadV1::ModerationBallotEvent(event) = &node.payload else {
         return Err("moderation fixture node must carry a moderation ballot event".into());
@@ -3777,7 +3598,6 @@ fn moderation_governance_node_json(node: &GovernanceLogNodeV1) -> Result<Value, 
         "payload_kind".into(),
         Value::from("moderation_ballot_event"),
     );
-
     let mut event_map = Map::new();
     event_map.insert("version".into(), Value::from(event.version));
     event_map.insert("sequence".into(), Value::from(event.sequence));
@@ -3834,7 +3654,6 @@ fn moderation_governance_node_json(node: &GovernanceLogNodeV1) -> Result<Value, 
             .unwrap_or(Value::Null),
     );
     map.insert("moderation_event".into(), Value::Object(event_map));
-
     let mut signature = Map::new();
     signature.insert("algorithm".into(), Value::from("ed25519"));
     signature.insert(
@@ -3848,7 +3667,6 @@ fn moderation_governance_node_json(node: &GovernanceLogNodeV1) -> Result<Value, 
     map.insert("publisher_signature".into(), Value::Object(signature));
     Ok(Value::Object(map))
 }
-
 fn governance_dag_block_json(block: &GovernanceDagBlockV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(block.version));
@@ -3915,7 +3733,6 @@ fn governance_dag_block_json(block: &GovernanceDagBlockV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn governance_dag_head_json(head: &GovernanceDagHeadV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(head.version));
@@ -3947,21 +3764,17 @@ fn governance_dag_head_json(head: &GovernanceDagHeadV1) -> Value {
     );
     Value::Object(map)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
     fn parse<const N: usize>(args: [&str; N]) -> Result<Args, String> {
         parse_args(args.map(OsString::from)).map_err(|error| error.to_string())
     }
-
     #[cfg(unix)]
     fn physical_path(path: &Path) -> PathBuf {
         fs::canonicalize(path).expect("canonical temporary path")
     }
-
     #[test]
     fn explicit_modes_default_to_checked_in_fixture_root() {
         for (argument, mode) in [("--write", Mode::Write), ("--check", Mode::Check)] {
@@ -3980,7 +3793,6 @@ mod tests {
                 .contains("exactly one mode is required")
         );
     }
-
     #[test]
     fn output_dir_accepts_one_separate_bounded_path() {
         assert_eq!(
@@ -4002,7 +3814,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn output_dir_rejects_missing_duplicate_and_joined_values() {
         assert_eq!(
@@ -4025,7 +3836,6 @@ mod tests {
                 .contains("unrecognized argument `--output-dir=target/pass-1`")
         );
     }
-
     #[test]
     fn output_dir_rejects_ambiguous_or_unbounded_paths() {
         for (path, expected) in [
@@ -4055,7 +3865,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn managed_fixture_paths_reject_traversal_and_open_layouts() {
         for path in [
@@ -4073,7 +3882,6 @@ mod tests {
                 .expect_err("directory outside the closed layout must be rejected");
         }
     }
-
     #[test]
     fn output_dir_rejects_unknown_and_non_utf8_arguments() {
         assert!(
@@ -4086,16 +3894,13 @@ mod tests {
                 .expect_err("unknown option")
                 .contains("unrecognized argument `--unknown`")
         );
-
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt as _;
-
             let error = parse_args([OsString::from_vec(vec![0xff])])
                 .expect_err("non-UTF-8 option")
                 .to_string();
             assert!(error.contains("arguments must be valid UTF-8"));
-
             let error = parse_args([
                 OsString::from("--output-dir"),
                 OsString::from_vec(vec![0xff]),
@@ -4105,7 +3910,6 @@ mod tests {
             assert_eq!(error, "`--output-dir` path must be valid UTF-8");
         }
     }
-
     #[test]
     fn help_is_supported_only_as_a_standalone_argument() {
         for flag in ["--help", "-h"] {
@@ -4124,28 +3928,23 @@ mod tests {
             "`--help` must be used by itself"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn output_root_binding_rejects_an_existing_non_directory() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let output = physical_path(temporary.path()).join("not-a-directory");
         fs::write(&output, b"fixture").expect("write non-directory output");
-
         let error = BoundDirectory::open(&output, "test fixture output")
             .err()
             .expect("non-directory output must fail")
             .to_string();
-
         assert!(error.contains("directories only") || error.contains("non-symlink directory"));
     }
-
     #[cfg(not(unix))]
     #[test]
     fn output_root_binding_fails_before_path_inspection_on_non_unix() {
         let temporary = tempdir().expect("temporary directory");
         let missing = temporary.path().join("must-remain-absent");
-
         let error = BoundDirectory::open(&missing, "test fixture output")
             .err()
             .expect("non-Unix binding must fail");
@@ -4155,27 +3954,22 @@ mod tests {
         assert_eq!(io_error.kind(), io::ErrorKind::Unsupported);
         assert!(!missing.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn output_root_binding_rejects_an_existing_symlink() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempfile::tempdir().expect("temporary directory");
         let temporary_path = physical_path(temporary.path());
         let real = temporary_path.join("real");
         let output = temporary_path.join("output");
         fs::create_dir(&real).expect("create real output");
         symlink(&real, &output).expect("create output symlink");
-
         let error = BoundDirectory::open(&output, "test fixture output")
             .err()
             .expect("symlinked output must fail")
             .to_string();
-
         assert!(error.contains("symbolic link"));
     }
-
     #[cfg(unix)]
     include!("generate_por_fixtures/output_transaction_tests.rs");
 }

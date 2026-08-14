@@ -4,7 +4,12 @@
 //! and completed replication orders. This module deliberately accepts only an
 //! immutable finalized-state source: provider adverts can add current
 //! connectivity details later, but cannot grant content authority.
-
+use iroha_data_model::sorafs::pin_registry::{
+    ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
+    ReplicationOrderRecord, ReplicationOrderStatus,
+};
+use norito::{core::DecodeLimits, derive::NoritoSerialize};
+use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
@@ -13,25 +18,15 @@ use std::{
         atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
 };
-
-use iroha_data_model::sorafs::pin_registry::{
-    ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
-    ReplicationOrderRecord, ReplicationOrderStatus,
-};
-use norito::{core::DecodeLimits, derive::NoritoSerialize};
-use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
 use thiserror::Error;
-
 /// Canonical projection envelope version for the first-release SFM-1 join.
 pub const ROUTING_AUTHORITY_PROJECTION_VERSION_V1: u8 = 1;
-
 const MAX_AUTHORITY_MANIFESTS: usize = 65_536;
 const MAX_AUTHORITY_ORDERS: usize = 65_536;
 const MAX_AUTHORITY_PROVIDER_REFS: usize = 262_144;
 const MAX_REPLICATION_ORDER_PAYLOAD_BYTES: usize = 1024 * 1024;
 const MAX_AUTHORITY_ORDER_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUTHORITY_PROJECTION_BYTES: usize = 16 * 1024 * 1024;
-
 const REPLICATION_ORDER_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
     MAX_CAPACITY_METADATA_VALUE_BYTES,
     MAX_REPLICATION_ORDER_PAYLOAD_BYTES,
@@ -39,7 +34,6 @@ const REPLICATION_ORDER_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
     MAX_REPLICATION_ORDER_PAYLOAD_BYTES * 4,
     32,
 );
-
 #[derive(Debug, Clone, Copy)]
 struct AuthorityJoinLimits {
     manifests: usize,
@@ -48,7 +42,6 @@ struct AuthorityJoinLimits {
     order_payload_bytes: usize,
     projection_bytes: usize,
 }
-
 impl AuthorityJoinLimits {
     const PRODUCTION: Self = Self {
         manifests: MAX_AUTHORITY_MANIFESTS,
@@ -58,7 +51,6 @@ impl AuthorityJoinLimits {
         projection_bytes: MAX_AUTHORITY_PROJECTION_BYTES,
     };
 }
-
 /// Exact identity of an immutable finalized ledger view.
 ///
 /// The bootstrap identity is `(height = 0, block_hash = None)`. Every
@@ -68,7 +60,6 @@ pub struct FinalizedStateIdentityV1 {
     height: u64,
     block_hash: Option<[u8; 32]>,
 }
-
 impl FinalizedStateIdentityV1 {
     /// Construct and validate a finalized-state identity.
     ///
@@ -88,33 +79,28 @@ impl FinalizedStateIdentityV1 {
         }
         Ok(Self { height, block_hash })
     }
-
     /// Finalized block height.
     #[must_use]
     pub const fn height(self) -> u64 {
         self.height
     }
-
     /// Finalized block hash, absent only before genesis is committed.
     #[must_use]
     pub const fn block_hash(self) -> Option<[u8; 32]> {
         self.block_hash
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct RoutingAuthorityRouteV1 {
     manifest_root_cid: ManifestRootCid,
     provider_ids: Vec<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct RoutingAuthorityProjectionEnvelopeV1 {
     version: u8,
     finalized_state: FinalizedStateIdentityV1,
     routes: Vec<RoutingAuthorityRouteV1>,
 }
-
 /// Deterministic SFM-1 authority projection derived from finalized ledger state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingAuthorityProjection {
@@ -123,33 +109,28 @@ pub struct RoutingAuthorityProjection {
     all_providers: BTreeSet<[u8; 32]>,
     canonical_bytes: Vec<u8>,
 }
-
 impl RoutingAuthorityProjection {
     /// Finalized ledger identity from which this projection was rebuilt.
     #[must_use]
     pub const fn identity(&self) -> FinalizedStateIdentityV1 {
         self.identity
     }
-
     /// Providers authorized for one canonical manifest root CID.
     #[must_use]
     pub fn providers_for_content(&self, content: &ManifestRootCid) -> Option<&BTreeSet<[u8; 32]>> {
         self.by_content.get(content)
     }
-
     /// Every provider referenced by an active authoritative route.
     #[must_use]
     pub fn all_providers(&self) -> &BTreeSet<[u8; 32]> {
         &self.all_providers
     }
-
     /// Canonical Norito bytes used for cross-replica parity checks.
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
 }
-
 /// Finalized-state source used by [`RoutingAuthorityCache`].
 ///
 /// Implementations must derive both methods from the same immutable state
@@ -163,7 +144,6 @@ pub trait RoutingAuthoritySource {
     /// Returns a routing-authority error when the view has no coherent
     /// finalized identity.
     fn finalized_identity(&self) -> Result<FinalizedStateIdentityV1, RoutingAuthorityError>;
-
     /// Rebuild the authority projection for `identity` from this same view.
     ///
     /// # Errors
@@ -174,7 +154,6 @@ pub trait RoutingAuthoritySource {
         identity: FinalizedStateIdentityV1,
     ) -> Result<RoutingAuthorityProjection, RoutingAuthorityError>;
 }
-
 /// Errors returned by the finalized routing-authority join and cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RoutingAuthorityError {
@@ -194,13 +173,11 @@ pub enum RoutingAuthorityError {
     #[error("routing authority snapshot failed canonical validation")]
     Corrupt,
 }
-
 #[derive(Debug, Clone)]
 struct CachedAuthorityProjection {
     identity: FinalizedStateIdentityV1,
     result: Result<Arc<RoutingAuthorityProjection>, RoutingAuthorityError>,
 }
-
 /// Bounded, single-flight cache for the SFM-1 finalized authority join.
 ///
 /// One projection (or deterministic failure) is retained. Older identities
@@ -218,7 +195,6 @@ pub struct RoutingAuthorityCache {
     fork_rejections: AtomicU64,
     evictions: AtomicU64,
 }
-
 /// Payload-free counters for bounded routing-authority cache outcomes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoutingAuthorityCacheMetrics {
@@ -235,7 +211,6 @@ pub struct RoutingAuthorityCacheMetrics {
     /// Previous entries atomically replaced by a newer finalized identity.
     pub evictions: u64,
 }
-
 /// Bounded telemetry outcome for one routing-authority cache request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutingAuthorityCacheOutcome {
@@ -250,7 +225,6 @@ pub enum RoutingAuthorityCacheOutcome {
     /// A same-height conflicting finalized hash was rejected.
     ForkRejected,
 }
-
 impl RoutingAuthorityCacheOutcome {
     /// Stable bounded Prometheus label for this outcome.
     #[must_use]
@@ -264,7 +238,6 @@ impl RoutingAuthorityCacheOutcome {
         }
     }
 }
-
 impl RoutingAuthorityCache {
     /// Resolve or rebuild the projection from one immutable finalized source.
     ///
@@ -291,7 +264,6 @@ impl RoutingAuthorityCache {
                 return (Err(error), RoutingAuthorityCacheOutcome::RebuildFailure);
             }
         };
-
         if let Some(entry) = cached.as_ref() {
             match identity.height.cmp(&entry.identity.height) {
                 Ordering::Less => {
@@ -315,7 +287,6 @@ impl RoutingAuthorityCache {
                 Ordering::Greater => {}
             }
         }
-
         increment(&self.rebuilds);
         let result = source.build_projection(identity).and_then(|projection| {
             if projection.identity != identity {
@@ -338,7 +309,6 @@ impl RoutingAuthorityCache {
         });
         (result, outcome)
     }
-
     /// Return payload-free cache counters.
     #[must_use]
     pub fn metrics(&self) -> RoutingAuthorityCacheMetrics {
@@ -352,13 +322,11 @@ impl RoutingAuthorityCache {
         }
     }
 }
-
 fn increment(counter: &AtomicU64) {
     let _ = counter.fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
         Some(value.saturating_add(1))
     });
 }
-
 /// Build the canonical SFM-1 projection from finalized ledger records.
 ///
 /// Input iteration order does not affect the projection or its canonical
@@ -386,7 +354,6 @@ where
         AuthorityJoinLimits::PRODUCTION,
     )
 }
-
 fn build_routing_authority_projection_with_limits<'a, M, O>(
     identity: FinalizedStateIdentityV1,
     manifests: M,
@@ -409,7 +376,6 @@ where
             return Err(RoutingAuthorityError::Corrupt);
         }
     }
-
     let mut by_content: BTreeMap<ManifestRootCid, BTreeSet<[u8; 32]>> = BTreeMap::new();
     let mut all_providers = BTreeSet::new();
     let mut order_count = 0usize;
@@ -467,7 +433,6 @@ where
             all_providers.insert(assignment.provider_id);
         }
     }
-
     let routes = by_content
         .iter()
         .map(
@@ -487,7 +452,6 @@ where
     if canonical_bytes.len() > limits.projection_bytes {
         return Err(RoutingAuthorityError::CapacityExceeded);
     }
-
     Ok(RoutingAuthorityProjection {
         identity,
         by_content,
@@ -495,7 +459,6 @@ where
         canonical_bytes,
     })
 }
-
 fn decode_canonical_order(
     record: &ReplicationOrderRecord,
 ) -> Result<ReplicationOrderV1, RoutingAuthorityError> {
@@ -522,17 +485,9 @@ fn decode_canonical_order(
     }
     Ok(payload)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering as AtomicUsizeOrdering},
-        },
-        time::Duration,
-    };
-
+    use super::*;
     use iroha_data_model::{
         account::AccountId,
         metadata::Metadata,
@@ -548,17 +503,19 @@ mod tests {
     use sorafs_manifest::capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     };
-
-    use super::*;
-
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering as AtomicUsizeOrdering},
+        },
+        time::Duration,
+    };
     const NOW: u64 = 1_700_000_100;
-
     fn finalized_identity(height: u64, seed: u8) -> FinalizedStateIdentityV1 {
         let mut hash = [seed.max(1); 32];
         hash[31] |= 1;
         FinalizedStateIdentityV1::new(height, Some(hash)).expect("valid finalized identity")
     }
-
     fn fixture_account() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -566,15 +523,12 @@ mod tests {
                 .expect("fixture public key"),
         )
     }
-
     fn sample_cid(seed: u8) -> ManifestRootCid {
         ManifestRootCid::from_blake3_digest([seed.max(1); 32]).expect("canonical root CID")
     }
-
     fn sample_digest(seed: u8) -> ManifestDigest {
         ManifestDigest::new([seed.max(1); 32])
     }
-
     fn sample_chunker() -> ChunkerProfileHandle {
         ChunkerProfileHandle {
             profile_id: 1,
@@ -584,7 +538,6 @@ mod tests {
             multihash_code: 0x1f,
         }
     }
-
     fn sample_manifest(seed: u8, status: PinStatus) -> (ManifestDigest, PinManifestRecord) {
         let digest = sample_digest(seed);
         let mut record = PinManifestRecord::new(
@@ -608,7 +561,6 @@ mod tests {
         record.status = status;
         (digest, record)
     }
-
     fn sample_order(
         seed: u8,
         manifest: &(ManifestDigest, PinManifestRecord),
@@ -689,7 +641,6 @@ mod tests {
         };
         (order_id, record)
     }
-
     fn build_test_projection(
         identity: FinalizedStateIdentityV1,
         manifests: &[(ManifestDigest, PinManifestRecord)],
@@ -701,7 +652,6 @@ mod tests {
             orders.iter().map(|(id, record)| (id, record)),
         )
     }
-
     #[derive(Clone)]
     struct StaticSource {
         identity: FinalizedStateIdentityV1,
@@ -709,12 +659,10 @@ mod tests {
         builds: Arc<AtomicUsize>,
         delay: Duration,
     }
-
     impl RoutingAuthoritySource for StaticSource {
         fn finalized_identity(&self) -> Result<FinalizedStateIdentityV1, RoutingAuthorityError> {
             Ok(self.identity)
         }
-
         fn build_projection(
             &self,
             _identity: FinalizedStateIdentityV1,
@@ -724,17 +672,14 @@ mod tests {
             Ok(self.projection.clone())
         }
     }
-
     struct FailingSource {
         identity: FinalizedStateIdentityV1,
         builds: Arc<AtomicUsize>,
     }
-
     impl RoutingAuthoritySource for FailingSource {
         fn finalized_identity(&self) -> Result<FinalizedStateIdentityV1, RoutingAuthorityError> {
             Ok(self.identity)
         }
-
         fn build_projection(
             &self,
             _identity: FinalizedStateIdentityV1,
@@ -743,7 +688,6 @@ mod tests {
             Err(RoutingAuthorityError::Corrupt)
         }
     }
-
     fn empty_source(identity: FinalizedStateIdentityV1, builds: Arc<AtomicUsize>) -> StaticSource {
         StaticSource {
             identity,
@@ -757,7 +701,6 @@ mod tests {
             delay: Duration::ZERO,
         }
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_callers_share_one_rebuild() {
         let cache = Arc::new(RoutingAuthorityCache::default());
@@ -800,7 +743,6 @@ mod tests {
             }
         );
     }
-
     #[tokio::test]
     async fn stale_and_fork_identities_fail_without_evicting() {
         let cache = RoutingAuthorityCache::default();
@@ -811,19 +753,16 @@ mod tests {
             .await;
         let original = original.expect("initial projection");
         assert_eq!(outcome, RoutingAuthorityCacheOutcome::Rebuild);
-
         let (stale, outcome) = cache
             .get_or_rebuild(|| empty_source(finalized_identity(9, 2), Arc::clone(&builds)))
             .await;
         assert_eq!(stale, Err(RoutingAuthorityError::StaleFinalizedIdentity));
         assert_eq!(outcome, RoutingAuthorityCacheOutcome::StaleRejected);
-
         let (fork, outcome) = cache
             .get_or_rebuild(|| empty_source(finalized_identity(10, 3), Arc::clone(&builds)))
             .await;
         assert_eq!(fork, Err(RoutingAuthorityError::FinalizedFork));
         assert_eq!(outcome, RoutingAuthorityCacheOutcome::ForkRejected);
-
         let (cached, outcome) = cache
             .get_or_rebuild(|| empty_source(current, Arc::clone(&builds)))
             .await;
@@ -844,7 +783,6 @@ mod tests {
             }
         );
     }
-
     #[tokio::test]
     async fn newer_identity_rebuilds_and_evicts_atomically() {
         let cache = RoutingAuthorityCache::default();
@@ -871,7 +809,6 @@ mod tests {
             }
         );
     }
-
     #[tokio::test]
     async fn newer_failure_replaces_success_without_local_fallback() {
         let cache = RoutingAuthorityCache::default();
@@ -883,7 +820,6 @@ mod tests {
             .await
             .0
             .expect("first projection");
-
         let (result, outcome) = cache
             .get_or_rebuild(|| FailingSource {
                 identity: failed,
@@ -892,13 +828,11 @@ mod tests {
             .await;
         assert_eq!(result, Err(RoutingAuthorityError::Corrupt));
         assert_eq!(outcome, RoutingAuthorityCacheOutcome::RebuildFailure);
-
         let (stale, outcome) = cache
             .get_or_rebuild(|| empty_source(first, Arc::clone(&builds)))
             .await;
         assert_eq!(stale, Err(RoutingAuthorityError::StaleFinalizedIdentity));
         assert_eq!(outcome, RoutingAuthorityCacheOutcome::StaleRejected);
-
         let (cached_failure, outcome) = cache
             .get_or_rebuild(|| FailingSource {
                 identity: failed,
@@ -909,7 +843,6 @@ mod tests {
         assert_eq!(outcome, RoutingAuthorityCacheOutcome::Hit);
         assert_eq!(builds.load(AtomicUsizeOrdering::SeqCst), 2);
     }
-
     #[test]
     fn replica_input_order_produces_byte_identical_projection() {
         let identity = finalized_identity(10, 7);
@@ -931,7 +864,6 @@ mod tests {
         let manifests_b = vec![second_manifest, first_manifest];
         let orders_a = vec![first_order.clone(), second_order.clone()];
         let orders_b = vec![second_order, first_order];
-
         let first = build_test_projection(identity, &manifests_a, &orders_a)
             .expect("first replica projection");
         let second = build_test_projection(identity, &manifests_b, &orders_b)
@@ -939,7 +871,6 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.canonical_bytes(), second.canonical_bytes());
     }
-
     #[test]
     fn only_approved_manifests_with_completed_orders_grant_authority() {
         let identity = finalized_identity(10, 8);
@@ -958,7 +889,6 @@ mod tests {
             projection.providers_for_content(&approved.1.root_cid),
             Some(&BTreeSet::from([provider]))
         );
-
         for status in [
             ReplicationOrderStatus::Pending,
             ReplicationOrderStatus::Expired(9),
@@ -991,7 +921,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn join_enforces_manifest_provider_and_projection_bounds() {
         let identity = finalized_identity(10, 9);
@@ -1012,7 +941,6 @@ mod tests {
             order_payload_bytes: MAX_AUTHORITY_ORDER_PAYLOAD_BYTES,
             projection_bytes: MAX_AUTHORITY_PROJECTION_BYTES,
         };
-
         assert_eq!(
             build_routing_authority_projection_with_limits(
                 identity,
@@ -1074,7 +1002,6 @@ mod tests {
             Err(RoutingAuthorityError::CapacityExceeded)
         );
     }
-
     #[test]
     fn invalid_identity_shapes_are_rejected() {
         assert_eq!(
@@ -1091,7 +1018,6 @@ mod tests {
         );
         assert!(FinalizedStateIdentityV1::new(0, None).is_ok());
     }
-
     #[test]
     fn authority_rejects_future_completion_and_payload_equivocation() {
         let identity = finalized_identity(10, 11);
@@ -1107,7 +1033,6 @@ mod tests {
             build_test_projection(identity, std::slice::from_ref(&manifest), &[future]),
             Err(RoutingAuthorityError::Corrupt)
         );
-
         let mut corrupt = sample_order(
             11,
             &manifest,
@@ -1119,7 +1044,6 @@ mod tests {
             build_test_projection(identity, std::slice::from_ref(&manifest), &[corrupt]),
             Err(RoutingAuthorityError::Corrupt)
         );
-
         let valid = sample_order(
             12,
             &manifest,
@@ -1131,7 +1055,6 @@ mod tests {
             Err(RoutingAuthorityError::Corrupt)
         );
     }
-
     #[test]
     fn authority_rejects_oversized_order_before_decode() {
         let identity = finalized_identity(10, 13);

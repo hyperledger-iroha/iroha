@@ -1,9 +1,6 @@
 //! Backend trait hierarchy shared by all implementations.
-
-use core::fmt;
-
 use crate::{constants::DST, errors::Error, hash::sha3_512, norito_types::ZkCurveId};
-
+use core::fmt;
 /// Scalar behaviour required by the IPA algorithms.
 pub trait IpaScalar: Copy + Clone + PartialEq + Eq + fmt::Debug + Default {
     /// Returns the additive identity.
@@ -31,12 +28,10 @@ pub trait IpaScalar: Copy + Clone + PartialEq + Eq + fmt::Debug + Default {
     /// Derive from 64 uniform random bytes (Fiat-Shamir challenge source).
     fn from_uniform(bytes: &[u8; 64]) -> Self;
 }
-
 /// Group behaviour required by the IPA algorithms.
 pub trait IpaGroup: Copy + Clone + PartialEq + Eq + fmt::Debug {
     /// Scalar type associated with the group.
     type Scalar: IpaScalar;
-
     /// Additive identity element.
     fn identity() -> Self;
     /// Group addition.
@@ -50,7 +45,6 @@ pub trait IpaGroup: Copy + Clone + PartialEq + Eq + fmt::Debug {
     /// Attempt to decode from canonical bytes.
     fn from_bytes(bytes: &[u8; 32]) -> Result<Self, Error>;
 }
-
 /// Multiplicative accumulation of group elements.
 pub fn product<G>(iter: impl IntoIterator<Item = G>) -> G
 where
@@ -58,17 +52,14 @@ where
 {
     iter.into_iter().fold(G::identity(), |acc, g| acc.mul(g))
 }
-
 /// Trait implemented by each backend to integrate with the generic IPA code.
 pub trait IpaBackend {
     /// Scalar field element type.
     type Scalar: IpaScalar;
     /// Commitment group element type.
     type Group: IpaGroup<Scalar = Self::Scalar> + Send + Sync + 'static;
-
     /// Curve identifier advertised over Norito payloads.
     const CURVE_ID: ZkCurveId;
-
     /// Deterministically hash the DST, generator kind and indices into a group element.
     fn derive_group_elem(kind: &[u8], n: u64, i: u64) -> Self::Group {
         let mut buf = Vec::with_capacity(DST.len() + kind.len() + 16);
@@ -82,10 +73,8 @@ pub trait IpaBackend {
         let scalar = Self::Scalar::from_uniform(&arr);
         Self::group_from_scalar(scalar)
     }
-
     /// Convert a scalar to a group element (deterministic generator derivation helper).
     fn group_from_scalar(scalar: Self::Scalar) -> Self::Group;
-
     /// Compute a variable-base multi-scalar multiplication.
     ///
     /// Backends can override this with an optimized deterministic MSM. The

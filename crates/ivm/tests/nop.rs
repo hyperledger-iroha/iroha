@@ -1,7 +1,6 @@
 use ivm::{IVM, encoding, instruction};
 mod common;
 use common::assemble;
-
 #[test]
 fn test_nop_instruction() {
     let mut vm = IVM::new(u64::MAX);

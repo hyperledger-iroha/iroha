@@ -1,18 +1,15 @@
 // Resumable publication engine, progress validation, and public error surface.
-
 /// Resumable publication coordinator.
 #[derive(Debug)]
 pub struct PublicationEngine<'a> {
     store: &'a PublicationJournalStore,
 }
-
 impl<'a> PublicationEngine<'a> {
     /// Bind an engine to a durable user-level journal store.
     #[must_use]
     pub const fn new(store: &'a PublicationJournalStore) -> Self {
         Self { store }
     }
-
     /// Persist a detached operation and return its resumable identifier.
     ///
     /// # Errors
@@ -27,7 +24,6 @@ impl<'a> PublicationEngine<'a> {
             .create(request)
             .map(|journal| journal.operation_id)
     }
-
     /// Repair the immutable CAR and plan for one pristine pre-ingress journal.
     ///
     /// The caller may rebuild the clean package outside the operation lock, but must supply the
@@ -64,7 +60,6 @@ impl<'a> PublicationEngine<'a> {
                     .to_owned(),
             });
         }
-
         let operation_id = expected.operation_id;
         let operation_lock = self.store.lock_operation(operation_id)?;
         let result = (|| {
@@ -88,7 +83,6 @@ impl<'a> PublicationEngine<'a> {
                             .to_owned(),
                 });
             }
-
             operation_lock.validate()?;
             let source = PublicationStagedCarSourceV1::stage_bytes(
                 self.store.root.path(),
@@ -105,7 +99,6 @@ impl<'a> PublicationEngine<'a> {
         })();
         operation_lock.finish(result)
     }
-
     /// Persist a secret-free operation journal before installing its immutable CAR and plan.
     ///
     /// This ordering leaves a small authoritative recovery anchor if power is lost or local
@@ -135,7 +128,6 @@ impl<'a> PublicationEngine<'a> {
             self.recover_pre_ingress_sidecars(&journal, &publication, &commitment, plan, car)?;
         Ok((operation_id, source))
     }
-
     /// Start or idempotently recover an operation, running until finality or a pending poll.
     ///
     /// # Errors
@@ -151,7 +143,6 @@ impl<'a> PublicationEngine<'a> {
         let journal = self.store.create(request)?;
         self.run(journal.operation_id, source, backend)
     }
-
     /// Resume an operation by id and run until finality or a pending poll.
     ///
     /// # Errors
@@ -166,7 +157,6 @@ impl<'a> PublicationEngine<'a> {
     ) -> Result<PublicationAdvanceV1, PublicationError> {
         self.run(operation_id, source, backend)
     }
-
     /// Advance exactly one durable phase, making retries observable to callers.
     ///
     /// # Errors
@@ -735,7 +725,6 @@ impl<'a> PublicationEngine<'a> {
         }
         self.persist_advance(&journal, next)
     }
-
     fn persist_advance(
         &self,
         journal: &PublicationJournalV1,
@@ -748,7 +737,6 @@ impl<'a> PublicationEngine<'a> {
             Ok(PublicationAdvanceV1::Progressed(persisted.phase))
         }
     }
-
     fn run(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -763,7 +751,6 @@ impl<'a> PublicationEngine<'a> {
         }
     }
 }
-
 fn verify_seed_ingress_receipt_with_bounded_service_lead(
     receipt: &MusubiSeedIngressReceiptV1,
     expected: &MusubiSeedIngressReceiptBindingV1,
@@ -785,7 +772,6 @@ fn verify_seed_ingress_receipt_with_bounded_service_lead(
         .verify(expected, current_time_ms.max(receipt.payload.issued_at_ms))
         .map_err(|error| invalid(PublicationPhaseV1::SeedIngress, error))
 }
-
 fn append_location_terminal(
     journal: &PublicationJournalV1,
     next: &mut PublicationJournalV1,
@@ -804,7 +790,6 @@ fn append_location_terminal(
     next.phase = PublicationPhaseV1::ArchiveRegistration;
     Ok(())
 }
-
 fn location_terminal_floor(
     journal: &PublicationJournalV1,
 ) -> Result<PublicationArchiveLocationTerminalFloorV1, PublicationError> {
@@ -828,7 +813,6 @@ fn location_terminal_floor(
         |checkpoint| PublicationArchiveLocationTerminalFloorV1::Replication(checkpoint.clone()),
     ))
 }
-
 fn validate_location_terminal(
     journal: &PublicationJournalV1,
     terminal: &PublicationArchiveLocationTerminalV1,
@@ -863,13 +847,11 @@ fn validate_location_terminal(
     )?;
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicationLocationProgressV1 {
     Stale,
     Current,
 }
-
 fn finalized_page_progress(
     previous: &MusubiArchiveLocationPageV1,
     current: &MusubiArchiveLocationPageV1,
@@ -895,7 +877,6 @@ fn finalized_page_progress(
     }
     Ok(PublicationLocationProgressV1::Current)
 }
-
 fn replication_checkpoint_progress(
     request: &PublicationRequestV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -914,7 +895,6 @@ fn replication_checkpoint_progress(
         current.location(registration)?,
     )
 }
-
 fn retirement_checkpoint_progress(
     journal: &PublicationJournalV1,
     checkpoint: &PublicationReplicationCheckpointV1,
@@ -938,7 +918,6 @@ fn retirement_checkpoint_progress(
     validate_location_terminal(journal, terminal, &floor)?;
     Ok(PublicationLocationProgressV1::Current)
 }
-
 fn location_progress(
     previous: &MusubiArchiveLocationV1,
     current: &MusubiArchiveLocationV1,
@@ -970,7 +949,6 @@ fn location_progress(
     }
     Ok(PublicationLocationProgressV1::Current)
 }
-
 /// Validate a current healthy location for the immutable publication archive.
 ///
 /// The stable location identity cannot be reused after retirement. Its renewable pin, order,
@@ -1002,7 +980,6 @@ pub(crate) fn validate_replication(
     }
     Ok(())
 }
-
 /// Publication workflow error with retry class preserved for backend failures.
 #[derive(Debug)]
 pub enum PublicationError {
@@ -1028,7 +1005,6 @@ pub enum PublicationError {
     /// Another resume changed the journal between load and durable transition.
     ConcurrentJournalUpdate,
 }
-
 impl fmt::Display for PublicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1061,7 +1037,6 @@ impl fmt::Display for PublicationError {
         }
     }
 }
-
 impl Error for PublicationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -1075,14 +1050,12 @@ impl Error for PublicationError {
         }
     }
 }
-
 fn invalid(phase: PublicationPhaseV1, error: impl fmt::Display) -> PublicationError {
     PublicationError::InvalidEvidence {
         phase,
         reason: error.to_string(),
     }
 }
-
 fn decode_publication_journal(bytes: &[u8]) -> Result<PublicationJournalV1, PublicationError> {
     if bytes.is_empty() || bytes.len() > MAX_JOURNAL_BYTES_USIZE {
         return Err(PublicationError::InvalidJournal(

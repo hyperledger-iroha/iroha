@@ -1,5 +1,4 @@
 //! `NPoS` staking lifecycle helpers for public lanes.
-
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -14,7 +13,6 @@ use iroha::data_model::{
     prelude::AccountId,
 };
 use std::{fs, path::PathBuf};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Register a stake-elected validator on a public lane
@@ -26,7 +24,6 @@ pub enum Command {
     /// Schedule or finalize a validator exit
     Exit(ExitArgs),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -37,7 +34,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RegisterArgs {
     /// Lane id to register against
@@ -59,7 +55,6 @@ pub struct RegisterArgs {
     #[arg(long, value_name = "PATH")]
     pub metadata: Option<PathBuf>,
 }
-
 impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
@@ -85,7 +80,6 @@ impl Run for RegisterArgs {
         context.finish(vec![instruction])
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RebindArgs {
     /// Lane id containing the validator
@@ -98,7 +92,6 @@ pub struct RebindArgs {
     #[arg(long, value_name = "PEER_ID")]
     pub peer_id: String,
 }
-
 impl Run for RebindArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
@@ -112,7 +105,6 @@ impl Run for RebindArgs {
         context.finish(vec![instruction])
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ActivateArgs {
     /// Lane id containing the pending validator
@@ -122,7 +114,6 @@ pub struct ActivateArgs {
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
 }
-
 impl Run for ActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
@@ -131,7 +122,6 @@ impl Run for ActivateArgs {
         context.finish(vec![instruction])
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ExitArgs {
     /// Lane id containing the validator
@@ -144,7 +134,6 @@ pub struct ExitArgs {
     #[arg(long, value_name = "MILLIS")]
     pub release_at_ms: u64,
 }
-
 impl Run for ExitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
@@ -158,12 +147,10 @@ impl Run for ExitArgs {
         context.finish(vec![instruction])
     }
 }
-
 fn parse_account_id<C: RunContext>(context: &C, value: &str, flag: &str) -> Result<AccountId> {
     crate::resolve_account_id(context, value)
         .map_err(|err| eyre!("invalid account id passed to {flag}: {err}"))
 }
-
 fn load_metadata(path: Option<&PathBuf>) -> Result<Metadata> {
     let Some(path) = path else {
         return Ok(Metadata::default());
@@ -172,7 +159,6 @@ fn load_metadata(path: Option<&PathBuf>) -> Result<Metadata> {
         .wrap_err_with(|| format!("failed to read metadata from {}", path.display()))?;
     norito::json::from_str(&raw).wrap_err("metadata file is not valid Norito JSON")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,20 +169,17 @@ mod tests {
     use iroha_test_samples::ALICE_ID;
     use norito::json::JsonSerialize;
     use std::fmt::Display;
-
     #[derive(Parser, Debug)]
     #[command(no_binary_name = true)]
     struct Wrapper {
         #[command(subcommand)]
         command: Command,
     }
-
     struct TestContext {
         cfg: crate::Config,
         submitted: Option<Vec<InstructionBox>>,
         i18n: crate::Localizer,
     }
-
     impl TestContext {
         fn new() -> Self {
             Self {
@@ -206,39 +189,31 @@ mod tests {
             }
         }
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &crate::Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &crate::Localizer {
             &self.i18n
         }
-
         fn print_data<T>(&mut self, _data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
         {
             Ok(())
         }
-
         fn println(&mut self, _data: impl Display) -> Result<()> {
             Ok(())
         }
-
         fn submit_with_metadata(
             &mut self,
             instructions: impl Into<crate::Executable>,
@@ -247,7 +222,6 @@ mod tests {
         ) -> Result<()> {
             self.submit(instructions)
         }
-
         fn submit(&mut self, instructions: impl Into<crate::Executable>) -> Result<()> {
             match instructions.into() {
                 crate::Executable::Instructions(list) => {
@@ -263,19 +237,15 @@ mod tests {
             }
         }
     }
-
     fn parse_command(args: &[&str]) -> clap::error::Result<Command> {
         Wrapper::try_parse_from(args).map(|wrapper| wrapper.command)
     }
-
     fn alice_literal() -> String {
         ALICE_ID.canonical_i105().expect("canonical I105")
     }
-
     fn checked_staking_key_fixture() -> KeyPair {
         KeyPair::try_random().expect("generate checked staking fixture key")
     }
-
     #[test]
     fn staking_fixture_uses_checked_default_key_generation() {
         let key_pair = checked_staking_key_fixture();
@@ -283,14 +253,11 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("staking fixture key advertises a valid algorithm");
-
         assert_eq!(actual, Algorithm::default());
     }
-
     fn valid_peer_id_literal() -> String {
         PeerId::from(checked_staking_key_fixture().public_key().clone()).to_string()
     }
-
     #[test]
     fn register_requires_peer_id_flag() {
         let err = parse_command(&[
@@ -303,20 +270,16 @@ mod tests {
             "10",
         ])
         .expect_err("register without --peer-id should fail");
-
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
         assert!(err.to_string().contains("--peer-id"));
     }
-
     #[test]
     fn rebind_requires_peer_id_flag() {
         let err = parse_command(&["rebind", "--lane-id", "1", "--validator", &alice_literal()])
             .expect_err("rebind without --peer-id should fail");
-
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
         assert!(err.to_string().contains("--peer-id"));
     }
-
     #[test]
     fn rebind_requires_validator_flag() {
         let err = parse_command(&[
@@ -327,11 +290,9 @@ mod tests {
             &valid_peer_id_literal(),
         ])
         .expect_err("rebind without --validator should fail");
-
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
         assert!(err.to_string().contains("--validator"));
     }
-
     #[test]
     fn register_submits_instruction_with_valid_peer_id() {
         let command = parse_command(&[
@@ -347,16 +308,13 @@ mod tests {
         ])
         .expect("register command should parse");
         let mut context = TestContext::new();
-
         command.run(&mut context).expect("register should succeed");
-
         assert_eq!(
             context.submitted.as_ref().map(Vec::len),
             Some(1),
             "register should submit exactly one instruction"
         );
     }
-
     #[test]
     fn rebind_submits_instruction_with_valid_peer_id() {
         let command = parse_command(&[
@@ -370,16 +328,13 @@ mod tests {
         ])
         .expect("rebind command should parse");
         let mut context = TestContext::new();
-
         command.run(&mut context).expect("rebind should succeed");
-
         assert_eq!(
             context.submitted.as_ref().map(Vec::len),
             Some(1),
             "rebind should submit exactly one instruction"
         );
     }
-
     #[test]
     fn register_rejects_invalid_peer_id_during_run() {
         let args = RegisterArgs {
@@ -394,14 +349,12 @@ mod tests {
         let err = args
             .run(&mut context)
             .expect_err("invalid peer id should fail");
-
         assert!(
             err.to_string()
                 .contains("--peer-id must be a valid peer id")
         );
         assert!(context.submitted.is_none());
     }
-
     #[test]
     fn rebind_rejects_invalid_peer_id_during_run() {
         let args = RebindArgs {
@@ -413,7 +366,6 @@ mod tests {
         let err = args
             .run(&mut context)
             .expect_err("invalid peer id should fail");
-
         assert!(
             err.to_string()
                 .contains("--peer-id must be a valid peer id")

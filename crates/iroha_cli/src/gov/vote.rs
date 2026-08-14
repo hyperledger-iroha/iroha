@@ -1,5 +1,4 @@
 //! Governance voting and query helpers.
-
 use crate::{
     Run, RunContext,
     json_utils::{json_object, json_value},
@@ -14,12 +13,10 @@ use iroha::data_model::isi::{
 };
 use iroha_crypto::Hash as CryptoHash;
 use norito::{decode_from_bytes, json};
-
 use super::shared::{
     canonicalize_hex32, parse_governance_proposal_id_v1, parse_governance_selector_v1,
     print_with_summary,
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 /// Voting mode selector for `iroha_cli gov vote`.
 pub enum VoteMode {
@@ -30,13 +27,11 @@ pub enum VoteMode {
     /// Force zero-knowledge voting mode.
     Zk,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedVoteMode {
     Plain,
     Zk,
 }
-
 fn parse_referendum_mode(value: &norito::json::Value) -> Option<ResolvedVoteMode> {
     let referendum = value.get("referendum")?;
     let mode = referendum.get("mode")?.as_str()?;
@@ -48,7 +43,6 @@ fn parse_referendum_mode(value: &norito::json::Value) -> Option<ResolvedVoteMode
         None
     }
 }
-
 fn resolve_vote_mode(
     client: &Client,
     referendum_id: &str,
@@ -74,12 +68,10 @@ fn resolve_vote_mode(
         }
     }
 }
-
 fn hint_present(map: &json::Map, key: &str) -> bool {
     map.get(key)
         .is_some_and(|value| !matches!(value, json::Value::Null))
 }
-
 fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
     let has_owner = hint_present(map, "owner");
     let has_amount = hint_present(map, "amount");
@@ -92,7 +84,6 @@ fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
     }
     Ok(())
 }
-
 fn canonicalize_account_literal(value: &str, field: &str) -> Result<String> {
     let owner = value.trim();
     if owner.is_empty() {
@@ -103,12 +94,10 @@ fn canonicalize_account_literal(value: &str, field: &str) -> Result<String> {
             "{field} must not include '@domain'; use canonical I105 only"
         ));
     }
-
     let parsed = AccountId::parse_encoded(owner)
         .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
     Ok(parsed.canonical().to_owned())
 }
-
 fn normalize_public_input_owner(map: &mut json::Map) -> Result<()> {
     let Some(value) = map.get("owner") else {
         return Ok(());
@@ -124,7 +113,6 @@ fn normalize_public_input_owner(map: &mut json::Map) -> Result<()> {
     map.insert("owner".to_owned(), json::Value::String(canonical));
     Ok(())
 }
-
 fn normalize_public_inputs(map: &mut json::Map) -> Result<()> {
     reject_public_input_key(map, "durationBlocks", "duration_blocks")?;
     reject_public_input_key(map, "root_hint_hex", "root_hint")?;
@@ -144,7 +132,6 @@ fn normalize_public_inputs(map: &mut json::Map) -> Result<()> {
     canonicalize_public_input_hex(map, "nullifier")?;
     Ok(())
 }
-
 fn canonicalize_public_input_hex(map: &mut json::Map, key: &str) -> Result<()> {
     let Some(value) = map.get_mut(key) else {
         return Ok(());
@@ -159,7 +146,6 @@ fn canonicalize_public_input_hex(map: &mut json::Map, key: &str) -> Result<()> {
     *value = json::Value::String(canonical);
     Ok(())
 }
-
 fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Result<()> {
     if map.contains_key(key) {
         return Err(eyre!(
@@ -168,7 +154,6 @@ fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Resul
     }
     Ok(())
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VoteArgs {
     #[arg(
@@ -205,7 +190,6 @@ pub struct VoteArgs {
     #[arg(long = "nullifier")]
     pub nullifier: Option<String>,
 }
-
 impl Run for VoteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let VoteArgs {
@@ -220,10 +204,8 @@ impl Run for VoteArgs {
             direction,
             nullifier,
         } = self;
-
         let client: Client = context.client_from_config();
         let resolved = resolve_vote_mode(&client, &referendum_id, mode)?;
-
         match resolved {
             ResolvedVoteMode::Zk => {
                 let backend = backend.ok_or_else(|| {
@@ -289,7 +271,6 @@ impl Run for VoteArgs {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VoteZkArgs {
     #[arg(long, value_parser = parse_governance_selector_v1)]
@@ -317,7 +298,6 @@ pub struct VoteZkArgs {
     #[arg(long = "nullifier")]
     pub nullifier: Option<String>,
 }
-
 impl Run for VoteZkArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -389,7 +369,6 @@ impl Run for VoteZkArgs {
         print_with_summary(context, Some(summary), &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VotePlainArgs {
     #[arg(long, value_parser = parse_governance_selector_v1)]
@@ -403,7 +382,6 @@ pub struct VotePlainArgs {
     #[arg(long)]
     pub direction: String,
 }
-
 impl Run for VotePlainArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -443,7 +421,6 @@ impl Run for VotePlainArgs {
         print_with_summary(context, Some(summary), &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProposalGetArgs {
     #[arg(
@@ -453,7 +430,6 @@ pub struct ProposalGetArgs {
     )]
     pub id: String,
 }
-
 impl Run for ProposalGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -466,13 +442,11 @@ impl Run for ProposalGetArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
     #[test]
     fn parse_referendum_mode_detects_plain() {
         let value = norito::json!({
@@ -483,7 +457,6 @@ mod tests {
         });
         assert_eq!(parse_referendum_mode(&value), Some(ResolvedVoteMode::Plain));
     }
-
     #[test]
     fn parse_referendum_mode_detects_zk_case_insensitive() {
         let value = norito::json!({
@@ -494,7 +467,6 @@ mod tests {
         });
         assert_eq!(parse_referendum_mode(&value), Some(ResolvedVoteMode::Zk));
     }
-
     #[test]
     fn parse_referendum_mode_missing_returns_none() {
         let value = norito::json!({
@@ -505,7 +477,6 @@ mod tests {
         });
         assert_eq!(parse_referendum_mode(&value), None);
     }
-
     #[test]
     fn annotate_vote_plain_populates_summary() {
         let owner = ALICE_ID.clone();
@@ -528,11 +499,9 @@ mod tests {
                 "payload_hex": payload_hex,
             }]
         });
-
         let summary = annotate_vote_instructions(&mut value)
             .expect("annotation result")
             .expect("summary present");
-
         assert!(
             summary
                 .fingerprint_hex
@@ -543,7 +512,6 @@ mod tests {
         assert_eq!(summary.amount.as_deref(), Some("42"));
         assert_eq!(summary.duration_blocks.as_deref(), Some("64"));
         assert_eq!(summary.direction.as_deref(), Some("Aye"));
-
         let line = format_vote_summary(&VoteSummaryInput {
             prefix: "vote plain",
             id_label: "referendum_id",
@@ -557,7 +525,6 @@ mod tests {
         assert!(line.contains("fingerprint="));
         assert!(line.contains(&format!("owner={owner_str}")));
         assert!(line.contains("direction=Aye"));
-
         let instr = value
             .get("tx_instructions")
             .and_then(json::Value::as_array)
@@ -574,7 +541,6 @@ mod tests {
             Some("Aye")
         );
     }
-
     #[test]
     fn annotate_vote_zk_populates_hints() {
         let nullifier = "aa".repeat(32);
@@ -597,11 +563,9 @@ mod tests {
                 "payload_hex": payload_hex,
             }]
         });
-
         let summary = annotate_vote_instructions(&mut value)
             .expect("annotation result")
             .expect("summary present");
-
         assert!(
             summary
                 .fingerprint_hex
@@ -613,7 +577,6 @@ mod tests {
         assert_eq!(summary.duration_blocks.as_deref(), Some("256"));
         assert_eq!(summary.direction.as_deref(), Some("Nay"));
         assert_eq!(summary.nullifier.as_deref(), Some(nullifier.as_str()));
-
         let line = format_vote_summary(&VoteSummaryInput {
             prefix: "vote zk",
             id_label: "election_id",
@@ -627,7 +590,6 @@ mod tests {
         assert!(line.contains("fingerprint="));
         assert!(line.contains(&format!("owner={owner}")));
         assert!(line.contains("nullifier="));
-
         let instr = value
             .get("tx_instructions")
             .and_then(json::Value::as_array)
@@ -644,7 +606,6 @@ mod tests {
             Some(nullifier.as_str())
         );
     }
-
     #[test]
     fn lock_hints_require_complete_triplet() {
         let mut map = json::Map::new();
@@ -656,7 +617,6 @@ mod tests {
         map.insert("duration_blocks".to_string(), json::Value::from(64u64));
         assert!(ensure_lock_hints_complete(&map).is_ok());
     }
-
     #[test]
     fn normalize_public_inputs_canonicalizes_hex() {
         let mut map = json::Map::new();
@@ -676,7 +636,6 @@ mod tests {
             Some(nullifier_expected.as_str())
         );
     }
-
     #[test]
     fn normalize_public_inputs_rejects_deprecated_keys() {
         let mut map = json::Map::new();
@@ -687,7 +646,6 @@ mod tests {
         let err = normalize_public_inputs(&mut map).expect_err("deprecated key");
         assert!(err.to_string().contains("nullifier_hex"));
     }
-
     #[test]
     fn normalize_public_inputs_rejects_invalid_hex() {
         let mut map = json::Map::new();
@@ -698,7 +656,6 @@ mod tests {
         let err = normalize_public_inputs(&mut map).expect_err("invalid hex");
         assert!(err.to_string().contains("root_hint"));
     }
-
     #[test]
     fn public_inputs_reject_noncanonical_owner() {
         let owner = ALICE_ID.clone();
@@ -709,12 +666,10 @@ mod tests {
         let err = normalize_public_input_owner(&mut map).expect_err("noncanonical owner");
         assert!(err.to_string().contains("must not include '@domain'"));
     }
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(0x56).algorithm(), Algorithm::Ed25519);
@@ -723,7 +678,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn public_inputs_allow_implicit_owner_without_selector_resolver() {
         let key_pair = fixture_key_pair(0x55);
@@ -735,7 +689,6 @@ mod tests {
             "implicit owner should be accepted when selector resolution is unavailable"
         );
     }
-
     #[test]
     fn public_inputs_reject_compressed_owner() {
         let owner = fixture_key_pair(5).public_key().to_string();
@@ -745,13 +698,11 @@ mod tests {
         assert!(err.to_string().contains("canonical I105 account id"));
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct LocksGetArgs {
     #[arg(long, value_parser = parse_governance_selector_v1)]
     pub referendum_id: String,
 }
-
 impl Run for LocksGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -772,10 +723,8 @@ impl Run for LocksGetArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct UnlockStatsArgs {}
-
 impl Run for UnlockStatsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -802,7 +751,6 @@ impl Run for UnlockStatsArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ReferendumGetArgs {
     #[arg(
@@ -811,7 +759,6 @@ pub struct ReferendumGetArgs {
     )]
     pub referendum_id: String,
 }
-
 impl Run for ReferendumGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -827,7 +774,6 @@ impl Run for ReferendumGetArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TallyGetArgs {
     #[arg(
@@ -836,7 +782,6 @@ pub struct TallyGetArgs {
     )]
     pub referendum_id: String,
 }
-
 impl Run for TallyGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -860,7 +805,6 @@ impl Run for TallyGetArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct VoteInstructionSummary {
     fingerprint_hex: Option<String>,
@@ -870,7 +814,6 @@ struct VoteInstructionSummary {
     direction: Option<String>,
     nullifier: Option<String>,
 }
-
 fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInstructionSummary>> {
     let Some(instructions) = value
         .get_mut("tx_instructions")
@@ -878,10 +821,8 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
     else {
         return Ok(None);
     };
-
     let mut summary = VoteInstructionSummary::default();
     let mut saw_relevant = false;
-
     for entry in instructions {
         let Some(map) = entry.as_object_mut() else {
             continue;
@@ -898,27 +839,22 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
         if summary.fingerprint_hex.is_none() {
             summary.fingerprint_hex = Some(fingerprint);
         }
-
         let instruction: InstructionBox = decode_from_bytes(&payload_bytes)
             .map_err(|err| eyre!("failed to decode instruction skeleton: {err}"))?;
-
         if let Some(plain) = instruction.as_any().downcast_ref::<CastPlainBallot>() {
             saw_relevant = true;
             let owner_str = plain.owner.to_string();
             map.insert("owner".to_owned(), json::Value::String(owner_str.clone()));
             summary.owner.get_or_insert(owner_str);
-
             let amount_str = plain.amount.to_string();
             map.insert("amount".to_owned(), json::Value::String(amount_str.clone()));
             summary.amount.get_or_insert(amount_str);
-
             let duration_str = plain.duration_blocks.to_string();
             map.insert(
                 "duration_blocks".to_owned(),
                 json::Value::String(duration_str.clone()),
             );
             summary.duration_blocks.get_or_insert(duration_str);
-
             let direction = direction_label_from_u8(plain.direction).to_string();
             map.insert(
                 "direction".to_owned(),
@@ -968,14 +904,12 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
             }
         }
     }
-
     if summary.fingerprint_hex.is_some() || saw_relevant {
         Ok(Some(summary))
     } else {
         Ok(None)
     }
 }
-
 fn decode_payload_hex(hex_str: &str) -> Result<Vec<u8>> {
     let trimmed = hex_str.trim();
     let cleaned = trimmed
@@ -984,7 +918,6 @@ fn decode_payload_hex(hex_str: &str) -> Result<Vec<u8>> {
         .unwrap_or(trimmed);
     hex::decode(cleaned).map_err(|err| eyre!("failed to decode payload hex: {err}"))
 }
-
 fn direction_label_from_u8(code: u8) -> &'static str {
     match code {
         0 => "Aye",
@@ -993,7 +926,6 @@ fn direction_label_from_u8(code: u8) -> &'static str {
         _ => "Unknown",
     }
 }
-
 fn direction_from_hint_value(value: &json::Value) -> Option<String> {
     fn from_u64(n: u64) -> String {
         u8::try_from(n).map_or_else(
@@ -1007,14 +939,12 @@ fn direction_from_hint_value(value: &json::Value) -> Option<String> {
             |code| direction_label_from_u8(code).to_string(),
         )
     }
-
     value
         .as_str()
         .map(ToString::to_string)
         .or_else(|| value.as_u64().map(from_u64))
         .or_else(|| value.as_i64().map(from_i64))
 }
-
 fn stringify_json_value(value: &json::Value) -> String {
     match value {
         json::Value::String(s) => s.clone(),
@@ -1028,7 +958,6 @@ fn stringify_json_value(value: &json::Value) -> String {
         _ => norito::json::to_json(value).unwrap_or_else(|_| "<invalid json>".to_owned()),
     }
 }
-
 struct VoteSummaryInput<'a> {
     prefix: &'a str,
     id_label: &'a str,
@@ -1039,7 +968,6 @@ struct VoteSummaryInput<'a> {
     reason: &'a str,
     annotation: Option<&'a VoteInstructionSummary>,
 }
-
 fn format_vote_summary(input: &VoteSummaryInput<'_>) -> String {
     let prefix = input.prefix;
     let id_label = input.id_label;

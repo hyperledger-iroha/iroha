@@ -1,10 +1,8 @@
 use darling::FromAttributes;
 use syn::Attribute;
-
 pub struct DocAttrs {
     pub attrs: Vec<Attribute>,
 }
-
 impl FromAttributes for DocAttrs {
     fn from_attributes(attrs: &[Attribute]) -> darling::Result<Self> {
         let mut docs = Vec::new();

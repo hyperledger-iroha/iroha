@@ -3,7 +3,7 @@
 def _serviced_candidate_production_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
-    """Seal the V3-decode/V4-emit producer lifecycle and runtime handoff."""
+    """Seal the V4-only producer lifecycle and runtime handoff."""
 
     base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
     paths = {
@@ -18,7 +18,7 @@ def _serviced_candidate_production_source_fidelity_errors(
     descriptions = {
         "module": "serviced-candidate module registration",
         "safety_wal": "opened safety-WAL directory capability",
-        "store": "V3/V4 serviced-candidate durable store",
+        "store": "V4-only serviced-candidate durable store",
         "adapter": "producer-continuation adapter ownership",
         "runtime": "producer-continuation serialized runtime",
         "runner": "producer-continuation high-water binding",
@@ -53,12 +53,8 @@ def _serviced_candidate_production_source_fidelity_errors(
     )
     for literal, description in (
         (
-            "const FORMAT_VERSION_V3: u16 = 3;",
-            "decode-only compatibility version must remain exactly V3",
-        ),
-        (
             "const FORMAT_VERSION: u16 = 4;",
-            "the sole emitted serviced-candidate version must remain V4",
+            "the sole serviced-candidate version must remain V4",
         ),
         (
             'const FRAME_MAGIC: &[u8; 8] = b"SUMVCAND";',
@@ -75,6 +71,16 @@ def _serviced_candidate_production_source_fidelity_errors(
                 f"{paths['store']}: {description} must occur exactly once in "
                 f"executable source; found {observed}"
             )
+    for retired_identifier in (
+        "FORMAT_VERSION_V3",
+        "PersistedServicedCandidatesV3",
+        "encode_frame_v3",
+    ):
+        if retired_identifier in structural["store"]:
+            errors.append(
+                f"{paths['store']}: first-release V4 storage must not retain "
+                f"{retired_identifier}"
+            )
 
     store_struct_attributes = {
         "ServicedCandidateKey": (
@@ -83,10 +89,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         ),
         "PersistedServicedCandidate": (
             "#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "PersistedServicedCandidatesV3": (
-            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
             "#[norito(deny_unknown_fields)]",
         ),
         "ProducerContinuationAddress": (
@@ -301,7 +303,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         ),
         ("encode_payload_frame", "encode_payload_frame"),
         ("encode_frame_v4", "encode_frame_v4"),
-        ("encode_frame_v3", "encode_frame_v3"),
         ("decode_frame", "decode_frame"),
     )
     store_items = collect_items(
@@ -309,18 +310,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         store_specs,
         _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256,
     )
-    encode_v3 = _require_rust_item(
-        paths["store"], sources["store"], "encode_frame_v3", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        encode_v3,
-        (),
-        "V3 compatibility encoder",
-        errors,
-        expected_attributes=("#[cfg(test)]",),
-    )
-
     adapter_specs = tuple(
         (name, name)
         for name in _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256
@@ -453,20 +442,21 @@ def _serviced_candidate_production_source_fidelity_errors(
         description: str,
     ) -> RustItem | None:
         discriminator_tokens = rust_code_tokens(discriminator)
+        candidates = rust_function_items_from_structural(
+            sources[source_key], structural[source_key], item_name
+        )
+        discriminator_counts = tuple(
+            _token_sequence_count(rust_code_tokens(item.source), discriminator_tokens)
+            for item in candidates
+        )
         items = [
-            item
-            for item in rust_function_items_from_structural(
-                sources[source_key], structural[source_key], item_name
-            )
-            if _token_sequence_count(
-                rust_code_tokens(item.source), discriminator_tokens
-            )
-            == 1
+            item for item, count in zip(candidates, discriminator_counts) if count == 1
         ]
         if len(items) != 1:
             errors.append(
                 f"{paths[source_key]}: require exactly one parsed {description} "
-                f"function named {item_name}; found {len(items)}"
+                f"function named {item_name}; found {len(items)}; "
+                f"discriminator_counts={discriminator_counts!r}"
             )
             return None
         return items[0]
@@ -551,6 +541,12 @@ def _serviced_candidate_production_source_fidelity_errors(
             "open_bound",
             "let identity = WalFileIdentity::new(protocol_version, network_id, key_hash)",
             "bound SafetyWal open",
+        ),
+        "stream_recovery": select_item(
+            "safety_wal",
+            "recover_wal_stream",
+            "let file_len = file.metadata()",
+            "bounded streaming SafetyWal recovery",
         ),
         "adjacent_read": select_item(
             "safety_wal",
@@ -801,7 +797,8 @@ if !opened.is_file()
         )
         if item is None:
             continue
-        if "snapshot storage is unsupported on this platform" not in item.source:
+        literal_source = mask_rust_comments(item.source)
+        if literal_source.count("snapshot storage is unsupported on this platform") != 1:
             errors.append(
                 f"{paths['safety_wal']}:{item.line}: non-Unix adjacent "
                 "storage operation cannot fall back to path I/O"
@@ -827,17 +824,22 @@ if !opened.is_file()
             "directory.open_wal_leaf(&wal_name)",
             "directory.verify_leaf(&file, &wal_name)",
             "let read_metadata_before = file.metadata()",
-            "file.read_to_end(&mut bytes)",
+            "recover_wal_stream(&mut file, &path, identity, WAL_RETENTION_LIMITS)?",
             "let read_metadata_after = file.metadata()",
             "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
-            "recover_wal_file(&bytes, identity, &frame_hash)",
+            "if recovery.incomplete_tail",
+            "file.set_len(valid_prefix_len)",
+            "wal_metadata_revision_unchanged(&truncated_before, &truncated_after)",
+            "file.seek(SeekFrom::End(0))",
+            "directory.verify_leaf(&file, &wal_name)",
+            "WalAppendState::from_verified_stream_recovery(",
         ),
         "bound SafetyWal recovery must open through its retained directory and bracket exact bytes with revisions",
     )
     for sequence, description in (
         (
-            "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after) || read_metadata_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)",
-            "WAL recovery must reject revision or exact-length drift",
+            "if !wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
+            "WAL recovery must reject opened-file revision drift",
         ),
         (
             "file.set_len(valid_prefix_len).and_then(|()| file.sync_data())",
@@ -847,6 +849,32 @@ if !opened.is_file()
         _require_rust_token_sequence(
             paths["safety_wal"], safety_open_bound, sequence, description, errors
         )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "stream_recovery",
+        (
+            "let file_len = file.metadata()",
+            "file.seek(SeekFrom::Start(0))",
+            "read_up_to(file, &mut file_header)",
+            "if header_len < FILE_HEADER_LEN",
+            "recover_wal_file(&file_header, identity, &frame_hash)",
+            "while valid_prefix_len < file_len",
+            "read_up_to(file, &mut frame_header)",
+            "if frame_header_len < FRAME_HEADER_LEN",
+            "if payload_len > MAX_RECORD_BYTES",
+            "if encoded_previous != previous_hash",
+            "enforce_retention_limits(path, records.len(), payload_bytes, payload_len, limits)",
+            "let mut scratch = vec![0_u8; SAFETY_WAL_RECOVERY_SCRATCH_BYTES]",
+            "file.read_exact(&mut encoded_hash)",
+            "if encoded_hash != calculated_hash",
+            "let (_, next_payload_total) = retention?",
+            "records.push(RecoveredRecord",
+            "valid_prefix_len = frame_start.checked_add(frame_len)",
+            "Ok(StreamingWalRecovery",
+        ),
+        "streaming WAL recovery must bound allocation, authenticate every frame, and retain only validated records",
+    )
 
     for struct_name, storage_type in (
         ("ServicedCandidateStore", "SafetyWalServicedCandidateStoreAuthority"),
@@ -1256,8 +1284,8 @@ frame.extend_from_slice(&payload);
         "store",
         store_items,
         "decode_frame",
-        "if !matches!(version, FORMAT_VERSION_V3 | FORMAT_VERSION)",
-        "decoding must accept exactly compatibility V3 and current V4",
+        "if version != FORMAT_VERSION",
+        "decoding must accept exactly V4",
     )
     require_item_sequence(
         "store",
@@ -1272,31 +1300,7 @@ if Hash::new(payload).as_ref() != &bytes[digest_offset..payload_offset] {
     return Err("serviced-candidate snapshot checksum mismatch".to_owned());
 }
 """,
-        "decoding must enforce exact length and checksum before schema selection",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-if state.format_version != FORMAT_VERSION_V3 || state.encode() != payload {
-    return Err("v3 serviced-candidate snapshot is not canonically encoded".to_owned());
-}
-""",
-        "V3 compatibility decoding must bind its inner version and canonical bytes",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-serviced_capacity: state.capacity,
-producer_continuation_capacity: state.capacity,
-decision_reclaimed: state.decision_reclaimed,
-records: state.records,
-producer_continuations: Vec::new(),
-""",
-        "V3 migration must map old capacity exactly and invent no producer lifecycle",
+        "decoding must enforce exact length and checksum before V4 decode",
     )
     require_item_sequence(
         "store",
@@ -2141,13 +2145,11 @@ def _effect_capacity_fetch_owner_source_fidelity_errors(
         )
     else:
         repo_root = effects_path.parents[4]
-        adapter_source = adapter_path.read_text(encoding="utf-8")
-        producer_recovery_path, producer_recovery_source = _read_reviewed_rust_source(
+        _loaded_path, adapter_source = _read_reviewed_rust_source(
             repo_root,
-            "crates/iroha_core/src/sumeragi/"
-            "v2_adapter_inline_producer_recovery_02_tests.rs",
+            adapter_path.relative_to(repo_root).as_posix(),
             errors,
-            "reviewed stage-7 producer recovery regressions",
+            "durable producer tombstone source",
         )
         deferred_exact_owners = _require_rust_item(
             adapter_path,
@@ -2381,8 +2383,8 @@ Ok(())
             )
 
         persistent_retirement_helper = _require_rust_item(
-            producer_recovery_path,
-            producer_recovery_source,
+            adapter_path,
+            adapter_source,
             "assert_restored_stage_seven_retirement_does_not_resurrect",
             errors,
         )
@@ -2540,14 +2542,14 @@ restarted_again.producer_continuations.is_empty()
             ),
         ):
             _require_rust_token_sequence(
-                producer_recovery_path,
+                adapter_path,
                 persistent_retirement_helper,
                 sequence,
                 description,
                 errors,
             )
         _require_rust_token_sequence(
-            producer_recovery_path,
+            adapter_path,
             persistent_retirement_helper,
             """
 !runtime
@@ -2569,13 +2571,13 @@ restarted_again.producer_continuations.is_empty()
         )
 
         persistent_retirement_regression = _require_rust_item(
-            producer_recovery_path,
-            producer_recovery_source,
+            adapter_path,
+            adapter_source,
             "restored_body_available_terminal_retirement_is_persistent_before_token_release",
             errors,
         )
         _require_rust_token_sequence(
-            producer_recovery_path,
+            adapter_path,
             persistent_retirement_regression,
             """
 assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, false);
@@ -2652,6 +2654,17 @@ Err(error) => return Err(error),
         "source-faithful certified-request capacity deferral method",
         errors,
         expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+self.recovered_decision_fetches
+    .values()
+    .any(|owner| owner.matches_body_coordinates(round, subject))
+""",
+        "ordinary Fetch admission must reject coordinates already owned by recovered Decision Fetch",
+        errors,
     )
     _require_rust_token_sequence(
         effects_path,

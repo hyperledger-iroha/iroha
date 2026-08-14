@@ -1,5 +1,28 @@
-use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
-
+use super::*;
+use crate::{
+    kura::Kura,
+    prelude::{AcceptedTransaction, World},
+    query::store::LiveQueryStore,
+    queue::{
+        LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
+        canonical_lane_queue_reservation_group_identity_projection,
+        lane_queue_reservation_group_binding_from_ordered_keys,
+    },
+    state::State,
+    sumeragi::{
+        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
+        v2_apply::LaneReservationSnapshotPlannerEvidence,
+        v2_core::{
+            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            ProductionInFlightFirstReleaseCarrierProjection,
+            ProductionInFlightFirstReleaseDecisionProjection,
+            ProductionInFlightFirstReleaseHistoryProjection,
+            ProductionInFlightFirstReleaseQueueProjection,
+            ProductionInFlightFirstReleaseReleaseProjection,
+            ProductionInFlightFirstReleaseSessionProjection,
+        },
+    },
+};
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -29,39 +52,12 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
 use tempfile::TempDir;
-
-use super::*;
-use crate::{
-    kura::Kura,
-    prelude::{AcceptedTransaction, World},
-    query::store::LiveQueryStore,
-    queue::{
-        LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
-        canonical_lane_queue_reservation_group_identity_projection,
-        lane_queue_reservation_group_binding_from_ordered_keys,
-    },
-    state::State,
-    sumeragi::{
-        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
-        v2_apply::LaneReservationSnapshotPlannerEvidence,
-        v2_core::{
-            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
-            ProductionInFlightFirstReleaseCarrierProjection,
-            ProductionInFlightFirstReleaseDecisionProjection,
-            ProductionInFlightFirstReleaseHistoryProjection,
-            ProductionInFlightFirstReleaseQueueProjection,
-            ProductionInFlightFirstReleaseReleaseProjection,
-            ProductionInFlightFirstReleaseSessionProjection,
-        },
-    },
-};
-
 fn lifecycle_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
         .expect("deterministic BLS lifecycle key")
 }
-
 fn lifecycle_lane_catalog() -> LaneCatalog {
     let primary = ModelLaneConfig::default();
     let autonomous = ModelLaneConfig {
@@ -75,11 +71,9 @@ fn lifecycle_lane_catalog() -> LaneCatalog {
     )
     .expect("two-lane recovery catalog")
 }
-
 fn lifecycle_runtime_lane_config() -> RuntimeLaneConfig {
     RuntimeLaneConfig::from_catalog(&lifecycle_lane_catalog())
 }
-
 fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
     KuraConfig {
         init_mode: InitMode::Strict,
@@ -95,7 +89,6 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
-
 fn lifecycle_payload(
     signer: &KeyPair,
     lane_incarnation: Hash,
@@ -112,7 +105,6 @@ fn lifecycle_payload(
         lane_incarnation,
     )
 }
-
 fn lifecycle_payload_for_validators(
     producer_signer: &KeyPair,
     context: &wire::HeightContext,
@@ -131,7 +123,6 @@ fn lifecycle_payload_for_validators(
         1,
     )
 }
-
 fn lifecycle_payload_for_validators_with_count(
     producer_signer: &KeyPair,
     context: &wire::HeightContext,
@@ -277,7 +268,6 @@ fn lifecycle_payload_for_validators_with_count(
     .expect("signed lifecycle recovery payload");
     (network_id, epoch, payload)
 }
-
 fn lifecycle_binding_and_live_state(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     local_peer: &PeerId,
@@ -336,7 +326,6 @@ fn lifecycle_binding_and_live_state(
     };
     (binding, live_state)
 }
-
 fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
     let mut validators = vec![local_peer.clone()];
     validators.extend(
@@ -370,11 +359,9 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
         leader_seed: [0x55; 32],
     }
 }
-
 fn lifecycle_context(key_pair: &KeyPair) -> wire::HeightContext {
     lifecycle_context_for_peer(&PeerId::new(key_pair.public_key().clone()))
 }
-
 fn open_lifecycle_recovery_state(
     kura_config: &KuraConfig,
     lane_config: &RuntimeLaneConfig,
@@ -393,7 +380,6 @@ fn open_lifecycle_recovery_state(
     state.install_pre_genesis_nexus_for_testing(nexus.clone());
     (kura, state)
 }
-
 fn open_empty_lifecycle_recovery_queue(queue_dir: &TempDir, state: &State) -> Queue {
     let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::ZERO);
     let queue = Queue::test(QueueConfig::default(), &time_source);
@@ -418,7 +404,6 @@ fn open_empty_lifecycle_recovery_queue(queue_dir: &TempDir, state: &State) -> Qu
     );
     queue
 }
-
 #[derive(Clone, Copy, Debug)]
 enum LifecycleRecoveryPostCasBoundary {
     Crashed,
@@ -427,7 +412,6 @@ enum LifecycleRecoveryPostCasBoundary {
     PreparedRehydration,
     FinalLive,
 }
-
 impl LifecycleRecoveryPostCasBoundary {
     const fn cas_ordinal(self) -> u64 {
         match self {
@@ -438,7 +422,6 @@ impl LifecycleRecoveryPostCasBoundary {
             Self::FinalLive => 5,
         }
     }
-
     fn assert_durable_cursor(self, cursor: &AutonomousLifecycleCursorV2, local_actor: u128) {
         assert_eq!(cursor.sequence(), self.cas_ordinal() + 1);
         assert_eq!(cursor.owner_generation(), 2);
@@ -498,10 +481,8 @@ impl LifecycleRecoveryPostCasBoundary {
         }
     }
 }
-
 #[derive(Debug)]
 struct LifecycleCursorCasInterruption;
-
 #[test]
 fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     let temp_dir = TempDir::new().expect("lifecycle Kura directory");
@@ -515,7 +496,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     context
         .validate()
         .expect("lifecycle startup context must be structurally valid");
-
     let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initial Kura");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         World::default(),
@@ -586,7 +566,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     drop(generation_one);
     drop(state);
     drop(kura);
-
     let (restarted, _) = Kura::new(&kura_config, &lane_config).expect("restart Kura");
     let mut restarted_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         World::default(),
@@ -666,7 +645,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         "generation recovery must preserve the exact combined V4/V6 receipt",
     );
     drop(receipt);
-
     let read = restarted
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
         .expect("read recovered lifecycle cursor");
@@ -684,7 +662,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     assert_eq!(recovered.session.bodies & local_actor, local_actor);
     assert!(recovered.session.producer_alive);
     drop(read);
-
     let repeated_snapshot = queue
         .lane_reservation_reconciliation_snapshot()
         .expect("recapture lifecycle Queue snapshot");
@@ -725,7 +702,6 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         .expect("read idempotent lifecycle cursor");
     assert_eq!(repeated.cursor().expect("idempotent cursor").sequence(), 6,);
 }
-
 fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecoveryPostCasBoundary) {
     let kura_dir = TempDir::new().expect("lifecycle interruption Kura directory");
     let queue_dir = TempDir::new().expect("lifecycle interruption Queue directory");
@@ -743,7 +719,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };
-
     let (kura, state) = open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
     let lane_incarnation = state
         .lane_incarnations_snapshot()
@@ -800,7 +775,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
     drop(generation_one);
     drop(state);
     drop(kura);
-
     let (restarted, restarted_state) =
         open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
     restarted
@@ -820,7 +794,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .bind_lane_reservation_startup_reconciliation_receipt(&snapshot_before_ownership_plan)
         .expect("bind pre-interruption Queue receipt")
         .expect("pre-interruption Queue snapshot stays immutable");
-
     let mut remaining_successful_cas = boundary.cas_ordinal();
     install_post_lifecycle_cursor_cas_hook_for_test(move |cursor| {
         remaining_successful_cas = remaining_successful_cas
@@ -855,7 +828,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         interruption.is::<LifecycleCursorCasInterruption>(),
         "{boundary:?} interrupted at an unexpected failure boundary",
     );
-
     let interrupted_read = restarted
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
         .expect("read the durably interrupted cursor");
@@ -892,7 +864,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
     drop(generation_two);
     drop(restarted_state);
     drop(restarted);
-
     let (reopened, reopened_state) =
         open_lifecycle_recovery_state(&kura_config, &lane_config, &context, &nexus);
     reopened
@@ -935,7 +906,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
             )
             .expect("revalidate post-interruption Queue receipt"),
     );
-
     let final_read = reopened
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_three)
         .expect("read post-interruption Live cursor");
@@ -958,7 +928,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
     assert_eq!(final_live.session.bodies & local_actor, local_actor);
     assert!(final_live.session.producer_alive);
     drop(final_read);
-
     let repeated_snapshot = reopened_queue
         .lane_reservation_reconciliation_snapshot()
         .expect("recapture post-interruption Queue snapshot");
@@ -1004,7 +973,6 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         "{boundary:?} repeat must preserve the exact current-generation Live cursor",
     );
 }
-
 #[test]
 fn every_lifecycle_recovery_cursor_cas_boundary_survives_restart() {
     for boundary in [
@@ -1017,7 +985,6 @@ fn every_lifecycle_recovery_cursor_cas_boundary_survives_restart() {
         exercise_lifecycle_recovery_post_cas_interruption(boundary);
     }
 }
-
 #[test]
 fn local_producer_recovery_requires_the_exact_current_queue_owner() {
     let signer = lifecycle_key_pair(41);
@@ -1047,19 +1014,16 @@ fn local_producer_recovery_requires_the_exact_current_queue_owner() {
             .expect("construct local-producer Live cursor"),
     )
     .expect("sign local-producer Live cursor");
-
     let no_groups = std::collections::BTreeMap::new();
     let missing = require_local_producer_queue_owner(&payload, &cursor, &no_groups)
         .expect_err("payload bytes alone must not replace producer Queue custody");
     assert!(missing.contains("lost its exact current Queue reservation owner"));
-
     let mut wrong_keys = payload.reservation_keys.clone();
     wrong_keys[0].queue_plan_admission_binding_hash = Hash::new(b"another-admission-binding");
     let mut conflicting_groups = std::collections::BTreeMap::new();
     conflicting_groups.insert(binding.reservation_group_binding().identity, wrong_keys);
     require_local_producer_queue_owner(&payload, &cursor, &conflicting_groups)
         .expect_err("same-slot but byte-different Queue custody must fail closed");
-
     let mut reversed_keys = payload.reservation_keys.clone();
     reversed_keys.reverse();
     assert_ne!(
@@ -1071,7 +1035,6 @@ fn local_producer_recovery_requires_the_exact_current_queue_owner() {
     reordered_groups.insert(binding.reservation_group_binding().identity, reversed_keys);
     require_local_producer_queue_owner(&payload, &cursor, &reordered_groups)
         .expect_err("reordered current Queue custody must fail closed");
-
     let mut exact_groups = std::collections::BTreeMap::new();
     exact_groups.insert(
         binding.reservation_group_binding().identity,
@@ -1080,7 +1043,6 @@ fn local_producer_recovery_requires_the_exact_current_queue_owner() {
     require_local_producer_queue_owner(&payload, &cursor, &exact_groups)
         .expect("the byte-exact current Queue group authenticates producer recovery custody");
 }
-
 #[test]
 fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
     let signer = lifecycle_key_pair(41);
@@ -1091,7 +1053,6 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
     );
     let (binding, live_state) = lifecycle_binding_and_live_state(&payload, &local_peer);
     let validator_set = &payload.origin_proposal.descriptor.validator_set;
-
     let mut before_activate = live_state;
     before_activate.carrier.kura_active = 0;
     let activate = crate::sumeragi::v2_core::ProductionInFlightFirstReleaseTransitionProjection {
@@ -1117,7 +1078,6 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         live_state,
         "payload inventory proves ActivateKura reached its durable after-state",
     );
-
     let crash = check_production_in_flight_first_release_crash_transition(live_state, 1)
         .expect("derive Crash")
         .into_projection();
@@ -1135,7 +1095,6 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         prepared_recovery_state(&prepared_crash).expect("resolve Prepared Crash"),
         crash.before,
     );
-
     let crashed = sign_lifecycle_cursor(
         &signer,
         &local_peer,
@@ -1151,7 +1110,6 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         cursor_recovery_state(&crashed).expect("resolve durable Crashed cursor"),
         crash.after,
     );
-
     let recover = check_production_in_flight_first_release_recover_transition(crash.after, 1)
         .expect("derive Recover")
         .into_projection();
@@ -1169,7 +1127,6 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         prepared_recovery_state(&prepared_recover).expect("resolve Prepared Recover"),
         recover.before,
     );
-
     let rehydrate =
         check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
             recover.after,
@@ -1193,7 +1150,6 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         rehydrate.before,
     );
 }
-
 #[test]
 fn empty_queue_reconciliation_returns_the_same_checked_receipt() {
     let temp_dir = TempDir::new().expect("Queue journal directory");

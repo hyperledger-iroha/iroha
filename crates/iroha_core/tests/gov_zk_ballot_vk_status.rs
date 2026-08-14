@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! ZK ballot should reject when the configured verifying key is not Active.
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn zk_ballot_rejects_when_vk_not_active() {
@@ -24,7 +23,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -35,7 +33,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
     let world = iroha_core::state::World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query);
     state.gov.min_bond_amount = 0_u64.into();
-
     // Configure gov: disallow unverified ballots (default is false already)
     let mut gov_cfg = state.gov.clone();
     gov_cfg.min_enactment_delay = 0;
@@ -45,12 +42,10 @@ fn zk_ballot_rejects_when_vk_not_active() {
         name: "ballot_current".to_string(),
     });
     state.set_gov(gov_cfg);
-
     // Begin a block/tx
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let perm = Permission::new(
         "CanManageVerifyingKeys".parse().expect("permission name"),
         Json::new(()),
@@ -72,7 +67,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
     iroha_data_model::prelude::Grant::account_permission(ballot_permission, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot submission");
-
     // Register distinct active ballot and tally VK records. The dummy inline bytes are sufficient
     // because the assertion is reached before cryptographic verification.
     let backend = iroha_core::zk::ZK_BACKEND_HALO2_IPA;
@@ -91,7 +85,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
     ballot_vk_record.status = ConfidentialStatus::Active;
     ballot_vk_record.key = Some(ballot_vk_box.clone());
     ballot_vk_record.gas_schedule_id = Some("halo2_default".into());
-
     let tally_vk_id = VerifyingKeyId::new(backend, "tally_current");
     let tally_vk_box = VerifyingKeyBox::new(backend.into(), vec![4, 5, 6]);
     let tally_commitment = iroha_core::zk::hash_vk(&tally_vk_box);
@@ -107,7 +100,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
     tally_vk_record.status = ConfidentialStatus::Active;
     tally_vk_record.key = Some(tally_vk_box);
     tally_vk_record.gas_schedule_id = Some("halo2_default".into());
-
     let exec = Executor::default();
     let reg_instr: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: ballot_vk_id.clone(),
@@ -123,7 +115,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
     .into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_instr)
         .expect("register tally vk");
-
     // Create the election while both role-specific keys are active.
     let create = CreateElection {
         election_id: "ref-vk".to_string(),
@@ -164,7 +155,6 @@ fn zk_ballot_rejects_when_vk_not_active() {
             mode: iroha_core::state::GovernanceReferendumMode::Zk,
         },
     );
-
     // Submit ZK ballot with some non-empty base64 body
     let proof_b64 = base64::engine::general_purpose::STANDARD.encode([0x01u8, 0x02, 0x03]);
     let cast = CastZkBallot {

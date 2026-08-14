@@ -1,30 +1,4 @@
 //! Peer-credential-authenticated Unix transport and runtime credential loading.
-
-use std::{
-    ffi::OsString,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    os::{
-        fd::{AsRawFd as _, OwnedFd},
-        unix::{
-            fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
-            net::UnixStream,
-        },
-    },
-    path::{Component, Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
-
-use iroha_crypto::Signature;
-use norito::{
-    NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, Encode},
-};
-
 use super::{
     SoftwareSignerWrappingKeyV1,
     protocol::{
@@ -43,13 +17,34 @@ use super::{
         verify_response_attestation,
     },
 };
-
+use iroha_crypto::Signature;
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
+};
+use std::{
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    os::{
+        fd::{AsRawFd as _, OwnedFd},
+        unix::{
+            fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+            net::UnixStream,
+        },
+    },
+    path::{Component, Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 const SOCKET_MODE_V1: u32 = 0o666;
 const RUNTIME_DIRECTORY_MODE_V1: u32 = 0o711;
 const IO_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const MAX_SESSIONS_V1: usize = 64;
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// Exact request/admin endpoint paths and expected software-signer identity.
 #[derive(Clone, Debug)]
 pub struct SoftwareSignerEndpointPolicyV1 {
@@ -60,7 +55,6 @@ pub struct SoftwareSignerEndpointPolicyV1 {
     /// Exact public service binding pinned by callers and the server launcher.
     pub expected_binding: SoftwareSignerPublicBindingV1,
 }
-
 impl SoftwareSignerEndpointPolicyV1 {
     /// Construct and validate an endpoint policy without accessing either socket.
     ///
@@ -85,7 +79,6 @@ impl SoftwareSignerEndpointPolicyV1 {
             .map_err(|()| SoftwareSignerServerErrorV1::BindingMismatch)?;
         Ok(policy)
     }
-
     fn validate_paths(&self) -> Result<(), SoftwareSignerServerErrorV1> {
         validate_absolute_normal_path(&self.request_socket)?;
         validate_absolute_normal_path(&self.administrator_socket)?;
@@ -98,7 +91,6 @@ impl SoftwareSignerEndpointPolicyV1 {
         Ok(())
     }
 }
-
 /// Public, payload-free evidence returned for one durably committed signature.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerSignatureReceiptV1 {
@@ -125,7 +117,6 @@ pub struct SoftwareSignerSignatureReceiptV1 {
     /// Active-key signature binding the response digest to live provenance.
     pub response_attestation: Vec<u8>,
 }
-
 fn valid_receipt_commit_position(
     role: SoftwareSignerRoleV1,
     replayed: bool,
@@ -149,7 +140,6 @@ fn valid_receipt_commit_position(
         && commit_sequence < provenance.audit_sequence
         && commit_audit_head != provenance.audit_head
 }
-
 impl SoftwareSignerSignatureReceiptV1 {
     /// Verify a public receipt without contacting the signer service.
     ///
@@ -200,7 +190,6 @@ impl SoftwareSignerSignatureReceiptV1 {
         {
             return Err(ExternalSoftwareSignerClientErrorV1::BindingMismatch);
         }
-
         let request = SignRequestV1 {
             binding_digest: expected_binding
                 .digest()
@@ -251,7 +240,6 @@ impl SoftwareSignerSignatureReceiptV1 {
         verify_payload_signature(expected_binding, payload, detached_signature)
     }
 }
-
 /// Synchronous request-side client used by irohad runtime-provider adapters.
 #[derive(Clone, Debug)]
 pub struct SoftwareSignerClientV1 {
@@ -259,7 +247,6 @@ pub struct SoftwareSignerClientV1 {
     #[cfg(test)]
     direct_service: Option<Arc<SoftwareSignerServiceV1>>,
 }
-
 impl SoftwareSignerClientV1 {
     /// Pin a client to an exact public signer binding and endpoint identity.
     pub fn new(policy: SoftwareSignerEndpointPolicyV1) -> Self {
@@ -269,7 +256,6 @@ impl SoftwareSignerClientV1 {
             direct_service: None,
         }
     }
-
     #[cfg(test)]
     pub(super) fn new_direct(
         service: Arc<SoftwareSignerServiceV1>,
@@ -288,13 +274,11 @@ impl SoftwareSignerClientV1 {
             direct_service: Some(service),
         })
     }
-
     /// Return the expected immutable binding.
     #[must_use]
     pub const fn expected_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         &self.policy.expected_binding
     }
-
     /// Perform a nonce-bound public qualification probe.
     ///
     /// # Errors
@@ -346,7 +330,6 @@ impl SoftwareSignerClientV1 {
         .map_err(|_| ExternalSoftwareSignerClientErrorV1::BindingMismatch)?;
         Ok(response.provenance)
     }
-
     /// Sign exact role-scoped bytes with replay-safe idempotency.
     ///
     /// # Errors
@@ -440,7 +423,6 @@ impl SoftwareSignerClientV1 {
             response_attestation: response.response_attestation,
         })
     }
-
     fn exchange_sign_request(
         &self,
         request: &SignRequestV1,
@@ -460,13 +442,11 @@ impl SoftwareSignerClientV1 {
         )
     }
 }
-
 /// Administrator-side client confined to the administrator Unix socket.
 #[derive(Clone, Debug)]
 pub struct SoftwareSignerAdministratorClientV1 {
     policy: SoftwareSignerEndpointPolicyV1,
 }
-
 /// Complete predecessor-bound request for one monotonic signer rotation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoftwareSignerRotationRequestV1 {
@@ -485,13 +465,11 @@ pub struct SoftwareSignerRotationRequestV1 {
     /// Signature algorithm for the successor key.
     pub algorithm: SoftwareSignerKeyAlgorithmV1,
 }
-
 impl SoftwareSignerAdministratorClientV1 {
     /// Pin an administrator client to the current reviewed binding.
     pub fn new(policy: SoftwareSignerEndpointPolicyV1) -> Self {
         Self { policy }
     }
-
     /// Read signed live state without mutating the journal.
     ///
     /// # Errors
@@ -503,7 +481,6 @@ impl SoftwareSignerAdministratorClientV1 {
     ) -> Result<SoftwareSignerLiveProvenanceV1, ExternalSoftwareSignerClientErrorV1> {
         self.command(AdminCommandV1::Status, None)
     }
-
     /// Rotate to a monotonic successor key and public policy.
     ///
     /// # Errors
@@ -541,7 +518,6 @@ impl SoftwareSignerAdministratorClientV1 {
             )),
         )
     }
-
     /// Irreversibly revoke the active key generation.
     ///
     /// # Errors
@@ -569,7 +545,6 @@ impl SoftwareSignerAdministratorClientV1 {
         }
         Ok(provenance)
     }
-
     fn command(
         &self,
         command: AdminCommandV1,
@@ -646,13 +621,11 @@ impl SoftwareSignerAdministratorClientV1 {
         Ok(response.provenance)
     }
 }
-
 /// Bound external software signer server.
 pub struct SoftwareSignerServerV1 {
     service: Arc<SoftwareSignerServiceV1>,
     policy: SoftwareSignerEndpointPolicyV1,
 }
-
 impl SoftwareSignerServerV1 {
     /// Bind a service implementation to its exact public endpoint policy.
     ///
@@ -674,7 +647,6 @@ impl SoftwareSignerServerV1 {
         }
         Ok(Self { service, policy })
     }
-
     /// Serve authenticated one-request sessions until SIGINT or SIGTERM.
     ///
     /// # Errors
@@ -760,7 +732,6 @@ impl SoftwareSignerServerV1 {
         administrator_cleanup
     }
 }
-
 fn admit_session(
     stream: tokio::net::UnixStream,
     expected_uid: u32,
@@ -790,11 +761,9 @@ fn admit_session(
     });
     Ok(())
 }
-
 pub(super) const fn peer_uid_is_authorized(observed_uid: u32, expected_uid: u32) -> bool {
     observed_uid == expected_uid
 }
-
 fn serve_one(
     mut stream: UnixStream,
     administrator: bool,
@@ -857,7 +826,6 @@ fn serve_one(
     };
     write_length_prefixed(&mut stream, &response)
 }
-
 fn exchange<Request, Response>(
     endpoint: &Path,
     service_uid: u32,
@@ -907,7 +875,6 @@ where
     }
     decode_body(&response.body).map_err(|_| ExternalSoftwareSignerClientErrorV1::Protocol)
 }
-
 fn encode_frame<T: NoritoSerialize>(
     kind: u8,
     value: &T,
@@ -927,7 +894,6 @@ fn encode_frame<T: NoritoSerialize>(
     }
     Ok(encoded)
 }
-
 fn read_frame(
     stream: &mut UnixStream,
 ) -> Result<SoftwareSignerFrameV1, SoftwareSignerServerErrorV1> {
@@ -956,7 +922,6 @@ fn read_frame(
     }
     Ok(frame)
 }
-
 fn decode_body<T>(bytes: &[u8]) -> Result<T, SoftwareSignerServerErrorV1>
 where
     T: NoritoSerialize,
@@ -964,7 +929,6 @@ where
 {
     norito::decode_canonical(bytes).map_err(|_| SoftwareSignerServerErrorV1::Protocol)
 }
-
 fn write_length_prefixed(
     stream: &mut UnixStream,
     bytes: &[u8],
@@ -976,7 +940,6 @@ fn write_length_prefixed(
         .and_then(|()| stream.flush())
         .map_err(|_| SoftwareSignerServerErrorV1::Protocol)
 }
-
 fn verify_live_provenance(
     expected: &SoftwareSignerPublicBindingV1,
     provenance: &SoftwareSignerLiveProvenanceV1,
@@ -986,7 +949,6 @@ fn verify_live_provenance(
     }
     verify_provenance(provenance).map_err(|_| ExternalSoftwareSignerClientErrorV1::BindingMismatch)
 }
-
 fn verify_payload_signature(
     binding: &SoftwareSignerPublicBindingV1,
     payload: &[u8],
@@ -1030,7 +992,6 @@ fn verify_payload_signature(
         .verify(&binding.public_key, &message)
         .map_err(|_| ExternalSoftwareSignerClientErrorV1::BindingMismatch)
 }
-
 fn validate_stable_service_identity(
     before: &SoftwareSignerPublicBindingV1,
     after: &SoftwareSignerPublicBindingV1,
@@ -1053,7 +1014,6 @@ fn validate_stable_service_identity(
     }
     Ok(())
 }
-
 fn random_nonzero() -> [u8; 32] {
     loop {
         let value = rand::random::<[u8; 32]>();
@@ -1062,13 +1022,11 @@ fn random_nonzero() -> [u8; 32] {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SocketIdentityV1 {
     device: u64,
     inode: u64,
 }
-
 fn endpoint_identity(
     path: &Path,
     service_uid: u32,
@@ -1094,7 +1052,6 @@ fn endpoint_identity(
         inode: metadata.ino(),
     })
 }
-
 struct BoundEndpointV1 {
     parent: File,
     name: OsString,
@@ -1102,7 +1059,6 @@ struct BoundEndpointV1 {
     service_uid: u32,
     armed: bool,
 }
-
 impl BoundEndpointV1 {
     fn verify(&self) -> Result<(), SoftwareSignerServerErrorV1> {
         let metadata = rustix::fs::statat(
@@ -1121,7 +1077,6 @@ impl BoundEndpointV1 {
         }
         Ok(())
     }
-
     fn cleanup(mut self) -> Result<(), SoftwareSignerServerErrorV1> {
         self.verify()?;
         let quarantine = OsString::from(format!(
@@ -1162,7 +1117,6 @@ impl BoundEndpointV1 {
         Ok(())
     }
 }
-
 impl Drop for BoundEndpointV1 {
     fn drop(&mut self) {
         if self.armed && self.verify().is_ok() {
@@ -1171,7 +1125,6 @@ impl Drop for BoundEndpointV1 {
         }
     }
 }
-
 fn bind_endpoint(
     path: &Path,
     service_uid: u32,
@@ -1245,7 +1198,6 @@ fn bind_endpoint(
     guard.verify()?;
     Ok((listener, guard))
 }
-
 #[cfg(target_os = "linux")]
 const fn socket_identity_from_stat(metadata: &rustix::fs::Stat) -> SocketIdentityV1 {
     SocketIdentityV1 {
@@ -1253,7 +1205,6 @@ const fn socket_identity_from_stat(metadata: &rustix::fs::Stat) -> SocketIdentit
         inode: metadata.st_ino,
     }
 }
-
 #[cfg(target_os = "macos")]
 fn socket_identity_from_stat(metadata: &rustix::fs::Stat) -> SocketIdentityV1 {
     SocketIdentityV1 {
@@ -1261,7 +1212,6 @@ fn socket_identity_from_stat(metadata: &rustix::fs::Stat) -> SocketIdentityV1 {
         inode: metadata.st_ino,
     }
 }
-
 fn validate_runtime_directory(
     path: &Path,
     service_uid: u32,
@@ -1289,7 +1239,6 @@ fn validate_runtime_directory(
     }
     Ok(())
 }
-
 fn validate_absolute_normal_path(path: &Path) -> Result<(), SoftwareSignerServerErrorV1> {
     if !path.is_absolute()
         || path.components().any(|component| {
@@ -1303,7 +1252,6 @@ fn validate_absolute_normal_path(path: &Path) -> Result<(), SoftwareSignerServer
     }
     Ok(())
 }
-
 /// Load exactly 32 wrapping-key bytes from a consumed inherited descriptor.
 ///
 /// The descriptor number, not its content, may be passed through argv. The
@@ -1348,7 +1296,6 @@ pub fn load_software_signer_wrapping_key_from_fd_v1(
     scrub(&mut key);
     result
 }
-
 /// Load exactly 32 wrapping-key bytes from a systemd credential file.
 ///
 /// The path must be absolute, symlink-free, single-link, owned by root or the
@@ -1395,7 +1342,6 @@ pub fn load_software_signer_wrapping_key_from_credential_v1(
     scrub(&mut key);
     result
 }
-
 fn validate_credential_path(path: &Path) -> Result<(u64, u64), SoftwareSignerCredentialErrorV1> {
     if !path.is_absolute()
         || path.components().any(|component| {
@@ -1435,7 +1381,6 @@ fn validate_credential_path(path: &Path) -> Result<(u64, u64), SoftwareSignerCre
     }
     Ok((metadata.dev(), metadata.ino()))
 }
-
 /// Payload-free client failure classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalSoftwareSignerClientErrorV1 {
@@ -1454,7 +1399,6 @@ pub enum ExternalSoftwareSignerClientErrorV1 {
     /// Key or policy is stale or revoked.
     StaleOrRevoked,
 }
-
 /// Payload-free server startup or transport failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoftwareSignerServerErrorV1 {
@@ -1471,7 +1415,6 @@ pub enum SoftwareSignerServerErrorV1 {
     /// Exact endpoint identity could not be safely removed.
     EndpointCleanup,
 }
-
 /// Payload-free runtime wrapping-key source failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoftwareSignerCredentialErrorV1 {

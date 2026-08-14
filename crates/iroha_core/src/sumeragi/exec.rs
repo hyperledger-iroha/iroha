@@ -1,9 +1,13 @@
 //! Exec-vote helpers: compute `post_state_root` via SMT, build votes, and assemble QCs.
 //!
 //! This module is internal and side-effect free; consumed by the Sumeragi execution pipeline.
-
-use std::collections::{BTreeMap, BTreeSet};
-
+use super::{
+    consensus::ExecWitness,
+    smt::{
+        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
+        compute_post_state_root,
+    },
+};
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
@@ -15,15 +19,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneFinalityStatement, LaneId, compute_settlement_hash},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-
-use super::{
-    consensus::ExecWitness,
-    smt::{
-        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
-        compute_post_state_root,
-    },
-};
-
+use std::collections::{BTreeMap, BTreeSet};
 fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
     let reads = witness
         .reads
@@ -37,7 +33,6 @@ fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
         .collect();
     (reads, writes)
 }
-
 #[derive(Debug)]
 struct NativeAmxApplicationGroup {
     participant_proposal: LaneBlockProposalV1,
@@ -47,7 +42,6 @@ struct NativeAmxApplicationGroup {
     members: Vec<wire::NativeAmxApplicationManifestMemberV1>,
     results: Vec<TransactionResult>,
 }
-
 #[derive(Clone, Debug)]
 struct NativeAmxApplicationSource {
     entrypoint_index: u64,
@@ -56,7 +50,6 @@ struct NativeAmxApplicationSource {
     receipt: NativeAmxReceipt,
     finality_bound_merge: bool,
 }
-
 fn ordinary_native_amx_application_sources(
     block: &SignedBlock,
 ) -> Result<Vec<NativeAmxApplicationSource>, String> {
@@ -70,7 +63,6 @@ fn ordinary_native_amx_application_sources(
     {
         return Ok(Vec::new());
     }
-
     let entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
     let results = block.results().cloned().collect::<Vec<_>>();
     let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
@@ -80,7 +72,6 @@ fn ordinary_native_amx_application_sources(
     {
         return Err("Native AMX application block result/context alignment is invalid".to_owned());
     }
-
     bundle
         .external
         .iter()
@@ -116,7 +107,6 @@ fn ordinary_native_amx_application_sources(
         })
         .collect()
 }
-
 fn merge_native_amx_application_sources(
     block: &SignedBlock,
     entry: &MergeLedgerEntry,
@@ -159,7 +149,6 @@ fn merge_native_amx_application_sources(
     if batch.lanes.is_empty() || !crate::merge::merge_execution_batch_commitments_match(batch) {
         return Err("Native AMX merge application batch commitments are invalid".to_owned());
     }
-
     let mut sources = Vec::new();
     let mut entrypoint_index = 0_u64;
     for execution in &batch.lanes {
@@ -212,7 +201,6 @@ fn merge_native_amx_application_sources(
     }
     Ok(sources)
 }
-
 fn canonical_native_amx_application_sources(
     block: &SignedBlock,
     merge_entry: Option<&MergeLedgerEntry>,
@@ -222,7 +210,6 @@ fn canonical_native_amx_application_sources(
         |entry| merge_native_amx_application_sources(block, entry),
     )
 }
-
 /// Full deterministic projection behind one Native AMX manifest leaf.
 #[derive(Clone, Debug)]
 pub(crate) struct NativeAmxApplicationManifestEntryV1 {
@@ -235,7 +222,6 @@ pub(crate) struct NativeAmxApplicationManifestEntryV1 {
     /// Exact canonical transaction results aligned with `leaf.members`.
     pub(crate) results: Vec<TransactionResult>,
 }
-
 /// Canonical, bounded Native AMX application manifest for one executed block.
 #[derive(Clone, Debug)]
 pub(crate) struct NativeAmxApplicationManifestV1 {
@@ -244,7 +230,6 @@ pub(crate) struct NativeAmxApplicationManifestV1 {
     entries: Vec<NativeAmxApplicationManifestEntryV1>,
     tree: MerkleTree<wire::NativeAmxApplicationManifestLeafV1>,
 }
-
 impl NativeAmxApplicationManifestV1 {
     /// Build the canonical empty manifest for a result-bearing wire identity.
     #[must_use]
@@ -256,7 +241,6 @@ impl NativeAmxApplicationManifestV1 {
             tree: MerkleTree::default(),
         }
     }
-
     /// Derive the exact manifest from ordinary external receipts in one
     /// deterministic result-bearing block.
     ///
@@ -267,7 +251,6 @@ impl NativeAmxApplicationManifestV1 {
     pub(crate) fn from_result_bearing_block(block: &SignedBlock) -> Result<Self, String> {
         Self::from_result_bearing_block_and_merge_entry(block, None)
     }
-
     /// Derive the exact manifest from ordinary block receipts or the exact
     /// finality-bound autonomous execution batch carried by `merge_entry`.
     pub(crate) fn from_result_bearing_block_and_merge_entry(
@@ -287,7 +270,6 @@ impl NativeAmxApplicationManifestV1 {
                 executed_block_wire_hash,
             ));
         }
-
         let application_block_height = block.header().height().get();
         let application_block_hash = block.hash();
         let mut route_heights = BTreeMap::<(LaneId, DataSpaceId, Hash), u64>::new();
@@ -375,7 +357,6 @@ impl NativeAmxApplicationManifestV1 {
                             .to_owned(),
                     );
                 }
-
                 let key = (
                     descriptor.lane_id,
                     descriptor.dataspace_id,
@@ -436,14 +417,12 @@ impl NativeAmxApplicationManifestV1 {
                 group.results.push(source.result.clone());
             }
         }
-
         if groups.len()
             > usize::try_from(wire::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES)
                 .expect("manifest leaf bound fits usize")
         {
             return Err("Native AMX application manifest exceeds the route-leaf limit".to_owned());
         }
-
         let mut entries = Vec::with_capacity(groups.len());
         for (_, group) in groups {
             let source_ids = group
@@ -498,25 +477,21 @@ impl NativeAmxApplicationManifestV1 {
             tree,
         })
     }
-
     /// Exact canonical result-bearing block wire byte length.
     #[must_use]
     pub(crate) const fn executed_block_wire_len(&self) -> u64 {
         self.executed_block_wire_len
     }
-
     /// Exact canonical result-bearing block wire hash.
     #[must_use]
     pub(crate) const fn executed_block_wire_hash(&self) -> Hash {
         self.executed_block_wire_hash
     }
-
     /// Canonically ordered separate-participant entries.
     #[must_use]
     pub(crate) fn entries(&self) -> &[NativeAmxApplicationManifestEntryV1] {
         &self.entries
     }
-
     /// Canonical manifest root, including the domain-separated empty root.
     #[must_use]
     pub(crate) fn root(&self) -> Hash {
@@ -525,13 +500,11 @@ impl NativeAmxApplicationManifestV1 {
             .map(Hash::from)
             .unwrap_or_else(wire::native_amx_application_manifest_empty_root)
     }
-
     /// Number of committed route/incarnation leaves.
     #[must_use]
     pub(crate) fn count(&self) -> u32 {
         u32::try_from(self.entries.len()).expect("manifest builder enforces the u32 leaf bound")
     }
-
     /// Inclusion proof for one canonical manifest entry.
     #[must_use]
     pub(crate) fn proof(
@@ -541,14 +514,12 @@ impl NativeAmxApplicationManifestV1 {
         self.tree.get_proof(index)
     }
 }
-
 /// Canonical, bounded lane-finality manifest for one result-bearing block.
 #[derive(Clone, Debug)]
 pub(crate) struct LaneFinalityManifestV1 {
     statements: Vec<LaneFinalityStatement>,
     tree: MerkleTree<LaneFinalityStatement>,
 }
-
 impl LaneFinalityManifestV1 {
     /// Build the canonical empty lane-finality manifest.
     #[cfg(test)]
@@ -559,7 +530,6 @@ impl LaneFinalityManifestV1 {
             tree: MerkleTree::default(),
         }
     }
-
     /// Derive the exact manifest from the immutable execution result.
     pub(crate) fn from_result_bearing_block(block: &SignedBlock) -> Result<Self, String> {
         if !block.has_results() {
@@ -612,26 +582,22 @@ impl LaneFinalityManifestV1 {
             .collect::<MerkleTree<_>>();
         Ok(Self { statements, tree })
     }
-
     /// Authenticated root and exact non-zero statement count.
     #[must_use]
     pub(crate) fn commitment(&self) -> Option<MerkleTreeCommitment<LaneFinalityStatement>> {
         self.tree.commitment()
     }
-
     /// Canonically ordered statements.
     #[must_use]
     pub(crate) fn statements(&self) -> &[LaneFinalityStatement] {
         &self.statements
     }
-
     /// Inclusion proof for one canonical statement.
     #[must_use]
     pub(crate) fn proof(&self, index: u32) -> Option<MerkleProof<LaneFinalityStatement>> {
         self.tree.get_proof(index)
     }
 }
-
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
     try_post_state_from_witness(w).unwrap_or_else(|error| {
@@ -641,13 +607,11 @@ pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
         Hash::new(preimage)
     })
 }
-
 /// Checked variant used before a validator signs execution roots.
 pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str> {
     let (reads, writes) = witness_pairs(w);
     compute_consensus_post_state_root(&reads, &writes)
 }
-
 /// Derive the exact execution commitment authenticated by Sumeragi-v2 votes.
 ///
 /// This is intentionally the only production projection used by candidate
@@ -684,7 +648,6 @@ pub(crate) fn execution_commitment_from_validated_block(
         executed_block_wire_hash,
     )
 }
-
 #[cfg(test)]
 pub(crate) fn execution_commitment_from_witness_for_tests(
     witness: &ExecWitness,
@@ -700,7 +663,6 @@ pub(crate) fn execution_commitment_from_witness_for_tests(
         native_amx_manifest.executed_block_wire_hash(),
     )
 }
-
 fn execution_commitment_from_projection(
     witness: &ExecWitness,
     native_amx_manifest: &NativeAmxApplicationManifestV1,
@@ -745,7 +707,6 @@ fn execution_commitment_from_projection(
         .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
     }
 }
-
 /// Compute the `parent_state_root` using only the witnessed reads (pre-values).
 /// When a block writes state, only pre-values for written keys are included.
 /// Read-only access witnesses can vary across execution strategies and should
@@ -767,11 +728,11 @@ pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
     };
     compute_post_state_root(&reads, &[])
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, time::Duration};
-
+    use super::super::consensus::{ExecKv, ExecWitness};
+    use super::*;
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -794,34 +755,26 @@ mod tests {
         trigger::DataTriggerSequence,
     };
     use iroha_primitives::{numeric::Quantity, time::TimeSource};
-
-    use super::super::consensus::{ExecKv, ExecWitness};
-    use super::*;
-    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
-
+    use std::{num::NonZeroU64, time::Duration};
     const MANIFEST_APPLICATION_HEIGHT: u64 = 40;
     const MANIFEST_LANE_BLOCK_HEIGHT: u64 = 5;
     const MANIFEST_COORDINATOR_VIEW: u64 = 9;
-
     #[derive(Clone)]
     struct ManifestParticipantFixture {
         proposal: LaneBlockProposalV1,
         settlement: LaneBlockCommitment,
         settlement_hash: HashOf<LaneBlockCommitment>,
     }
-
     pub(super) struct ManifestBlockFixture {
         pub(super) block: SignedBlock,
         source_ids: [[u8; Hash::LENGTH]; 2],
         first_route: (LaneId, DataSpaceId),
         second_route: (LaneId, DataSpaceId),
     }
-
     fn fixture_key(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("deterministic manifest fixture key")
     }
-
     #[allow(clippy::too_many_lines)]
     fn manifest_participant(
         lane_id: LaneId,
@@ -882,7 +835,6 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         crate::lane_consensus::validate_lane_block_proposal(&proposal)
             .expect("canonical manifest participant proposal");
-
         let receipts = source_ids
             .iter()
             .copied()
@@ -918,7 +870,6 @@ mod tests {
             settlement_hash,
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn manifest_attestation_body(
         participant: &ManifestParticipantFixture,
@@ -966,7 +917,6 @@ mod tests {
             coordinator_proposal_hash: coordinator.proposal.proposal_hash,
         }
     }
-
     fn manifest_qc(
         body: NativeAmxAttestationBodyV2,
         validator_key: &KeyPair,
@@ -992,7 +942,6 @@ mod tests {
         )
         .expect("manifest fixture validator set and proofs must align")
     }
-
     #[allow(clippy::too_many_arguments)]
     fn manifest_leg(
         participant: &ManifestParticipantFixture,
@@ -1025,7 +974,6 @@ mod tests {
             commit_qc: manifest_qc(commit, validator_key, validator),
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn manifest_receipt(
         source_id: [u8; Hash::LENGTH],
@@ -1086,7 +1034,6 @@ mod tests {
             ],
         }
     }
-
     #[allow(clippy::too_many_lines)]
     pub(super) fn result_bearing_native_manifest_block() -> ManifestBlockFixture {
         let transaction_keys = [
@@ -1211,7 +1158,6 @@ mod tests {
                 .with_native_amx_receipt(receipt)
             })
             .collect::<Vec<_>>();
-
         let header = BlockHeader::new(
             NonZeroU64::new(MANIFEST_APPLICATION_HEIGHT).expect("non-zero fixture height"),
             None,
@@ -1245,7 +1191,6 @@ mod tests {
         block
             .replace_signatures([final_signature].into_iter().collect())
             .expect("replace manifest fixture signature");
-
         ManifestBlockFixture {
             block,
             source_ids,
@@ -1259,14 +1204,12 @@ mod tests {
             ),
         }
     }
-
     fn kv(key: &str, value: &str) -> ExecKv {
         ExecKv {
             key: key.as_bytes().to_vec(),
             value: value.as_bytes().to_vec(),
         }
     }
-
     fn witness(reads: Vec<ExecKv>, writes: Vec<ExecKv>) -> ExecWitness {
         ExecWitness {
             reads,
@@ -1275,7 +1218,6 @@ mod tests {
             fastpq_batches: Vec::new(),
         }
     }
-
     #[test]
     fn post_root_projection_matches_formal_empty_pure_read_write_and_conflict_cases() {
         let empty = witness(Vec::new(), Vec::new());
@@ -1283,7 +1225,6 @@ mod tests {
             post_state_from_witness(&empty),
             compute_post_state_root(&[], &[])
         );
-
         let pure_reads = witness(vec![kv("account", "old")], Vec::new());
         assert_eq!(
             post_state_from_witness(&pure_reads),
@@ -1293,7 +1234,6 @@ mod tests {
             post_state_from_witness(&pure_reads),
             post_state_from_witness(&empty)
         );
-
         let writes_with_incidental_reads = witness(
             vec![kv("account", "old"), kv("permission-cache", "true")],
             vec![kv("account", "new")],
@@ -1308,7 +1248,6 @@ mod tests {
             post_state_from_witness(&pure_reads)
         );
     }
-
     #[test]
     fn parent_root_projection_matches_formal_empty_read_only_and_write_filter_cases() {
         let empty = witness(Vec::new(), Vec::new());
@@ -1316,7 +1255,6 @@ mod tests {
             parent_state_from_witness(&empty),
             compute_post_state_root(&[], &[])
         );
-
         let read_only = witness(vec![kv("config", "1"), kv("other", "2")], Vec::new());
         assert_eq!(
             parent_state_from_witness(&read_only),
@@ -1325,7 +1263,6 @@ mod tests {
                 &[]
             )
         );
-
         let witness_with_writes = witness(
             vec![kv("balance", "10"), kv("permission-cache", "true")],
             vec![kv("balance", "7"), kv("write-only", "created")],
@@ -1335,7 +1272,6 @@ mod tests {
             parent,
             compute_post_state_root(&[KvPair::new(b"balance", b"10")], &[])
         );
-
         let changed_write_values = witness(
             witness_with_writes.reads.clone(),
             vec![kv("balance", "999"), kv("write-only", "different")],
@@ -1343,7 +1279,6 @@ mod tests {
         assert_eq!(parent, parent_state_from_witness(&changed_write_values));
         assert_ne!(parent, post_state_from_witness(&witness_with_writes));
     }
-
     #[test]
     fn root_projection_is_order_independent_and_deduplicates_identical_keys() {
         let ordered = witness(
@@ -1362,14 +1297,12 @@ mod tests {
             parent_state_from_witness(&ordered),
             parent_state_from_witness(&reordered)
         );
-
         let duplicated_reads = witness(vec![kv("config", "1"), kv("config", "1")], Vec::new());
         let single_read = witness(vec![kv("config", "1")], Vec::new());
         assert_eq!(
             post_state_from_witness(&duplicated_reads),
             post_state_from_witness(&single_read)
         );
-
         let duplicated_writes = witness(Vec::new(), vec![kv("balance", "7"), kv("balance", "7")]);
         let single_write = witness(Vec::new(), vec![kv("balance", "7")]);
         assert_eq!(
@@ -1377,7 +1310,6 @@ mod tests {
             post_state_from_witness(&single_write)
         );
     }
-
     #[test]
     fn v2_execution_commitment_exposes_exact_bounded_topup_projection() {
         let mut operation_key = vec![super::super::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
@@ -1400,7 +1332,6 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-
         let executed_block_wire_hash = Hash::new(b"executed block wire");
         let native_manifest = NativeAmxApplicationManifestV1::empty(1, executed_block_wire_hash);
         let commitment = execution_commitment_from_witness_for_tests(&witness, &native_manifest)
@@ -1417,7 +1348,6 @@ mod tests {
             try_post_state_from_witness(&witness).expect("same consensus post root")
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn native_amx_manifest_reconstructs_grouped_mixed_routes_and_binds_wire_and_root() {
@@ -1488,7 +1418,6 @@ mod tests {
                 vec![0, 1]
             );
         }
-
         let typed_root =
             HashOf::<MerkleTree<wire::NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
                 manifest.root(),
@@ -1527,7 +1456,6 @@ mod tests {
                 .verify(&HashOf::new(&wire_identity_tampered_leaf), &commitment,),
             "the committed proof must reject an executed-wire identity substitution"
         );
-
         let mut wire_tampered = fixture.block.clone();
         let extra_signer = fixture_key(0x42, Algorithm::BlsNormal);
         wire_tampered
@@ -1547,7 +1475,6 @@ mod tests {
             manifest.root(),
             "the executed-wire identity in every leaf must make the manifest root change"
         );
-
         let mut result_root_tampered = fixture.block.clone();
         let header = result_root_tampered.header();
         let execution_context = result_root_tampered.execution_context().cloned();
@@ -1570,14 +1497,12 @@ mod tests {
             "a header/result-tree mismatch must not reconstruct an authenticated manifest"
         );
     }
-
     #[test]
     fn roots_ignore_fastpq_payloads_match_formal_gate() {
         use iroha_data_model::fastpq::{
             FastpqOperationKind, FastpqPublicInputs, FastpqStateTransition, FastpqTransitionBatch,
             TransferTranscriptBundle,
         };
-
         let base = witness(vec![kv("balance", "10")], vec![kv("balance", "7")]);
         let mut with_fastpq = base.clone();
         with_fastpq
@@ -1604,7 +1529,6 @@ mod tests {
             }],
             metadata: std::collections::BTreeMap::from([(String::from("entry"), vec![0xAA])]),
         });
-
         assert_eq!(
             post_state_from_witness(&base),
             post_state_from_witness(&with_fastpq)
@@ -1615,7 +1539,6 @@ mod tests {
         );
     }
 }
-
 #[cfg(test)]
 pub(crate) fn result_bearing_native_manifest_block_for_tests() -> SignedBlock {
     tests::result_bearing_native_manifest_block().block

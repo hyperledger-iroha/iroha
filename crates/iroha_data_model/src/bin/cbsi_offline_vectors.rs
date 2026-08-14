@@ -14,9 +14,6 @@
 //!
 //! Use `--check` to reject drift or `--output <path>` to write a synchronized
 //! Android/iOS copy.
-
-use std::{env, error::Error, fs, io, path::Path};
-
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -61,7 +58,7 @@ use p256::ecdsa::{
     Signature as P256Signature, SigningKey as P256SigningKey, signature::Signer as _,
 };
 use sha2::{Digest, Sha256};
-
+use std::{env, error::Error, fs, io, path::Path};
 const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/offline/cbsi_interop_contract.json"
@@ -91,7 +88,6 @@ const PAYMENT_TOKEN_ENVELOPE_SCHEMA: &str =
 const OFFLINE_BEARER_CASH_RECEIVE_PREFIX: &str = "wallet-offline-bearer-cash-receive:";
 const OFFLINE_BEARER_CASH_PAYMENT_PREFIX: &str = "wallet-offline-bearer-cash-payment:";
 const OFFLINE_BEARER_CASH_ACK_PREFIX: &str = "wallet-offline-bearer-cash-ack:";
-
 #[cfg_attr(not(test), allow(dead_code))]
 struct FixtureParts {
     fixture: Value,
@@ -102,7 +98,6 @@ struct FixtureParts {
     payment_bundle: KagemushaRecursiveSpendBundleV4,
     acknowledgement: KagemushaReceiverAcknowledgementV2,
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut check_only = false;
     let mut output = FIXTURE_PATH.to_owned();
@@ -127,7 +122,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let parts = build_fixture()?;
     write_fixture(&output, &parts.fixture, check_only)
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     let offline_fi_key = fixed_ed25519_keypair(0x11)?;
@@ -137,7 +131,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     let recipient = AccountId::new(recipient_account_key.public_key().clone());
     let sender_literal = taira_account_literal(&sender)?;
     let recipient_literal = taira_account_literal(&recipient)?;
-
     let asset_definition = AssetDefinitionId::parse_address_literal(CBSI_SBD_ASSET_DEFINITION_ID)?;
     let asset_definition_literal = asset_definition.canonical_address();
     if asset_definition_literal != CBSI_SBD_ASSET_DEFINITION_ID {
@@ -153,7 +146,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::new(NETWORK_ID_SEED),
     ));
-
     let sender_device_key = fixed_p256_signing_key(0x31)?;
     let recipient_device_key = fixed_p256_signing_key(0x32)?;
     let source_note = KagemushaSpendableNoteDescriptorV2 {
@@ -202,7 +194,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         vec![0x54],
     )?;
     recipient_request.validate_at(GENERATED_AT_MS)?;
-
     let payment_bundle = payment_bundle(&recipient_request)?;
     let acknowledgement = acknowledgement(
         &recipient_device_key,
@@ -211,7 +202,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         ACCEPTED_AT_MS,
     )?;
     acknowledgement.validate_for_payment_v4(&recipient_request, &payment_bundle)?;
-
     let source_request_bytes = to_bytes(&source_request)?;
     let recipient_signing_bytes = recipient_request.signing_payload().signing_bytes()?;
     let sender_signing_bytes = source_request.signing_payload().signing_bytes()?;
@@ -229,7 +219,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
     let change_claim_hash = sha256_hex(&change_note_bytes);
     let sender_certificate_payload_hash = sha256_hex(&sender_signing_bytes);
     let recipient_certificate_payload_hash = sha256_hex(&recipient_signing_bytes);
-
     let sender_certificate = certificate_json(
         &sender_literal,
         SENDER_KEY_ID,
@@ -286,7 +275,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
             Value::from(encode(change_note.note_commitment)),
         ),
     ]);
-
     let payment_token = object(vec![
         ("amount", Value::from(AMOUNT)),
         (
@@ -374,7 +362,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         ("token_id", Value::from(encode(payment_bundle_digest))),
         ("type", Value::from("offline_payment_token")),
     ]);
-
     let receive_request = object(vec![
         ("account_id", Value::from(recipient_literal.clone())),
         ("amount", Value::from(AMOUNT)),
@@ -397,7 +384,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         ("token_id", Value::from(encode(payment_bundle_digest))),
         ("type", Value::from("offline_receipt_ack")),
     ]);
-
     let fixture = object(vec![
         (
             "bad_variants",
@@ -673,7 +659,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         ("sdk_interop", sdk_interop_json(&payment_bundle_bytes)?),
         ("version", Value::from(1_u64)),
     ]);
-
     Ok(FixtureParts {
         fixture,
         sender_literal,
@@ -684,7 +669,6 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         acknowledgement,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn signed_payment_request(
     key: &P256SigningKey,
@@ -718,7 +702,6 @@ fn signed_payment_request(
         payload, signature,
     )?)
 }
-
 fn payment_bundle(
     request: &KagemushaRecipientPaymentRequestV2,
 ) -> Result<KagemushaRecursiveSpendBundleV4, Box<dyn Error>> {
@@ -800,7 +783,6 @@ fn payment_bundle(
     bundle.validate_public_binding()?;
     Ok(bundle)
 }
-
 fn acknowledgement(
     key: &P256SigningKey,
     request: &KagemushaRecipientPaymentRequestV2,
@@ -825,7 +807,6 @@ fn acknowledgement(
     let signature = sign(key, &payload.signing_bytes()?)?;
     Ok(KagemushaReceiverAcknowledgementV2 { payload, signature })
 }
-
 fn certificate_json(
     account_literal: &str,
     key_id: &str,
@@ -866,7 +847,6 @@ fn certificate_json(
         ("version", Value::from(2_u64)),
     ])
 }
-
 fn sdk_interop_json(payment_bundle_bytes: &[u8]) -> Result<Value, Box<dyn Error>> {
     Ok(object(vec![
         (
@@ -894,7 +874,6 @@ fn sdk_interop_json(payment_bundle_bytes: &[u8]) -> Result<Value, Box<dyn Error>
         ),
     ]))
 }
-
 fn fountain_qr_fixture(
     payload: &[u8],
     chunk_size: u16,
@@ -933,7 +912,6 @@ fn fountain_qr_fixture(
         ),
     ]))
 }
-
 fn frame_kind_label(kind: QrStreamFrameKind) -> &'static str {
     match kind {
         QrStreamFrameKind::Header => "header",
@@ -941,21 +919,17 @@ fn frame_kind_label(kind: QrStreamFrameKind) -> &'static str {
         QrStreamFrameKind::Parity => "parity",
     }
 }
-
 fn fixed_ed25519_keypair(seed: u8) -> Result<KeyPair, Box<dyn Error>> {
     Ok(KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)?)
 }
-
 fn fixed_p256_signing_key(seed: u8) -> Result<P256SigningKey, Box<dyn Error>> {
     Ok(P256SigningKey::from_bytes((&[seed; 32]).into())?)
 }
-
 fn device_public_key(key: &P256SigningKey) -> Result<KagemushaDevicePublicKeyV2, Box<dyn Error>> {
     Ok(KagemushaDevicePublicKeyV2::from_sec1_bytes(
         key.verifying_key().to_encoded_point(false).as_bytes(),
     )?)
 }
-
 fn sign(
     key: &P256SigningKey,
     message: &[u8],
@@ -966,7 +940,6 @@ fn sign(
         signature.to_bytes().as_slice(),
     )?)
 }
-
 fn taira_account_literal(account_id: &AccountId) -> Result<String, Box<dyn Error>> {
     let literal = AccountAddress::from_account_id(account_id)?
         .to_i105_for_discriminant(TAIRA_CHAIN_DISCRIMINANT)?;
@@ -979,7 +952,6 @@ fn taira_account_literal(account_id: &AccountId) -> Result<String, Box<dyn Error
     }
     Ok(literal)
 }
-
 fn taira_asset_literal(asset_id: &AssetId) -> Result<String, Box<dyn Error>> {
     if asset_id.scope() != &AssetBalanceScope::Global
         || asset_id.definition().canonical_address() != CBSI_SBD_ASSET_DEFINITION_ID
@@ -992,7 +964,6 @@ fn taira_asset_literal(asset_id: &AssetId) -> Result<String, Box<dyn Error>> {
         taira_account_literal(asset_id.account())?
     ))
 }
-
 fn public_key_base64(key_pair: &KeyPair) -> Result<String, Box<dyn Error>> {
     let (algorithm, bytes) = key_pair.public_key().try_to_bytes()?;
     if algorithm != Algorithm::Ed25519 {
@@ -1000,11 +971,9 @@ fn public_key_base64(key_pair: &KeyPair) -> Result<String, Box<dyn Error>> {
     }
     Ok(BASE64_STANDARD.encode(bytes))
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     encode(Sha256::digest(bytes))
 }
-
 fn object(entries: Vec<(&'static str, Value)>) -> Value {
     let mut map = json::Map::new();
     for (key, value) in entries {
@@ -1012,15 +981,12 @@ fn object(entries: Vec<(&'static str, Value)>) -> Value {
     }
     Value::Object(map)
 }
-
 fn string_array(values: &[String]) -> Value {
     Value::Array(values.iter().cloned().map(Value::from).collect())
 }
-
 fn str_array(values: &[&str]) -> Value {
     Value::Array(values.iter().copied().map(Value::from).collect())
 }
-
 fn write_fixture(path: &str, value: &Value, check_only: bool) -> Result<(), Box<dyn Error>> {
     let rendered = format!("{}\n", json::to_string_pretty(value)?);
     let path = Path::new(path);
@@ -1048,11 +1014,9 @@ fn write_fixture(path: &str, value: &Value, check_only: bool) -> Result<(), Box<
     fs::write(path, rendered)?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
         let Value::Object(map) = value else {
             panic!("expected object while reading {key}");
@@ -1060,28 +1024,24 @@ mod tests {
         map.get(key)
             .unwrap_or_else(|| panic!("missing fixture field {key}"))
     }
-
     fn array(value: &Value) -> &[Value] {
         let Value::Array(values) = value else {
             panic!("expected array");
         };
         values
     }
-
     fn string(value: &Value) -> &str {
         let Value::String(value) = value else {
             panic!("expected string");
         };
         value
     }
-
     fn number(value: &Value) -> u64 {
         let Value::Number(value) = value else {
             panic!("expected number");
         };
         value.as_u64().expect("expected unsigned number")
     }
-
     fn assert_exact_cbsi_identifiers(
         value: &Value,
         field_name: Option<&str>,
@@ -1143,7 +1103,6 @@ mod tests {
             _ => {}
         }
     }
-
     #[test]
     fn committed_interop_fixture_matches_current_typed_generator() {
         let fixture = build_fixture().expect("build fixture");
@@ -1157,7 +1116,6 @@ mod tests {
             "committed CBSI Offline Cash fixture is stale"
         );
     }
-
     #[test]
     fn typed_kagemusha_archives_validate_end_to_end() {
         let parts = build_fixture().expect("build fixture");
@@ -1177,7 +1135,6 @@ mod tests {
             .acknowledgement
             .validate_for_payment_v4(&parts.recipient_request, &parts.payment_bundle)
             .expect("receiver acknowledgement");
-
         let bundle_bytes = BASE64_STANDARD
             .decode(string(field(
                 field(&parts.fixture, "sdk_interop"),
@@ -1188,7 +1145,6 @@ mod tests {
             norito::decode_from_bytes(&bundle_bytes).expect("decode typed bundle");
         assert_eq!(decoded, parts.payment_bundle);
     }
-
     #[test]
     fn fixture_is_exact_taira_sbd_and_current_kagemusha() {
         let parts = build_fixture().expect("build fixture");

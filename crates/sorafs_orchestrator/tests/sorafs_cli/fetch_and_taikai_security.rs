@@ -1,5 +1,4 @@
 // Fetch security and Taikai bundle CLI regressions.
-
 #[test]
 fn fetch_command_config_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
@@ -8,10 +7,8 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
     let manifest = ManifestBuilder::new()
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -34,7 +31,6 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
     let manifest_id_hex = manifest_digest_hex.clone();
     let payload_digest_hex = hex_encode(plan.payload_digest.as_bytes());
     let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
     let manifest_report_path = tempdir.path().join("direct_manifest_report.json");
     let manifest_response = format!(
         "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
@@ -51,7 +47,6 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         format!("{}\n", manifest_response).as_bytes(),
     )
     .expect("write manifest report");
-
     let server = MockServer::start();
     let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
     server.mock(|when, then| {
@@ -81,7 +76,6 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         .path()
         .join("scoreboards/direct_policy_scoreboard.json");
     let policy_path = tempdir.path().join("direct_policy.json");
-
     let mut scoreboard = Map::new();
     scoreboard.insert("latency_cap_ms".into(), Value::from(3500u64));
     scoreboard.insert("weight_scale".into(), Value::from(200u64));
@@ -91,26 +85,22 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         Value::from(scoreboard_path.display().to_string()),
     );
     scoreboard.insert("now_unix_secs".into(), Value::from(1_700_000_000u64));
-
     let mut fetch = Map::new();
     fetch.insert("retry_budget".into(), Value::from(4u64));
     fetch.insert("provider_failure_threshold".into(), Value::from(2u64));
     fetch.insert("global_parallel_limit".into(), Value::from(1u64));
     fetch.insert("verify_lengths".into(), Value::from(true));
     fetch.insert("verify_digests".into(), Value::from(true));
-
     let mut root = Map::new();
     root.insert("scoreboard".into(), Value::Object(scoreboard));
     root.insert("fetch".into(), Value::Object(fetch));
     root.insert("telemetry_region".into(), Value::from("regulated-eu"));
     root.insert("max_providers".into(), Value::from(1u64));
     root.insert("transport_policy".into(), Value::from("direct-only"));
-
     let rendered = norito::json::to_string_pretty(&Value::Object(root))
         .expect("render orchestrator config json");
     fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config json");
     let base_url = server.url("/");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -128,7 +118,6 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         return;
     }
     let assert = assert.success();
-
     let summary_value: Value =
         norito::json::from_slice(assert.get_output().stdout.as_slice()).expect("stdout summary");
     assert_eq!(
@@ -137,7 +126,6 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
             .and_then(Value::as_str),
         Some("regulated-eu")
     );
-
     let summary_bytes = fs::read(&summary_path).expect("read summary file");
     let summary_file: Value =
         norito::json::from_slice(&summary_bytes).expect("parse summary file json");
@@ -145,10 +133,8 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         summary_file.get("telemetry_region").and_then(Value::as_str),
         Some("regulated-eu")
     );
-
     let assembled = fs::read(&output_path).expect("read assembled payload");
     assert_eq!(assembled, payload);
-
     let scoreboard_bytes = fs::read(&scoreboard_path).expect("persisted scoreboard json");
     let persisted_scoreboard: Value =
         norito::json::from_slice(&scoreboard_bytes).expect("parse scoreboard json");
@@ -165,7 +151,6 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         Some("policy-gw")
     );
 }
-
 #[test]
 fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
     let tempdir = tempdir().expect("tempdir");
@@ -174,10 +159,8 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
     let manifest = ManifestBuilder::new()
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -199,7 +182,6 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
     let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
     let manifest_id_hex = manifest_digest_hex.clone();
     let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
     let manifest_report_path = tempdir.path().join("flag_manifest_report.json");
     let manifest_response = format!(
         "{{\"manifest_id_hex\":\"{manifest_id_hex}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{manifest_digest_hex}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
@@ -214,7 +196,6 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
         format!("{manifest_response}\n").as_bytes(),
     )
     .expect("write manifest report");
-
     let server = MockServer::start();
     let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
     server.mock(|when, then| {
@@ -238,14 +219,12 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
     let provider_id_hex = "56".repeat(32);
     let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, chunk_profile_handle, 2);
-
     let summary_path = tempdir.path().join("flag_summary.json");
     let output_path = tempdir.path().join("flag_payload.bin");
     let scoreboard_path = tempdir
         .path()
         .join("scoreboards/flag_fetch_scoreboard.json");
     let base_url = server.url("/");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -267,7 +246,6 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
         return;
     }
     assert.success();
-
     let scoreboard_bytes = fs::read(&scoreboard_path).expect("read scoreboard file");
     let scoreboard_value: Value =
         norito::json::from_slice(&scoreboard_bytes).expect("parse scoreboard json");
@@ -288,7 +266,6 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
         "provider id should be recorded in scoreboard"
     );
 }
-
 #[cfg(not(feature = "local-quic-proxy"))]
 #[test]
 fn fetch_command_rejects_insecure_gateway_before_proxy_startup_without_runtime_feature() {
@@ -298,27 +275,22 @@ fn fetch_command_rejects_insecure_gateway_before_proxy_startup_without_runtime_f
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
     let manifest_id_hex = hex_encode(blake3_hash(&payload).as_bytes());
     let provider_id_hex = "cd".repeat(32);
     let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let policy_path = tempdir.path().join("proxy_config.json");
     let manifest_out_path = tempdir.path().join("proxy_manifest.json");
-
     let mut local_proxy = Map::new();
     local_proxy.insert("bind_addr".into(), Value::from("127.0.0.1:0"));
     local_proxy.insert("telemetry_label".into(), Value::from("test-proxy"));
     local_proxy.insert("proxy_mode".into(), Value::from("bridge"));
     local_proxy.insert("emit_browser_manifest".into(), Value::from(true));
-
     let mut root = Map::new();
     root.insert("local_proxy".into(), Value::Object(local_proxy));
-
     let rendered =
         norito::json::to_string_pretty(&Value::Object(root)).expect("render orchestrator config");
     fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config");
-
     let output = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -333,7 +305,6 @@ fn fetch_command_rejects_insecure_gateway_before_proxy_startup_without_runtime_f
         ))
         .output()
         .expect("command executes");
-
     assert!(
         !output.status.success(),
         "command should fail before starting the proxy"
@@ -348,7 +319,6 @@ fn fetch_command_rejects_insecure_gateway_before_proxy_startup_without_runtime_f
         "no proxy manifest should be written when runtime support is unavailable"
     );
 }
-
 #[cfg(feature = "local-quic-proxy")]
 #[test]
 fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
@@ -358,10 +328,8 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
     let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json") + "\n";
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
-
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
-
     let manifest = ManifestBuilder::new()
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -384,7 +352,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
     let manifest_id_hex = manifest_digest_hex.clone();
     let payload_digest_hex = hex_encode(plan.payload_digest.as_bytes());
     let chunk_profile_handle = "sorafs.sf1@1.0.0";
-
     let manifest_report_path = tempdir.path().join("proxy_manifest_report.json");
     let manifest_response = format!(
         "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
@@ -401,7 +368,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         format!("{}\n", manifest_response).as_bytes(),
     )
     .expect("write manifest report");
-
     let server = MockServer::start();
     for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
@@ -417,43 +383,36 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
             then.status(200).body(body.clone());
         });
     }
-
     let provider_id_hex = "ab".repeat(32);
     let (stream_token_b64, gateway_public_key_hex) =
         make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
     let summary_path = tempdir.path().join("proxy_fetch_summary.json");
     let manifest_out_path = tempdir.path().join("proxy_manifest.json");
     let policy_path = tempdir.path().join("proxy_config.json");
-
     let mut scoreboard = Map::new();
     scoreboard.insert("latency_cap_ms".into(), Value::from(3000u64));
     scoreboard.insert("weight_scale".into(), Value::from(100u64));
     scoreboard.insert("telemetry_grace_secs".into(), Value::from(30u64));
     scoreboard.insert("now_unix_secs".into(), Value::from(1_701_000_000u64));
-
     let mut fetch = Map::new();
     fetch.insert("retry_budget".into(), Value::from(3u64));
     fetch.insert("provider_failure_threshold".into(), Value::from(2u64));
     fetch.insert("global_parallel_limit".into(), Value::from(2u64));
     fetch.insert("verify_lengths".into(), Value::from(true));
     fetch.insert("verify_digests".into(), Value::from(true));
-
     let mut local_proxy = Map::new();
     local_proxy.insert("bind_addr".into(), Value::from("127.0.0.1:0"));
     local_proxy.insert("telemetry_label".into(), Value::from("test-proxy"));
     local_proxy.insert("proxy_mode".into(), Value::from("bridge"));
     local_proxy.insert("emit_browser_manifest".into(), Value::from(true));
-
     let mut root = Map::new();
     root.insert("scoreboard".into(), Value::Object(scoreboard));
     root.insert("fetch".into(), Value::Object(fetch));
     root.insert("local_proxy".into(), Value::Object(local_proxy));
-
     let rendered =
         norito::json::to_string_pretty(&Value::Object(root)).expect("render orchestrator config");
     fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config");
     let base_url = server.url("/");
-
     let assert = sorafs_cli_cmd()
         .arg("fetch")
         .arg(format!("--plan={}", plan_path.display()))
@@ -474,7 +433,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         return;
     }
     assert.success();
-
     let summary_bytes = fs::read(&summary_path).expect("read summary json");
     let summary_value: Value =
         from_slice(&summary_bytes).expect("summary json must parse into Value");
@@ -502,7 +460,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         .and_then(Value::as_str)
         .expect("summary.local_proxy_kaigi_policy");
     assert_eq!(summary_kaigi_policy, "public");
-
     let manifest_bytes = fs::read(&manifest_out_path).expect("read manifest json");
     let manifest_value: Value =
         from_slice(&manifest_bytes).expect("manifest json should parse into Value");
@@ -510,7 +467,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         manifest_value, manifest_from_summary,
         "manifest exported to disk should match summary"
     );
-
     let authority = manifest_value
         .get("authority")
         .and_then(Value::as_str)
@@ -539,7 +495,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         .and_then(Value::as_str)
         .expect("cache_tagging.salt_hex");
     assert_eq!(salt_hex.len(), 32, "salt_hex must be 16 bytes encoded");
-
     let summary_override_path = tempdir.path().join("proxy_fetch_summary_override.json");
     let manifest_override_path = tempdir.path().join("proxy_manifest_override.json");
     sorafs_cli_cmd()
@@ -559,7 +514,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         .arg("--local-proxy-mode=metadata-only")
         .assert()
         .success();
-
     let summary_override_bytes =
         fs::read(&summary_override_path).expect("read override summary json");
     let summary_override: Value =
@@ -583,7 +537,6 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         Some("metadata-only")
     );
 }
-
 #[test]
 fn sorafs_cli_taikai_bundle_generates_artifacts() {
     let dir = tempdir().expect("tempdir");
@@ -594,7 +547,6 @@ fn sorafs_cli_taikai_bundle_generates_artifacts() {
     let indexes_path = dir.path().join("segment_bundle.index.json");
     let ingest_path = dir.path().join("segment_bundle.ingest.json");
     let summary_path = dir.path().join("segment_bundle.summary.json");
-
     let mut cmd = sorafs_cli_cmd();
     cmd.arg("taikai")
         .arg("bundle")
@@ -621,13 +573,11 @@ fn sorafs_cli_taikai_bundle_generates_artifacts() {
         .arg("--live-edge-drift-ms=-17")
         .arg("--ingest-node-id=node-a");
     cmd.assert().success();
-
     assert!(car_path.exists(), "car output should exist");
     assert!(envelope_path.exists(), "envelope output should exist");
     assert!(indexes_path.exists(), "indexes output should exist");
     assert!(ingest_path.exists(), "ingest metadata output should exist");
     assert!(summary_path.exists(), "summary output should exist");
-
     let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
     let envelope: TaikaiSegmentEnvelopeV1 =
         norito::decode_from_bytes(&envelope_bytes).expect("decode envelope");
@@ -637,7 +587,6 @@ fn sorafs_cli_taikai_bundle_generates_artifacts() {
         Some(42)
     );
     assert_eq!(envelope.instrumentation.live_edge_drift_ms, Some(-17));
-
     let summary_bytes = fs::read(&summary_path).expect("read summary");
     let summary_json: Value = from_slice(&summary_bytes).expect("summary json");
     assert_eq!(
@@ -656,7 +605,6 @@ fn sorafs_cli_taikai_bundle_generates_artifacts() {
         Some(true)
     );
 }
-
 #[test]
 fn sorafs_cli_taikai_bundle_rejects_noncanonical_operator_inputs() {
     let cases = vec![
@@ -700,7 +648,6 @@ fn sorafs_cli_taikai_bundle_rejects_noncanonical_operator_inputs() {
         ("--bitrate-kbps", "0".to_string(), "greater than zero"),
         ("--segment-duration", "0".to_string(), "greater than zero"),
     ];
-
     for (flag, value, expected) in cases {
         let dir = tempdir().expect("tempdir");
         let payload_path = dir.path().join("segment_bundle.bin");
@@ -710,7 +657,6 @@ fn sorafs_cli_taikai_bundle_rejects_noncanonical_operator_inputs() {
         let indexes_path = dir.path().join("segment_bundle.index.json");
         let ingest_path = dir.path().join("segment_bundle.ingest.json");
         let summary_path = dir.path().join("segment_bundle.summary.json");
-
         let mut args = vec![
             "taikai".to_string(),
             "bundle".to_string(),
@@ -746,7 +692,6 @@ fn sorafs_cli_taikai_bundle_rejects_noncanonical_operator_inputs() {
             }
         }
         assert!(replaced, "test case flag {flag} must replace a base arg");
-
         let output = sorafs_cli_cmd()
             .args(args)
             .output()

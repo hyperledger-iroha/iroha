@@ -5,25 +5,21 @@
 //! reader: descriptor selection, release binding, complete-frame digest
 //! authentication, exact parser-pass consumption, and trailing-byte rejection
 //! remain owned by core.
-
-use std::{
-    fmt,
-    io::{Read, Seek},
-    sync::Arc,
-};
-
-use iroha_data_model::offline::{
-    KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
-    KagemushaPastaCycleParityV1, KagemushaStepCircuitParamsV4,
-};
-
 use super::kagemusha_artifact_v4::{
     KagemushaAuthenticatedArtifactInspectionV4, KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     kagemusha_artifact_descriptor_v4,
     with_kagemusha_pasta_cycle_artifact_payload_after_inspection_v4,
     with_kagemusha_pasta_cycle_artifact_payload_v4,
 };
-
+use iroha_data_model::offline::{
+    KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
+    KagemushaPastaCycleParityV1, KagemushaStepCircuitParamsV4,
+};
+use std::{
+    fmt,
+    io::{Read, Seek},
+    sync::Arc,
+};
 /// Object-safe seekable reader lent by an authenticated artifact source.
 ///
 /// The source must keep the underlying handle pinned for the complete callback.
@@ -31,9 +27,7 @@ use super::kagemusha_artifact_v4::{
 /// pinned source's retained complete-frame inspection and reauthenticates the
 /// exact bytes seen by the callback.
 pub trait KagemushaArtifactReadSeekV4: Read + Seek {}
-
 impl<T: Read + Seek + ?Sized> KagemushaArtifactReadSeekV4 for T {}
-
 /// Immutable source for one separately authenticated production release.
 ///
 /// Implementations do not expose unframed bytes.  They lend exactly one raw
@@ -44,7 +38,6 @@ impl<T: Read + Seek + ?Sized> KagemushaArtifactReadSeekV4 for T {}
 pub trait KagemushaAuthenticatedArtifactSourceV4: Send + Sync {
     /// The signed release selecting every descriptor this source can open.
     fn authenticated_release(&self) -> &KagemushaAuthenticatedReleaseV4;
-
     /// Lend the pinned complete KRV4 file for one exact parity and role.
     fn with_framed_artifact(
         &self,
@@ -52,7 +45,6 @@ pub trait KagemushaAuthenticatedArtifactSourceV4: Send + Sync {
         kind: KagemushaPastaCycleArtifactKindV4,
         consume: &mut dyn FnMut(&mut dyn KagemushaArtifactReadSeekV4) -> Result<(), String>,
     ) -> Result<(), String>;
-
     /// Return a prior complete-frame authentication retained by this source.
     ///
     /// Sources which cannot pin immutable file identity should keep the safe
@@ -67,7 +59,6 @@ pub trait KagemushaAuthenticatedArtifactSourceV4: Send + Sync {
         Ok(None)
     }
 }
-
 /// Lightweight, release-bound semantic identity for one qualified parity.
 ///
 /// This deliberately retains no Halo2 parameters or keys.  The raw SHA-256
@@ -86,7 +77,6 @@ pub struct KagemushaQualifiedParityMetadataV4 {
     proving_key_fixed_columns: usize,
     proving_key_permutation_columns: usize,
 }
-
 impl KagemushaQualifiedParityMetadataV4 {
     pub(crate) fn new(
         parity: KagemushaPastaCycleParityV1,
@@ -124,56 +114,46 @@ impl KagemushaQualifiedParityMetadataV4 {
             proving_key_permutation_columns,
         })
     }
-
     /// Pasta parity selected by this metadata.
     #[must_use]
     pub const fn parity(&self) -> KagemushaPastaCycleParityV1 {
         self.parity
     }
-
     /// Authenticated circuit parameters for this parity.
     #[must_use]
     pub fn circuit_params(&self) -> &KagemushaStepCircuitParamsV4 {
         &self.circuit_params
     }
-
     /// Identity of the fully compiled final protocol.
     #[must_use]
     pub const fn compiled_protocol_identity_sha256(&self) -> [u8; 32] {
         self.compiled_protocol_identity_sha256
     }
-
     /// Exact byte length of the canonical processed verifying key.
     #[must_use]
     pub const fn processed_verifying_key_len(&self) -> u64 {
         self.processed_verifying_key_len
     }
-
     /// Raw SHA-256 of the canonical processed verifying key artifact payload.
     #[must_use]
     pub const fn processed_verifying_key_sha256(&self) -> [u8; 32] {
         self.processed_verifying_key_sha256
     }
-
     /// Iroha domain-separated commitment to the processed verifying key.
     #[must_use]
     pub const fn verifying_key_commitment(&self) -> [u8; 32] {
         self.verifying_key_commitment
     }
-
     pub(crate) const fn proving_key_embedded_verifying_key_sha256(&self) -> [u8; 32] {
         self.proving_key_embedded_verifying_key_sha256
     }
-
     pub(crate) const fn proving_key_fixed_columns(&self) -> usize {
         self.proving_key_fixed_columns
     }
-
     pub(crate) const fn proving_key_permutation_columns(&self) -> usize {
         self.proving_key_permutation_columns
     }
 }
-
 /// Core-owned proof that all eight signed roles passed semantic qualification.
 ///
 /// Construction is private to core.  The returned object inseparably retains
@@ -188,7 +168,6 @@ pub struct KagemushaQualifiedArtifactSourceV4 {
     step_eq: KagemushaQualifiedParityMetadataV4,
     step_ep: KagemushaQualifiedParityMetadataV4,
 }
-
 impl fmt::Debug for KagemushaQualifiedArtifactSourceV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -202,7 +181,6 @@ impl fmt::Debug for KagemushaQualifiedArtifactSourceV4 {
             .finish_non_exhaustive()
     }
 }
-
 impl KagemushaQualifiedArtifactSourceV4 {
     pub(crate) fn new(
         source: Arc<dyn KagemushaAuthenticatedArtifactSourceV4>,
@@ -227,25 +205,21 @@ impl KagemushaQualifiedArtifactSourceV4 {
             step_ep,
         })
     }
-
     /// Authenticated release pinned before semantic qualification began.
     #[must_use]
     pub fn authenticated_release(&self) -> &KagemushaAuthenticatedReleaseV4 {
         &self.authenticated_release
     }
-
     /// Core-qualified Eq metadata.
     #[must_use]
     pub const fn step_eq(&self) -> &KagemushaQualifiedParityMetadataV4 {
         &self.step_eq
     }
-
     /// Core-qualified Ep metadata.
     #[must_use]
     pub const fn step_ep(&self) -> &KagemushaQualifiedParityMetadataV4 {
         &self.step_ep
     }
-
     /// Lend one authenticated processed verifying-key payload without copying it.
     ///
     /// Only a semantically qualified source exposes this projection.  Core
@@ -279,12 +253,10 @@ impl KagemushaQualifiedArtifactSourceV4 {
         )
     }
 }
-
 impl KagemushaAuthenticatedArtifactSourceV4 for KagemushaQualifiedArtifactSourceV4 {
     fn authenticated_release(&self) -> &KagemushaAuthenticatedReleaseV4 {
         &self.authenticated_release
     }
-
     fn with_framed_artifact(
         &self,
         parity: KagemushaPastaCycleParityV1,
@@ -293,7 +265,6 @@ impl KagemushaAuthenticatedArtifactSourceV4 for KagemushaQualifiedArtifactSource
     ) -> Result<(), String> {
         self.source.with_framed_artifact(parity, kind, consume)
     }
-
     fn authenticated_inspection(
         &self,
         parity: KagemushaPastaCycleParityV1,
@@ -302,7 +273,6 @@ impl KagemushaAuthenticatedArtifactSourceV4 for KagemushaQualifiedArtifactSource
         self.source.authenticated_inspection(parity, kind)
     }
 }
-
 /// Semantically qualify all eight roles of one authenticated production source.
 ///
 /// Qualification is performed inside core and returns an opaque, unforgeable
@@ -317,12 +287,10 @@ pub fn qualify_kagemusha_authenticated_artifact_source_v4(
         authenticated_release,
     )
 }
-
 struct KagemushaSourceCallbackStateV4<T> {
     outcome: Option<Result<T, String>>,
     callback_count: u8,
 }
-
 impl<T> KagemushaSourceCallbackStateV4<T> {
     const fn new() -> Self {
         Self {
@@ -330,7 +298,6 @@ impl<T> KagemushaSourceCallbackStateV4<T> {
             callback_count: 0,
         }
     }
-
     fn enter(&mut self) -> Result<(), String> {
         self.callback_count = self.callback_count.saturating_add(1);
         if self.callback_count != 1 {
@@ -341,7 +308,6 @@ impl<T> KagemushaSourceCallbackStateV4<T> {
         }
         Ok(())
     }
-
     fn record(&mut self, outcome: Result<T, String>) -> Result<(), String> {
         let callback_result = outcome
             .as_ref()
@@ -350,7 +316,6 @@ impl<T> KagemushaSourceCallbackStateV4<T> {
         self.outcome = Some(outcome);
         callback_result
     }
-
     fn finish(self, source_result: Result<(), String>) -> Result<T, String> {
         if self.callback_count != 1 {
             return Err(format!(
@@ -370,7 +335,6 @@ impl<T> KagemushaSourceCallbackStateV4<T> {
         }
     }
 }
-
 /// Authenticate and parse one exact payload from a source-backed release.
 ///
 /// The callback sees a bounded hashing reader and must consume it completely.
@@ -395,7 +359,6 @@ where
     let authenticated_inspection = source.authenticated_inspection(parity, kind)?;
     let mut parse = Some(parse);
     let mut state = KagemushaSourceCallbackStateV4::new();
-
     let source_result = source.with_framed_artifact(parity, kind, &mut |reader| {
         state.enter()?;
         let parse = parse.take().ok_or_else(|| {
@@ -425,18 +388,15 @@ where
     });
     state.finish(source_result)
 }
-
 #[cfg(test)]
 mod tests {
     use super::KagemushaSourceCallbackStateV4;
-
     #[test]
     fn source_callback_state_requires_exactly_one_invocation() {
         let omitted = KagemushaSourceCallbackStateV4::<u8>::new()
             .finish(Ok(()))
             .expect_err("omitted callback must fail");
         assert!(omitted.contains("0 times"));
-
         let mut repeated = KagemushaSourceCallbackStateV4::new();
         repeated.enter().expect("first callback");
         repeated.record(Ok(7_u8)).expect("first result");
@@ -446,7 +406,6 @@ mod tests {
             .expect_err("repeated callback must remain failed if source swallows it");
         assert!(repeated.contains("2 times"));
     }
-
     #[test]
     fn source_callback_state_preserves_parser_and_source_errors() {
         let mut swallowed_parser = KagemushaSourceCallbackStateV4::<u8>::new();
@@ -460,7 +419,6 @@ mod tests {
             swallowed_parser.finish(Ok(())).expect_err("parse failure"),
             "parse sentinel"
         );
-
         let mut late_source = KagemushaSourceCallbackStateV4::new();
         late_source.enter().expect("callback");
         late_source.record(Ok(9_u8)).expect("parse");

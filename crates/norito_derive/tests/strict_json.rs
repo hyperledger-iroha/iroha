@@ -1,44 +1,36 @@
 //! Runtime coverage for strict Norito JSON derives.
-
 use norito::json::JsonDeserialize as _;
 use norito::json::{self, Arena, Error, FastFromJson, TapeWalker};
 use norito_derive::{JsonDeserialize, JsonSerialize};
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct StrictInner {
     value: u32,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct StrictOuter {
     child: StrictInner,
     children: Vec<StrictInner>,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct Permissive {
     value: u32,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct StrictOptional {
     optional: Option<u32>,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct RequiredOptional {
     #[norito(required)]
     optional: Option<u32>,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct FlattenedFields {
     label: String,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct StrictFlattened {
@@ -46,7 +38,6 @@ struct StrictFlattened {
     #[norito(flatten)]
     fields: FlattenedFields,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct RequiredWithFlatten {
     #[norito(required)]
@@ -54,13 +45,11 @@ struct RequiredWithFlatten {
     #[norito(flatten)]
     fields: FlattenedFields,
 }
-
 #[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
 struct FastRequiredOptional {
     #[norito(required)]
     optional: Option<u32>,
 }
-
 #[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
 struct FastRequiredWithFlatten {
     #[norito(required)]
@@ -68,14 +57,12 @@ struct FastRequiredWithFlatten {
     #[norito(flatten)]
     fields: FlattenedFields,
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "kind", content = "payload", deny_unknown_fields)]
 enum StrictEvent {
     Unit,
     Record { id: u32 },
 }
-
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "kind", content = "payload")]
 enum RequiredEvent {
@@ -84,7 +71,6 @@ enum RequiredEvent {
         optional: Option<u32>,
     },
 }
-
 #[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
 #[norito(tag = "kind", content = "payload")]
 enum FastRequiredEvent {
@@ -93,13 +79,11 @@ enum FastRequiredEvent {
         optional: Option<u32>,
     },
 }
-
 fn decode_fast<'a, T: FastFromJson<'a>>(input: &'a str) -> Result<T, norito::Error> {
     let mut walker = TapeWalker::new(input);
     let mut arena = Arena::new();
     T::parse(&mut walker, &mut arena)
 }
-
 fn assert_missing_field(error: impl core::fmt::Display, field: &str) {
     let message = error.to_string();
     assert!(
@@ -107,32 +91,27 @@ fn assert_missing_field(error: impl core::fmt::Display, field: &str) {
         "unexpected error: {message}"
     );
 }
-
 fn assert_unknown_field(error: Error, expected: &str) {
     match error {
         Error::UnknownField { field } => assert_eq!(field, expected),
         other => panic!("expected unknown field `{expected}`, got {other:?}"),
     }
 }
-
 fn assert_duplicate_field(error: Error, expected: &str) {
     match error {
         Error::DuplicateField { field } => assert_eq!(field, expected),
         other => panic!("expected duplicate field `{expected}`, got {other:?}"),
     }
 }
-
 #[test]
 fn named_struct_rejects_unknown_fields_without_changing_permissive_default() {
     let error = json::from_slice::<StrictInner>(br#"{"value":1,"future":2}"#)
         .expect_err("strict struct must reject unknown field");
     assert_unknown_field(error, "future");
-
     let permissive = json::from_slice::<Permissive>(br#"{"value":1,"future":2}"#)
         .expect("unannotated struct remains permissive");
     assert_eq!(permissive, Permissive { value: 1 });
 }
-
 #[test]
 fn strictness_applies_to_nested_objects_and_array_elements() {
     for input in [
@@ -144,7 +123,6 @@ fn strictness_applies_to_nested_objects_and_array_elements() {
         assert_unknown_field(error, "future");
     }
 }
-
 #[test]
 fn strict_struct_keeps_optional_absence_and_explicit_null_semantics() {
     assert_eq!(
@@ -156,7 +134,6 @@ fn strict_struct_keeps_optional_absence_and_explicit_null_semantics() {
         StrictOptional { optional: None }
     );
 }
-
 #[test]
 fn required_option_distinguishes_omission_from_explicit_null_on_normal_and_fallback_paths() {
     let expected = RequiredOptional { optional: None };
@@ -180,7 +157,6 @@ fn required_option_distinguishes_omission_from_explicit_null_on_normal_and_fallb
         "optional",
     );
 }
-
 #[test]
 fn required_option_is_enforced_by_direct_fast_and_flatten_paths() {
     assert_eq!(
@@ -192,7 +168,6 @@ fn required_option_is_enforced_by_direct_fast_and_flatten_paths() {
         decode_fast::<FastRequiredOptional>(r#"{}"#).expect_err("fast omission must reject"),
         "optional",
     );
-
     let normal = r#"{"optional":null,"label":"known"}"#;
     assert_eq!(
         json::from_str::<RequiredWithFlatten>(normal).expect("normal flatten path"),
@@ -223,7 +198,6 @@ fn required_option_is_enforced_by_direct_fast_and_flatten_paths() {
         "optional",
     );
 }
-
 #[test]
 fn required_option_is_enforced_in_tagged_enum_named_fields() {
     let explicit = r#"{"kind":"Record","payload":{"optional":null}}"#;
@@ -246,7 +220,6 @@ fn required_option_is_enforced_in_tagged_enum_named_fields() {
         "optional",
     );
 }
-
 #[test]
 fn strict_flatten_rejects_fields_not_consumed_by_flattened_value() {
     let decoded = json::from_slice::<StrictFlattened>(br#"{"id":7,"label":"known"}"#)
@@ -260,44 +233,37 @@ fn strict_flatten_rejects_fields_not_consumed_by_flattened_value() {
             },
         }
     );
-
     let error =
         json::from_slice::<StrictFlattened>(br#"{"id":7,"label":"known","unclaimed":true}"#)
             .expect_err("unclaimed flattened field must reject");
     assert_unknown_field(error, "unclaimed");
 }
-
 #[test]
 fn tagged_enum_rejects_unknown_envelope_and_variant_fields() {
     let direct_envelope =
         json::from_json::<StrictEvent>(r#"{"kind":"Unit","payload":null,"future":false}"#)
             .expect_err("strict enum envelope must reject unknown field on direct parser path");
     assert_unknown_field(direct_envelope, "future");
-
     let envelope =
         json::from_slice::<StrictEvent>(br#"{"kind":"Unit","payload":null,"future":false}"#)
             .expect_err("strict enum envelope must reject unknown field");
     assert_unknown_field(envelope, "future");
-
     let payload =
         json::from_slice::<StrictEvent>(br#"{"kind":"Record","payload":{"id":1,"future":false}}"#)
             .expect_err("strict enum payload must reject unknown field");
     assert_unknown_field(payload, "future");
 }
-
 #[test]
 fn tagged_enum_rejects_duplicate_tag_and_content_on_direct_parser_path() {
     let duplicate_tag =
         json::from_json::<StrictEvent>(r#"{"kind":"Unit","kind":"Unit","payload":null}"#)
             .expect_err("duplicate tag must reject");
     assert_duplicate_field(duplicate_tag, "kind");
-
     let duplicate_content =
         json::from_json::<StrictEvent>(r#"{"kind":"Unit","payload":null,"payload":null}"#)
             .expect_err("duplicate content must reject");
     assert_duplicate_field(duplicate_content, "payload");
 }
-
 #[test]
 fn value_conversion_path_enforces_unknown_fields() {
     let value: json::Value =
@@ -306,7 +272,6 @@ fn value_conversion_path_enforces_unknown_fields() {
         .expect_err("strict json_from_value must reject unknown field");
     assert_unknown_field(error, "future");
 }
-
 #[test]
 fn preparse_rejects_escaped_duplicate_keys_recursively() {
     let error =

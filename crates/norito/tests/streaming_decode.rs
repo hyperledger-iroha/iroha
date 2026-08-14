@@ -1,17 +1,14 @@
 //! Sanity checks for slice-based decoding of streaming enum types.
-
 use norito::{
     core::from_bytes_view,
     streaming::{CapabilityRole, EncryptionSuite, Hash, PrivacyBucketGranularity},
     to_bytes,
 };
-
 fn sample_hash(byte: u8) -> Hash {
     let mut hash = [0u8; 32];
     hash.fill(byte);
     hash
 }
-
 #[test]
 fn capability_role_decodes_via_slice_adapter() {
     let original = CapabilityRole::Publisher;
@@ -20,7 +17,6 @@ fn capability_role_decodes_via_slice_adapter() {
     let decoded = view.decode_exact::<CapabilityRole>().expect("decode role");
     assert_eq!(decoded, original);
 }
-
 #[test]
 fn encryption_suite_decodes_via_slice_adapter() {
     let original = EncryptionSuite::Kyber768XChaCha20Poly1305(sample_hash(0x42));
@@ -31,7 +27,6 @@ fn encryption_suite_decodes_via_slice_adapter() {
         .expect("decode suite");
     assert_eq!(decoded, original);
 }
-
 #[test]
 fn privacy_bucket_decodes_via_slice_adapter() {
     let original = PrivacyBucketGranularity::StandardV1;

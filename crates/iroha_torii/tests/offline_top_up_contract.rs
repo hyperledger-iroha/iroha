@@ -1,20 +1,16 @@
 //! Source-level contract guards for the first-release offline top-up command.
-
 const KAGEMUSHA_COMMANDS_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const OFFLINE_API_SOURCE: &str = include_str!("../../iroha_torii_shared/src/offline_api.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
-
 fn production_source(source: &str) -> &str {
     source
         .split("\nmod tests")
         .next()
         .expect("production source")
 }
-
 #[test]
 fn top_up_is_a_typed_async_command_on_the_final_route() {
     let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
-
     assert!(TORII_SOURCE.contains("&route_catalog::offline::TOP_UP"));
     assert!(TORII_SOURCE.contains("post(handler_offline_top_up)"));
     assert!(TORII_SOURCE.contains("offline_api::OfflineTopUpRequest"));
@@ -35,11 +31,9 @@ fn top_up_is_a_typed_async_command_on_the_final_route() {
     assert!(commands.contains("header::RETRY_AFTER"));
     assert!(commands.contains("header::CACHE_CONTROL"));
 }
-
 #[test]
 fn retries_use_bounded_recovery_and_confirmed_admission() {
     let commands = production_source(KAGEMUSHA_COMMANDS_SOURCE);
-
     assert!(commands.contains("find_pending_offline_operation_by_id"));
     assert!(commands.contains("get_earliest_block_height_by_offline_operation_id"));
     assert!(!commands.contains("while height > 0"));

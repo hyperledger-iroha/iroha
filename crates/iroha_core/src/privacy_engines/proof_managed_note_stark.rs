@@ -11,14 +11,6 @@
 //! profile is not safe to expose until its extension-domain residue evaluator,
 //! strict proof adversaries, native differential tests, and typed state
 //! transition are all complete.
-
-use std::collections::BTreeSet;
-
-use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
-use rand::TryRngCore;
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     transparent_stark::{
@@ -29,7 +21,11 @@ use super::{
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
-
+use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
+use rand::TryRngCore;
+use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
+use thiserror::Error;
 /// Number of byte-copy cells in every shared note row.
 pub(crate) const NOTE_COPY_WIDTH_V1: usize = 8;
 /// Independent copy-permutation lanes.
@@ -48,7 +44,6 @@ pub(crate) const NOTE_COPY_CONSTRAINT_DEGREE_V1: u8 = 2;
 /// Number of shared copy constraints before profile-only residues.
 pub(crate) const NOTE_COPY_CONSTRAINT_COUNT_V1: usize =
     NOTE_COPY_BIT_COLUMNS_V1 + 3 * NOTE_COPY_WIDTH_V1 + 21 * NOTE_COPY_LANES_V1;
-
 const COPY_FIXED_IDENTITY_OFFSET: usize = 0;
 const COPY_FIXED_SIGMA_OFFSET: usize = COPY_FIXED_IDENTITY_OFFSET + NOTE_COPY_WIDTH_V1;
 const COPY_FIXED_INACTIVE_OFFSET: usize = COPY_FIXED_SIGMA_OFFSET + NOTE_COPY_WIDTH_V1;
@@ -58,7 +53,6 @@ const COPY_FIXED_CONSTANT_VALUE_OFFSET: usize =
 const COPY_FIXED_FIRST: usize = COPY_FIXED_CONSTANT_VALUE_OFFSET + NOTE_COPY_WIDTH_V1;
 const COPY_FIXED_LAST: usize = COPY_FIXED_FIRST + 1;
 const COPY_FIXED_TRANSITION: usize = COPY_FIXED_LAST + 1;
-
 const COPY_AUX_BITS_OFFSET: usize = 0;
 const COPY_AUX_PRODUCTS_OFFSET: usize = COPY_AUX_BITS_OFFSET + NOTE_COPY_BIT_COLUMNS_V1;
 const COPY_NUMERATOR_BEFORE: usize = 0;
@@ -71,7 +65,6 @@ const COPY_NUMERATOR_TOTAL: usize = 10;
 const COPY_DENOMINATOR_PAIRS: usize = 11;
 const COPY_DENOMINATOR_QUADS: usize = 15;
 const COPY_DENOMINATOR_TOTAL: usize = 17;
-
 const NOTE_CONSTRAINT_ALPHA_LABEL_V1: &[u8] = b"proof-managed-note-stark-constraint-alpha-v1";
 const NOTE_DEEP_BASE_CURRENT_MIX_LABEL_V1: &[u8] =
     b"proof-managed-note-stark-deep-base-current-mix-v1";
@@ -88,7 +81,6 @@ const NOTE_SHARED_PROFILE_BINDING_LABEL_V1: &[u8] =
     b"proof-managed-note-stark-shared-profile-binding-v1";
 const NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-stark.combined-profile.v1";
-
 /// Sole first-release proof-system identity for proof-managed note pools.
 pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriSha256Goldilocks";
 /// Independent composition and FRI lanes in the first-release profile.
@@ -140,7 +132,6 @@ pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DIGEST_V1: [u8; 32] = [
     0x44, 0x2a, 0xf0, 0x7c, 0xaf, 0x81, 0x76, 0xe5, 0x5e, 0xaf, 0x01, 0xdd, 0x72, 0x3a, 0xbd, 0x10,
     0xf8, 0xd9, 0x3a, 0x8e, 0xc0, 0xf3, 0x62, 0x98, 0x0f, 0xb7, 0xa3, 0xa1, 0x62, 0x61, 0x93, 0xe4,
 ];
-
 /// Derive the canonical digest of shared proof geometry plus one relation.
 pub(crate) fn proof_managed_note_stark_profile_digest_v1(relation_descriptor: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -155,7 +146,6 @@ pub(crate) fn proof_managed_note_stark_profile_digest_v1(relation_descriptor: &[
     }
     hasher.finalize().into()
 }
-
 /// Shared proof-driver or copy-chip failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ProofManagedNoteStarkErrorV1 {
@@ -196,7 +186,6 @@ pub(crate) enum ProofManagedNoteStarkErrorV1 {
     #[error("proof-managed note STARK internal invariant failed")]
     Internal,
 }
-
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
         TransparentStarkErrorV1::RandomnessUnavailable => ProofManagedNoteStarkErrorV1::Randomness,
@@ -212,7 +201,6 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteS
         _ => ProofManagedNoteStarkErrorV1::Internal,
     }
 }
-
 fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
         aggregate::AggregateStarkErrorV1::InvalidLayout => {
@@ -249,7 +237,6 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
         }
     }
 }
-
 /// Closed protocol data supplied by one compiled private-note profile.
 ///
 /// The generic driver fixes every cryptographic primitive and security
@@ -273,7 +260,6 @@ pub(crate) struct ProofManagedNoteStarkProtocolV1 {
     /// Relation-specific domain embedded in the ordered layout frame.
     pub(crate) relation_layout_domain: &'static [u8],
 }
-
 fn validate_note_fri_soundness_v1(
     parameters: aggregate::AggregateStarkParametersV1,
 ) -> Result<aggregate::AggregateFriTheorem2BoundV1, ProofManagedNoteStarkErrorV1> {
@@ -321,7 +307,6 @@ fn validate_note_fri_soundness_v1(
     aggregate::validate_affine_batched_fri_theorem2_v1(parameters, &layout, certificate)
         .map_err(map_aggregate_error_v1)
 }
-
 impl ProofManagedNoteStarkProtocolV1 {
     /// Enforce the sole first-release security profile and unique domains.
     pub(crate) fn validate(self) -> Result<(), ProofManagedNoteStarkErrorV1> {
@@ -418,7 +403,6 @@ impl ProofManagedNoteStarkProtocolV1 {
         Ok(())
     }
 }
-
 /// Statement-derived relation adapter consumed by the shared proof driver.
 ///
 /// Base columns always begin with the eight byte-copy cells. Auxiliary columns
@@ -429,7 +413,6 @@ impl ProofManagedNoteStarkProtocolV1 {
 pub(crate) trait ProofManagedNoteStarkAdapterV1 {
     /// Profile-specific Fiat-Shamir challenges derived after copy challenges.
     type ProfileChallenges: Clone;
-
     /// Closed proof protocol.
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1;
     /// Exact digest of all public statement fields.
@@ -475,7 +458,6 @@ pub(crate) trait ProofManagedNoteStarkAdapterV1 {
         profile_challenges: &Self::ProfileChallenges,
     ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1>;
 }
-
 /// Fixed policy for one byte-copy cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NoteCopyCellPolicyV1 {
@@ -486,7 +468,6 @@ pub(crate) enum NoteCopyCellPolicyV1 {
     /// The cell belongs to a verifier-fixed variable cycle.
     Variable,
 }
-
 /// Verifier-fixed copy policy and permutation for a complete note trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NoteCopyScheduleV1 {
@@ -495,7 +476,6 @@ pub(crate) struct NoteCopyScheduleV1 {
     /// One-based target label for every copy cell.
     pub(crate) sigma: Vec<[u32; NOTE_COPY_WIDTH_V1]>,
 }
-
 impl NoteCopyScheduleV1 {
     /// Validate the exact size, label permutation, and policy separation.
     pub(crate) fn validate(&self, trace_size: usize) -> Result<(), ProofManagedNoteStarkErrorV1> {
@@ -550,7 +530,6 @@ impl NoteCopyScheduleV1 {
         }
         Ok(())
     }
-
     /// Compile the fixed copy preprocessing columns on the native domain.
     pub(crate) fn fixed_columns_v1(
         &self,
@@ -589,7 +568,6 @@ impl NoteCopyScheduleV1 {
         Ok(columns)
     }
 }
-
 /// One copy-permutation lane's transcript challenges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NoteCopyLaneChallengesV1 {
@@ -598,14 +576,12 @@ pub(crate) struct NoteCopyLaneChallengesV1 {
     /// Additive nonzero shift.
     pub(crate) gamma: F,
 }
-
 /// Three independent copy-permutation challenge lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NoteCopyChallengesV1 {
     /// Closed three-lane challenge set.
     pub(crate) lanes: [NoteCopyLaneChallengesV1; NOTE_COPY_LANES_V1],
 }
-
 /// Derive the shared copy challenges after all base roots are committed.
 pub(crate) fn derive_note_copy_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -637,7 +613,6 @@ pub(crate) fn derive_note_copy_challenges_v1(
     }
     Ok(NoteCopyChallengesV1 { lanes })
 }
-
 fn columns_to_rows_v1(
     columns: &[Vec<F>],
     rows: usize,
@@ -659,7 +634,6 @@ fn columns_to_rows_v1(
         })
         .collect()
 }
-
 fn rows_to_columns_v1(
     rows: &[Vec<F>],
     width: usize,
@@ -672,11 +646,9 @@ fn rows_to_columns_v1(
         .collect();
     Ok(columns)
 }
-
 fn copy_factor_v1(value: F, label: F, challenge: NoteCopyLaneChallengesV1) -> F {
     value.add(challenge.beta.mul(label)).add(challenge.gamma)
 }
-
 fn write_product_tree_v1(target: &mut [F], offset: usize, factors: [F; NOTE_COPY_WIDTH_V1]) {
     let pairs = [
         factors[0].mul(factors[1]),
@@ -689,7 +661,6 @@ fn write_product_tree_v1(target: &mut [F], offset: usize, factors: [F; NOTE_COPY
     target[offset + 4..offset + 6].copy_from_slice(&quads);
     target[offset + 6] = quads[0].mul(quads[1]);
 }
-
 /// Build byte decompositions and all three copy grand-product lanes.
 pub(crate) fn build_note_copy_aux_columns_v1(
     base_columns: &[Vec<F>],
@@ -752,11 +723,9 @@ pub(crate) fn build_note_copy_aux_columns_v1(
     }
     rows_to_columns_v1(&rows, NOTE_COPY_AUX_WIDTH_V1)
 }
-
 fn push_boolean_residue_v1(residues: &mut Vec<F>, value: F) {
     residues.push(value.mul(value.sub(F::ONE)));
 }
-
 /// Evaluate all shared byte-range, fixed-policy, and copy-product residues.
 pub(crate) fn note_copy_constraint_residues_v1(
     current_base: &[F],
@@ -889,7 +858,6 @@ pub(crate) fn note_copy_constraint_residues_v1(
     }
     Ok(residues)
 }
-
 #[derive(Clone)]
 struct PreparedNoteProfileV1 {
     protocol: ProofManagedNoteStarkProtocolV1,
@@ -902,7 +870,6 @@ struct PreparedNoteProfileV1 {
     layout: aggregate::AggregateProofLayoutV1,
     fixed_columns: Vec<Vec<F>>,
 }
-
 fn canonical_columns_v1(
     columns: &[Vec<F>],
     width: usize,
@@ -917,13 +884,11 @@ fn canonical_columns_v1(
     }
     Ok(())
 }
-
 fn checked_trace_size_v1(trace_log2: u8) -> Result<usize, ProofManagedNoteStarkErrorV1> {
     1_usize
         .checked_shl(u32::from(trace_log2))
         .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)
 }
-
 fn maximum_masked_trace_degree_v1(
     trace_size: usize,
 ) -> Result<usize, ProofManagedNoteStarkErrorV1> {
@@ -931,7 +896,6 @@ fn maximum_masked_trace_degree_v1(
         .checked_add(PROOF_MANAGED_NOTE_MASK_DEGREE_V1)
         .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)
 }
-
 fn maximum_quotient_degree_v1(
     trace_size: usize,
     constraint_degree: u8,
@@ -941,7 +905,6 @@ fn maximum_quotient_degree_v1(
         .and_then(|degree| degree.checked_sub(trace_size))
         .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)
 }
-
 fn maximum_fri_input_degree_v1(
     layout: &aggregate::AggregateProofLayoutV1,
     parameters: aggregate::AggregateStarkParametersV1,
@@ -961,7 +924,6 @@ fn maximum_fri_input_degree_v1(
         .and_then(|coefficient_capacity| coefficient_capacity.checked_sub(1))
         .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile)
 }
-
 fn prepare_note_profile_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
 ) -> Result<PreparedNoteProfileV1, ProofManagedNoteStarkErrorV1> {
@@ -1037,7 +999,6 @@ fn prepare_note_profile_v1<A: ProofManagedNoteStarkAdapterV1>(
         fixed_columns,
     })
 }
-
 fn row_at_columns_v1(
     columns: &[Vec<F>],
     row: usize,
@@ -1052,7 +1013,6 @@ fn row_at_columns_v1(
         })
         .collect()
 }
-
 fn fixed_lde_columns_v1(
     columns: &[Vec<F>],
     trace_log2: u8,
@@ -1080,7 +1040,6 @@ fn fixed_lde_columns_v1(
         })
         .collect()
 }
-
 fn masked_lde_columns_v1<R: TryRngCore>(
     columns: &[Vec<F>],
     trace_log2: u8,
@@ -1109,7 +1068,6 @@ fn masked_lde_columns_v1<R: TryRngCore>(
     }
     Ok((lde_columns, masks))
 }
-
 fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
     coefficients
         .iter()
@@ -1119,7 +1077,6 @@ fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
             value.mul(point).add(E::from_base(coefficient))
         })
 }
-
 fn evaluate_masked_native_columns_at_deep_v1(
     columns: &[Vec<F>],
     masks: &[ReplayableTraceMaskV1],
@@ -1168,7 +1125,6 @@ fn evaluate_masked_native_columns_at_deep_v1(
     }
     Ok((current, next))
 }
-
 fn new_note_transcript_v1(
     prepared: &PreparedNoteProfileV1,
     public_digest: &[u8; 32],
@@ -1208,7 +1164,6 @@ fn new_note_transcript_v1(
     .map_err(map_aggregate_error_v1)?;
     Ok(transcript)
 }
-
 fn challenge_extension_vector_v1(
     transcript: &mut TransparentTranscriptV1,
     label: &[u8],
@@ -1222,7 +1177,6 @@ fn challenge_extension_vector_v1(
         })
         .collect()
 }
-
 fn derive_constraint_alphas_v1(
     transcript: &mut TransparentTranscriptV1,
     constraint_count: usize,
@@ -1237,7 +1191,6 @@ fn derive_constraint_alphas_v1(
         })
         .collect()
 }
-
 fn derive_deep_mixes_v1(
     transcript: &mut TransparentTranscriptV1,
     base_width: usize,
@@ -1283,7 +1236,6 @@ fn derive_deep_mixes_v1(
         .map_err(map_aggregate_error_v1)?;
     Ok(mixes)
 }
-
 fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
@@ -1333,7 +1285,6 @@ fn all_constraint_residues_v1<A: ProofManagedNoteStarkAdapterV1>(
     }
     Ok(residues)
 }
-
 fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
@@ -1361,7 +1312,6 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
     }
     Ok(())
 }
-
 fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     prepared: &PreparedNoteProfileV1,
@@ -1437,7 +1387,6 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         })
         .collect()
 }
-
 #[allow(clippy::too_many_arguments)]
 fn mixed_deep_fri_base_v1(
     base_lde: &[Vec<F>],
@@ -1583,7 +1532,6 @@ fn mixed_deep_fri_base_v1(
     }
     Ok(result)
 }
-
 fn absorb_grinding_nonce_v1(
     transcript: &mut TransparentTranscriptV1,
     nonce: u64,
@@ -1592,7 +1540,6 @@ fn absorb_grinding_nonce_v1(
         .absorb(NOTE_GRINDING_LABEL_V1, &[&nonce.to_be_bytes()])
         .map_err(map_transparent_error_v1)
 }
-
 /// Construct the sole canonical proof wire with injected masking entropy.
 ///
 /// The caller supplies exact native base columns; the adapter reconstructs all
@@ -1621,7 +1568,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         lde_size,
     )
     .map_err(map_aggregate_error_v1)?;
-
     let mut transcript = new_note_transcript_v1(&prepared, &public_digest)?;
     let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
         base_root: base_tree.root(),
@@ -1635,7 +1581,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         &trace_group_proofs,
     )
     .map_err(map_aggregate_error_v1)?;
-
     let copy_challenges = derive_note_copy_challenges_v1(&mut transcript)?;
     let profile_challenges =
         adapter.derive_profile_challenges_v1(&mut transcript, copy_challenges)?;
@@ -1668,7 +1613,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         copy_challenges,
         &profile_challenges,
     )?;
-
     let (aux_lde, aux_masks) =
         masked_lde_columns_v1(&aux_columns, prepared.trace_log2, lde_log2, rng)?;
     let aux_tree = aggregate::row_tree_v1(
@@ -1686,7 +1630,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         &trace_group_proofs,
     )
     .map_err(map_aggregate_error_v1)?;
-
     let alphas = derive_constraint_alphas_v1(&mut transcript, prepared.constraint_count)?;
     let fixed_lde = fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)?;
     let compositions = composition_lanes_v1(
@@ -1728,7 +1671,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         &fri_mask_roots,
     )
     .map_err(map_aggregate_error_v1)?;
-
     let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
         base_lde,
         aux_lde,
@@ -1838,7 +1780,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let grinding_nonce = grind_nonce_v1(&grinding_state, PROOF_MANAGED_NOTE_GRINDING_BITS_V1)
         .map_err(map_transparent_error_v1)?;
     absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
-
     let query_indices = aggregate::query_indices_v1(
         &transcript,
         prepared.protocol.parameters,
@@ -1912,7 +1853,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     verify_proof_managed_note_stark_v1(adapter, &encoded)?;
     Ok(encoded)
 }
-
 /// Construct a canonical proof with operating-system masking entropy.
 #[allow(dead_code)]
 pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
@@ -1921,7 +1861,6 @@ pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV
 ) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
     prove_proof_managed_note_stark_v1_with_rng(adapter, base_columns, &mut rand::rngs::OsRng)
 }
-
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,
     prepared: &'a PreparedNoteProfileV1,
@@ -1931,7 +1870,6 @@ struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     alphas: &'a [Vec<E>],
     lde_root: F,
 }
-
 impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
     for NoteOpenedRowEvaluatorV1<'_, A>
 {
@@ -1988,7 +1926,6 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
         })
     }
 }
-
 /// Verify the exact canonical proof wire against one statement-derived adapter.
 pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
@@ -2084,7 +2021,6 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-
     let fixed_lde = fixed_lde_columns_v1(
         &prepared.fixed_columns,
         prepared.trace_log2,
@@ -2115,7 +2051,6 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     )
     .map_err(map_aggregate_error_v1)
 }
-
 /// Deterministic affine-line audits for declared AIR polynomial degrees.
 ///
 /// This test-only helper varies every evaluator input independently along
@@ -2126,21 +2061,16 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
 /// well as an unsound understatement.
 #[cfg(test)]
 pub(crate) mod degree_audit {
-    use core::fmt::Debug;
-
-    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
-
     use super::F;
-
+    use core::fmt::Debug;
+    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
     fn random_field_v1(rng: &mut StdRng) -> F {
         F::reduce(u128::from(rng.next_u64()))
     }
-
     fn random_nonzero_field_v1(rng: &mut StdRng) -> F {
         let value = random_field_v1(rng);
         if value == F::ZERO { F::ONE } else { value }
     }
-
     fn affine_vector_v1(origin: &[F], direction: &[F], point: F) -> Vec<F> {
         origin
             .iter()
@@ -2149,7 +2079,6 @@ pub(crate) mod degree_audit {
             .map(|(origin, direction)| origin.add(direction.mul(point)))
             .collect()
     }
-
     /// Measure and enforce the maximum total degree of a residue evaluator.
     pub(crate) fn measured_maximum_affine_degree_v1<E>(
         seed: [u8; 32],
@@ -2169,7 +2098,6 @@ pub(crate) mod degree_audit {
         let mut rng = StdRng::from_seed(seed);
         let mut measured_maximum = 0;
         let terminal_order = usize::from(declared_maximum_degree) + 1;
-
         for trial in 0..trial_count {
             let origins = widths.map(|width| {
                 (0..width)
@@ -2210,7 +2138,6 @@ pub(crate) mod degree_audit {
                     .all(|residues| residues.len() == residue_count),
                 "degree-audit residue width changed within trial {trial}"
             );
-
             for order in 1..=terminal_order {
                 differences = differences
                     .windows(2)
@@ -2239,21 +2166,16 @@ pub(crate) mod degree_audit {
                 }
             }
         }
-
         measured_maximum
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-
     use super::*;
     use rand::{RngCore, SeedableRng as _, rngs::StdRng};
-
+    use std::sync::OnceLock;
     const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^12:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
     const MOCK_TRACE_LOG2_V1: u8 = 12;
-
     const MOCK_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         aggregate::AggregateStarkDomainsV1 {
             base_leaf: b"proof-managed-note-mock-base-leaf-v1",
@@ -2272,7 +2194,6 @@ mod tests {
             fri_beta_label: b"proof-managed-note-mock-fri-beta-label-v1",
             query_seed: b"proof-managed-note-mock-query-seed-v1",
         };
-
     fn mock_parameters_v1() -> aggregate::AggregateStarkParametersV1 {
         aggregate::AggregateStarkParametersV1 {
             proof_magic: *b"PMN1",
@@ -2292,7 +2213,6 @@ mod tests {
             maximum_proof_bytes: 4 * 1024 * 1024,
         }
     }
-
     #[derive(Clone)]
     struct MockAdapterV1 {
         parameters: aggregate::AggregateStarkParametersV1,
@@ -2301,7 +2221,6 @@ mod tests {
         public_digest: [u8; 32],
         corrupt_schedule: bool,
     }
-
     impl Default for MockAdapterV1 {
         fn default() -> Self {
             Self {
@@ -2315,10 +2234,8 @@ mod tests {
             }
         }
     }
-
     impl ProofManagedNoteStarkAdapterV1 for MockAdapterV1 {
         type ProfileChallenges = ();
-
         fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
             ProofManagedNoteStarkProtocolV1 {
                 parameters: self.parameters,
@@ -2330,31 +2247,24 @@ mod tests {
                 relation_layout_domain: b"proof-managed-note-mock-relation-layout-v1",
             }
         }
-
         fn public_input_digest_v1(&self) -> Result<[u8; 32], ProofManagedNoteStarkErrorV1> {
             Ok(self.public_digest)
         }
-
         fn trace_log2_v1(&self) -> u8 {
             MOCK_TRACE_LOG2_V1
         }
-
         fn base_width_v1(&self) -> usize {
             NOTE_COPY_WIDTH_V1
         }
-
         fn profile_aux_width_v1(&self) -> usize {
             0
         }
-
         fn profile_fixed_width_v1(&self) -> usize {
             0
         }
-
         fn profile_constraint_count_v1(&self) -> usize {
             1
         }
-
         fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
             let trace_size = 1_usize << self.trace_log2_v1();
             let policies = vec![[NoteCopyCellPolicyV1::Variable; NOTE_COPY_WIDTH_V1]; trace_size];
@@ -2371,11 +2281,9 @@ mod tests {
             }
             Ok(NoteCopyScheduleV1 { policies, sigma })
         }
-
         fn profile_fixed_columns_v1(&self) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
             Ok(Vec::new())
         }
-
         fn derive_profile_challenges_v1(
             &self,
             _transcript: &mut TransparentTranscriptV1,
@@ -2383,7 +2291,6 @@ mod tests {
         ) -> Result<Self::ProfileChallenges, ProofManagedNoteStarkErrorV1> {
             Ok(())
         }
-
         fn build_profile_aux_columns_v1(
             &self,
             _base_columns: &[Vec<F>],
@@ -2394,7 +2301,6 @@ mod tests {
         ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
             Ok(Vec::new())
         }
-
         fn profile_constraint_residues_v1(
             &self,
             current_base: &[F],
@@ -2412,13 +2318,11 @@ mod tests {
             ])
         }
     }
-
     fn mock_base_columns_v1() -> Vec<Vec<F>> {
         (0..NOTE_COPY_WIDTH_V1)
             .map(|column| vec![F(column as u64); 1 << MOCK_TRACE_LOG2_V1])
             .collect()
     }
-
     fn proof_fixture_v1() -> &'static (MockAdapterV1, Vec<Vec<F>>, Vec<u8>) {
         static FIXTURE: OnceLock<(MockAdapterV1, Vec<Vec<F>>, Vec<u8>)> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -2430,23 +2334,18 @@ mod tests {
             (adapter, base, proof)
         })
     }
-
     struct MaxValueRng;
-
     impl RngCore for MaxValueRng {
         fn next_u32(&mut self) -> u32 {
             u32::MAX
         }
-
         fn next_u64(&mut self) -> u64 {
             u64::MAX
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             destination.fill(0xFF);
         }
     }
-
     #[test]
     fn shared_geometry_descriptor_and_digest_match_every_driver_constant() {
         let expected = format!(
@@ -2497,7 +2396,6 @@ mod tests {
             "the canonical profile digest must frame the shared geometry before the relation"
         );
     }
-
     #[test]
     fn affine_batched_fri_certificate_meets_the_release_soundness_floor() {
         let mock_bound =
@@ -2509,7 +2407,6 @@ mod tests {
                 commitment_error_bits: 195,
             }
         );
-
         let mut maximum_release_parameters = mock_parameters_v1();
         maximum_release_parameters.minimum_trace_log2 = PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1;
         maximum_release_parameters.maximum_trace_log2 = PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1;
@@ -2522,7 +2419,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn materialized_deep_codeword_matches_the_opened_row_verifier() {
         // This is the smallest native domain that satisfies the release
@@ -2673,7 +2569,6 @@ mod tests {
             assert_eq!(codeword[index], expected, "row {index}");
         }
     }
-
     #[test]
     fn replayed_native_masks_match_materialized_lde_at_both_deep_points() {
         // Keep this fixture inside the same closed FRI geometry used by the
@@ -2728,7 +2623,6 @@ mod tests {
             assert_eq!(next[column_index], materialized[1]);
         }
     }
-
     #[test]
     fn copy_schedule_and_residues_are_exact() {
         let adapter = MockAdapterV1::default();
@@ -2767,7 +2661,6 @@ mod tests {
             assert_eq!(residues.len(), NOTE_COPY_CONSTRAINT_COUNT_V1);
             assert!(residues.iter().all(|value| *value == F::ZERO));
         }
-
         let mut changed_aux = aux.clone();
         changed_aux[0][3] = changed_aux[0][3].add(F::ONE);
         let residues = note_copy_constraint_residues_v1(
@@ -2780,7 +2673,6 @@ mod tests {
         .expect("mutated residues");
         assert!(residues.iter().any(|value| *value != F::ZERO));
     }
-
     #[test]
     fn copy_dual_products_are_total_at_zero_factors_and_reject_a_bad_multiset() {
         let adapter = MockAdapterV1::default();
@@ -2823,7 +2715,6 @@ mod tests {
             .expect("residues");
             assert!(residues.iter().all(|value| *value == F::ZERO));
         }
-
         let mut malformed_fixed = prepared.fixed_columns.clone();
         let zero_denominator_row = prepared.trace_size - 1;
         malformed_fixed[COPY_FIXED_SIGMA_OFFSET][zero_denominator_row] =
@@ -2833,7 +2724,6 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::Copy),
         );
     }
-
     #[test]
     fn copy_chip_declared_degree_matches_affine_finite_differences() {
         let challenges = NoteCopyChallengesV1 {
@@ -2879,7 +2769,6 @@ mod tests {
             "the shared copy chip's declared maximum degree must be exact"
         );
     }
-
     #[test]
     fn malformed_schedules_and_non_bytes_fail_closed() {
         let mut duplicate = MockAdapterV1::default();
@@ -2888,7 +2777,6 @@ mod tests {
             prepare_note_profile_v1(&duplicate),
             Err(ProofManagedNoteStarkErrorV1::Copy)
         ));
-
         let adapter = MockAdapterV1::default();
         let prepared = prepare_note_profile_v1(&adapter).expect("profile");
         let mut transcript =
@@ -2914,26 +2802,21 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::Copy)
         ));
     }
-
     #[test]
     fn canonical_proof_roundtrips_and_is_statement_bound() {
         let (adapter, _base, proof) = proof_fixture_v1();
         verify_proof_managed_note_stark_v1(adapter, proof).expect("canonical proof verifies");
         assert_eq!(&proof[..4], b"PMN1");
         assert!(proof.len() < adapter.parameters.maximum_proof_bytes);
-
         let digest: [u8; 32] = Sha256::digest(proof).into();
         assert_ne!(digest, [0; 32]);
-
         let mut wrong_public = adapter.clone();
         wrong_public.public_digest[0] ^= 1;
         assert!(verify_proof_managed_note_stark_v1(&wrong_public, proof).is_err());
-
         let mut wrong_profile = adapter.clone();
         wrong_profile.profile_digest[0] ^= 1;
         assert!(verify_proof_managed_note_stark_v1(&wrong_profile, proof).is_err());
     }
-
     #[test]
     fn exact_wire_and_committed_values_reject_adversarial_mutations() {
         let (adapter, _base, proof) = proof_fixture_v1();
@@ -2944,7 +2827,6 @@ mod tests {
         let mut trailing = proof.to_vec();
         trailing.push(0);
         assert!(verify_proof_managed_note_stark_v1(adapter, &trailing).is_err());
-
         for offset in [0_usize, 4, 6, 8, 40, 72, 168] {
             let mut changed = proof.to_vec();
             changed[offset] ^= 1;
@@ -2953,7 +2835,6 @@ mod tests {
                 "offset {offset} must be bound"
             );
         }
-
         let parameters = mock_parameters_v1();
         let layout = aggregate::AggregateProofLayoutV1::new(
             parameters,
@@ -2981,7 +2862,6 @@ mod tests {
             aggregate::decode_proof_v1(proof, parameters, &layout).is_err(),
             "the non-DEEP codec must not reinterpret a release proof"
         );
-
         let mut omitted_deep = proof.to_vec();
         omitted_deep.drain(deep_insertion..deep_end);
         assert!(verify_proof_managed_note_stark_v1(adapter, &omitted_deep).is_err());
@@ -2991,7 +2871,6 @@ mod tests {
             proof[deep_insertion..deep_end].iter().copied(),
         );
         assert!(verify_proof_managed_note_stark_v1(adapter, &duplicated_deep).is_err());
-
         let extension_bytes = core::mem::size_of::<[u64; 4]>();
         let deep_region_offsets = [
             ("base-current", deep_insertion),
@@ -3034,7 +2913,6 @@ mod tests {
             ..deep_insertion + (NOTE_COPY_WIDTH_V1 + 1) * extension_bytes]
             .copy_from_slice(&first_current);
         assert!(verify_proof_managed_note_stark_v1(adapter, &reordered_deep).is_err());
-
         let mut noncanonical_deep = proof.to_vec();
         noncanonical_deep[deep_insertion..deep_insertion + 8]
             .copy_from_slice(&u64::MAX.to_be_bytes());
@@ -3042,7 +2920,6 @@ mod tests {
             verify_proof_managed_note_stark_v1(adapter, &noncanonical_deep),
             Err(ProofManagedNoteStarkErrorV1::ProofWire)
         ));
-
         let first_terminal =
             deep_end + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * (fri_rounds + 1) * 32;
         let mut noncanonical = proof.to_vec();
@@ -3051,7 +2928,6 @@ mod tests {
             verify_proof_managed_note_stark_v1(adapter, &noncanonical),
             Err(ProofManagedNoteStarkErrorV1::ProofWire)
         ));
-
         let grinding = first_terminal
             + PROOF_MANAGED_NOTE_SECURITY_LANES_V1
                 * (1 << PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1)
@@ -3060,7 +2936,6 @@ mod tests {
         wrong_nonce[grinding + 7] ^= 1;
         assert!(verify_proof_managed_note_stark_v1(adapter, &wrong_nonce).is_err());
     }
-
     #[test]
     fn malformed_trace_profile_and_entropy_never_emit_a_proof() {
         let adapter = MockAdapterV1::default();
@@ -3068,7 +2943,6 @@ mod tests {
         changed[0][5] = F::ONE;
         let mut rng = StdRng::from_seed([3; 32]);
         assert!(prove_proof_managed_note_stark_v1_with_rng(&adapter, &changed, &mut rng,).is_err());
-
         assert!(matches!(
             prove_proof_managed_note_stark_v1_with_rng(
                 &adapter,
@@ -3077,14 +2951,12 @@ mod tests {
             ),
             Err(ProofManagedNoteStarkErrorV1::Randomness)
         ));
-
         let mut wrong_parameters = adapter.clone();
         wrong_parameters.parameters.query_count -= 1;
         assert!(matches!(
             prepare_note_profile_v1(&wrong_parameters),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let mut oversized_trace_profile = adapter.clone();
         oversized_trace_profile.parameters.minimum_trace_log2 =
             PROOF_MANAGED_NOTE_MAX_NATIVE_TRACE_LOG2_V1 + 1;
@@ -3094,7 +2966,6 @@ mod tests {
             oversized_trace_profile.protocol_v1().validate(),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let mut degree_below_copy_chip = adapter.clone();
         degree_below_copy_chip.maximum_constraint_degree =
             NOTE_COPY_CONSTRAINT_DEGREE_V1.saturating_sub(1);
@@ -3102,7 +2973,6 @@ mod tests {
             prepare_note_profile_v1(&degree_below_copy_chip),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let mut unsupported_degree = adapter.clone();
         unsupported_degree.maximum_constraint_degree =
             PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1 + 1;
@@ -3110,7 +2980,6 @@ mod tests {
             prepare_note_profile_v1(&unsupported_degree),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let mut insufficient_fri_capacity = adapter.clone();
         insufficient_fri_capacity.maximum_constraint_degree =
             PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
@@ -3118,7 +2987,6 @@ mod tests {
             prepare_note_profile_v1(&insufficient_fri_capacity),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let mut zero_profile = adapter;
         zero_profile.profile_digest = [0; 32];
         assert!(matches!(
@@ -3126,7 +2994,6 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
     }
-
     #[test]
     fn mock_profile_cannot_exceed_the_consensus_proof_cap() {
         let mut adapter = MockAdapterV1::default();
@@ -3140,7 +3007,6 @@ mod tests {
             prepare_note_profile_v1(&adapter),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let canonical = MockAdapterV1::default();
         let prepared = prepare_note_profile_v1(&canonical).expect("canonical profile");
         let hard_maximum = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
@@ -3156,7 +3022,6 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
     }
-
     #[test]
     fn quotient_degree_capacity_is_exact_and_overflow_checked() {
         let adapter = MockAdapterV1::default();
@@ -3173,7 +3038,6 @@ mod tests {
         assert_eq!(maximum_quotient_degree, 30);
         assert_eq!(maximum_fri_input_degree, 63);
         assert!(maximum_trace_degree.max(maximum_quotient_degree) <= maximum_fri_input_degree);
-
         assert!(matches!(
             maximum_masked_trace_degree_v1(usize::MAX),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
@@ -3182,7 +3046,6 @@ mod tests {
             maximum_quotient_degree_v1(usize::MAX - PROOF_MANAGED_NOTE_MASK_DEGREE_V1, u8::MAX),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
-
         let mut production_parameters = mock_parameters_v1();
         production_parameters.minimum_trace_log2 = 14;
         production_parameters.maximum_trace_log2 = 14;

@@ -5,9 +5,7 @@
 //! - materialize: build owned Vec<(u64, String, bool)> and perform the same work
 //!
 //! Run with: cargo bench -p norito --bench view_vs_materialize
-
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-
 fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     let mut rows = Vec::with_capacity(n);
     for i in 0..n as u64 {
@@ -23,7 +21,6 @@ fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     }
     rows
 }
-
 fn bench_view_vs_materialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("view_vs_materialize_u64_str_bool");
     for &n in &[1_000usize, 10_000] {
@@ -34,7 +31,6 @@ fn bench_view_vs_materialize(c: &mut Criterion) {
             .map(|(id, s, b)| (*id, s.as_str(), *b))
             .collect();
         let body = norito::columnar::encode_ncb_u64_str_bool(&borrowed);
-
         // Sanity: compute both accumulators once and ensure equality
         let acc_view = {
             let view = norito::columnar::view_ncb_u64_str_bool(&body).expect("view");
@@ -61,7 +57,6 @@ fn bench_view_vs_materialize(c: &mut Criterion) {
             acc_view, acc_mat,
             "view/materialize accumulators must match"
         );
-
         group.bench_with_input(BenchmarkId::new("view_iter", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_ncb_u64_str_bool(&body).expect("view");
@@ -75,7 +70,6 @@ fn bench_view_vs_materialize(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("materialize", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_ncb_u64_str_bool(&body).expect("view");
@@ -95,6 +89,5 @@ fn bench_view_vs_materialize(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_view_vs_materialize);
 criterion_main!(benches);

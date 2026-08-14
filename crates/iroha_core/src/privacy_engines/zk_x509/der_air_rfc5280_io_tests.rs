@@ -7,7 +7,6 @@ fn rfc5280_io_is_exact_and_uses_attribute_contents_at_256_byte_boundary() {
         fixed_padded_v1(&encoded_common_name, ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1),
         Err(ZkX509DerAirErrorV1::Resource)
     );
-
     let (chain, crl, statement) = rfc5280_fixture_with_leaf_common_name(2, &[10, 11], &common_name);
     let trace = build_zk_x509_rfc5280_trace_v1(&chain, &crl, statement).expect("boundary trace");
     assert_eq!(
@@ -62,11 +61,9 @@ fn rfc5280_io_is_exact_and_uses_attribute_contents_at_256_byte_boundary() {
             instance: 0,
         }]
     );
-
     let io = build_zk_x509_io_trace_v1(&witnesses, io_challenges()).expect("global I/O");
     validate_rfc5280_io_v1(&trace, &io, 0).expect("DER I/O binding");
     let canonical_witnesses = witnesses.clone();
-
     let (depth_three_chain, depth_three_crl, depth_three_statement) = rfc5280_fixture(3, &[10, 11]);
     let depth_three_trace =
         build_zk_x509_rfc5280_trace_v1(&depth_three_chain, &depth_three_crl, depth_three_statement)
@@ -88,7 +85,6 @@ fn rfc5280_io_is_exact_and_uses_attribute_contents_at_256_byte_boundary() {
         depth_three_witnesses[24].producer_value,
         depth_three_trace.certificates[2].public_key
     );
-
     let mut mismatched = witnesses.clone();
     mismatched[8].producer_value[0] ^= 1;
     mismatched[8].consumer_values[0][0] ^= 1;
@@ -98,11 +94,9 @@ fn rfc5280_io_is_exact_and_uses_attribute_contents_at_256_byte_boundary() {
         validate_rfc5280_io_v1(&trace, &mismatched_io, 0),
         Err(ZkX509DerAirErrorV1::ByteBinding)
     );
-
     let mut unequal_endpoints = witnesses;
     unequal_endpoints[7].consumer_values[0][0] ^= 1;
     assert!(build_zk_x509_io_trace_v1(&unequal_endpoints, io_challenges()).is_err());
-
     let reject_topology = |label: &str, changed: Vec<ZkX509IoChannelWitnessV1>| {
         if let Ok(changed_io) = build_zk_x509_io_trace_v1(&changed, io_challenges()) {
             assert!(
@@ -111,7 +105,6 @@ fn rfc5280_io_is_exact_and_uses_attribute_contents_at_256_byte_boundary() {
             );
         }
     };
-
     let mut changed = canonical_witnesses.clone();
     changed[0].declaration.channel += 1;
     reject_topology("channel", changed);
@@ -173,7 +166,6 @@ fn rfc5280_io_is_exact_and_uses_attribute_contents_at_256_byte_boundary() {
     let mut changed = canonical_witnesses.clone();
     changed[0].consumer_values[0].pop();
     reject_topology("short consumer value", changed);
-
     let declaration_mutations: [fn(&mut ZkX509IoTraceV1); 8] = [
         |value| value.declarations[0].channel += 1,
         |value| value.declarations[0].producer.role = ZkX509IoSegmentRoleV1::Sha256,

@@ -1,7 +1,5 @@
 //! Internal helpers shared across governance CLI submodules.
-
 use core::mem;
-
 use crate::{CliOutputFormat, RunContext};
 use eyre::{Result, eyre};
 use iroha::client::Client;
@@ -10,7 +8,6 @@ use iroha_crypto::{
     blake2::{Blake2b512, digest::Digest},
 };
 use norito::json::Value;
-
 /// Parse one canonical governance selector V1 for Clap.
 pub(crate) fn parse_governance_selector_v1(input: &str) -> Result<String, String> {
     if iroha::data_model::governance::is_valid_governance_selector_v1(input) {
@@ -21,7 +18,6 @@ pub(crate) fn parse_governance_selector_v1(input: &str) -> Result<String, String
         iroha::data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
     ))
 }
-
 /// Parse one canonical lowercase 32-byte governance proposal identifier for Clap.
 pub(crate) fn parse_governance_proposal_id_v1(input: &str) -> Result<String, String> {
     if input.len() == 64
@@ -33,7 +29,6 @@ pub(crate) fn parse_governance_proposal_id_v1(input: &str) -> Result<String, Str
     }
     Err("must be exactly 64 lowercase hexadecimal characters".to_owned())
 }
-
 /// Print a JSON payload or a summary line, depending on CLI output mode.
 pub fn print_with_summary<C: RunContext>(
     context: &mut C,
@@ -52,7 +47,6 @@ pub fn print_with_summary<C: RunContext>(
     }
     Ok(())
 }
-
 /// Normalize a 32-byte hex string.
 pub(super) fn canonicalize_hex32(input: &str) -> Result<String> {
     if input.starts_with("hash:") {
@@ -90,7 +84,6 @@ pub(super) fn canonicalize_hex32(input: &str) -> Result<String> {
     }
     Ok(body.to_ascii_lowercase())
 }
-
 /// Decode a canonicalized 32-byte hex string into bytes.
 pub(super) fn decode_hex32(hex_str: &str) -> Result<[u8; 32]> {
     let canonical = canonicalize_hex32(hex_str)?;
@@ -98,7 +91,6 @@ pub(super) fn decode_hex32(hex_str: &str) -> Result<[u8; 32]> {
     hex::decode_to_slice(&canonical, &mut out)?;
     Ok(out)
 }
-
 /// Compute the governance proposal id using the stable hash recipe.
 pub(super) fn compute_proposal_id(
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
@@ -125,7 +117,6 @@ pub(super) fn compute_proposal_id(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 pub(super) fn resolve_contract_address_target(
     client: &Client,
     contract_address: Option<&str>,
@@ -169,11 +160,9 @@ pub(super) fn resolve_contract_address_target(
         )),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn canonicalize_hex32_strips_prefixes() {
         let raw = "0xAaBb".to_string() + &"Cc".repeat(30);
@@ -184,11 +173,9 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         );
-
         let scheme = "BLAKE2B32:11".to_string() + &"22".repeat(31);
         let canon2 = canonicalize_hex32(&scheme).expect("canonicalize with scheme");
         assert_eq!(canon2.len(), 64);
-
         let hash = Hash::new(b"manifest hash literal");
         let literal = norito::json::to_value(&hash)
             .expect("serialize hash")
@@ -218,14 +205,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn decode_hex32_roundtrip() {
         let hex_str = "0x".to_string() + &"ab".repeat(32);
         let bytes = decode_hex32(&hex_str).expect("decode");
         assert_eq!(hex::encode(bytes), "ab".repeat(32));
     }
-
     #[test]
     fn governance_clap_parsers_enforce_exact_v1_grammars() {
         for selector in ["a".to_owned(), "a".repeat(128)] {
@@ -243,7 +228,6 @@ mod tests {
         ] {
             parse_governance_selector_v1(&selector).expect_err("invalid selector");
         }
-
         let proposal_id = "ab".repeat(32);
         assert_eq!(
             parse_governance_proposal_id_v1(&proposal_id).expect("valid proposal id"),
@@ -257,18 +241,15 @@ mod tests {
             parse_governance_proposal_id_v1(&proposal_id).expect_err("invalid proposal id");
         }
     }
-
     #[test]
     fn compute_proposal_id_matches_reference_logic() {
         use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
-
         let contract_address: iroha::data_model::smart_contract::ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let code = [0x11u8; 32];
         let abi = [0x22u8; 32];
-
         let mut input = Vec::new();
         input.extend_from_slice(b"iroha:gov:proposal:v1|");
         let contract_address_len = u32::try_from(contract_address.as_ref().len())
@@ -280,7 +261,6 @@ mod tests {
         let digest = Blake2b512::digest(&input);
         let mut expected = [0u8; 32];
         expected.copy_from_slice(&digest[..32]);
-
         let candidate = compute_proposal_id(&contract_address, &code, &abi);
         assert_eq!(candidate, expected);
     }

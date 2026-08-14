@@ -1,7 +1,5 @@
 //! Negative tests for NCB enum view (invalid tags)
-
 use norito::core::Error;
-
 #[test]
 fn ncb_enum_invalid_tag_detected() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};

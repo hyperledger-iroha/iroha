@@ -1,13 +1,9 @@
 //! Threshold-governed admission for canonical SoraFS pricing manifests.
-
-use std::cmp::Ordering;
-
+use super::{PricingManifestError, PricingManifestV1};
 use blake3::Hasher;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::cmp::Ordering;
 use thiserror::Error;
-
-use super::{PricingManifestError, PricingManifestV1};
-
 /// Schema version for [`PricingTrustedSignerV1`].
 pub const PRICING_TRUSTED_SIGNER_VERSION_V1: u8 = 1;
 /// Schema version for [`PricingTrustPolicyV1`].
@@ -34,7 +30,6 @@ pub const MAX_GOVERNED_PRICING_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_GOVERNED_PRICING_SERIES_ENTRIES: usize = 1_024;
 /// Maximum canonical durable pricing-series checkpoint bytes.
 pub const MAX_GOVERNED_PRICING_SERIES_BYTES: usize = 32 * 1024 * 1024;
-
 /// One strong Ed25519 signer authorized by pricing governance.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -47,7 +42,6 @@ pub struct PricingTrustedSignerV1 {
     /// Canonical strong Ed25519 public key.
     pub public_key: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 }
-
 impl PricingTrustedSignerV1 {
     /// Validate identifier and strong public key.
     pub fn validate(&self) -> Result<(), GovernedPricingError> {
@@ -66,7 +60,6 @@ impl PricingTrustedSignerV1 {
         Ok(())
     }
 }
-
 /// External trust, currency, threshold, and activation policy for pricing.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -91,7 +84,6 @@ pub struct PricingTrustPolicyV1 {
     /// Explicit revoked signer ids in strictly increasing order.
     pub revoked_signer_ids: Vec<String>,
 }
-
 impl PricingTrustPolicyV1 {
     /// Validate trust roots, threshold, currency, validity, and revocations.
     pub fn validate(&self) -> Result<(), GovernedPricingError> {
@@ -197,7 +189,6 @@ impl PricingTrustPolicyV1 {
         }
         Ok(())
     }
-
     /// Return the domain-separated canonical policy digest.
     pub fn canonical_digest(&self) -> Result<[u8; 32], GovernedPricingError> {
         self.validate()?;
@@ -208,27 +199,23 @@ impl PricingTrustPolicyV1 {
             MAX_PRICING_TRUST_POLICY_BYTES,
         )
     }
-
     /// Return bounded canonical policy bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GovernedPricingError> {
         self.validate()?;
         encode_canonical_bounded("pricing trust policy", self, MAX_PRICING_TRUST_POLICY_BYTES)
     }
-
     fn signer(&self, signer_id: &str) -> Option<&PricingTrustedSignerV1> {
         self.signers
             .binary_search_by(|signer| signer.signer_id.as_str().cmp(signer_id))
             .ok()
             .map(|index| &self.signers[index])
     }
-
     fn is_revoked(&self, signer_id: &str) -> bool {
         self.revoked_signer_ids
             .binary_search_by(|revoked| revoked.as_str().cmp(signer_id))
             .is_ok()
     }
 }
-
 /// One threshold signature retained on a governed pricing manifest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -241,7 +228,6 @@ pub struct PricingManifestSignatureV1 {
     /// Strong canonical Ed25519 signature.
     pub signature: [u8; ed25519_dalek::SIGNATURE_LENGTH],
 }
-
 impl PricingManifestSignatureV1 {
     fn validate_structure(&self) -> Result<(), GovernedPricingError> {
         if self.version != PRICING_MANIFEST_SIGNATURE_VERSION_V1 {
@@ -259,7 +245,6 @@ impl PricingManifestSignatureV1 {
         Ok(())
     }
 }
-
 /// Canonical pricing manifest plus threshold governance authorization.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -279,7 +264,6 @@ pub struct GovernedPricingManifestV1 {
     /// Distinct signatures in strictly increasing signer-id order.
     pub signatures: Vec<PricingManifestSignatureV1>,
 }
-
 impl GovernedPricingManifestV1 {
     /// Validate policy-independent structure, id binding, and signature encodings.
     pub fn validate_structure(&self) -> Result<(), GovernedPricingError> {
@@ -336,7 +320,6 @@ impl GovernedPricingManifestV1 {
         }
         Ok(())
     }
-
     /// Return the exact digest signed by pricing governance.
     pub fn signing_digest(&self) -> Result<[u8; 32], GovernedPricingError> {
         if crate::inert_bytes(&self.policy_digest) {
@@ -352,7 +335,6 @@ impl GovernedPricingManifestV1 {
         hasher.update(&self.pricing_id);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Verify policy identity, currency, schedule, threshold, revocations, and signatures.
     pub fn verify(
         &self,
@@ -415,7 +397,6 @@ impl GovernedPricingManifestV1 {
         }
         Ok(())
     }
-
     /// Return bounded canonical governed-manifest bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GovernedPricingError> {
         self.validate_structure()?;
@@ -426,7 +407,6 @@ impl GovernedPricingManifestV1 {
         )
     }
 }
-
 /// Derive the canonical pricing id from predecessor and intrinsic manifest bytes.
 pub fn derive_pricing_id(
     manifest: &PricingManifestV1,
@@ -457,7 +437,6 @@ pub fn derive_pricing_id(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Validate exact predecessor linkage and strictly increasing activation time.
 pub fn validate_governed_pricing_transition(
     previous: Option<&GovernedPricingManifestV1>,
@@ -481,7 +460,6 @@ pub fn validate_governed_pricing_transition(
     }
     Ok(())
 }
-
 /// One governed pricing manifest and the exact time it passed admission.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -492,21 +470,18 @@ pub struct GovernedPricingAdmissionV1 {
     /// Exact threshold-signed pricing manifest retained for deterministic replay.
     governed: GovernedPricingManifestV1,
 }
-
 impl GovernedPricingAdmissionV1 {
     /// Return the exact admission Unix second.
     #[must_use]
     pub const fn admitted_at_unix(&self) -> u64 {
         self.admitted_at_unix
     }
-
     /// Return the retained threshold-signed manifest.
     #[must_use]
     pub const fn governed(&self) -> &GovernedPricingManifestV1 {
         &self.governed
     }
 }
-
 /// Durable, replay-verifiable series of governed pricing activations.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -519,7 +494,6 @@ pub struct GovernedPricingSeriesV1 {
     /// Admissions in exact predecessor and non-decreasing admission-time order.
     admissions: Vec<GovernedPricingAdmissionV1>,
 }
-
 impl GovernedPricingSeriesV1 {
     /// Construct an empty series bound to a validated external policy.
     pub fn new(policy: &PricingTrustPolicyV1) -> Result<Self, GovernedPricingError> {
@@ -530,7 +504,6 @@ impl GovernedPricingSeriesV1 {
             admissions: Vec::new(),
         })
     }
-
     /// Replay every retained admission against the external trust policy.
     pub fn validate(&self, policy: &PricingTrustPolicyV1) -> Result<(), GovernedPricingError> {
         if self.version != GOVERNED_PRICING_SERIES_VERSION_V1 {
@@ -550,7 +523,6 @@ impl GovernedPricingSeriesV1 {
                 max: MAX_GOVERNED_PRICING_SERIES_ENTRIES,
             });
         }
-
         let mut previous: Option<&GovernedPricingManifestV1> = None;
         let mut previous_admitted_at = 0_u64;
         for admission in &self.admissions {
@@ -569,7 +541,6 @@ impl GovernedPricingSeriesV1 {
         }
         Ok(())
     }
-
     /// Verify and append one exact-head successor without partial mutation.
     pub fn admit(
         &mut self,
@@ -609,31 +580,26 @@ impl GovernedPricingSeriesV1 {
         });
         Ok(())
     }
-
     /// Return the external policy digest bound into this series.
     #[must_use]
     pub const fn policy_digest(&self) -> &[u8; 32] {
         &self.policy_digest
     }
-
     /// Return the number of retained governed admissions.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.admissions.len()
     }
-
     /// Return `true` when no pricing schedule has been admitted.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.admissions.is_empty()
     }
-
     /// Return the immutable admission inventory for audit/readback.
     #[must_use]
     pub fn admissions(&self) -> &[GovernedPricingAdmissionV1] {
         &self.admissions
     }
-
     /// Validate and return the exact admitted chain head, including future activations.
     pub fn head(
         &self,
@@ -642,7 +608,6 @@ impl GovernedPricingSeriesV1 {
         self.validate(policy)?;
         Ok(self.admissions.last().map(|entry| &entry.governed))
     }
-
     /// Return the most recent pricing manifest effective at `observed_at_unix`.
     pub fn active_at(
         &self,
@@ -660,7 +625,6 @@ impl GovernedPricingSeriesV1 {
             .find(|entry| entry.governed.manifest.effective_from_unix <= observed_at_unix)
             .map(|entry| &entry.governed))
     }
-
     /// Return a bounded canonical checkpoint for durable restart recovery.
     pub fn canonical_bytes(
         &self,
@@ -674,7 +638,6 @@ impl GovernedPricingSeriesV1 {
         )
     }
 }
-
 /// Decode one bounded canonical pricing trust policy.
 pub fn decode_pricing_trust_policy(
     bytes: &[u8],
@@ -694,7 +657,6 @@ pub fn decode_pricing_trust_policy(
     policy.validate()?;
     Ok(policy)
 }
-
 /// Decode one bounded canonical governed pricing manifest.
 pub fn decode_governed_pricing_manifest(
     bytes: &[u8],
@@ -714,7 +676,6 @@ pub fn decode_governed_pricing_manifest(
     manifest.validate_structure()?;
     Ok(manifest)
 }
-
 /// Decode and fully replay one bounded canonical pricing-series checkpoint.
 pub fn decode_governed_pricing_series(
     bytes: &[u8],
@@ -735,7 +696,6 @@ pub fn decode_governed_pricing_series(
     series.validate(policy)?;
     Ok(series)
 }
-
 fn validate_admission_time(
     policy: &PricingTrustPolicyV1,
     manifest: &PricingManifestV1,
@@ -761,7 +721,6 @@ fn validate_admission_time(
     }
     Ok(())
 }
-
 fn validate_signer_id(signer_id: &str) -> Result<(), GovernedPricingError> {
     if signer_id.is_empty()
         || signer_id.len() > MAX_PRICING_SIGNER_ID_BYTES
@@ -775,7 +734,6 @@ fn validate_signer_id(signer_id: &str) -> Result<(), GovernedPricingError> {
     }
     Ok(())
 }
-
 fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &[u8],
     payload: &'static str,
@@ -790,7 +748,6 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     payload: &'static str,
     value: &T,
@@ -816,7 +773,6 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     }
     Ok(bytes)
 }
-
 fn decode_canonical<T>(
     payload: &'static str,
     bytes: &[u8],
@@ -845,7 +801,6 @@ where
     }
     Ok(decoded)
 }
-
 /// Governed pricing validation failures.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum GovernedPricingError {
@@ -1020,24 +975,19 @@ pub enum GovernedPricingError {
     #[error(transparent)]
     Manifest(#[from] PricingManifestError),
 }
-
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
-
     use super::*;
     use crate::XorQuantity;
     use crate::pricing::{
         BondPolicyV1, CreditPolicyV1, PRICING_MANIFEST_VERSION_V1, PricingMicropaymentPolicyV1,
         PricingTierV1,
     };
-
+    use ed25519_dalek::{Signer, SigningKey};
     const ADMITTED_AT: u64 = 1_800_000_000;
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     fn keys() -> [SigningKey; 3] {
         [
             SigningKey::from_bytes(&[31; 32]),
@@ -1045,7 +995,6 @@ mod tests {
             SigningKey::from_bytes(&[33; 32]),
         ]
     }
-
     fn policy() -> PricingTrustPolicyV1 {
         let keys = keys();
         PricingTrustPolicyV1 {
@@ -1068,7 +1017,6 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn manifest(effective_from_unix: u64) -> PricingManifestV1 {
         PricingManifestV1 {
             version: PRICING_MANIFEST_VERSION_V1,
@@ -1105,7 +1053,6 @@ mod tests {
             }),
         }
     }
-
     fn signed_manifest(
         policy: &PricingTrustPolicyV1,
         effective_from_unix: u64,
@@ -1134,7 +1081,6 @@ mod tests {
             .collect();
         governed
     }
-
     #[test]
     fn threshold_governed_pricing_manifest_verifies() {
         let policy = policy();
@@ -1147,12 +1093,10 @@ mod tests {
             derive_pricing_id(&governed.manifest, None).expect("pricing id replay")
         );
     }
-
     #[test]
     fn pricing_tamper_policy_currency_and_schedule_substitution_fail() {
         let policy = policy();
         let governed = signed_manifest(&policy, ADMITTED_AT + 100, None, &[0, 1]);
-
         let mut tampered = governed.clone();
         tampered.manifest.tiers[0].storage_price_per_gib_hour = tampered.manifest.tiers[0]
             .storage_price_per_gib_hour
@@ -1162,14 +1106,12 @@ mod tests {
             tampered.verify(&policy, ADMITTED_AT),
             Err(GovernedPricingError::PricingIdMismatch)
         ));
-
         let mut substituted = policy.clone();
         substituted.policy_id[0] ^= 1;
         assert!(matches!(
             governed.verify(&substituted, ADMITTED_AT),
             Err(GovernedPricingError::PolicyDigestMismatch)
         ));
-
         let mut other_currency = policy.clone();
         other_currency.currency = "usd".into();
         let mismatched = signed_manifest(&other_currency, ADMITTED_AT + 100, None, &[0, 1]);
@@ -1177,7 +1119,6 @@ mod tests {
             mismatched.verify(&other_currency, ADMITTED_AT),
             Err(GovernedPricingError::CurrencyMismatch { .. })
         ));
-
         let future = signed_manifest(
             &policy,
             ADMITTED_AT + policy.max_future_activation_secs + 1,
@@ -1188,32 +1129,27 @@ mod tests {
             future.verify(&policy, ADMITTED_AT),
             Err(GovernedPricingError::ActivationTooFarInFuture)
         ));
-
         let retroactive = signed_manifest(&policy, ADMITTED_AT - 1, None, &[0, 1]);
         assert!(matches!(
             retroactive.verify(&policy, ADMITTED_AT),
             Err(GovernedPricingError::ActivationBeforeAdmission)
         ));
     }
-
     #[test]
     fn quorum_duplicates_order_unknown_revoked_and_malformed_signatures_fail() {
         let policy = policy();
         let governed = signed_manifest(&policy, ADMITTED_AT, None, &[0, 1]);
-
         let below = signed_manifest(&policy, ADMITTED_AT, None, &[0]);
         assert!(matches!(
             below.verify(&policy, ADMITTED_AT),
             Err(GovernedPricingError::SignatureQuorumNotMet { .. })
         ));
-
         let mut duplicate = governed.clone();
         duplicate.signatures[1] = duplicate.signatures[0].clone();
         assert!(matches!(
             duplicate.validate_structure(),
             Err(GovernedPricingError::DuplicateManifestSigner { .. })
         ));
-
         let mut unsorted = governed.clone();
         unsorted.signatures.swap(0, 1);
         assert!(matches!(
@@ -1222,14 +1158,12 @@ mod tests {
                 field: "signatures"
             })
         ));
-
         let mut unknown = governed.clone();
         unknown.signatures[1].signer_id = "council-9".into();
         assert!(matches!(
             unknown.verify(&policy, ADMITTED_AT),
             Err(GovernedPricingError::UntrustedSigner { .. })
         ));
-
         let mut revoked_policy = policy.clone();
         revoked_policy.revoked_signer_ids = vec!["council-1".into()];
         revoked_policy.min_signatures = 1;
@@ -1238,7 +1172,6 @@ mod tests {
             revoked.verify(&revoked_policy, ADMITTED_AT),
             Err(GovernedPricingError::RevokedSigner { .. })
         ));
-
         let mut malformed = governed;
         malformed.signatures[0].signature = [0; ed25519_dalek::SIGNATURE_LENGTH];
         assert!(matches!(
@@ -1246,7 +1179,6 @@ mod tests {
             Err(GovernedPricingError::InvalidSignature { .. })
         ));
     }
-
     #[test]
     fn policy_rejects_weak_duplicate_keys_thresholds_and_revocations() {
         let mut weak = policy();
@@ -1255,21 +1187,18 @@ mod tests {
             weak.validate(),
             Err(GovernedPricingError::InvalidPublicKey { .. })
         ));
-
         let mut duplicate_key = policy();
         duplicate_key.signers[1].public_key = duplicate_key.signers[0].public_key;
         assert!(matches!(
             duplicate_key.validate(),
             Err(GovernedPricingError::DuplicateTrustedPublicKey)
         ));
-
         let mut threshold = policy();
         threshold.min_signatures = 4;
         assert!(matches!(
             threshold.validate(),
             Err(GovernedPricingError::InvalidSignatureThreshold { .. })
         ));
-
         let mut unknown_revocation = policy();
         unknown_revocation.revoked_signer_ids = vec!["council-9".into()];
         assert!(matches!(
@@ -1277,7 +1206,6 @@ mod tests {
             Err(GovernedPricingError::UnknownRevokedSigner { .. })
         ));
     }
-
     #[test]
     fn pricing_transition_requires_exact_head_and_monotonic_activation() {
         let policy = policy();
@@ -1285,7 +1213,6 @@ mod tests {
         validate_governed_pricing_transition(None, &first).expect("initial pricing");
         let second = signed_manifest(&policy, ADMITTED_AT + 1, Some(first.pricing_id), &[0, 1]);
         validate_governed_pricing_transition(Some(&first), &second).expect("pricing successor");
-
         let wrong = signed_manifest(&policy, ADMITTED_AT + 2, Some([0x77; 32]), &[0, 1]);
         assert!(matches!(
             validate_governed_pricing_transition(Some(&first), &wrong),
@@ -1301,7 +1228,6 @@ mod tests {
             Err(GovernedPricingError::UnexpectedInitialPredecessor)
         ));
     }
-
     #[test]
     fn pricing_series_admits_exact_chain_and_activates_on_schedule() {
         let policy = policy();
@@ -1314,7 +1240,6 @@ mod tests {
         series
             .admit(&policy, second.clone(), ADMITTED_AT + 10)
             .expect("second admission");
-
         assert_eq!(
             series.head(&policy).expect("validated series head"),
             Some(&second)
@@ -1341,14 +1266,12 @@ mod tests {
             series.active_at(&policy, 0),
             Err(GovernedPricingError::InvalidObservationTime)
         ));
-
         let checkpoint = series.canonical_bytes(&policy).expect("series checkpoint");
         assert_eq!(
             decode_governed_pricing_series(&checkpoint, &policy).expect("replay checkpoint"),
             series
         );
     }
-
     #[test]
     fn pricing_series_rejects_replay_branch_clock_rollback_and_policy_substitution_atomically() {
         let policy = policy();
@@ -1358,20 +1281,17 @@ mod tests {
             .admit(&policy, first.clone(), ADMITTED_AT)
             .expect("first admission");
         let baseline = series.clone();
-
         assert!(matches!(
             series.admit(&policy, first.clone(), ADMITTED_AT + 1),
             Err(GovernedPricingError::PreviousPricingMismatch)
         ));
         assert_eq!(series, baseline, "replay rejection must be atomic");
-
         let branch = signed_manifest(&policy, ADMITTED_AT + 200, Some([0x77; 32]), &[0, 1]);
         assert!(matches!(
             series.admit(&policy, branch, ADMITTED_AT + 1),
             Err(GovernedPricingError::PreviousPricingMismatch)
         ));
         assert_eq!(series, baseline, "branch rejection must be atomic");
-
         let successor =
             signed_manifest(&policy, ADMITTED_AT + 200, Some(first.pricing_id), &[0, 1]);
         assert!(matches!(
@@ -1379,7 +1299,6 @@ mod tests {
             Err(GovernedPricingError::AdmissionTimeRollback { .. })
         ));
         assert_eq!(series, baseline, "clock rollback must be atomic");
-
         let mut substituted_policy = policy.clone();
         substituted_policy.policy_id[0] ^= 1;
         assert!(matches!(
@@ -1387,7 +1306,6 @@ mod tests {
             Err(GovernedPricingError::SeriesPolicyDigestMismatch)
         ));
     }
-
     #[test]
     fn pricing_series_replay_rejects_reordered_and_tampered_checkpoint_state() {
         let policy = policy();
@@ -1400,18 +1318,15 @@ mod tests {
         series
             .admit(&policy, second, ADMITTED_AT + 10)
             .expect("second admission");
-
         let mut reordered = series.clone();
         reordered.admissions.swap(0, 1);
         assert!(reordered.validate(&policy).is_err());
-
         let mut clock_rollback = series.clone();
         clock_rollback.admissions[1].admitted_at_unix = ADMITTED_AT - 1;
         assert!(matches!(
             clock_rollback.validate(&policy),
             Err(GovernedPricingError::AdmissionTimeRollback { .. })
         ));
-
         let mut tampered = series;
         tampered.admissions[1].governed.manifest.tiers[0].egress_price_per_gib =
             tampered.admissions[1].governed.manifest.tiers[0]
@@ -1423,7 +1338,6 @@ mod tests {
             Err(GovernedPricingError::PricingIdMismatch)
         ));
     }
-
     #[test]
     fn canonical_decoders_reject_trailing_compressed_and_oversized_inputs() {
         let policy = policy();
@@ -1438,7 +1352,6 @@ mod tests {
             decode_governed_pricing_manifest(&governed_bytes).expect("decode governed manifest"),
             governed
         );
-
         let mut trailing = policy_bytes;
         trailing.push(0);
         assert!(matches!(

@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry-enabled tests for the sumeragi evidence list endpoint.
 #![cfg(feature = "telemetry")]
-
-use std::sync::Arc;
-
 use axum::extract::State;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -22,7 +19,7 @@ use iroha_data_model::{
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
 };
 use iroha_torii::{Error, EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
-
+use std::sync::Arc;
 fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
     let certificate = Qc {
@@ -53,7 +50,6 @@ fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
         },
     }
 }
-
 fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
     fn vote(height: u64, signer: u32, seed: u8, phase: Phase) -> Vote {
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
@@ -72,7 +68,6 @@ fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
             bls_sig: Vec::new(),
         }
     }
-
     Evidence {
         kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote {
@@ -81,7 +76,6 @@ fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
         },
     }
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn evidence_list_endpoint_supports_filters_and_pagination() {
@@ -94,7 +88,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         StateTelemetry::default(),
     );
     let mut state = state;
-
     let records = [
         EvidenceRecord {
             evidence: make_invalid_commit_qc_evidence(10, 0xA1),
@@ -133,9 +126,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     for record in records {
         insert_evidence_record_for_test(&mut state, record);
     }
-
     let state = Arc::new(state);
-
     let query_all = EvidenceListQuery {
         limit: Some(2),
         offset: Some(0),
@@ -174,7 +165,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         items[0].get("consensus_admitted_height"),
         Some(norito::json::Value::Null)
     ));
-
     let query_filtered = EvidenceListQuery {
         limit: Some(1),
         offset: Some(1),
@@ -211,7 +201,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             .map(str::len),
         Some(64),
     );
-
     for kind in [
         "DoublePrepare",
         "DoubleCommit",
@@ -232,7 +221,6 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             "canonical evidence kind `{kind}` must be accepted"
         );
     }
-
     for kind in [
         "DoublePrevote",
         "DoublePrecommit",

@@ -4,16 +4,12 @@
 //! policy digest. Bearer credentials and vendor connection material remain
 //! inside the deployment-owned provider, which executes the authenticated
 //! request without returning credential material to `irohad`.
-
 use std::{fmt, sync::Arc};
-
 use iroha_config::parameters::validate_production_runtime_handle;
-
 const MAX_HF_INFERENCE_URL_BYTES_V1: usize = 8 * 1024;
 const MAX_HF_INFERENCE_HEADER_BYTES_V1: usize = 8 * 1024;
 const MAX_HF_INFERENCE_BODY_BYTES_V1: usize = 64 * 1024 * 1024;
 const MAX_HF_INFERENCE_RESPONSE_BYTES_V1: u64 = 64 * 1024 * 1024;
-
 /// Public liveness and policy identity reported by the credential provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoracloudHfCredentialProviderQualificationV1 {
@@ -22,7 +18,6 @@ pub struct SoracloudHfCredentialProviderQualificationV1 {
     active: bool,
     test_only: bool,
 }
-
 impl SoracloudHfCredentialProviderQualificationV1 {
     /// Construct one public qualification report.
     #[must_use]
@@ -39,31 +34,26 @@ impl SoracloudHfCredentialProviderQualificationV1 {
             test_only,
         }
     }
-
     /// Return the exact adapter and public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the exact public-policy digest.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Return whether the provider reports an active, non-revoked posture.
     #[must_use]
     pub const fn active(self) -> bool {
         self.active
     }
-
     /// Return whether the provider reports a test-only implementation.
     #[must_use]
     pub const fn test_only(self) -> bool {
         self.test_only
     }
-
     fn validate(self) -> Result<(), SoracloudHfCredentialProviderQualificationErrorV1> {
         if self.revision == 0 || self.policy_digest == [0; 32] {
             return Err(
@@ -79,14 +69,12 @@ impl SoracloudHfCredentialProviderQualificationV1 {
         Ok(())
     }
 }
-
 /// Exact non-secret identity expected from the deployment-owned provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudHfCredentialProviderBindingV1 {
     handle: String,
     qualification: SoracloudHfCredentialProviderQualificationV1,
 }
-
 impl SoracloudHfCredentialProviderBindingV1 {
     /// Project and validate one parsed public provider binding.
     ///
@@ -107,7 +95,6 @@ impl SoracloudHfCredentialProviderBindingV1 {
             ),
         )
     }
-
     /// Validate and construct an exact production provider binding.
     ///
     /// # Errors
@@ -127,20 +114,17 @@ impl SoracloudHfCredentialProviderBindingV1 {
             qualification,
         })
     }
-
     /// Return the stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the exact active, non-test qualification.
     #[must_use]
     pub const fn qualification(&self) -> SoracloudHfCredentialProviderQualificationV1 {
         self.qualification
     }
 }
-
 /// Payload-free failure while probing the deployment-owned provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudHfCredentialProviderProbeErrorV1 {
@@ -149,7 +133,6 @@ pub enum SoracloudHfCredentialProviderProbeErrorV1 {
     /// Provider refused or could not answer the public readiness probe.
     Refused,
 }
-
 /// Payload-free authenticated inference failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudHfCredentialProviderOperationErrorV1 {
@@ -162,7 +145,6 @@ pub enum SoracloudHfCredentialProviderOperationErrorV1 {
     /// Provider returned a malformed or oversized response.
     InvalidResponse,
 }
-
 /// Failure while qualifying an injected provider against exact public config.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudHfCredentialProviderQualificationErrorV1 {
@@ -185,7 +167,6 @@ pub enum SoracloudHfCredentialProviderQualificationErrorV1 {
     /// Provider identity or posture changed across startup probes.
     ProviderDrift,
 }
-
 /// Bounded authenticated Hugging Face inference request.
 pub struct SoracloudHfAuthenticatedInferenceRequestV1 {
     url: String,
@@ -194,7 +175,6 @@ pub struct SoracloudHfAuthenticatedInferenceRequestV1 {
     body: Vec<u8>,
     maximum_response_bytes: u64,
 }
-
 impl fmt::Debug for SoracloudHfAuthenticatedInferenceRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -207,7 +187,6 @@ impl fmt::Debug for SoracloudHfAuthenticatedInferenceRequestV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SoracloudHfAuthenticatedInferenceRequestV1 {
     /// Validate and construct one authenticated inference request.
     ///
@@ -243,45 +222,38 @@ impl SoracloudHfAuthenticatedInferenceRequestV1 {
             maximum_response_bytes,
         })
     }
-
     /// Return the exact public inference URL.
     #[must_use]
     pub fn url(&self) -> &str {
         &self.url
     }
-
     /// Return the exact request content type.
     #[must_use]
     pub fn content_type(&self) -> &str {
         &self.content_type
     }
-
     /// Return the optional exact response media type.
     #[must_use]
     pub fn accept(&self) -> Option<&str> {
         self.accept.as_deref()
     }
-
     /// Return the private request body without copying it.
     #[must_use]
     pub fn body(&self) -> &[u8] {
         &self.body
     }
-
     /// Return the maximum admitted response body length.
     #[must_use]
     pub const fn maximum_response_bytes(&self) -> u64 {
         self.maximum_response_bytes
     }
 }
-
 impl Drop for SoracloudHfAuthenticatedInferenceRequestV1 {
     fn drop(&mut self) {
         self.body.fill(0);
         let _ = std::hint::black_box(&self.body);
     }
 }
-
 /// Bounded response returned by the authenticated provider.
 pub struct SoracloudHfAuthenticatedInferenceResponseV1 {
     status: u16,
@@ -289,7 +261,6 @@ pub struct SoracloudHfAuthenticatedInferenceResponseV1 {
     content_encoding: Option<String>,
     body: Vec<u8>,
 }
-
 impl fmt::Debug for SoracloudHfAuthenticatedInferenceResponseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -301,7 +272,6 @@ impl fmt::Debug for SoracloudHfAuthenticatedInferenceResponseV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SoracloudHfAuthenticatedInferenceResponseV1 {
     /// Validate and construct one bounded provider response.
     ///
@@ -338,39 +308,33 @@ impl SoracloudHfAuthenticatedInferenceResponseV1 {
             body,
         })
     }
-
     /// Return the HTTP status code.
     #[must_use]
     pub const fn status(&self) -> u16 {
         self.status
     }
-
     /// Return the optional response content type.
     #[must_use]
     pub fn content_type(&self) -> Option<&str> {
         self.content_type.as_deref()
     }
-
     /// Return the optional response content encoding.
     #[must_use]
     pub fn content_encoding(&self) -> Option<&str> {
         self.content_encoding.as_deref()
     }
-
     /// Consume the response and return its private body.
     #[must_use]
     pub fn into_body(mut self) -> Vec<u8> {
         std::mem::take(&mut self.body)
     }
 }
-
 impl Drop for SoracloudHfAuthenticatedInferenceResponseV1 {
     fn drop(&mut self) {
         self.body.fill(0);
         let _ = std::hint::black_box(&self.body);
     }
 }
-
 /// Deployment-owned Hugging Face inference credential provider.
 ///
 /// Implementations retain bearer credentials internally and perform the
@@ -379,7 +343,6 @@ impl Drop for SoracloudHfAuthenticatedInferenceResponseV1 {
 pub trait SoracloudHfInferenceCredentialProviderV1: Send + Sync {
     /// Return the stable opaque production-provider handle.
     fn handle(&self) -> &str;
-
     /// Probe the exact public qualification and active/test posture.
     fn qualification(
         &self,
@@ -387,10 +350,8 @@ pub trait SoracloudHfInferenceCredentialProviderV1: Send + Sync {
         SoracloudHfCredentialProviderQualificationV1,
         SoracloudHfCredentialProviderProbeErrorV1,
     >;
-
     /// Confirm that the backing credential is available without exposing it.
     fn check_readiness(&self) -> Result<(), SoracloudHfCredentialProviderProbeErrorV1>;
-
     /// Execute one bounded authenticated inference request.
     ///
     /// Implementations must authenticate only endpoints admitted by the exact
@@ -404,12 +365,10 @@ pub trait SoracloudHfInferenceCredentialProviderV1: Send + Sync {
         SoracloudHfCredentialProviderOperationErrorV1,
     >;
 }
-
 struct QualifiedSoracloudHfInferenceCredentialProviderV1 {
     binding: SoracloudHfCredentialProviderBindingV1,
     provider: Arc<dyn SoracloudHfInferenceCredentialProviderV1>,
 }
-
 impl QualifiedSoracloudHfInferenceCredentialProviderV1 {
     fn try_new(
         binding: SoracloudHfCredentialProviderBindingV1,
@@ -427,20 +386,17 @@ impl QualifiedSoracloudHfInferenceCredentialProviderV1 {
         validate_snapshot(&binding, provider.handle(), second)?;
         Ok(Self { binding, provider })
     }
-
     fn revalidate(&self) -> Result<(), SoracloudHfCredentialProviderQualificationErrorV1> {
         let qualification = probe_provider(self.provider.as_ref())?;
         validate_snapshot(&self.binding, self.provider.handle(), qualification)
     }
 }
-
 impl SoracloudHfInferenceCredentialProviderV1
     for QualifiedSoracloudHfInferenceCredentialProviderV1
 {
     fn handle(&self) -> &str {
         self.binding.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -450,13 +406,11 @@ impl SoracloudHfInferenceCredentialProviderV1
         self.revalidate().map_err(qualification_probe_error)?;
         Ok(self.binding.qualification())
     }
-
     fn check_readiness(&self) -> Result<(), SoracloudHfCredentialProviderProbeErrorV1> {
         self.revalidate().map_err(qualification_probe_error)?;
         self.provider.check_readiness()?;
         self.revalidate().map_err(qualification_probe_error)
     }
-
     fn execute_authenticated(
         &self,
         request: &SoracloudHfAuthenticatedInferenceRequestV1,
@@ -477,7 +431,6 @@ impl SoracloudHfInferenceCredentialProviderV1
         Ok(response)
     }
 }
-
 /// Qualify an injected credential provider against exact public configuration.
 ///
 /// The provider is probed twice with an intervening readiness check. The
@@ -499,14 +452,12 @@ pub fn qualify_soracloud_hf_inference_credential_provider_v1(
         QualifiedSoracloudHfInferenceCredentialProviderV1::try_new(binding, provider)?,
     ))
 }
-
 fn valid_bounded_text(value: &str, maximum_bytes: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum_bytes
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
-
 fn probe_provider(
     provider: &dyn SoracloudHfInferenceCredentialProviderV1,
 ) -> Result<
@@ -521,7 +472,6 @@ fn probe_provider(
     qualification.validate()?;
     Ok(qualification)
 }
-
 fn validate_snapshot(
     binding: &SoracloudHfCredentialProviderBindingV1,
     observed_handle: &str,
@@ -538,7 +488,6 @@ fn validate_snapshot(
     }
     Ok(())
 }
-
 fn qualification_probe_error(
     error: SoracloudHfCredentialProviderQualificationErrorV1,
 ) -> SoracloudHfCredentialProviderProbeErrorV1 {
@@ -548,27 +497,21 @@ fn qualification_probe_error(
         SoracloudHfCredentialProviderProbeErrorV1::Refused
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-
     use super::*;
-
     const QUALIFICATION: SoracloudHfCredentialProviderQualificationV1 =
         SoracloudHfCredentialProviderQualificationV1::new(7, [0xA7; 32], true, false);
-
     struct TestProvider {
         handle: String,
         qualification: Mutex<SoracloudHfCredentialProviderQualificationV1>,
         ready: bool,
     }
-
     impl SoracloudHfInferenceCredentialProviderV1 for TestProvider {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -577,13 +520,11 @@ mod tests {
         > {
             Ok(*self.qualification.lock().expect("qualification lock"))
         }
-
         fn check_readiness(&self) -> Result<(), SoracloudHfCredentialProviderProbeErrorV1> {
             self.ready
                 .then_some(())
                 .ok_or(SoracloudHfCredentialProviderProbeErrorV1::Unavailable)
         }
-
         fn execute_authenticated(
             &self,
             request: &SoracloudHfAuthenticatedInferenceRequestV1,
@@ -600,7 +541,6 @@ mod tests {
             )
         }
     }
-
     fn fixture(
         qualification: SoracloudHfCredentialProviderQualificationV1,
         ready: bool,
@@ -616,7 +556,6 @@ mod tests {
             }),
         )
     }
-
     #[test]
     fn qualification_rejects_stale_test_and_unavailable_providers() {
         let (binding, stale) = fixture(
@@ -629,7 +568,6 @@ mod tests {
                 .expect("stale provider must fail"),
             SoracloudHfCredentialProviderQualificationErrorV1::RevisionMismatch
         );
-
         let (binding, test_only) = fixture(
             SoracloudHfCredentialProviderQualificationV1::new(7, [0xA7; 32], true, true),
             true,
@@ -640,7 +578,6 @@ mod tests {
                 .expect("test provider must fail"),
             SoracloudHfCredentialProviderQualificationErrorV1::TestProviderRejected
         );
-
         let (binding, unavailable) = fixture(QUALIFICATION, false);
         assert_eq!(
             qualify_soracloud_hf_inference_credential_provider_v1(binding, unavailable)
@@ -649,7 +586,6 @@ mod tests {
             SoracloudHfCredentialProviderQualificationErrorV1::ProviderUnavailable
         );
     }
-
     #[test]
     fn qualified_provider_revalidates_around_operation() {
         let (binding, provider) = fixture(QUALIFICATION, true);
@@ -668,7 +604,6 @@ mod tests {
             .execute_authenticated(&request)
             .expect("qualified request");
         assert_eq!(response.status(), 200);
-
         *provider.qualification.lock().expect("qualification lock") =
             SoracloudHfCredentialProviderQualificationV1::new(8, [0xA8; 32], true, false);
         assert_eq!(
@@ -679,7 +614,6 @@ mod tests {
             SoracloudHfCredentialProviderOperationErrorV1::QualificationChanged
         );
     }
-
     #[test]
     fn debug_output_redacts_private_request_and_response_bodies() {
         let request = SoracloudHfAuthenticatedInferenceRequestV1::try_new(

@@ -4,15 +4,12 @@
 //! by [`IrohaRuntimeProviderBindingsV1`]. Provider credentials, private keys,
 //! tokens, attestations, and private evidence remain encapsulated by the
 //! deployment-owned backend objects returned by the registry.
-
 use std::{
     fmt,
     path::{Path, PathBuf},
     sync::Arc,
 };
-
 use clap::Parser;
-
 use super::api::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
     RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
@@ -25,7 +22,6 @@ use crate::runtime_provider_registry::{
     IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1,
     IrohaRuntimeProviderRegistryErrorV1,
 };
-
 /// Deployment-owned resolver for the complete broker-server backend set.
 ///
 /// Implementations use stable public handles from `bindings` to locate
@@ -46,7 +42,6 @@ pub trait RuntimeProviderBrokerBackendRegistryV1: Send + Sync {
         bindings: &IrohaRuntimeProviderBindingsV1,
     ) -> Result<RuntimeProviderBrokerBackendsV1, IrohaRuntimeProviderRegistryErrorV1>;
 }
-
 /// Fully assembled deployment-owned broker launch.
 ///
 /// Construction retains only the public binding catalog and opaque backend
@@ -56,7 +51,6 @@ pub struct RuntimeProviderBrokerDeploymentV1 {
     bindings: IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
 }
-
 impl RuntimeProviderBrokerDeploymentV1 {
     /// Resolve the complete backend set for a non-empty public catalog.
     ///
@@ -80,13 +74,11 @@ impl RuntimeProviderBrokerDeploymentV1 {
             .map_err(RuntimeProviderBrokerLauncherErrorV1::BackendRegistry)?;
         Ok(Self { bindings, backends })
     }
-
     /// Return the number of exact public provider bindings to be served.
     #[must_use]
     pub fn binding_count(&self) -> usize {
         self.bindings.len()
     }
-
     /// Qualify every backend and serve on the platform-fixed authenticated
     /// endpoint until the server stops.
     ///
@@ -103,7 +95,6 @@ impl RuntimeProviderBrokerDeploymentV1 {
         serve_runtime_provider_broker_v1(&self.bindings, self.backends)
             .map_err(RuntimeProviderBrokerLauncherErrorV1::Server)
     }
-
     /// Qualify every backend and serve with caller-owned readiness and shutdown.
     ///
     /// `on_ready` runs only after the complete catalog passes both startup
@@ -131,7 +122,6 @@ impl RuntimeProviderBrokerDeploymentV1 {
         )
         .map_err(RuntimeProviderBrokerLauncherErrorV1::Server)
     }
-
     /// Qualify every backend and serve with a fallible readiness publication.
     ///
     /// The broker remains in its starting state until `on_ready` returns
@@ -159,7 +149,6 @@ impl RuntimeProviderBrokerDeploymentV1 {
         .map_err(RuntimeProviderBrokerLauncherErrorV1::Server)
     }
 }
-
 impl fmt::Debug for RuntimeProviderBrokerDeploymentV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -169,7 +158,6 @@ impl fmt::Debug for RuntimeProviderBrokerDeploymentV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Payload-free deployment broker assembly or serving failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -181,7 +169,6 @@ pub enum RuntimeProviderBrokerLauncherErrorV1 {
     /// Live qualification, endpoint security, or serving failed.
     Server(RuntimeProviderBrokerServerErrorV1),
 }
-
 impl fmt::Display for RuntimeProviderBrokerLauncherErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -191,7 +178,6 @@ impl fmt::Display for RuntimeProviderBrokerLauncherErrorV1 {
         }
     }
 }
-
 impl std::error::Error for RuntimeProviderBrokerLauncherErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -201,7 +187,6 @@ impl std::error::Error for RuntimeProviderBrokerLauncherErrorV1 {
         }
     }
 }
-
 /// Credential-free command-line contract shared by deployment broker binaries.
 ///
 /// The deployment package statically selects and constructs its concrete
@@ -219,7 +204,6 @@ pub struct RuntimeProviderBrokerExecutableArgsV1 {
     #[arg(long, value_name = "ABSOLUTE_PATH")]
     catalog: PathBuf,
 }
-
 impl RuntimeProviderBrokerExecutableArgsV1 {
     /// Return the operator-supplied canonical catalog path.
     #[must_use]
@@ -227,7 +211,6 @@ impl RuntimeProviderBrokerExecutableArgsV1 {
         &self.catalog
     }
 }
-
 /// Fully assembled process shell for a statically linked deployment broker.
 ///
 /// This type standardizes CLI-to-catalog loading, backend resolution,
@@ -239,7 +222,6 @@ pub struct RuntimeProviderBrokerExecutableV1 {
     deployment: RuntimeProviderBrokerDeploymentV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
 }
-
 impl RuntimeProviderBrokerExecutableV1 {
     /// Load the exact public catalog and resolve its complete backend set.
     ///
@@ -254,7 +236,6 @@ impl RuntimeProviderBrokerExecutableV1 {
     ) -> Result<Self, RuntimeProviderBrokerExecutableErrorV1> {
         Self::try_from_catalog_file(args.catalog_path(), registry)
     }
-
     /// Load one canonical catalog file and resolve its complete backend set.
     ///
     /// # Errors
@@ -272,19 +253,16 @@ impl RuntimeProviderBrokerExecutableV1 {
             lifecycle: Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
         })
     }
-
     /// Return the number of exact public bindings selected for this process.
     #[must_use]
     pub fn binding_count(&self) -> usize {
         self.deployment.binding_count()
     }
-
     /// Clone the orderly-shutdown control for an external supervisor hook.
     #[must_use]
     pub fn lifecycle(&self) -> Arc<RuntimeProviderBrokerLifecycleV1> {
         Arc::clone(&self.lifecycle)
     }
-
     /// Qualify the complete backend set and serve with caller-owned readiness.
     ///
     /// The callback runs only after both live qualification rounds and secure
@@ -303,7 +281,6 @@ impl RuntimeProviderBrokerExecutableV1 {
             .serve_with_lifecycle(self.lifecycle, on_ready)
             .map_err(RuntimeProviderBrokerExecutableErrorV1::Launcher)
     }
-
     /// Serve until SIGINT/SIGTERM or an external lifecycle request shuts down.
     ///
     /// This is the standard process entry for a deployment package without a
@@ -325,7 +302,6 @@ impl RuntimeProviderBrokerExecutableV1 {
         install_runtime_provider_broker_shutdown_signals_v1(Arc::clone(&self.lifecycle))?;
         self.serve(on_ready)
     }
-
     /// Serve under the checked-in Linux `Type=notify` systemd contract.
     ///
     /// This is the credential-free process entry expected by
@@ -373,7 +349,6 @@ impl RuntimeProviderBrokerExecutableV1 {
         }
     }
 }
-
 impl fmt::Debug for RuntimeProviderBrokerExecutableV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -382,7 +357,6 @@ impl fmt::Debug for RuntimeProviderBrokerExecutableV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Payload-free catalog, executable assembly, signal, or serving failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -406,7 +380,6 @@ pub enum RuntimeProviderBrokerExecutableErrorV1 {
     /// The Linux systemd readiness notification boundary was unavailable.
     SystemdNotifyUnavailable,
 }
-
 impl fmt::Display for RuntimeProviderBrokerExecutableErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -433,7 +406,6 @@ impl fmt::Display for RuntimeProviderBrokerExecutableErrorV1 {
         }
     }
 }
-
 impl std::error::Error for RuntimeProviderBrokerExecutableErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -449,7 +421,6 @@ impl std::error::Error for RuntimeProviderBrokerExecutableErrorV1 {
         }
     }
 }
-
 /// Load one exact secret-free catalog from a secure absolute file path.
 ///
 /// Linux and macOS require every path component to be a root-owned non-symlink
@@ -477,7 +448,6 @@ pub fn load_runtime_provider_broker_catalog_file_v1(
         Err(RuntimeProviderBrokerExecutableErrorV1::UnsupportedPlatform)
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RuntimeProviderCatalogFileIdentityV1 {
@@ -492,12 +462,10 @@ struct RuntimeProviderCatalogFileIdentityV1 {
     changed_seconds: i64,
     changed_nanoseconds: i64,
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl RuntimeProviderCatalogFileIdentityV1 {
     fn from_metadata(metadata: &std::fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt as _;
-
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -512,7 +480,6 @@ impl RuntimeProviderCatalogFileIdentityV1 {
         }
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn trusted_runtime_provider_catalog_owner_uid_v1() -> u32 {
     #[cfg(test)]
@@ -526,13 +493,11 @@ fn trusted_runtime_provider_catalog_owner_uid_v1() -> u32 {
         0
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn validate_runtime_provider_catalog_path_v1(
     catalog_path: &Path,
 ) -> Result<(), RuntimeProviderBrokerExecutableErrorV1> {
     use std::{os::unix::fs::MetadataExt as _, path::Component};
-
     if !catalog_path.is_absolute()
         || catalog_path
             .components()
@@ -557,13 +522,11 @@ fn validate_runtime_provider_catalog_path_v1(
     }
     Ok(())
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn load_runtime_provider_broker_catalog_file_on_unix_v1(
     catalog_path: &Path,
 ) -> Result<IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerExecutableErrorV1> {
     use std::io::Read as _;
-
     validate_runtime_provider_catalog_path_v1(catalog_path)?;
     let descriptor = rustix::fs::open(
         catalog_path,
@@ -611,7 +574,6 @@ fn load_runtime_provider_broker_catalog_file_on_unix_v1(
     IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes)
         .map_err(RuntimeProviderBrokerExecutableErrorV1::Catalog)
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn install_runtime_provider_broker_shutdown_signals_v1(
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
@@ -642,22 +604,18 @@ fn install_runtime_provider_broker_shutdown_signals_v1(
         .map(drop)
         .map_err(|_| RuntimeProviderBrokerExecutableErrorV1::SignalUnavailable)
 }
-
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn install_runtime_provider_broker_shutdown_signals_v1(
     _lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
 ) -> Result<(), RuntimeProviderBrokerExecutableErrorV1> {
     Err(RuntimeProviderBrokerExecutableErrorV1::UnsupportedPlatform)
 }
-
 #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 const SYSTEMD_READY_MESSAGE_V1: &[u8] = b"READY=1";
-
 #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 struct RuntimeProviderBrokerSystemdNotifierV1 {
     socket: std::os::unix::net::UnixDatagram,
 }
-
 #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 impl RuntimeProviderBrokerSystemdNotifierV1 {
     #[cfg(target_os = "linux")]
@@ -667,10 +625,8 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
         Self::try_from_notify_socket(notify_socket.as_os_str())
             .map_err(|()| RuntimeProviderBrokerExecutableErrorV1::SystemdNotifyUnavailable)
     }
-
     fn try_from_notify_socket(notify_socket: &std::ffi::OsStr) -> Result<Self, ()> {
         use std::os::unix::{ffi::OsStrExt as _, net::UnixDatagram};
-
         let raw = notify_socket.as_bytes();
         if raw.is_empty() {
             return Err(());
@@ -683,7 +639,6 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
             #[cfg(target_os = "linux")]
             {
                 use std::{os::linux::net::SocketAddrExt as _, os::unix::net::SocketAddr};
-
                 if raw.len() == 1 {
                     return Err(());
                 }
@@ -701,7 +656,6 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
         }
         Ok(Self { socket })
     }
-
     fn publish_ready(self) -> Result<(), RuntimeProviderBrokerReadinessErrorV1> {
         match self.socket.send(SYSTEMD_READY_MESSAGE_V1) {
             Ok(sent) if sent == SYSTEMD_READY_MESSAGE_V1.len() => Ok(()),
@@ -709,21 +663,17 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::{fs, sync::atomic::AtomicBool};
-
     use super::*;
     use crate::IrohaRuntimeProviderSlotV1;
-
     struct RecordingRegistry {
         calls: AtomicUsize,
         outcome: Result<RuntimeProviderBrokerBackendsV1, IrohaRuntimeProviderRegistryErrorV1>,
     }
-
     impl RecordingRegistry {
         fn available() -> Self {
             Self {
@@ -731,7 +681,6 @@ mod tests {
                 outcome: Ok(RuntimeProviderBrokerBackendsV1::new()),
             }
         }
-
         fn failing(error: IrohaRuntimeProviderRegistryErrorV1) -> Self {
             Self {
                 calls: AtomicUsize::new(0),
@@ -739,7 +688,6 @@ mod tests {
             }
         }
     }
-
     impl RuntimeProviderBrokerBackendRegistryV1 for RecordingRegistry {
         fn resolve(
             &self,
@@ -750,7 +698,6 @@ mod tests {
             self.outcome.clone()
         }
     }
-
     fn qualified_catalog() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1::qualified_for_test(
             "sora.production",
@@ -760,11 +707,9 @@ mod tests {
             [0x51; 32],
         )
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn write_catalog_file(bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
         use std::os::unix::fs::PermissionsExt as _;
-
         let root = std::env::current_dir()
             .expect("resolve current directory")
             .canonicalize()
@@ -779,7 +724,6 @@ mod tests {
             .expect("secure catalog fixture");
         (directory, path)
     }
-
     #[test]
     fn empty_catalog_is_rejected_without_backend_discovery() {
         let registry = RecordingRegistry::available();
@@ -787,20 +731,17 @@ mod tests {
             IrohaRuntimeProviderBindingsV1::empty_for_test("sora.production"),
             &registry,
         );
-
         assert_eq!(
             result.expect_err("an enabled broker requires at least one role"),
             RuntimeProviderBrokerLauncherErrorV1::EmptyCatalog
         );
         assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
     }
-
     #[test]
     fn backend_registry_failure_category_is_preserved() {
         let registry =
             RecordingRegistry::failing(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
         let result = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry);
-
         assert_eq!(
             result.expect_err("stale provider must reject broker assembly"),
             RuntimeProviderBrokerLauncherErrorV1::BackendRegistry(
@@ -809,7 +750,6 @@ mod tests {
         );
         assert_eq!(registry.calls.load(Ordering::Relaxed), 1);
     }
-
     #[test]
     fn launcher_errors_expose_only_payload_free_sources() {
         let empty = RuntimeProviderBrokerLauncherErrorV1::EmptyCatalog;
@@ -818,7 +758,6 @@ mod tests {
             "runtime-provider broker catalog is empty"
         );
         assert!(std::error::Error::source(&empty).is_none());
-
         let registry = RuntimeProviderBrokerLauncherErrorV1::BackendRegistry(
             IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected,
         );
@@ -827,7 +766,6 @@ mod tests {
             "runtime-provider binding is test-marked"
         );
         assert!(std::error::Error::source(&registry).is_some());
-
         let server = RuntimeProviderBrokerLauncherErrorV1::Server(
             RuntimeProviderBrokerServerErrorV1::BindingMismatch,
         );
@@ -837,7 +775,6 @@ mod tests {
         );
         assert!(std::error::Error::source(&server).is_some());
     }
-
     #[test]
     fn executable_cli_accepts_only_the_public_catalog_path() {
         let args = RuntimeProviderBrokerExecutableArgsV1::try_parse_from([
@@ -876,14 +813,12 @@ mod tests {
             );
         }
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn catalog_file_loader_roundtrips_exact_canonical_public_bytes() {
         let catalog = qualified_catalog();
         let bytes = catalog.export_canonical_v1().expect("encode catalog");
         let (_directory, path) = write_catalog_file(&bytes);
-
         let loaded = load_runtime_provider_broker_catalog_file_v1(&path)
             .expect("load secure canonical catalog");
         assert_eq!(
@@ -891,7 +826,6 @@ mod tests {
             bytes
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn catalog_file_loader_rejects_relative_missing_and_noncanonical_input() {
@@ -905,7 +839,6 @@ mod tests {
             Err(RuntimeProviderBrokerExecutableErrorV1::InvalidCatalogPath)
         ));
         assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
-
         let root = std::env::current_dir()
             .expect("resolve current directory")
             .canonicalize()
@@ -919,7 +852,6 @@ mod tests {
             Err(RuntimeProviderBrokerExecutableErrorV1::CatalogUnavailable)
         ));
         assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
-
         let (_directory, path) = write_catalog_file(b"not a canonical catalog");
         assert!(matches!(
             RuntimeProviderBrokerExecutableV1::try_from_catalog_file(&path, &registry),
@@ -929,12 +861,10 @@ mod tests {
         ));
         assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn catalog_file_loader_rejects_symlink_writable_and_oversized_files() {
         use std::os::unix::{fs::PermissionsExt as _, fs::symlink};
-
         let bytes = qualified_catalog()
             .export_canonical_v1()
             .expect("encode catalog");
@@ -945,21 +875,18 @@ mod tests {
             load_runtime_provider_broker_catalog_file_v1(&symlink_path),
             Err(RuntimeProviderBrokerExecutableErrorV1::CatalogUnavailable)
         ));
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("make catalog owner writable");
         assert!(matches!(
             load_runtime_provider_broker_catalog_file_v1(&path),
             Err(RuntimeProviderBrokerExecutableErrorV1::UntrustedCatalogPath)
         ));
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o4400))
             .expect("make catalog set-user-ID");
         assert!(matches!(
             load_runtime_provider_broker_catalog_file_v1(&path),
             Err(RuntimeProviderBrokerExecutableErrorV1::UntrustedCatalogPath)
         ));
-
         let oversized = vec![0xA5; RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1 + 1];
         let (_oversized_directory, oversized_path) = write_catalog_file(&oversized);
         assert!(matches!(
@@ -969,7 +896,6 @@ mod tests {
             ))
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn executable_preserves_registry_failure_and_redacts_catalog_details() {
@@ -991,7 +917,6 @@ mod tests {
             ))
         ));
         assert_eq!(failing.calls.load(Ordering::Relaxed), 1);
-
         let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
             &path,
             &RecordingRegistry::available(),
@@ -1002,7 +927,6 @@ mod tests {
         assert!(debug.contains("binding_count: 1"));
         assert!(!debug.contains("providers.norito"));
         assert!(!debug.contains("threshold-prf://sorafs/privacy/primary"));
-
         let lifecycle = executable.lifecycle();
         lifecycle.request_shutdown();
         let ready = AtomicBool::new(false);
@@ -1011,7 +935,6 @@ mod tests {
             .expect("pre-requested shutdown exits without endpoint access");
         assert!(!ready.load(Ordering::Relaxed));
     }
-
     #[test]
     fn executable_errors_are_stable_and_payload_free() {
         let catalog = RuntimeProviderBrokerExecutableErrorV1::Catalog(
@@ -1034,7 +957,6 @@ mod tests {
             assert!(!error.to_string().contains('/'));
             assert!(std::error::Error::source(&error).is_none());
         }
-
         let readiness = RuntimeProviderBrokerReadinessErrorV1;
         assert_eq!(
             readiness.to_string(),
@@ -1048,7 +970,6 @@ mod tests {
         );
         assert!(std::error::Error::source(&server).is_none());
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn systemd_notifier_rejects_noncanonical_socket_addresses() {
@@ -1062,12 +983,10 @@ mod tests {
             );
         }
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn systemd_notifier_publishes_only_exact_ready_datagram() {
         use std::os::unix::net::UnixDatagram;
-
         let directory = tempfile::tempdir().expect("systemd notifier socket directory");
         let path = directory.path().join("notify.sock");
         let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
@@ -1077,18 +996,15 @@ mod tests {
         let notifier =
             RuntimeProviderBrokerSystemdNotifierV1::try_from_notify_socket(path.as_os_str())
                 .expect("connect systemd notifier");
-
         notifier.publish_ready().expect("publish READY=1");
         let mut received = [0_u8; 32];
         let received_len = receiver.recv(&mut received).expect("receive READY=1");
         assert_eq!(&received[..received_len], SYSTEMD_READY_MESSAGE_V1);
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn systemd_notifier_rejects_send_after_supervisor_disappears() {
         use std::os::unix::net::UnixDatagram;
-
         let directory = tempfile::tempdir().expect("systemd notifier socket directory");
         let path = directory.path().join("notify.sock");
         let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
@@ -1097,16 +1013,13 @@ mod tests {
                 .expect("connect systemd notifier");
         drop(receiver);
         fs::remove_file(&path).expect("remove stopped systemd notification socket");
-
         assert!(notifier.publish_ready().is_err());
     }
-
     #[test]
     fn assembled_launcher_reports_only_public_summary() {
         let registry = RecordingRegistry::available();
         let deployment = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry)
             .expect("assemble public catalog");
-
         assert_eq!(deployment.binding_count(), 1);
         let debug = format!("{deployment:?}");
         assert!(debug.contains("sora.production"));
@@ -1114,14 +1027,12 @@ mod tests {
         assert!(!debug.contains("threshold-prf://sorafs/privacy/primary"));
         assert!(!debug.contains("RuntimeProviderBrokerBackendsV1"));
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn serve_rejects_incomplete_backend_set_before_endpoint_access() {
         let registry = RecordingRegistry::available();
         let deployment = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry)
             .expect("assemble public catalog");
-
         assert_eq!(
             deployment
                 .serve()
@@ -1131,7 +1042,6 @@ mod tests {
             )
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn pre_requested_shutdown_suppresses_readiness_callback() {
@@ -1141,7 +1051,6 @@ mod tests {
         let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
         lifecycle.request_shutdown();
         let ready = AtomicBool::new(false);
-
         deployment
             .serve_with_lifecycle(lifecycle, || ready.store(true, Ordering::Relaxed))
             .expect("pre-start shutdown exits without endpoint access");

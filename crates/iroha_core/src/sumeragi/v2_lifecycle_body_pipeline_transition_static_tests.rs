@@ -11,7 +11,6 @@ mod static_tests {
     use crate::sumeragi::v2_lifecycle_coordinator::{
         reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
     };
-
     fn key(
         phase: LifecyclePhase,
         proposal_round: bool,
@@ -27,11 +26,9 @@ mod static_tests {
             commitment,
         )
     }
-
     fn stage(kind: LifecycleStageKind, scope: PredecessorScope) -> LifecycleStage {
         LifecycleStage::new(kind, scope)
     }
-
     #[test]
     fn durable_successor_relation_covers_all_ten_exact_continuation_edges() {
         let commitment = LifecycleDigest::new([3; 32]);
@@ -155,7 +152,6 @@ mod static_tests {
                 stage(child_kind, PredecessorScope::Independent),
             ));
         }
-
         assert!(!durable_continuation_successor_is_exact(
             DurableContinuationEdge::ValidateToApply,
             LifecycleWorkClass::Validate,
@@ -233,7 +229,6 @@ mod static_tests {
             ),
         ));
     }
-
     #[test]
     fn durable_successor_payload_relation_rejects_body_frame_substitution() {
         let round = LifecycleRound::new(7, 3);
@@ -325,7 +320,6 @@ mod static_tests {
             ));
         }
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn recovered_broadcast_and_next_sign_relation_accepts_only_adjacent_wal_vote() {
@@ -347,7 +341,6 @@ mod static_tests {
         assert!(recovered_broadcast_and_next_sign_are_exact(
             &broadcast, &next_sign
         ));
-
         let mut prepare_broadcast = broadcast.clone();
         prepare_broadcast.key = key(
             LifecyclePhase::BroadcastPrepareVote,
@@ -369,7 +362,6 @@ mod static_tests {
             &prepare_broadcast,
             &commit_sign
         ));
-
         let mut foreign = commit_sign.clone();
         foreign.key.execution_commitment = Some(LifecycleDigest::new([0x64; 32]));
         assert!(!recovered_broadcast_and_next_sign_are_exact(
@@ -382,7 +374,6 @@ mod static_tests {
             &broadcast, &foreign
         ));
     }
-
     #[test]
     fn combined_recovered_sign_staging_is_two_child_affine_and_inert() {
         let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
@@ -420,7 +411,6 @@ mod static_tests {
             );
         }
         assert!(!reducer.contains("persist_exact"));
-
         let entry = source
             .split_once(
                 "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_transition",
@@ -449,7 +439,6 @@ mod static_tests {
                 "preparation entrypoint exposed {forbidden}"
             );
         }
-
         let publication = source
             .split_once("impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_>")
             .expect("locate combined transition publication")
@@ -497,7 +486,6 @@ mod static_tests {
         let tail = &publication[registry_commit..];
         assert!(!tail.contains("return "));
         assert!(!tail.contains(".is_err()"));
-
         let adapter_commit = adapter_source
             .split_once("fn commit_after_durable_broadcast_and_sign(self)")
             .expect("locate combined adapter publication")
@@ -540,7 +528,6 @@ mod static_tests {
                 "combined Vote adapter publication omitted {required}"
             );
         }
-
         let registry_prepare = registry_source
             .split_once(
                 "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor",
@@ -578,7 +565,6 @@ mod static_tests {
                 "combined registry preparation exposed {forbidden}"
             );
         }
-
         let commit = registry_source
             .split_once(
                 "impl<'registry, 'adapter>\n    BoundRecoveredLifecycleSignBroadcastAndSignSuccessor",
@@ -617,7 +603,6 @@ mod static_tests {
             );
         }
         assert!(!commit.contains("pub(super) fn into_"));
-
         let sign_dispatch = registry_recovery_source
             .split_once("pub(super) fn attest_ready_recovered_lifecycle_sign(")
             .expect("locate recovered Sign attestation")
@@ -634,7 +619,6 @@ mod static_tests {
         assert!(sign_dispatch.contains("PreparedRecoveredLifecycleSignCarrier::NextWalVote"));
         assert!(sign_dispatch.contains(".project_task(identity)"));
     }
-
     #[test]
     fn transition_surface_is_ordered_borrow_bound_and_inert() {
         let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
@@ -657,8 +641,8 @@ mod static_tests {
             .find("reduce_admit")
             .expect("staged transition admits its child");
         assert!(
-            settlement < admission,
-            "the same-class Effect branch must release capacity before child admission"
+            staging < settlement && settlement < admission,
+            "the same-class Effect branch must stage first, release capacity, then admit its child"
         );
         for required in [
             "candidate.replay_authority_is_exact(coordinator.active_context)",
@@ -901,7 +885,6 @@ mod static_tests {
                 );
             }
         }
-
         let publication = production
             .split("pub(super) fn persist_and_publish(")
             .nth(1)
@@ -934,7 +917,6 @@ mod static_tests {
                 "post-fsync publication acquired fallible work through {forbidden}"
             );
         }
-
         let exact_fsync_callers = production
             .matches(".persist_exact_staged_successor(")
             .count()

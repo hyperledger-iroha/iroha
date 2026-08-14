@@ -4,15 +4,6 @@
 //! `manifest-version = 1` is mandatory, and values are converted immediately
 //! into the structured Musubi data-model types used by resolution and
 //! publication.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt,
-    path::PathBuf,
-    str::FromStr,
-};
-
 use iroha_data_model::{
     musubi::{
         MUSUBI_IVM_ABI_VERSION_V1, MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_EXPORTS_V1,
@@ -21,12 +12,17 @@ use iroha_data_model::{
     },
     name::Name,
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+    path::PathBuf,
+    str::FromStr,
+};
 /// Filename of a first-release Musubi manifest.
 pub const MANIFEST_FILE_NAME: &str = "Musubi.toml";
 /// Only manifest schema accepted by this implementation.
 pub const MANIFEST_VERSION_V1: u32 = 1;
-
 const MAX_DESCRIPTION_BYTES: usize = 4_096;
 const MAX_LICENSE_BYTES: usize = 256;
 const MAX_REPOSITORY_BYTES: usize = 2_048;
@@ -36,7 +32,6 @@ const MAX_LOCAL_TARGETS: usize = 256;
 const MAX_PORTABLE_PATH_BYTES: usize = 4_096;
 const MAX_PORTABLE_COMPONENT_BYTES: usize = 255;
 const MAX_PORTABLE_COMPONENTS: usize = 64;
-
 /// Broad category of a manifest validation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManifestErrorKind {
@@ -55,7 +50,6 @@ pub enum ManifestErrorKind {
     /// A focused text edit could not be performed safely.
     Edit,
 }
-
 /// Structured error produced while parsing or editing `Musubi.toml`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManifestError {
@@ -63,7 +57,6 @@ pub struct ManifestError {
     location: String,
     message: String,
 }
-
 impl ManifestError {
     fn new(
         kind: ManifestErrorKind,
@@ -76,26 +69,22 @@ impl ManifestError {
             message: message.into(),
         }
     }
-
     /// Return the stable error category.
     #[must_use]
     pub const fn kind(&self) -> ManifestErrorKind {
         self.kind
     }
-
     /// Return the dotted manifest location associated with the error.
     #[must_use]
     pub fn location(&self) -> &str {
         &self.location
     }
-
     /// Return the human-readable reason without a path prefix.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
-
 impl fmt::Display for ManifestError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.location.is_empty() {
@@ -105,9 +94,7 @@ impl fmt::Display for ManifestError {
         }
     }
 }
-
 impl Error for ManifestError {}
-
 /// A normalized relative path whose spelling is safe on supported platforms.
 ///
 /// Paths use `/`, contain no traversal components, drive prefixes, or portable
@@ -115,7 +102,6 @@ impl Error for ManifestError {}
 /// retained for APIs that explicitly select a package or include root.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PortablePath(String);
-
 impl PortablePath {
     /// Parse and validate one canonical portable path.
     ///
@@ -125,13 +111,11 @@ impl PortablePath {
     pub fn new(raw: &str) -> Result<Self, ManifestError> {
         validate_portable_path(raw, false).map(Self)
     }
-
     /// Return the canonical slash-separated spelling.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
     /// Convert to a platform path without changing its semantics.
     #[must_use]
     pub fn to_path_buf(&self) -> PathBuf {
@@ -140,28 +124,23 @@ impl PortablePath {
         }
         self.0.split('/').collect()
     }
-
     /// Return a deterministic ASCII case-folded collision key.
     #[must_use]
     pub fn collision_key(&self) -> String {
         self.0.chars().flat_map(char::to_lowercase).collect()
     }
 }
-
 impl fmt::Display for PortablePath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
-
 impl FromStr for PortablePath {
     type Err = ManifestError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         Self::new(raw)
     }
 }
-
 /// A portable relative dependency path.
 ///
 /// Unlike package-content paths, dependency paths may contain `..` so a member
@@ -169,7 +148,6 @@ impl FromStr for PortablePath {
 /// remains beneath the workspace root before any manifest is read.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DependencyPath(String);
-
 impl DependencyPath {
     /// Parse a portable relative dependency path.
     ///
@@ -179,13 +157,11 @@ impl DependencyPath {
     pub fn new(raw: &str) -> Result<Self, ManifestError> {
         validate_portable_path(raw, true).map(Self)
     }
-
     /// Return the slash-separated source spelling.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
     /// Convert to a platform-relative path.
     #[must_use]
     pub fn to_path_buf(&self) -> PathBuf {
@@ -195,21 +171,17 @@ impl DependencyPath {
         self.0.split('/').collect()
     }
 }
-
 impl fmt::Display for DependencyPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
-
 impl FromStr for DependencyPath {
     type Err = ManifestError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         Self::new(raw)
     }
 }
-
 /// A value either written locally or explicitly inherited from the workspace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Inheritable<T> {
@@ -218,7 +190,6 @@ pub enum Inheritable<T> {
     /// `{ workspace = true }` marker.
     Workspace,
 }
-
 impl<T> Inheritable<T> {
     /// Return the concrete local value, if this field is not inherited.
     #[must_use]
@@ -228,14 +199,12 @@ impl<T> Inheritable<T> {
             Self::Workspace => None,
         }
     }
-
     /// Return whether the field explicitly inherits from its workspace.
     #[must_use]
     pub const fn is_workspace(&self) -> bool {
         matches!(self, Self::Workspace)
     }
 }
-
 /// Package identity, compiler binding, and immutable descriptive metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageManifest {
@@ -264,7 +233,6 @@ pub struct PackageManifest {
     /// Optional positive additions to the package file set.
     pub include: Option<Inheritable<Vec<PortablePath>>>,
 }
-
 /// Concrete package metadata after workspace inheritance is applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedPackageManifest {
@@ -291,7 +259,6 @@ pub struct ResolvedPackageManifest {
     /// Sorted positive include additions.
     pub include: Vec<PortablePath>,
 }
-
 /// Shared concrete values available to package manifests in a workspace.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkspacePackageDefaults {
@@ -318,7 +285,6 @@ pub struct WorkspacePackageDefaults {
     /// Shared positive include additions, relative to the workspace root.
     pub include: Option<Vec<PortablePath>>,
 }
-
 /// Local Kotodama library configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryManifest {
@@ -327,7 +293,6 @@ pub struct LibraryManifest {
     /// Sorted, explicit exported interface names.
     pub exports: Vec<Name>,
 }
-
 /// One local contract or test target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalTarget {
@@ -336,7 +301,6 @@ pub struct LocalTarget {
     /// Source file or directory relative to the package root.
     pub path: PortablePath,
 }
-
 /// Concrete registry or local path dependency.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConcreteDependency {
@@ -357,7 +321,6 @@ pub enum ConcreteDependency {
         requirement: Option<MusubiVersionReqV1>,
     },
 }
-
 impl ConcreteDependency {
     /// Return the registry package and range usable in a published normal dependency.
     ///
@@ -385,7 +348,6 @@ impl ConcreteDependency {
         }
     }
 }
-
 /// Dependency declaration before workspace inheritance is applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DependencySpec {
@@ -394,7 +356,6 @@ pub enum DependencySpec {
     /// Exact `{ workspace = true }` inheritance marker.
     Workspace,
 }
-
 /// Which dependency table a focused edit should modify.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DependencySection {
@@ -405,7 +366,6 @@ pub enum DependencySection {
     /// `[workspace.dependencies]`.
     Workspace,
 }
-
 impl DependencySection {
     fn header(self) -> &'static str {
         match self {
@@ -415,7 +375,6 @@ impl DependencySection {
         }
     }
 }
-
 /// Workspace membership and shared package/dependency declarations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceManifest {
@@ -430,7 +389,6 @@ pub struct WorkspaceManifest {
     /// Concrete dependencies inherited by alias.
     pub dependencies: BTreeMap<Name, ConcreteDependency>,
 }
-
 /// Fully validated syntax tree for a first-release `Musubi.toml`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -451,14 +409,12 @@ pub struct Manifest {
     /// Optional workspace declaration.
     pub workspace: Option<WorkspaceManifest>,
 }
-
 impl Manifest {
     /// Return whether this document is a virtual workspace root.
     #[must_use]
     pub fn is_virtual_workspace(&self) -> bool {
         self.package.is_none() && self.workspace.is_some()
     }
-
     /// Resolve all package fields against optional workspace defaults.
     ///
     /// # Errors
@@ -496,7 +452,6 @@ impl Manifest {
             &package.abi_version,
             defaults.and_then(|value| value.abi_version.as_ref()),
         )?;
-
         Ok(ResolvedPackageManifest {
             selector: MusubiPackageSelectorV1 {
                 namespace,
@@ -545,7 +500,6 @@ impl Manifest {
         })
     }
 }
-
 /// Parse and fully validate one Musubi V1 manifest document.
 ///
 /// The TOML parser rejects duplicate keys before semantic validation. Every
@@ -586,7 +540,6 @@ pub fn parse_manifest(source: &str) -> Result<Manifest, ManifestError> {
             "`manifest-version = 1` is required; pre-release manifests are not supported",
         ));
     }
-
     let package = root
         .get("package")
         .map(|value| parse_package(required_value_table(value, "package")?))
@@ -604,7 +557,6 @@ pub fn parse_manifest(source: &str) -> Result<Manifest, ManifestError> {
         .get("workspace")
         .map(|value| parse_workspace(required_value_table(value, "workspace")?))
         .transpose()?;
-
     match (&package, &workspace) {
         (None, None) => {
             return Err(ManifestError::new(
@@ -636,7 +588,6 @@ pub fn parse_manifest(source: &str) -> Result<Manifest, ManifestError> {
         }
         (Some(_), _) => {}
     }
-
     Ok(Manifest {
         schema_version: MANIFEST_VERSION_V1,
         package,
@@ -648,7 +599,6 @@ pub fn parse_manifest(source: &str) -> Result<Manifest, ManifestError> {
         workspace,
     })
 }
-
 /// Add or replace one dependency through a span-focused text edit.
 ///
 /// Existing comments and all unrelated bytes are preserved. A missing table is
@@ -680,7 +630,6 @@ pub fn upsert_dependency(
     parse_manifest(&edited)?;
     Ok(edited)
 }
-
 /// Remove one dependency through a span-focused text edit.
 ///
 /// # Errors
@@ -699,7 +648,6 @@ pub fn remove_dependency(
     parse_manifest(&edited)?;
     Ok(edited)
 }
-
 fn parse_package(table: &toml::Table) -> Result<PackageManifest, ManifestError> {
     reject_unknown(
         table,
@@ -780,7 +728,6 @@ fn parse_package(table: &toml::Table) -> Result<PackageManifest, ManifestError> 
         })?,
     })
 }
-
 fn parse_library(table: &toml::Table) -> Result<LibraryManifest, ManifestError> {
     reject_unknown(table, &["source-dir", "exports"], "lib")?;
     let source_dir = match table.get("source-dir") {
@@ -796,7 +743,6 @@ fn parse_library(table: &toml::Table) -> Result<LibraryManifest, ManifestError> 
         exports,
     })
 }
-
 fn parse_targets(
     value: Option<&toml::Value>,
     field: &'static str,
@@ -844,7 +790,6 @@ fn parse_targets(
     targets.sort_by(|left, right| left.name.cmp(&right.name).then(left.path.cmp(&right.path)));
     Ok(targets)
 }
-
 fn parse_workspace(table: &toml::Table) -> Result<WorkspaceManifest, ManifestError> {
     reject_unknown(
         table,
@@ -886,7 +831,6 @@ fn parse_workspace(table: &toml::Table) -> Result<WorkspaceManifest, ManifestErr
         dependencies,
     })
 }
-
 fn parse_workspace_package(table: &toml::Table) -> Result<WorkspacePackageDefaults, ManifestError> {
     reject_unknown(
         table,
@@ -962,7 +906,6 @@ fn parse_workspace_package(table: &toml::Table) -> Result<WorkspacePackageDefaul
             .transpose()?,
     })
 }
-
 fn parse_dependency_table(
     value: Option<&toml::Value>,
     location: &'static str,
@@ -984,7 +927,6 @@ fn parse_dependency_table(
     }
     Ok(result)
 }
-
 fn parse_concrete_dependency_table(
     value: Option<&toml::Value>,
     location: &'static str,
@@ -1001,7 +943,6 @@ fn parse_concrete_dependency_table(
         })
         .collect()
 }
-
 fn parse_dependency(
     value: &toml::Value,
     location: &str,
@@ -1046,7 +987,6 @@ fn parse_dependency(
         }
         return Ok(DependencySpec::Workspace);
     }
-
     let package = table
         .get("package")
         .map(|value| {
@@ -1102,7 +1042,6 @@ fn parse_dependency(
         },
     }
 }
-
 fn parse_required_inheritable<T>(
     table: &toml::Table,
     key: &str,
@@ -1111,7 +1050,6 @@ fn parse_required_inheritable<T>(
 ) -> Result<Inheritable<T>, ManifestError> {
     parse_inheritable(required_value(table, key, location)?, location, parse)
 }
-
 fn parse_optional_inheritable<T>(
     table: &toml::Table,
     key: &str,
@@ -1123,7 +1061,6 @@ fn parse_optional_inheritable<T>(
         .map(|value| parse_inheritable(value, location, parse))
         .transpose()
 }
-
 fn parse_inheritable<T>(
     value: &toml::Value,
     location: &str,
@@ -1141,7 +1078,6 @@ fn parse_inheritable<T>(
     }
     parse(value).map(Inheritable::Value)
 }
-
 fn resolve_required<T: Clone>(
     location: &str,
     value: &Inheritable<T>,
@@ -1158,7 +1094,6 @@ fn resolve_required<T: Clone>(
         }),
     }
 }
-
 fn resolve_optional<T: Clone>(
     location: &str,
     value: Option<&Inheritable<T>>,
@@ -1176,7 +1111,6 @@ fn resolve_optional<T: Clone>(
         }),
     }
 }
-
 fn parse_edition(
     value: &toml::Value,
     location: &str,
@@ -1191,7 +1125,6 @@ fn parse_edition(
         ))
     }
 }
-
 fn parse_abi_version(value: &toml::Value, location: &str) -> Result<u16, ManifestError> {
     let version = value.as_integer().ok_or_else(|| {
         ManifestError::new(
@@ -1209,11 +1142,9 @@ fn parse_abi_version(value: &toml::Value, location: &str) -> Result<u16, Manifes
     }
     Ok(MUSUBI_IVM_ABI_VERSION_V1)
 }
-
 fn parse_repository(value: &toml::Value) -> Result<String, ManifestError> {
     parse_repository_at(value, "package.repository")
 }
-
 fn parse_repository_at(value: &toml::Value, location: &str) -> Result<String, ManifestError> {
     let raw = parse_bounded_text(value, location, MAX_REPOSITORY_BYTES)?;
     let parsed = url::Url::parse(&raw).map_err(|error| invalid(location, error))?;
@@ -1237,11 +1168,9 @@ fn parse_repository_at(value: &toml::Value, location: &str) -> Result<String, Ma
     }
     Ok(raw)
 }
-
 fn parse_keywords(value: &toml::Value) -> Result<Vec<String>, ManifestError> {
     parse_keywords_at(value, "package.keywords")
 }
-
 fn parse_keywords_at(value: &toml::Value, location: &str) -> Result<Vec<String>, ManifestError> {
     let array = value.as_array().ok_or_else(|| {
         ManifestError::new(
@@ -1276,7 +1205,6 @@ fn parse_keywords_at(value: &toml::Value, location: &str) -> Result<Vec<String>,
     keywords.sort();
     Ok(keywords)
 }
-
 fn parse_path_array(
     value: &toml::Value,
     location: &str,
@@ -1318,7 +1246,6 @@ fn parse_path_array(
     paths.sort();
     Ok(paths)
 }
-
 fn parse_name_array(
     value: &toml::Value,
     location: &str,
@@ -1343,13 +1270,11 @@ fn parse_name_array(
         })
         .collect()
 }
-
 fn parse_portable_path(value: &toml::Value, location: &str) -> Result<PortablePath, ManifestError> {
     let raw = parse_string(value, location)?;
     PortablePath::new(raw)
         .map_err(|error| ManifestError::new(error.kind(), location, error.message().to_owned()))
 }
-
 fn validate_portable_path(raw: &str, allow_parent: bool) -> Result<String, ManifestError> {
     if raw.is_empty()
         || raw.len() > MAX_PORTABLE_PATH_BYTES
@@ -1398,7 +1323,6 @@ fn validate_portable_path(raw: &str, allow_parent: bool) -> Result<String, Manif
     }
     Ok(raw.to_owned())
 }
-
 fn portable_reserved_name(component: &str) -> bool {
     let stem = component
         .split_once('.')
@@ -1440,7 +1364,6 @@ fn portable_reserved_name(component: &str) -> bool {
     }
     false
 }
-
 fn normalize_portable_component(component: &str) -> Result<String, ()> {
     let mut output = String::with_capacity(component.len());
     let mut segment = String::new();
@@ -1464,7 +1387,6 @@ fn normalize_portable_component(component: &str) -> Result<String, ()> {
     flush(&mut segment, &mut output)?;
     Ok(output)
 }
-
 fn is_bidi_control(character: char) -> bool {
     matches!(
         character,
@@ -1475,11 +1397,9 @@ fn is_bidi_control(character: char) -> bool {
             | '\u{2066}'..='\u{2069}'
     )
 }
-
 fn parse_alias(raw: &str, location: &str) -> Result<Name, ManifestError> {
     raw.parse().map_err(|error| invalid(location, error))
 }
-
 fn parse_bounded_text(
     value: &toml::Value,
     location: &str,
@@ -1495,7 +1415,6 @@ fn parse_bounded_text(
     }
     Ok(raw.to_owned())
 }
-
 fn parse_string<'a>(value: &'a toml::Value, location: &str) -> Result<&'a str, ManifestError> {
     value.as_str().ok_or_else(|| {
         ManifestError::new(
@@ -1505,7 +1424,6 @@ fn parse_string<'a>(value: &'a toml::Value, location: &str) -> Result<&'a str, M
         )
     })
 }
-
 fn parse_optional_string_value<'a>(
     table: &'a toml::Table,
     key: &str,
@@ -1516,7 +1434,6 @@ fn parse_optional_string_value<'a>(
         .map(|value| parse_string(value, location))
         .transpose()
 }
-
 fn required_integer(table: &toml::Table, key: &str, location: &str) -> Result<i64, ManifestError> {
     required_value(table, key, location)?
         .as_integer()
@@ -1528,7 +1445,6 @@ fn required_integer(table: &toml::Table, key: &str, location: &str) -> Result<i6
             )
         })
 }
-
 fn required_value<'a>(
     table: &'a toml::Table,
     key: &str,
@@ -1542,7 +1458,6 @@ fn required_value<'a>(
         )
     })
 }
-
 fn required_value_table<'a>(
     value: &'a toml::Value,
     location: &str,
@@ -1551,7 +1466,6 @@ fn required_value_table<'a>(
         ManifestError::new(ManifestErrorKind::InvalidField, location, "must be a table")
     })
 }
-
 fn reject_unknown(
     table: &toml::Table,
     allowed: &[&str],
@@ -1575,7 +1489,6 @@ fn reject_unknown(
     }
     Ok(())
 }
-
 fn reject_unsupported_root_fields(table: &toml::Table) -> Result<(), ManifestError> {
     for field in ["build-dependencies", "target", "features"] {
         if table.contains_key(field) {
@@ -1588,7 +1501,6 @@ fn reject_unsupported_root_fields(table: &toml::Table) -> Result<(), ManifestErr
     }
     Ok(())
 }
-
 fn ensure_unique_names(values: &[Name], location: &str) -> Result<(), ManifestError> {
     let mut seen = BTreeSet::new();
     for value in values {
@@ -1602,7 +1514,6 @@ fn ensure_unique_names(values: &[Name], location: &str) -> Result<(), ManifestEr
     }
     Ok(())
 }
-
 fn ensure_unique_strings(values: &[String], location: &str) -> Result<(), ManifestError> {
     let mut seen = BTreeSet::new();
     for value in values {
@@ -1616,15 +1527,12 @@ fn ensure_unique_strings(values: &[String], location: &str) -> Result<(), Manife
     }
     Ok(())
 }
-
 fn invalid(location: impl Into<String>, error: impl fmt::Display) -> ManifestError {
     ManifestError::new(ManifestErrorKind::InvalidField, location, error.to_string())
 }
-
 fn invalid_path(message: impl Into<String>) -> ManifestError {
     ManifestError::new(ManifestErrorKind::InvalidField, "path", message)
 }
-
 fn limit(location: impl Into<String>, maximum: usize) -> ManifestError {
     ManifestError::new(
         ManifestErrorKind::Limit,
@@ -1632,7 +1540,6 @@ fn limit(location: impl Into<String>, maximum: usize) -> ManifestError {
         format!("contains more than the Musubi V1 maximum of {maximum} entries"),
     )
 }
-
 fn render_dependency(dependency: &DependencySpec) -> String {
     match dependency {
         DependencySpec::Workspace => "{ workspace = true }".to_owned(),
@@ -1661,7 +1568,6 @@ fn render_dependency(dependency: &DependencySpec) -> String {
         }
     }
 }
-
 fn toml_string(raw: &str) -> String {
     let mut output = String::with_capacity(raw.len() + 2);
     output.push('"');
@@ -1678,7 +1584,6 @@ fn toml_string(raw: &str) -> String {
     output.push('"');
     output
 }
-
 fn edit_dependency_line(
     source: &str,
     section: DependencySection,
@@ -1712,7 +1617,6 @@ fn edit_dependency_line(
         output.push('\n');
         return Ok(output);
     };
-
     let mut found = None;
     for index in (header_line + 1)..end_line {
         let text = &source[lines[index].0..lines[index].1];
@@ -1768,7 +1672,6 @@ fn edit_dependency_line(
         )),
     }
 }
-
 fn line_spans(source: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut start = 0;
@@ -1783,7 +1686,6 @@ fn line_spans(source: &str) -> Vec<(usize, usize)> {
     }
     spans
 }
-
 fn find_section(source: &str, lines: &[(usize, usize)], wanted: &str) -> Option<(usize, usize)> {
     let mut start = None;
     for (index, (line_start, line_end)) in lines.iter().copied().enumerate() {
@@ -1808,7 +1710,6 @@ fn find_section(source: &str, lines: &[(usize, usize)], wanted: &str) -> Option<
     }
     start.map(|start| (start, lines.len()))
 }
-
 fn parse_table_header(line: &str) -> Option<&str> {
     if line.starts_with("[[") {
         return None;
@@ -1819,7 +1720,6 @@ fn parse_table_header(line: &str) -> Option<&str> {
         .strip_suffix(']')
         .map(str::trim)
 }
-
 fn assignment_key(line: &str) -> Option<String> {
     let body = line.trim_start();
     if body.is_empty() || body.starts_with('#') || body.starts_with('[') {
@@ -1839,11 +1739,9 @@ fn assignment_key(line: &str) -> Option<String> {
         None
     }
 }
-
 fn trailing_comment(line: &str) -> Option<usize> {
     find_unquoted(line, '#')
 }
-
 fn find_unquoted(line: &str, needle: char) -> Option<usize> {
     let mut quote = None;
     let mut escaped = false;
@@ -1870,7 +1768,6 @@ fn find_unquoted(line: &str, needle: char) -> Option<usize> {
     }
     None
 }
-
 fn preferred_newline(source: &str) -> &'static str {
     if source.contains("\r\n") {
         "\r\n"
@@ -1878,7 +1775,6 @@ fn preferred_newline(source: &str) -> &'static str {
         "\n"
     }
 }
-
 fn replace_span(source: &str, start: usize, end: usize, replacement: &str) -> String {
     let mut output = String::with_capacity(source.len() - (end - start) + replacement.len());
     output.push_str(&source[..start]);
@@ -1886,11 +1782,9 @@ fn replace_span(source: &str, start: usize, end: usize, replacement: &str) -> St
     output.push_str(&source[end..]);
     output
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const PACKAGE: &str = r#"
 manifest-version = 1
 
@@ -1927,7 +1821,6 @@ local = { path = "vendor/local", package = "std/local", version = "~2.0.0" }
 [dev-dependencies]
 fixtures = { path = "tests/fixtures" }
 "#;
-
     #[test]
     fn parses_full_package_into_structured_v1_types() {
         let manifest = parse_manifest(PACKAGE).expect("valid package manifest");
@@ -1954,7 +1847,6 @@ fixtures = { path = "tests/fixtures" }
             ))
         ));
     }
-
     #[test]
     fn virtual_workspace_and_inheritance_are_explicit() {
         let root = parse_manifest(
@@ -1977,7 +1869,6 @@ math = { package = "std/math", version = "1.0.0" }
         )
         .expect("virtual root");
         assert!(root.is_virtual_workspace());
-
         let member = parse_manifest(
             r#"
 manifest-version = 1
@@ -2001,7 +1892,6 @@ math = { workspace = true }
         assert_eq!(effective.version.to_string(), "2.0.0");
         assert_eq!(effective.license.as_deref(), Some("Apache-2.0"));
     }
-
     #[test]
     fn rejects_unknown_duplicate_and_deferred_dependency_fields() {
         let unknown = PACKAGE.replace("description =", "mystery = true\ndescription =");
@@ -2028,7 +1918,6 @@ math = { workspace = true }
                 .contains("not supported")
         );
     }
-
     #[test]
     fn rejects_noncanonical_versions_and_unsafe_paths() {
         let build = PACKAGE.replace("1.2.3-alpha.1", "1.2.3+local");
@@ -2040,7 +1929,6 @@ math = { workspace = true }
         let reserved = PACKAGE.replace("assets", "con/secret");
         assert!(parse_manifest(&reserved).is_err());
     }
-
     #[test]
     fn normal_path_publication_requires_registry_pair() {
         let manifest = parse_manifest(PACKAGE).expect("manifest");
@@ -2053,7 +1941,6 @@ math = { workspace = true }
         };
         assert!(dependency.publication_requirement().is_err());
     }
-
     #[test]
     fn focused_edits_preserve_unrelated_bytes_and_comments() {
         let dependency = DependencySpec::Concrete(ConcreteDependency::Registry {
@@ -2077,7 +1964,6 @@ math = { workspace = true }
             ),
             source
         );
-
         let added = upsert_dependency(&edited, DependencySection::Normal, "codec", &dependency)
             .expect("focused add");
         assert!(added.contains("codec = { package = \"std/crypto\", version = \"^3.0.0\" }"));
@@ -2085,7 +1971,6 @@ math = { workspace = true }
             remove_dependency(&added, DependencySection::Normal, "codec").expect("focused remove");
         assert_eq!(removed, edited);
     }
-
     #[test]
     fn focused_edit_appends_missing_table_without_rerendering() {
         let source = r#"manifest-version = 1

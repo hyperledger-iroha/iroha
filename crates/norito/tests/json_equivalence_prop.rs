@@ -1,14 +1,11 @@
 #![cfg(feature = "json")]
 //! Deterministic equivalence tests for Norito's JSON fast path.
-
 use norito::json::{JsonDeserialize, Parser, from_json_fast};
-
 #[derive(Clone, Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Inner {
     count: u32,
     title: String,
 }
-
 impl JsonDeserialize for Inner {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
         parser.skip_ws();
@@ -34,7 +31,6 @@ impl JsonDeserialize for Inner {
         })
     }
 }
-
 #[derive(Clone, Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Outer {
     id: u64,
@@ -45,7 +41,6 @@ struct Outer {
     nested: Option<Inner>,
     nums: Vec<u64>,
 }
-
 impl JsonDeserialize for Outer {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
         parser.skip_ws();
@@ -93,7 +88,6 @@ impl JsonDeserialize for Outer {
         })
     }
 }
-
 fn outer_cases() -> Vec<Outer> {
     vec![
         Outer {
@@ -131,7 +125,6 @@ fn outer_cases() -> Vec<Outer> {
         },
     ]
 }
-
 #[test]
 fn from_json_fast_matches_generic_for_outer() {
     for value in outer_cases() {
@@ -141,11 +134,9 @@ fn from_json_fast_matches_generic_for_outer() {
         assert_eq!(slow, fast);
     }
 }
-
 #[test]
 fn tape_parse_string_ref_inline_matches_input() {
     let cases = ["", "plain", "line\nbreak", "\"quoted\"", "π", "😀"];
-
     for value in cases {
         let quoted = norito::json::to_json(&norito::json::Value::String(value.to_owned())).unwrap();
         let mut walker = norito::json::TapeWalker::new(&quoted);
@@ -160,7 +151,6 @@ fn tape_parse_string_ref_inline_matches_input() {
         assert_eq!(got, value);
     }
 }
-
 #[test]
 fn tape_skip_value_advances_to_second_string() {
     let cases = [
@@ -169,7 +159,6 @@ fn tape_skip_value_advances_to_second_string() {
         ("line\nbreak", "\"quoted\""),
         ("π", "😀"),
     ];
-
     for (first, second) in cases {
         let first_json =
             norito::json::to_json(&norito::json::Value::String(first.to_owned())).unwrap();

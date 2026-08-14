@@ -5,24 +5,6 @@
 //! request, verify and sign that request, then let the holder independently
 //! finalize and validate the credential before any presentation proof is
 //! produced. There is no direct or trusted-issuance shortcut.
-
-use iroha_data_model::{
-    NetworkId,
-    privacy::{
-        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
-        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
-        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
-        PrivacyStatementContextV1,
-    },
-};
-use rand_core_06::{CryptoRng, OsRng, RngCore};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
-
 pub use super::issuance_store::{
     BootleLanternFileIssuanceStoreV1, BootleLanternInMemoryIssuanceStoreV1,
     BootleLanternIssuanceClaimV1, BootleLanternIssuancePreflightV1,
@@ -62,7 +44,22 @@ use super::{
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
 };
-
+use iroha_data_model::{
+    NetworkId,
+    privacy::{
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
+        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
+        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
+        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        PrivacyStatementContextV1,
+    },
+};
+use rand_core_06::{CryptoRng, OsRng, RngCore};
+use sha2::{Digest as _, Sha256};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 /// Exact concrete issuer profile committed by compiled privacy metadata.
 pub const BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1: &[u8] = b"falcon512-ntru-r512-as-r64-rank8-interleaved|source:rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997-Unlicense|specialization:BLNS-specialization-no-main-construction-reduction|public-key:H_i[j]=h[8*j+i]|equation:s1+h*s2=t+A_tau*tau+credential-scope|keygen-seed:exact-nonzero-32-byte-secret-or-health-checked-CSPRNG|keygen-candidates:4096|authorization-id-draws:4|authorization-lifetime-blocks<=4096|authorization-state:Fresh-Processing-Completed-or-Failed|issuance-store:bounded-strict-ILS1-file-store+canonical-process-lease+held-unix-exclusive-flock+atomic-sync-rename+explicit-height-pruning|preimage-attempts:64|tau:one-purpose-derived-64-byte-stream-eight-R64-MSB-first|preimage-rng:purpose-derived-56-byte-Falcon-ChaCha20-word-major|issuance-rng:one-health-checked-master64-per-holder-or-issuer-operation+closed-context-bound-SHAKE256-substreams|canonical-flow:keygen-provider-prepare-ILA1+torii-only-register-request-ILQ1-with-ILB1-torii-preflight-public-P1+provider-key-validation-atomic-height-claim-provider-independent-revalidation-before-RNG-issue-local-ILR1-revalidation-durable-complete-or-fail-finalize-ILN1|broker-binding:exact-handle+revision+policy-digest+issuer-id+policy-id+lifetime+same-service-uid|completed-retry-before-provider-call-after-process-reopen-and-independent-of-expiry|no-direct-issuance";
 /// Exact peer-1 Taira broker contract committed by provider qualification.
@@ -88,7 +85,6 @@ pub const MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1: u32 = 4;
 pub const MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1: u64 = 4_096;
 /// Maximum independent Falcon sampler-coin draws for one fixed target.
 pub const MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1: u32 = 64;
-
 const ISSUER_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.issuer-profile-digest.v1";
 const TAIRA_QUALIFICATION_DIGEST_DOMAIN_V1: &[u8] =
@@ -109,7 +105,6 @@ const RESPONSE_MAGIC_V1: [u8; 4] = *b"ILR1";
 const RESPONSE_VERSION_V1: u8 = 1;
 const RESPONSE_HEADER_BYTES_V1: usize = 8;
 const BLIND_ISSUANCE_REQUEST_BINDING_FIELDS_V1: usize = 5;
-
 /// Public governance metadata used to derive one active issuer policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootleLanternIssuerPolicyMetadataV1 {
@@ -124,7 +119,6 @@ pub struct BootleLanternIssuerPolicyMetadataV1 {
     /// Fixed-order allowed public values for all eight attributes.
     pub allowed_values: Vec<BootleLanternAllowedAttributeValuesV1>,
 }
-
 /// Public inputs committed by the peer-1 Taira provider qualification digest.
 #[derive(Clone, Copy, Debug)]
 pub struct TairaBootleLanternBrokerQualificationInputsV1<'a> {
@@ -145,7 +139,6 @@ pub struct TairaBootleLanternBrokerQualificationInputsV1<'a> {
     /// Stable public requester-principal commitment, independent of bearer rotation.
     pub stable_principal_digest: [u8; 32],
 }
-
 /// Failure while deriving the shared peer-1 Taira provider qualification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum TairaBootleLanternBrokerQualificationErrorV1 {
@@ -162,7 +155,6 @@ pub enum TairaBootleLanternBrokerQualificationErrorV1 {
     #[error("Taira Bootle/Lantern broker qualification digest is degenerate")]
     DegenerateDigest,
 }
-
 /// Issuer-generated bearer authorization for exactly one blind issuance.
 ///
 /// The authorization is integrity-bound to the issuer implementation, chain
@@ -184,7 +176,6 @@ pub struct BootleLanternIssuanceAuthorizationV1 {
     expires_at_height: u64,
     authorization_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for BootleLanternIssuanceAuthorizationV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -195,20 +186,17 @@ impl core::fmt::Debug for BootleLanternIssuanceAuthorizationV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl BootleLanternIssuanceAuthorizationV1 {
     /// Unique identifier used by the authoritative one-shot issuance store.
     #[must_use]
     pub const fn authorization_id(&self) -> [u8; 32] {
         self.authorization_id
     }
-
     /// Digest bound into the holder's request and P1 transcript.
     #[must_use]
     pub const fn authorization_digest(&self) -> [u8; 32] {
         self.authorization_digest
     }
-
     /// Digest of the authenticated external requester principal.
     ///
     /// Issuers use this binding to require that the principal presenting an
@@ -217,19 +205,16 @@ impl BootleLanternIssuanceAuthorizationV1 {
     pub const fn requester_authorization_digest(&self) -> [u8; 32] {
         self.requester_authorization_digest
     }
-
     /// First block height at which this authorization is valid.
     #[must_use]
     pub const fn issued_at_height(&self) -> u64 {
         self.issued_at_height
     }
-
     /// Inclusive last height at which an issuer may atomically claim it.
     #[must_use]
     pub const fn expires_at_height(&self) -> u64 {
         self.expires_at_height
     }
-
     /// Encode the unique fixed-width holder-facing `ILA1` wire.
     ///
     /// # Errors
@@ -263,7 +248,6 @@ impl BootleLanternIssuanceAuthorizationV1 {
         }
         Ok(bytes)
     }
-
     /// Decode exactly one canonical fixed-width `ILA1` authorization.
     ///
     /// # Errors
@@ -316,20 +300,17 @@ impl BootleLanternIssuanceAuthorizationV1 {
         Ok(authorization)
     }
 }
-
 /// One native Falcon-512 issuer trapdoor and its exact public matrix.
 pub struct BootleLanternIssuerKeyPairV1 {
     issuer_parameter_id: PrivacyParameterIdV1,
     public_matrix: BootleLanternIssuerPublicMatrixV1,
     trapdoor: Trapdoor,
 }
-
 impl core::fmt::Debug for BootleLanternIssuerKeyPairV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("BootleLanternIssuerKeyPairV1(<redacted>)")
     }
 }
-
 impl BootleLanternIssuerKeyPairV1 {
     /// Reconstruct one genuine bounded issuer key from exact secret seed material.
     ///
@@ -367,7 +348,6 @@ impl BootleLanternIssuerKeyPairV1 {
             trapdoor,
         })
     }
-
     /// Generate one genuine bounded Falcon-512/NTRU issuer key.
     ///
     /// # Errors
@@ -400,7 +380,6 @@ impl BootleLanternIssuerKeyPairV1 {
             trapdoor,
         })
     }
-
     /// Build the self-digested active governed policy for this exact key.
     ///
     /// # Errors
@@ -434,7 +413,6 @@ impl BootleLanternIssuerKeyPairV1 {
             .map_err(|_| BootleLanternIssuanceErrorV1::InvalidIssuerPolicy)?;
         Ok(policy)
     }
-
     fn matches_policy(&self, policy: &BootleLanternIssuerPolicyV1) -> bool {
         policy.lifecycle == BootleLanternIssuerPolicyLifecycleV1::Active
             && policy.issuer_parameter_id == self.issuer_parameter_id
@@ -442,7 +420,6 @@ impl BootleLanternIssuerKeyPairV1 {
             && policy.validate().is_ok()
     }
 }
-
 /// Generate and atomically register one bounded blind-issuance authorization.
 ///
 /// `requester_authorization_digest` is the issuer deployment's non-zero
@@ -506,7 +483,6 @@ pub fn issuer_authorize_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
     }
     Err(BootleLanternIssuanceErrorV1::AuthorizationIdExhausted)
 }
-
 /// Prepare one native authorization candidate without mutating replay state.
 ///
 /// This is the cryptographic-provider half of the issuance boundary. The
@@ -558,7 +534,6 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1<R: Cryp
         expires_at_height,
     )
 }
-
 /// Prepare one native authorization candidate with fresh operating-system randomness.
 ///
 /// This is the production provider entrypoint. Deterministic and fault-
@@ -592,7 +567,6 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_v1(
         &mut rng,
     )
 }
-
 /// Validate a provider-prepared authorization against exact public chain state.
 ///
 /// This consumes no randomness and performs no store mutation. Callers must
@@ -612,7 +586,6 @@ pub fn issuer_validate_prepared_blind_issuance_authorization_v1(
     require_active_policy_v1(policy)?;
     validate_issuance_authorization_v1(authorization, context, canonical_genesis_hash, policy, None)
 }
-
 fn validate_authorization_candidate_inputs_v1(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
@@ -635,7 +608,6 @@ fn validate_authorization_candidate_inputs_v1(
         .digest()
         .map_err(|_| BootleLanternIssuanceErrorV1::CredentialScopeFailed)
 }
-
 fn build_authorization_candidate_v1(
     authorization_id: [u8; 32],
     canonical_genesis_hash: [u8; 32],
@@ -666,7 +638,6 @@ fn build_authorization_candidate_v1(
     let _canonical_wire = authorization.encode()?;
     Ok(authorization)
 }
-
 /// Holder-to-issuer P1 request. All fields are exact and field-private.
 pub struct BootleLanternBlindIssuanceRequestV1 {
     target: [ApplicationPolynomialV1; APPLICATION_ROWS_V1],
@@ -678,7 +649,6 @@ pub struct BootleLanternBlindIssuanceRequestV1 {
     proof: super::codec::BootleLanternBlindIssuanceRequestProofV1,
     request_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for BootleLanternBlindIssuanceRequestV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -687,26 +657,21 @@ impl core::fmt::Debug for BootleLanternBlindIssuanceRequestV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl BootleLanternBlindIssuanceRequestV1 {
     /// Digest of the complete canonical request, including its P1 wire.
     #[must_use]
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
-
     pub(super) const fn issuance_authorization_digest_v1(&self) -> [u8; 32] {
         self.issuance_authorization_digest
     }
-
     pub(super) const fn scope_digest_v1(&self) -> [u8; 32] {
         self.scope_digest
     }
-
     pub(super) const fn policy_record_digest_v1(&self) -> [u8; 32] {
         *self.policy_record_digest.as_bytes()
     }
-
     /// Encode the unique fixed-width holder-to-issuer `ILQ1` request.
     ///
     /// # Errors
@@ -716,7 +681,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
     pub fn encode(&self) -> Result<Vec<u8>, BootleLanternIssuanceErrorV1> {
         let proof_wire = self.proof.encode();
         self.validate_self_v1(&proof_wire)?;
-
         let mut bytes = Vec::with_capacity(BLIND_ISSUANCE_REQUEST_BYTES_V1);
         bytes.extend_from_slice(&BLIND_ISSUANCE_REQUEST_MAGIC_V1);
         bytes.push(BLIND_ISSUANCE_REQUEST_VERSION_V1);
@@ -753,7 +717,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
         }
         Ok(bytes)
     }
-
     /// Decode exactly one allocation-bounded canonical `ILQ1` request.
     ///
     /// The caller ceiling and exact outer length are checked before the sole
@@ -795,7 +758,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
         {
             return Err(BootleLanternIssuanceErrorV1::BlindRequestWireInvalid);
         }
-
         let mut offset = BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1;
         let mut target = [ApplicationPolynomialV1::ZERO; APPLICATION_ROWS_V1];
         for polynomial in &mut target {
@@ -854,7 +816,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
         request.validate_self_v1(proof_wire)?;
         Ok(request)
     }
-
     fn validate_self_v1(&self, proof_wire: &[u8]) -> Result<(), BootleLanternIssuanceErrorV1> {
         if proof_wire.len() != PROOF_BYTES_V1
             || self.target_digest == [0; 32]
@@ -878,12 +839,10 @@ impl BootleLanternBlindIssuanceRequestV1 {
         }
         Ok(())
     }
-
     #[cfg(test)]
     pub(crate) const fn proof_v1(&self) -> &super::codec::BootleLanternBlindIssuanceRequestProofV1 {
         &self.proof
     }
-
     fn validate_bindings_v1(
         &self,
         context: &PrivacyStatementContextV1,
@@ -923,7 +882,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
         }
         Ok(scope)
     }
-
     #[cfg(test)]
     pub(crate) fn compile_transcript_v1(
         &self,
@@ -941,7 +899,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
         self.validate_bindings_v1(context, canonical_genesis_hash, policy, authorization)?;
         self.compile_transcript_after_binding_v1(context, canonical_genesis_hash, policy)
     }
-
     fn compile_transcript_after_binding_v1(
         &self,
         context: &PrivacyStatementContextV1,
@@ -975,7 +932,6 @@ impl BootleLanternBlindIssuanceRequestV1 {
         Ok((relation, transcript))
     }
 }
-
 /// Secret holder state consumed while finalizing exactly one request.
 pub struct BootleLanternBlindIssuanceStateV1 {
     pub(super) randomness: [ApplicationPolynomialV1; 16],
@@ -983,13 +939,11 @@ pub struct BootleLanternBlindIssuanceStateV1 {
     pub(super) request_digest: [u8; 32],
     pub(super) scope: BootleLanternCredentialScopeV1,
 }
-
 impl core::fmt::Debug for BootleLanternBlindIssuanceStateV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("BootleLanternBlindIssuanceStateV1(<redacted>)")
     }
 }
-
 impl Zeroize for BootleLanternBlindIssuanceStateV1 {
     fn zeroize(&mut self) {
         self.randomness.zeroize();
@@ -997,13 +951,11 @@ impl Zeroize for BootleLanternBlindIssuanceStateV1 {
         self.request_digest.zeroize();
     }
 }
-
 impl Drop for BootleLanternBlindIssuanceStateV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Exact issuer response to one verified P1 request.
 pub struct BootleLanternBlindIssuanceResponseV1 {
     tag: [ApplicationPolynomialV1; 8],
@@ -1013,26 +965,21 @@ pub struct BootleLanternBlindIssuanceResponseV1 {
     scope_digest: [u8; 32],
     policy_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
 }
-
 impl core::fmt::Debug for BootleLanternBlindIssuanceResponseV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("BootleLanternBlindIssuanceResponseV1(<redacted>)")
     }
 }
-
 impl BootleLanternBlindIssuanceResponseV1 {
     pub(super) const fn request_digest_v1(&self) -> [u8; 32] {
         self.request_digest
     }
-
     pub(super) const fn scope_digest_v1(&self) -> [u8; 32] {
         self.scope_digest
     }
-
     pub(super) const fn policy_record_digest_v1(&self) -> [u8; 32] {
         *self.policy_record_digest.as_bytes()
     }
-
     /// Encode the unique fixed-width `ILR1` response persisted for retries.
     ///
     /// # Errors
@@ -1074,7 +1021,6 @@ impl BootleLanternBlindIssuanceResponseV1 {
         }
         Ok(bytes)
     }
-
     /// Decode exactly one canonical fixed-width `ILR1` response.
     ///
     /// # Errors
@@ -1119,7 +1065,6 @@ impl BootleLanternBlindIssuanceResponseV1 {
         })
     }
 }
-
 impl Zeroize for BootleLanternBlindIssuanceResponseV1 {
     fn zeroize(&mut self) {
         self.tag.zeroize();
@@ -1129,13 +1074,11 @@ impl Zeroize for BootleLanternBlindIssuanceResponseV1 {
         self.scope_digest.zeroize();
     }
 }
-
 impl Drop for BootleLanternBlindIssuanceResponseV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// Reusable holder credential produced only by canonical finalization.
 pub struct BootleLanternCredentialV1 {
     pub(super) randomness: [ApplicationPolynomialV1; 16],
@@ -1145,13 +1088,11 @@ pub struct BootleLanternCredentialV1 {
     pub(super) attributes: [[u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1],
     pub(super) scope: BootleLanternCredentialScopeV1,
 }
-
 impl core::fmt::Debug for BootleLanternCredentialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("BootleLanternCredentialV1(<redacted>)")
     }
 }
-
 impl Zeroize for BootleLanternCredentialV1 {
     fn zeroize(&mut self) {
         self.randomness.zeroize();
@@ -1161,13 +1102,11 @@ impl Zeroize for BootleLanternCredentialV1 {
         self.attributes.zeroize();
     }
 }
-
 impl Drop for BootleLanternCredentialV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl BootleLanternCredentialV1 {
     /// Build and independently validate the witness for one later statement.
     ///
@@ -1208,7 +1147,6 @@ impl BootleLanternCredentialV1 {
         Ok(witness)
     }
 }
-
 /// Prepare the only canonical holder P1 request.
 ///
 /// # Errors
@@ -1246,7 +1184,6 @@ pub fn holder_prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
     let issuer_profile_digest = bootle_lantern_issuer_profile_digest_v1();
     let matrix_seed = matrix_seed_v1(*context.parameter_digest.as_bytes())
         .map_err(|_| BootleLanternIssuanceErrorV1::TranscriptFailed)?;
-
     let (mut mask_rng, mut proof_rng) = BootleLanternIssuanceRandomnessRootV1::from_rng_v1(rng)
         .map_err(map_randomness_error_v1)?
         .split_holder_v1(authorization.authorization_digest);
@@ -1306,7 +1243,6 @@ pub fn holder_prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
     };
     Ok((request, state))
 }
-
 /// Prepare the canonical holder P1 request with fresh operating-system randomness.
 ///
 /// This is the production holder entrypoint. Deterministic and fault-injected
@@ -1341,7 +1277,6 @@ pub fn holder_prepare_blind_issuance_v1(
         &mut rng,
     )
 }
-
 /// Decode one canonical holder request and verify its public bindings and P1 proof.
 ///
 /// # Errors
@@ -1366,7 +1301,6 @@ pub fn issuer_validate_blind_issuance_request_encoded_v1(
     )?;
     Ok(validated.request.request_digest)
 }
-
 /// Verify one canonical holder request against the exact issuer trapdoor.
 ///
 /// This is the cryptographic provider's non-random validation phase. It
@@ -1398,7 +1332,6 @@ pub fn issuer_validate_blind_issuance_request_for_issuer_encoded_v1(
     )?;
     Ok(validated.request.request_digest)
 }
-
 /// Validate and cryptographically issue one request without touching replay state.
 ///
 /// The caller must first run the non-mutating replay preflight, invoke
@@ -1448,7 +1381,6 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<R: Cryp
     let _canonical_wire = response.encode()?;
     Ok(response)
 }
-
 /// Revalidate and issue one claimed request with fresh operating-system randomness.
 ///
 /// This production provider entrypoint creates a new `OsRng` value for every
@@ -1480,7 +1412,6 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_v1(
         &mut rng,
     )
 }
-
 /// Decode and bind a cached response to the exact completed request.
 ///
 /// This performs no issuer operation and consumes no randomness. It is the
@@ -1511,14 +1442,12 @@ pub fn issuer_validate_cached_blind_issuance_response_encoded_v1(
         .map_err(|_| BootleLanternIssuanceErrorV1::CredentialScopeFailed)?;
     decode_cached_response_v1(response_bytes, &request, scope_digest, policy)
 }
-
 struct ValidatedIssuerRequestV1 {
     request: BootleLanternBlindIssuanceRequestV1,
     scope: BootleLanternCredentialScopeV1,
     scope_digest: [u8; 32],
     matrix_seed: super::transcript::MatrixSeedV1,
 }
-
 fn validate_encoded_request_for_issuer_v1(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
@@ -1541,7 +1470,6 @@ fn validate_encoded_request_for_issuer_v1(
         current_height,
     )
 }
-
 fn validate_encoded_request_v1(
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1580,7 +1508,6 @@ fn validate_encoded_request_v1(
         matrix_seed,
     })
 }
-
 /// Decode one canonical `ILQ1` request, atomically claim it, and issue at most once.
 ///
 /// This explicit-RNG entrypoint retains the authoritative store-backed
@@ -1623,7 +1550,6 @@ pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: CryptoRng + RngCore>(
         rng,
     )
 }
-
 /// Verify a decoded P1 request, atomically claim its authorization, and issue once.
 ///
 /// # Errors
@@ -1653,7 +1579,6 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
     let scope_digest = scope
         .digest()
         .map_err(|_| BootleLanternIssuanceErrorV1::CredentialScopeFailed)?;
-
     match store.preflight_v1(
         authorization.authorization_id,
         authorization.authorization_digest,
@@ -1666,14 +1591,12 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
         Ok(BootleLanternIssuancePreflightV1::Fresh) => {}
         Err(error) => return Err(map_store_claim_error_v1(error)),
     }
-
     let (relation, transcript) =
         request.compile_transcript_after_binding_v1(context, canonical_genesis_hash, policy)?;
     let matrix_seed = matrix_seed_v1(*context.parameter_digest.as_bytes())
         .map_err(|_| BootleLanternIssuanceErrorV1::TranscriptFailed)?;
     verify_blind_issuance_request_v1(&relation, transcript, &request.proof)
         .map_err(|_| BootleLanternIssuanceErrorV1::BlindRequestProofFailed)?;
-
     match store.claim_v1(
         authorization.authorization_id,
         authorization.authorization_digest,
@@ -1686,7 +1609,6 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
         Ok(BootleLanternIssuanceClaimV1::Fresh) => {}
         Err(error) => return Err(map_store_claim_error_v1(error)),
     }
-
     let (mut tag_rng, mut preimage_rng) =
         match BootleLanternIssuanceRandomnessRootV1::from_rng_v1(rng) {
             Ok(root) => root.split_issuer_v1(request.request_digest),
@@ -1695,7 +1617,6 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
                 return Err(map_randomness_error_v1(error));
             }
         };
-
     let issue_result = issue_claimed_request_v1(
         issuer,
         matrix_seed,
@@ -1740,7 +1661,6 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
     }
     Ok(response)
 }
-
 fn issue_claimed_request_v1<RTag: CryptoRng + RngCore, RPreimage: CryptoRng + RngCore>(
     issuer: &BootleLanternIssuerKeyPairV1,
     matrix_seed: super::transcript::MatrixSeedV1,
@@ -1787,7 +1707,6 @@ fn issue_claimed_request_v1<RTag: CryptoRng + RngCore, RPreimage: CryptoRng + Rn
         policy_record_digest: policy.record_digest,
     })
 }
-
 fn sample_preimage_bounded_v1<T, R, Sample>(
     rng: &mut R,
     mut sample: Sample,
@@ -1808,7 +1727,6 @@ where
     }
     Err(BootleLanternIssuanceErrorV1::PreimageSamplingExhausted)
 }
-
 fn fail_claim_v1(
     store: &dyn BootleLanternIssuanceStoreV1,
     authorization: &BootleLanternIssuanceAuthorizationV1,
@@ -1824,7 +1742,6 @@ fn fail_claim_v1(
         )
         .map_err(|_| BootleLanternIssuanceErrorV1::IssuanceStoreFailed)
 }
-
 fn decode_cached_response_v1(
     response_bytes: &[u8],
     request: &BootleLanternBlindIssuanceRequestV1,
@@ -1841,7 +1758,6 @@ fn decode_cached_response_v1(
     }
     Ok(response)
 }
-
 fn map_store_claim_error_v1(
     error: BootleLanternIssuanceStoreErrorV1,
 ) -> BootleLanternIssuanceErrorV1 {
@@ -1868,7 +1784,6 @@ fn map_store_claim_error_v1(
         }
     }
 }
-
 /// Consume holder state, validate the complete credential equation, and
 /// finalize one reusable credential.
 ///
@@ -1919,7 +1834,6 @@ pub fn holder_finalize_blind_issuance_v1(
         scope: state.scope.clone(),
     })
 }
-
 /// Digest of the exact native issuer implementation profile.
 #[must_use]
 pub fn bootle_lantern_issuer_profile_digest_v1() -> [u8; 32] {
@@ -1931,7 +1845,6 @@ pub fn bootle_lantern_issuer_profile_digest_v1() -> [u8; 32] {
         falcon512::BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
     ])
 }
-
 fn issuer_profile_digest_from_fields_v1(fields: &[&[u8]]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(ISSUER_PROFILE_DIGEST_DOMAIN_V1);
@@ -1950,7 +1863,6 @@ fn issuer_profile_digest_from_fields_v1(fields: &[&[u8]]) -> [u8; 32] {
     }
     hash.finalize().into()
 }
-
 /// BLAKE3 digest of the exact issuer profile as committed by Taira provider qualification.
 #[must_use]
 pub fn taira_bootle_lantern_issuer_profile_contract_digest_v1() -> [u8; 32] {
@@ -1959,7 +1871,6 @@ pub fn taira_bootle_lantern_issuer_profile_contract_digest_v1() -> [u8; 32] {
         &[BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1],
     )
 }
-
 /// BLAKE3 digest of the exact peer-1 broker executable contract.
 #[must_use]
 pub fn taira_bootle_lantern_broker_contract_digest_v1() -> [u8; 32] {
@@ -1968,7 +1879,6 @@ pub fn taira_bootle_lantern_broker_contract_digest_v1() -> [u8; 32] {
         &[TAIRA_BOOTLE_LANTERN_BROKER_CONTRACT_V1],
     )
 }
-
 /// Derive the one canonical peer-1 Taira provider qualification digest.
 ///
 /// # Errors
@@ -2022,7 +1932,6 @@ pub fn derive_taira_bootle_lantern_broker_qualification_digest_v1(
     }
     Ok(digest)
 }
-
 fn taira_length_framed_digest_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(
@@ -2046,7 +1955,6 @@ fn taira_length_framed_digest_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn taira_strong_public_digest_v1(bytes: &[u8; 32]) -> bool {
     let mut seen = [false; 256];
     let mut unique = 0_usize;
@@ -2059,7 +1967,6 @@ fn taira_strong_public_digest_v1(bytes: &[u8; 32]) -> bool {
     }
     unique >= 8
 }
-
 fn public_matrix_from_falcon_h_v1(
     h: &[u16],
 ) -> Result<BootleLanternIssuerPublicMatrixV1, BootleLanternIssuanceErrorV1> {
@@ -2074,7 +1981,6 @@ fn public_matrix_from_falcon_h_v1(
     BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
         .map_err(|_| BootleLanternIssuanceErrorV1::InvalidIssuerPublicMatrix)
 }
-
 fn masked_target_v1(
     matrix_seed: super::transcript::MatrixSeedV1,
     randomness: &[ApplicationPolynomialV1; 16],
@@ -2108,7 +2014,6 @@ fn masked_target_v1(
     }
     Ok(target)
 }
-
 fn sample_tag_v1<R: CryptoRng + RngCore>(
     rng: &mut R,
 ) -> Result<Zeroizing<[ApplicationPolynomialV1; 8]>, BootleLanternIssuanceErrorV1> {
@@ -2126,7 +2031,6 @@ fn sample_tag_v1<R: CryptoRng + RngCore>(
     }
     Ok(tag)
 }
-
 fn r64_rank8_to_r512_v1(
     input: &[ApplicationPolynomialV1; APPLICATION_ROWS_V1],
 ) -> Zeroizing<[u16; FALCON_DEGREE_V1]> {
@@ -2138,7 +2042,6 @@ fn r64_rank8_to_r512_v1(
     }
     output
 }
-
 fn centered_r512_to_r64_rank8_v1(
     input: &[i16],
 ) -> Result<Zeroizing<[ApplicationPolynomialV1; APPLICATION_ROWS_V1]>, BootleLanternIssuanceErrorV1>
@@ -2156,7 +2059,6 @@ fn centered_r512_to_r64_rank8_v1(
     }
     Ok(output)
 }
-
 fn validation_statement_v1(
     context: PrivacyStatementContextV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -2183,7 +2085,6 @@ fn validation_statement_v1(
         disclosures,
     }
 }
-
 fn digest_application_vector_v1(
     domain: &[u8],
     vector: &[ApplicationPolynomialV1; APPLICATION_ROWS_V1],
@@ -2197,7 +2098,6 @@ fn digest_application_vector_v1(
     }
     hash.finalize().into()
 }
-
 fn blind_request_digest_v1(
     target_digest: &[u8; 32],
     issuance_authorization_digest: &[u8; 32],
@@ -2223,7 +2123,6 @@ fn blind_request_digest_v1(
     }
     hash.finalize().into()
 }
-
 fn validate_authorization_lifetime_v1(
     issued_at_height: u64,
     expires_at_height: u64,
@@ -2236,7 +2135,6 @@ fn validate_authorization_lifetime_v1(
     }
     Ok(())
 }
-
 fn validate_issuance_authorization_self_v1(
     authorization: &BootleLanternIssuanceAuthorizationV1,
 ) -> Result<(), BootleLanternIssuanceErrorV1> {
@@ -2262,7 +2160,6 @@ fn validate_issuance_authorization_self_v1(
     }
     Ok(())
 }
-
 fn validate_issuance_authorization_v1(
     authorization: &BootleLanternIssuanceAuthorizationV1,
     context: &PrivacyStatementContextV1,
@@ -2295,7 +2192,6 @@ fn validate_issuance_authorization_v1(
     }
     Ok(())
 }
-
 fn issuance_authorization_digest_v1(
     authorization: &BootleLanternIssuanceAuthorizationV1,
 ) -> [u8; 32] {
@@ -2326,7 +2222,6 @@ fn issuance_authorization_digest_v1(
     }
     hash.finalize().into()
 }
-
 fn take_32_v1(bytes: &[u8], offset: &mut usize) -> Result<[u8; 32], BootleLanternIssuanceErrorV1> {
     let end = offset
         .checked_add(32)
@@ -2339,7 +2234,6 @@ fn take_32_v1(bytes: &[u8], offset: &mut usize) -> Result<[u8; 32], BootleLanter
     *offset = end;
     Ok(output)
 }
-
 fn take_blind_request_32_v1(
     bytes: &[u8],
     offset: &mut usize,
@@ -2355,7 +2249,6 @@ fn take_blind_request_32_v1(
     *offset = end;
     Ok(output)
 }
-
 fn take_u64_v1(bytes: &[u8], offset: &mut usize) -> Result<u64, BootleLanternIssuanceErrorV1> {
     let end = offset
         .checked_add(8)
@@ -2368,7 +2261,6 @@ fn take_u64_v1(bytes: &[u8], offset: &mut usize) -> Result<u64, BootleLanternIss
     *offset = end;
     Ok(u64::from_be_bytes(encoded))
 }
-
 fn decode_application_polynomials_v1<const N: usize>(
     bytes: &[u8],
     offset: &mut usize,
@@ -2397,7 +2289,6 @@ fn decode_application_polynomials_v1<const N: usize>(
     }
     Ok(polynomials)
 }
-
 fn require_active_policy_v1(
     policy: &BootleLanternIssuerPolicyV1,
 ) -> Result<(), BootleLanternIssuanceErrorV1> {
@@ -2409,14 +2300,12 @@ fn require_active_policy_v1(
     }
     Ok(())
 }
-
 fn map_randomness_error_v1(error: ProverRandomnessErrorV1) -> BootleLanternIssuanceErrorV1 {
     match error {
         ProverRandomnessErrorV1::Unavailable => BootleLanternIssuanceErrorV1::RandomnessUnavailable,
         ProverRandomnessErrorV1::Unhealthy => BootleLanternIssuanceErrorV1::RandomnessUnhealthy,
     }
 }
-
 fn map_credential_randomness_error_v1(
     error: CredentialRandomnessErrorV1,
 ) -> BootleLanternIssuanceErrorV1 {
@@ -2433,7 +2322,6 @@ fn map_credential_randomness_error_v1(
         }
     }
 }
-
 /// Failure in the closed native issuance lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum BootleLanternIssuanceErrorV1 {
@@ -2554,31 +2442,26 @@ pub enum BootleLanternIssuanceErrorV1 {
     #[error("Bootle/Lantern issuance internal invariant failed")]
     InternalInvariant,
 }
-
 impl From<CredentialScopeErrorV1> for BootleLanternIssuanceErrorV1 {
     fn from(_: CredentialScopeErrorV1) -> Self {
         Self::CredentialScopeFailed
     }
 }
-
 impl From<RelationErrorV1> for BootleLanternIssuanceErrorV1 {
     fn from(_: RelationErrorV1) -> Self {
         Self::RelationFailed
     }
 }
-
 impl From<TranscriptErrorV1> for BootleLanternIssuanceErrorV1 {
     fn from(_: TranscriptErrorV1) -> Self {
         Self::TranscriptFailed
     }
 }
-
 impl From<PresentationProofErrorV1> for BootleLanternIssuanceErrorV1 {
     fn from(_: PresentationProofErrorV1) -> Self {
         Self::BlindRequestProofFailed
     }
 }
-
 const _: () = {
     assert!(APPLICATION_ROWS_V1 == 8);
     assert!(APPLICATION_RING_DEGREE_V1 * APPLICATION_ROWS_V1 == FALCON_DEGREE_V1);
@@ -2588,14 +2471,9 @@ const _: () = {
     assert!(BLIND_ISSUANCE_REQUEST_BINDING_FIELDS_V1 == 5);
     assert!(BLIND_ISSUANCE_REQUEST_BYTES_V1 == 71_576);
 };
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        OnceLock,
-        atomic::{AtomicU32, Ordering},
-    };
-
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::BlockHeader,
@@ -2605,9 +2483,10 @@ mod tests {
         },
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
-    use super::*;
-
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicU32, Ordering},
+    };
     #[test]
     fn issuer_profile_digest_binds_every_exact_native_subprofile_in_order() {
         let canonical_fields = [
@@ -2623,7 +2502,6 @@ mod tests {
             issuer_profile_digest_from_fields_v1(&canonical_fields)
         );
         assert_ne!(canonical, [0; 32]);
-
         for changed_index in 0..canonical_fields.len() {
             let mut changed_fields = canonical_fields
                 .iter()
@@ -2637,7 +2515,6 @@ mod tests {
                 "field {changed_index} must be bound"
             );
         }
-
         let reordered = [
             canonical_fields[1],
             canonical_fields[0],
@@ -2647,35 +2524,29 @@ mod tests {
         ];
         assert_ne!(canonical, issuer_profile_digest_from_fields_v1(&reordered));
     }
-
     struct TestRng {
         state: u64,
     }
-
     impl TestRng {
         const fn healthy(seed: u64) -> Self {
             Self { state: seed }
         }
     }
-
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_le_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_le_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination)
                 .expect("infallible deterministic test RNG");
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for byte in destination {
                 self.state ^= self.state << 13;
@@ -2686,53 +2557,39 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for TestRng {}
-
     struct PanicRng;
-
     impl RngCore for PanicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
-
         fn fill_bytes(&mut self, _: &mut [u8]) {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
-
         fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
     }
-
     impl CryptoRng for PanicRng {}
-
     struct FailingRng;
-
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {
             panic!("fallible path must use try_fill_bytes")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("fallible path must use try_fill_bytes")
         }
-
         fn fill_bytes(&mut self, _: &mut [u8]) {
             panic!("fallible path must use try_fill_bytes")
         }
-
         fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
             Err(RngError::new("injected issuer RNG failure"))
         }
     }
-
     impl CryptoRng for FailingRng {}
-
     struct IssuanceFixture {
         issuer: BootleLanternIssuerKeyPairV1,
         context: PrivacyStatementContextV1,
@@ -2742,17 +2599,14 @@ mod tests {
         request: BootleLanternBlindIssuanceRequestV1,
         credential: BootleLanternCredentialV1,
     }
-
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     fn network_id(byte: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(raw(byte)),
         ))
     }
-
     fn statement_context_v1() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: network_id(0x32),
@@ -2765,7 +2619,6 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
         }
     }
-
     fn policy_metadata_v1(epoch: u64) -> BootleLanternIssuerPolicyMetadataV1 {
         BootleLanternIssuerPolicyMetadataV1 {
             issuer_id: PrivacyIssuerIdV1::new(raw(11)),
@@ -2783,13 +2636,11 @@ mod tests {
                 .collect(),
         }
     }
-
     fn attributes_v1() -> [[u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1] {
         let mut attributes = [[0_u8; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1];
         attributes[1] = [1; 8];
         attributes
     }
-
     fn presentation_statement_v1(
         context: PrivacyStatementContextV1,
         policy: &BootleLanternIssuerPolicyV1,
@@ -2808,7 +2659,6 @@ mod tests {
             }],
         }
     }
-
     fn clone_request_v1(
         request: &BootleLanternBlindIssuanceRequestV1,
     ) -> BootleLanternBlindIssuanceRequestV1 {
@@ -2823,7 +2673,6 @@ mod tests {
             request_digest: request.request_digest,
         }
     }
-
     fn issuance_fixture_v1() -> &'static IssuanceFixture {
         static FIXTURE: OnceLock<IssuanceFixture> = OnceLock::new();
         FIXTURE.get_or_init(|| {
@@ -2890,7 +2739,6 @@ mod tests {
             }
         })
     }
-
     fn fresh_store_v1(fixture: &IssuanceFixture) -> BootleLanternInMemoryIssuanceStoreV1 {
         let store = BootleLanternInMemoryIssuanceStoreV1::new();
         store
@@ -2903,7 +2751,6 @@ mod tests {
             .expect("fresh fixture authorization");
         store
     }
-
     fn assert_store_remained_fresh_v1(
         fixture: &IssuanceFixture,
         store: &BootleLanternInMemoryIssuanceStoreV1,
@@ -2918,7 +2765,6 @@ mod tests {
             Ok(BootleLanternIssuancePreflightV1::Fresh)
         );
     }
-
     fn valid_authorization_v1() -> BootleLanternIssuanceAuthorizationV1 {
         let mut authorization = BootleLanternIssuanceAuthorizationV1 {
             authorization_id: raw(1),
@@ -2937,7 +2783,6 @@ mod tests {
         authorization.authorization_digest = issuance_authorization_digest_v1(&authorization);
         authorization
     }
-
     fn valid_response_v1() -> BootleLanternBlindIssuanceResponseV1 {
         BootleLanternBlindIssuanceResponseV1 {
             tag: [ApplicationPolynomialV1::ZERO; 8],
@@ -2948,12 +2793,10 @@ mod tests {
             policy_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new(raw(3)),
         }
     }
-
     fn decode_ilq1_error_v1(bytes: &[u8], cap: u32) -> BootleLanternIssuanceErrorV1 {
         BootleLanternBlindIssuanceRequestV1::decode_exact(bytes, cap)
             .expect_err("malformed ILQ1 must fail")
     }
-
     #[test]
     fn secret_seed_key_reconstruction_is_exact_and_rejects_defaults() {
         let parameter_id = PrivacyParameterIdV1::new(raw(0x13));
@@ -2984,7 +2827,6 @@ mod tests {
             Err(BootleLanternIssuanceErrorV1::InvalidIssuerParameterId)
         ));
     }
-
     #[test]
     fn provider_authorization_candidate_is_store_free_and_fully_publicly_bound() {
         let fixture = issuance_fixture_v1();
@@ -3007,7 +2849,6 @@ mod tests {
             &authorization,
         )
         .expect("exact public candidate binding");
-
         let store = BootleLanternInMemoryIssuanceStoreV1::new();
         assert_eq!(
             store.preflight_v1(
@@ -3036,7 +2877,6 @@ mod tests {
             ),
             Err(BootleLanternIssuanceStoreErrorV1::AuthorizationExists)
         );
-
         let mut substituted_context = fixture.context.clone();
         substituted_context.action_index += 1;
         assert_eq!(
@@ -3049,7 +2889,6 @@ mod tests {
             Err(BootleLanternIssuanceErrorV1::AuthorizationBindingMismatch)
         );
     }
-
     #[test]
     fn pure_provider_issue_split_revalidates_before_rng_and_binds_cached_response() {
         let fixture = issuance_fixture_v1();
@@ -3088,7 +2927,6 @@ mod tests {
             ),
             Err(BootleLanternIssuanceErrorV1::AuthorizationNotYetValid)
         );
-
         let mut substituted_request = request_wire.clone();
         *substituted_request
             .last_mut()
@@ -3121,7 +2959,6 @@ mod tests {
             .is_err(),
             "genesis substitution must fail before issuer RNG"
         );
-
         let mut issue_rng = TestRng::healthy(0x9b05_688c_2b3e_6c1f);
         let response = issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
             &fixture.issuer,
@@ -3166,7 +3003,6 @@ mod tests {
             BootleLanternIssuanceErrorV1::CachedIssuanceResponseInvalid
         );
     }
-
     #[test]
     fn production_provider_wrappers_use_fresh_os_randomness_and_preserve_exact_bindings() {
         let fixture = issuance_fixture_v1();
@@ -3192,7 +3028,6 @@ mod tests {
             [0; 32],
             "production preparation must return a non-zero identifier"
         );
-
         let request_wire = fixture.request.encode().expect("canonical ILQ1");
         let response = issuer_issue_validated_blind_issuance_request_encoded_v1(
             &fixture.issuer,
@@ -3215,7 +3050,6 @@ mod tests {
         )
         .expect("validate exact OS-random response binding");
     }
-
     #[test]
     fn ilq1_wire_roundtrips_and_rejects_every_non_exact_outer_length() {
         let wire = issuance_fixture_v1()
@@ -3239,7 +3073,6 @@ mod tests {
                 .expect("canonical ILQ1 re-encoding"),
             wire
         );
-
         for length in 0..wire.len() {
             assert_eq!(
                 BootleLanternBlindIssuanceRequestV1::decode_exact(&wire[..length], cap)
@@ -3269,7 +3102,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn ilq1_decoder_rejects_header_count_length_and_payload_substitutions() {
         let canonical = issuance_fixture_v1()
@@ -3278,7 +3110,6 @@ mod tests {
             .expect("canonical ILQ1 request");
         let cap = u32::try_from(BLIND_ISSUANCE_REQUEST_BYTES_V1)
             .expect("fixed ILQ1 request length fits u32");
-
         for magic_byte in 0..4 {
             for bit in 0..8 {
                 let mut malformed = canonical.clone();
@@ -3343,7 +3174,6 @@ mod tests {
                 BootleLanternIssuanceErrorV1::BlindRequestWireInvalid
             );
         }
-
         let target_bytes = APPLICATION_ROWS_V1 * APPLICATION_RING_DEGREE_V1 * 2;
         let bindings_offset = BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1 + target_bytes;
         let proof_offset = bindings_offset + BLIND_ISSUANCE_REQUEST_BINDING_FIELDS_V1 * 32;
@@ -3355,7 +3185,6 @@ mod tests {
             decode_ilq1_error_v1(&noncanonical_target, cap),
             BootleLanternIssuanceErrorV1::BlindRequestWireInvalid
         );
-
         for binding in 0..BLIND_ISSUANCE_REQUEST_BINDING_FIELDS_V1 {
             let mut zero_binding = canonical.clone();
             let start = bindings_offset + binding * 32;
@@ -3385,7 +3214,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn encoded_issuer_ingress_rejects_before_store_or_rng() {
         let fixture = issuance_fixture_v1();
@@ -3407,7 +3235,6 @@ mod tests {
         assert_eq!(error, BootleLanternIssuanceErrorV1::BlindRequestWireInvalid);
         assert_store_remained_fresh_v1(fixture, &store);
     }
-
     #[test]
     fn ila1_every_single_byte_mutation_is_rejected() {
         let wire = valid_authorization_v1().encode().expect("valid ILA1");
@@ -3434,13 +3261,11 @@ mod tests {
         trailing.push(0);
         assert!(BootleLanternIssuanceAuthorizationV1::decode_exact(&trailing).is_err());
     }
-
     #[test]
     fn authorization_id_collisions_stop_at_the_exact_public_attempt_cap() {
         struct AlwaysCollidingStore {
             registrations: AtomicU32,
         }
-
         impl BootleLanternIssuanceStoreV1 for AlwaysCollidingStore {
             fn register_fresh_v1(
                 &self,
@@ -3452,7 +3277,6 @@ mod tests {
                 self.registrations.fetch_add(1, Ordering::Relaxed);
                 Err(BootleLanternIssuanceStoreErrorV1::AuthorizationExists)
             }
-
             fn preflight_v1(
                 &self,
                 _: [u8; 32],
@@ -3463,7 +3287,6 @@ mod tests {
             {
                 unreachable!("authorization collision exhaustion cannot preflight")
             }
-
             fn claim_v1(
                 &self,
                 _: [u8; 32],
@@ -3474,7 +3297,6 @@ mod tests {
             {
                 unreachable!("authorization collision exhaustion cannot claim")
             }
-
             fn complete_v1(
                 &self,
                 _: [u8; 32],
@@ -3485,7 +3307,6 @@ mod tests {
             ) -> Result<(), BootleLanternIssuanceStoreErrorV1> {
                 unreachable!("authorization collision exhaustion cannot complete")
             }
-
             fn fail_v1(
                 &self,
                 _: [u8; 32],
@@ -3495,12 +3316,10 @@ mod tests {
             ) -> Result<(), BootleLanternIssuanceStoreErrorV1> {
                 unreachable!("authorization collision exhaustion cannot fail")
             }
-
             fn prune_v1(&self, _: u64) -> Result<usize, BootleLanternIssuanceStoreErrorV1> {
                 unreachable!("authorization collision exhaustion cannot prune")
             }
         }
-
         let fixture = issuance_fixture_v1();
         let store = AlwaysCollidingStore {
             registrations: AtomicU32::new(0),
@@ -3526,7 +3345,6 @@ mod tests {
             MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1
         );
     }
-
     #[test]
     fn issuer_preimage_sampler_fails_after_exact_public_attempt_cap() {
         let mut attempts = 0_u32;
@@ -3542,7 +3360,6 @@ mod tests {
         );
         assert_eq!(attempts, MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1);
     }
-
     #[test]
     fn issuer_preimage_sampler_accepts_the_final_allowed_attempt() {
         let mut attempts = 0_u32;
@@ -3554,7 +3371,6 @@ mod tests {
         assert_eq!(result, Ok(MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1));
         assert_eq!(attempts, MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1);
     }
-
     #[test]
     fn ilr1_wire_is_exact_and_rejects_noncanonical_fields() {
         let wire = valid_response_v1().encode().expect("valid ILR1");
@@ -3577,12 +3393,10 @@ mod tests {
         let mut trailing = wire.clone();
         trailing.push(0);
         assert!(BootleLanternBlindIssuanceResponseV1::decode_exact(&trailing).is_err());
-
         let mut non_binary_tag = wire.clone();
         non_binary_tag[RESPONSE_HEADER_BYTES_V1..RESPONSE_HEADER_BYTES_V1 + 2]
             .copy_from_slice(&2_u16.to_be_bytes());
         assert!(BootleLanternBlindIssuanceResponseV1::decode_exact(&non_binary_tag).is_err());
-
         let signature_one_offset = RESPONSE_HEADER_BYTES_V1 + 8 * APPLICATION_RING_DEGREE_V1 * 2;
         let mut noncanonical_signature = wire.clone();
         noncanonical_signature[signature_one_offset..signature_one_offset + 2]
@@ -3590,7 +3404,6 @@ mod tests {
         assert!(
             BootleLanternBlindIssuanceResponseV1::decode_exact(&noncanonical_signature).is_err()
         );
-
         for binding in 0..3 {
             let mut zero_binding = wire.clone();
             let start = wire.len() - 3 * 32 + binding * 32;
@@ -3598,7 +3411,6 @@ mod tests {
             assert!(BootleLanternBlindIssuanceResponseV1::decode_exact(&zero_binding).is_err());
         }
     }
-
     #[test]
     fn authorization_input_and_lifetime_failures_precede_rng_and_registration() {
         let fixture = issuance_fixture_v1();
@@ -3644,7 +3456,6 @@ mod tests {
             assert_eq!(error, expected);
         }
     }
-
     #[test]
     fn action_and_intent_change_reuses_credential_and_existing_p1() {
         let fixture = issuance_fixture_v1();
@@ -3668,12 +3479,10 @@ mod tests {
         verify_blind_issuance_request_v1(&relation, transcript, &fixture.request.proof)
             .expect("existing P1 remains valid");
     }
-
     #[test]
     fn every_reusable_scope_change_fails_before_claim_or_rng() {
         let fixture = issuance_fixture_v1();
         let mut contexts = Vec::new();
-
         let mut network = fixture.context.clone();
         network.network_id = network_id(0x33);
         contexts.push(network);
@@ -3692,7 +3501,6 @@ mod tests {
         let mut manifest = fixture.context.clone();
         manifest.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(0x85));
         contexts.push(manifest);
-
         for context in contexts {
             let store = fresh_store_v1(fixture);
             let error = issuer_blind_issue_once_with_rng_v1(
@@ -3722,7 +3530,6 @@ mod tests {
                 Err(BootleLanternIssuanceErrorV1::CredentialScopeMismatch)
             );
         }
-
         let other_genesis = raw(0x86);
         let store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
@@ -3750,11 +3557,9 @@ mod tests {
             Err(BootleLanternIssuanceErrorV1::CredentialScopeMismatch)
         );
     }
-
     #[test]
     fn expired_rotated_and_wrong_key_requests_fail_before_claim_or_rng() {
         let fixture = issuance_fixture_v1();
-
         let expired_store = fresh_store_v1(fixture);
         let error = issuer_blind_issue_once_with_rng_v1(
             &fixture.issuer,
@@ -3770,7 +3575,6 @@ mod tests {
         .expect_err("expired authorization must fail before issuer RNG");
         assert_eq!(error, BootleLanternIssuanceErrorV1::AuthorizationExpired);
         assert_store_remained_fresh_v1(fixture, &expired_store);
-
         let rotated_policy = fixture
             .issuer
             .active_policy_v1(policy_metadata_v1(fixture.policy.epoch + 1))
@@ -3802,7 +3606,6 @@ mod tests {
             ),
             Err(BootleLanternIssuanceErrorV1::CredentialScopeMismatch)
         );
-
         let wrong_key = {
             let mut keygen_rng = TestRng::healthy(0x243f_6a88_85a3_08d3);
             BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
@@ -3827,7 +3630,6 @@ mod tests {
         assert_eq!(error, BootleLanternIssuanceErrorV1::IssuerKeyPolicyMismatch);
         assert_store_remained_fresh_v1(fixture, &wrong_key_store);
     }
-
     #[test]
     fn a_new_authorization_rejects_the_old_p1_before_claim_or_rng() {
         let fixture = issuance_fixture_v1();
@@ -3875,7 +3677,6 @@ mod tests {
             Ok(BootleLanternIssuancePreflightV1::Fresh)
         );
     }
-
     #[test]
     fn completed_retry_returns_exact_bytes_without_rng() {
         let fixture = issuance_fixture_v1();
@@ -3911,7 +3712,6 @@ mod tests {
             cached.encode().expect("canonical cached response"),
             expected
         );
-
         for binding_index in 0..3 {
             let mut substituted = expected.clone();
             let binding_offset = substituted.len() - 3 * 32 + binding_index * 32;
@@ -3960,7 +3760,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn post_claim_rng_failure_is_terminal() {
         let fixture = issuance_fixture_v1();
@@ -3995,7 +3794,6 @@ mod tests {
             BootleLanternIssuanceErrorV1::AuthorizationConsumed
         );
     }
-
     #[test]
     fn crash_after_claim_remains_busy_and_never_reaches_rng() {
         let fixture = issuance_fixture_v1();
@@ -4023,7 +3821,6 @@ mod tests {
         .expect_err("a restarted worker must observe the persisted processing claim");
         assert_eq!(error, BootleLanternIssuanceErrorV1::AuthorizationBusy);
     }
-
     #[test]
     fn completion_failure_is_terminal_and_never_reissues() {
         let fixture = issuance_fixture_v1();
@@ -4060,7 +3857,6 @@ mod tests {
             BootleLanternIssuanceErrorV1::AuthorizationConsumed
         );
     }
-
     #[test]
     fn cloned_request_helper_preserves_the_exact_p1_binding() {
         let fixture = issuance_fixture_v1();
@@ -4078,7 +3874,6 @@ mod tests {
         verify_blind_issuance_request_v1(&relation, transcript, &cloned.proof)
             .expect("cloned exact P1");
     }
-
     #[test]
     fn taira_qualification_is_one_shared_exact_profile_and_contract_binding() {
         let fixture = issuance_fixture_v1();
@@ -4151,7 +3946,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn taira_qualification_rejects_weak_or_mismatched_public_inputs() {
         let fixture = issuance_fixture_v1();

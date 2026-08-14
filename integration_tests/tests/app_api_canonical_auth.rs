@@ -3,7 +3,6 @@
 //! the canonical signed header set
 //! (`X-Iroha-Account`/`X-Iroha-Signature`/`X-Iroha-Timestamp-Ms`/`X-Iroha-Nonce`)
 //! over the exact-network canonical method/path/query/body envelope plus freshness metadata.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha_crypto::Signature;
@@ -18,14 +17,12 @@ use iroha_torii::{
 use norito::json::Value as JsonValue;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use std::time::{SystemTime, UNIX_EPOCH};
-
 fn signing_uri(url: &reqwest::Url) -> Result<Uri> {
     match url.query() {
         Some(query) => Ok(format!("{}?{query}", url.path()).parse()?),
         None => Ok(url.path().parse()?),
     }
 }
-
 #[test]
 fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let builder = NetworkBuilder::new();
@@ -36,7 +33,6 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     else {
         return Ok(());
     };
-
     let peer = network
         .peers()
         .first()
@@ -44,11 +40,18 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let network_id = network.network_id();
     let http = integration_tests::http::client();
     let account_literal = ALICE_ID.to_string();
+    let account_header = ALICE_ID.to_canonical_hex()?;
+    assert!(account_header.is_ascii());
+    assert!(account_header.starts_with("0x"));
+    assert!(
+        account_header[2..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
     let timestamp_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .try_into()?;
-
     // GET /v1/accounts/{account}/assets with canonical signed headers.
     let mut assets_url = reqwest::Url::parse(&peer.torii_url())?;
     {
@@ -72,17 +75,17 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         &[],
         timestamp_ms,
         assets_nonce,
-    );
+    )?;
     let assets_sig = Signature::try_new(ALICE_KEYPAIR.private_key(), &assets_msg)
         .expect("GET app-api signature");
     let mut assets_headers = HeaderMap::new();
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_ACCOUNT.as_bytes())?,
-        HeaderValue::from_str(&account_literal)?,
+        HeaderValue::from_str(&account_header)?,
     );
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_SIGNATURE.as_bytes())?,
-        HeaderValue::from_str(&signature_header_value(&assets_sig))?,
+        HeaderValue::from_str(&signature_header_value(&assets_sig)?)?,
     );
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_TIMESTAMP_MS.as_bytes())?,
@@ -92,7 +95,6 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         HeaderName::from_bytes(HEADER_NONCE.as_bytes())?,
         HeaderValue::from_static(assets_nonce),
     );
-
     let assets_body: String = rt.block_on(async {
         http.get(&assets_endpoint)
             .headers(assets_headers)
@@ -111,7 +113,6 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         total_assets > 0,
         "assets endpoint should accept canonical auth"
     );
-
     // POST /v1/accounts/{account}/transactions/query with canonical signed headers + body hash
     let envelope = QueryEnvelope {
         pagination: Pagination {
@@ -121,7 +122,6 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         ..QueryEnvelope::default()
     };
     let body = norito::json::to_vec(&envelope)?;
-
     let mut tx_url = reqwest::Url::parse(&peer.torii_url())?;
     {
         let mut segments = tx_url
@@ -143,19 +143,18 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         &body,
         timestamp_ms,
         tx_nonce,
-    );
+    )?;
     let tx_sig =
         Signature::try_new(ALICE_KEYPAIR.private_key(), &tx_msg).expect("POST app-api signature");
-
     let mut tx_headers = HeaderMap::new();
     tx_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     tx_headers.insert(
         HeaderName::from_bytes(HEADER_ACCOUNT.as_bytes())?,
-        HeaderValue::from_str(&account_literal)?,
+        HeaderValue::from_str(&account_header)?,
     );
     tx_headers.insert(
         HeaderName::from_bytes(HEADER_SIGNATURE.as_bytes())?,
-        HeaderValue::from_str(&signature_header_value(&tx_sig))?,
+        HeaderValue::from_str(&signature_header_value(&tx_sig)?)?,
     );
     tx_headers.insert(
         HeaderName::from_bytes(HEADER_TIMESTAMP_MS.as_bytes())?,
@@ -165,7 +164,6 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         HeaderName::from_bytes(HEADER_NONCE.as_bytes())?,
         HeaderValue::from_static(tx_nonce),
     );
-
     let tx_body: String = rt.block_on(async {
         http.post(tx_url)
             .headers(tx_headers)
@@ -181,6 +179,5 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         tx_json.get("items").is_some(),
         "transactions query should parse with canonical auth"
     );
-
     Ok(())
 }

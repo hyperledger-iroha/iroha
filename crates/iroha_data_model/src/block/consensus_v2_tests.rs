@@ -2,15 +2,12 @@
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::DecodeAll as _;
-
     use super::*;
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     #[test]
     fn consensus_modes_project_canonical_protocol_identities() {
         assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
@@ -22,13 +19,11 @@ mod tests {
         assert_eq!(ConsensusMode::Npos.bls_domain(), NPOS_BLS_DOMAIN);
         assert!(ConsensusMode::Permissioned.is_permissioned());
         assert!(!ConsensusMode::Npos.is_permissioned());
-
         for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
             let parameter_mode = crate::parameter::system::SumeragiConsensusMode::from(mode);
             assert_eq!(ConsensusMode::from(parameter_mode), mode);
         }
     }
-
     #[test]
     fn global_phase_wire_tags_are_explicit_and_schema_aligned() {
         let prepare = GlobalPhase::Prepare.encode();
@@ -37,7 +32,6 @@ mod tests {
         assert_eq!(commit, u32::from(GlobalPhase::Commit as u8).to_le_bytes());
         assert_eq!(prepare, 1_u32.to_le_bytes());
         assert_eq!(commit, 2_u32.to_le_bytes());
-
         let mut prepare_cursor = prepare.as_slice();
         let mut commit_cursor = commit.as_slice();
         assert_eq!(
@@ -52,7 +46,6 @@ mod tests {
         let mut legacy_implicit_zero = legacy_implicit_zero_bytes.as_slice();
         assert!(GlobalPhase::decode_all(&mut legacy_implicit_zero).is_err());
     }
-
     #[test]
     fn payload_encoding_uses_natural_zero_tag_and_rejects_retired_tag_one() {
         let canonical = PayloadEncoding::ReedSolomon16.encode();
@@ -62,14 +55,12 @@ mod tests {
                 .expect("decode canonical RS16 payload encoding"),
             PayloadEncoding::ReedSolomon16
         );
-
         let retired_tag = 1_u32.to_le_bytes();
         assert!(
             PayloadEncoding::decode_all(&mut retired_tag.as_slice()).is_err(),
             "retired payload-encoding tag 1 must fail closed"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn payload_encoding_json_rejects_retired_plain_variant() {
@@ -80,7 +71,6 @@ mod tests {
                 .expect("decode canonical RS16 payload encoding"),
             PayloadEncoding::ReedSolomon16
         );
-
         let mut retired = canonical;
         let encoding = retired
             .as_object_mut()
@@ -94,7 +84,6 @@ mod tests {
             "retired Plain payload encoding must fail closed"
         );
     }
-
     #[test]
     fn execution_commitment_enforces_topup_shape_count_and_combined_root() {
         let parent = Hash::new(b"parent");
@@ -117,14 +106,12 @@ mod tests {
         .expect("canonical top-up commitment");
         assert_eq!(canonical.validate(), Ok(()));
         assert_eq!(canonical.executed_block_wire_hash, executed);
-
         let encoded = canonical.encode();
         let mut cursor = encoded.as_slice();
         assert_eq!(
             ExecutionCommitment::decode_all(&mut cursor).expect("decode execution commitment"),
             canonical
         );
-
         assert_eq!(
             ExecutionCommitment::new_without_merge_carrier(
                 parent,
@@ -162,7 +149,6 @@ mod tests {
             Err(ValidationError::TooManyKagemushaTopupAnchors)
         );
     }
-
     #[test]
     fn execution_commitment_enforces_native_amx_manifest_shape_and_bound() {
         #[derive(Encode)]
@@ -174,7 +160,6 @@ mod tests {
             topup_anchor_count: u32,
             executed_block_wire_hash: Hash,
         }
-
         #[derive(Encode)]
         struct ExecutionCommitmentWithoutLaneFinalityManifest {
             parent_state_root: Hash,
@@ -189,7 +174,6 @@ mod tests {
             executed_block_wire_len: u64,
             executed_block_wire_hash: Hash,
         }
-
         let parent = Hash::new(b"native manifest parent");
         let post = Hash::new(b"native manifest post");
         let ordinary = Hash::new(b"native manifest ordinary");
@@ -259,7 +243,6 @@ mod tests {
             )
             .expect("canonical Native AMX manifest commitment");
         assert_eq!(canonical.validate(), Ok(()));
-
         assert_eq!(
             ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
@@ -306,7 +289,6 @@ mod tests {
             Err(ValidationError::InvalidNativeAmxApplicationManifestVersion)
         );
     }
-
     #[test]
     fn native_amx_manifest_leaf_rejects_reordered_or_duplicate_members() {
         let member = |index: u64, source: u8| NativeAmxApplicationManifestMemberV1 {
@@ -335,7 +317,6 @@ mod tests {
             executed_block_wire_hash: Hash::new(b"native leaf executed wire"),
         };
         assert_eq!(leaf.validate(), Ok(()));
-
         leaf.members.swap(0, 1);
         assert_eq!(
             leaf.validate(),
@@ -346,7 +327,6 @@ mod tests {
             leaf.validate(),
             Err(ValidationError::InvalidNativeAmxApplicationManifestMembership)
         );
-
         leaf.members = vec![member(1, 0x11), member(2, 0x22)];
         leaf.predecessor_descriptor_hash = Some(Hash::prehashed([0; Hash::LENGTH]));
         assert_eq!(
@@ -368,7 +348,6 @@ mod tests {
             Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn genesis_context_json_uses_explicit_policy_hash_names_only() {
@@ -377,7 +356,6 @@ mod tests {
         assert!(json.contains("\"nexus_amx_context_hash\""));
         assert!(json.contains("\"execution_policy_hash\""));
         assert!(!json.contains("active_nexus_lane_hash"));
-
         let obsolete = json.replace("nexus_amx_context_hash", "active_nexus_lane_hash");
         assert!(
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&obsolete).is_err(),
@@ -392,20 +370,17 @@ mod tests {
                 .is_err(),
             "signed v2 genesis context must require the execution-policy commitment"
         );
-
         let unknown = json.replacen('{', "{\"unknown\":1,", 1);
         assert!(
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&unknown).is_err(),
             "signed v2 genesis context must reject unknown fields"
         );
     }
-
     fn peer(seed: u8) -> PeerId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic Sumeragi v2 fixture keypair");
         PeerId::new(key_pair.public_key().clone())
     }
-
     fn roster(powers: &[u64]) -> Vec<ValidatorPower> {
         let mut validators = (0..powers.len())
             .map(|index| peer(u8::try_from(index + 1).expect("small fixture roster")))
@@ -417,7 +392,6 @@ mod tests {
             .map(|(validator, power)| ValidatorPower { validator, power })
             .collect()
     }
-
     fn context(powers: &[u64]) -> HeightContext {
         let roster = roster(powers);
         HeightContext {
@@ -445,7 +419,6 @@ mod tests {
             leader_seed: [0xA5; 32],
         }
     }
-
     fn round(context: &HeightContext, view: View) -> ConsensusRound {
         ConsensusRound {
             context_id: context.id(),
@@ -453,7 +426,6 @@ mod tests {
             view,
         }
     }
-
     fn subject(seed: u8) -> BlockSubject {
         BlockSubject {
             parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new([seed, 0]))),
@@ -461,12 +433,10 @@ mod tests {
             payload_hash: Hash::new([seed, 2]),
         }
     }
-
     fn rs16_fixture_chunks(context: &HeightContext, payload: &[u8]) -> Vec<Vec<u8>> {
         encode_payload_chunks(context.da_layout, payload)
             .expect("fixture payload encoding succeeds")
     }
-
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         let executed_block_wire = [seed, 6];
         ExecutionCommitment::new_without_merge_carrier(
@@ -480,7 +450,6 @@ mod tests {
         )
         .expect("canonical fixture execution commitment")
     }
-
     fn qc(
         context: &HeightContext,
         view: View,
@@ -500,21 +469,18 @@ mod tests {
             aggregate_signature: vec![0x5A; 48],
         }
     }
-
     fn manifest(context: &HeightContext) -> PayloadManifest {
         let subject = subject(9);
         let encoded_chunks = rs16_fixture_chunks(context, b"body");
         PayloadManifest::derive(context, round(context, 1), subject, 4, &encoded_chunks)
             .expect("valid canonical manifest")
     }
-
     struct TimeoutProposalFixture {
         context: HeightContext,
         timeout_round: ConsensusRound,
         proposal: Proposal,
         highest_prepare: QuorumCertificate,
     }
-
     fn timeout_proposal_fixture() -> TimeoutProposalFixture {
         let context = context(&[1, 1, 1, 1]);
         let payload_manifest = manifest(&context);
@@ -529,7 +495,6 @@ mod tests {
         };
         let mut highest_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
         highest_prepare.subject = proposal.subject;
-
         TimeoutProposalFixture {
             context,
             timeout_round,
@@ -537,7 +502,6 @@ mod tests {
             highest_prepare,
         }
     }
-
     fn timeout_justification(
         timeout_round: ConsensusRound,
         certificate_high: Option<QuorumCertificate>,
@@ -556,13 +520,11 @@ mod tests {
             highest_prepare_qc: proposal_high,
         })
     }
-
     struct ParentReproposalFixture {
         context: HeightContext,
         parent_round: ConsensusRound,
         proposal: Proposal,
     }
-
     fn parent_reproposal_fixture() -> ParentReproposalFixture {
         let mut context = context(&[1, 1, 1, 1]);
         context.height = 2;
@@ -617,14 +579,12 @@ mod tests {
             }),
             signature: vec![0x33; 48],
         };
-
         ParentReproposalFixture {
             context,
             parent_round,
             proposal,
         }
     }
-
     fn carried_parent_certificate(proposal: &mut Proposal) -> &mut QuorumCertificate {
         let ProposalJustification::ParentCommit(parent) = &mut proposal.justification else {
             unreachable!("fixture uses a parent justification");
@@ -634,11 +594,9 @@ mod tests {
             .as_mut()
             .expect("carried parent certificate")
     }
-
     #[test]
     fn equal_vote_quorum_requires_two_f_plus_one_distinct_signers() {
         let context = context(&[1, 1, 1, 1]);
-
         assert_eq!(context.quorum.min_signers, 3);
         assert_eq!(context.validate_signers(&[0, 1, 2]), Ok(()));
         assert_eq!(context.validate_signers(&[1, 2, 3]), Ok(()));
@@ -651,7 +609,6 @@ mod tests {
             Err(ValidationError::SignersNotStrictlySorted)
         );
     }
-
     #[test]
     fn height_context_rejects_weighted_consensus_votes_in_all_modes() {
         for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
@@ -663,18 +620,15 @@ mod tests {
             assert_eq!(invalid.validate(), Err(ValidationError::VotingPowerNotOne));
         }
     }
-
     #[test]
     fn height_context_rejects_zero_execution_policy_hash() {
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.execution_policy_hash = Hash::prehashed([0; Hash::LENGTH]);
-
         assert_eq!(
             invalid.validate(),
             Err(ValidationError::InvalidExecutionPolicyHash)
         );
     }
-
     #[test]
     fn data_availability_layout_enforces_protocol_resource_caps() {
         let maximum = DataAvailabilityLayout {
@@ -686,7 +640,6 @@ mod tests {
             max_chunk_count: MAX_DA_CHUNK_COUNT,
         };
         assert_eq!(validate_data_availability_layout(maximum), Ok(()));
-
         let mut invalid_layouts = Vec::new();
         invalid_layouts.push(DataAvailabilityLayout {
             chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES + 2,
@@ -719,7 +672,6 @@ mod tests {
             max_chunk_count: u32::MAX,
             ..maximum
         });
-
         for invalid in invalid_layouts {
             assert_eq!(
                 validate_data_availability_layout(invalid),
@@ -727,7 +679,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn payload_chunk_encoding_is_complete_padded_and_deterministic() {
         let context = context(&[1, 1, 1, 1]);
@@ -745,7 +696,6 @@ mod tests {
             encode_payload_chunks(context.da_layout, payload)
                 .expect("repeated canonical encoding succeeds")
         );
-
         let manifest = PayloadManifest::derive(
             &context,
             round(&context, 1),
@@ -756,18 +706,15 @@ mod tests {
         .expect("complete encoded chunks derive a valid manifest");
         assert_eq!(manifest.validate(&context), Ok(()));
     }
-
     #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
         assert_eq!(empty.leader(u64::MAX), 0);
         assert_eq!(empty.validate(), Err(ValidationError::EmptyRoster));
-
         let mut too_small = context(&[1, 1, 1, 1]);
         too_small.roster.truncate(MIN_VALIDATORS_PER_HEIGHT - 1);
         assert_eq!(too_small.validate(), Err(ValidationError::RosterTooSmall));
-
         let mut invalid_geometry = context(&[1, 1, 1, 1]);
         invalid_geometry.roster.push(ValidatorPower {
             validator: peer(0xFE),
@@ -778,42 +725,35 @@ mod tests {
             invalid_geometry.validate(),
             Err(ValidationError::InvalidCommitteeGeometry)
         );
-
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.roster[1].validator = invalid.roster[0].validator.clone();
         assert_eq!(invalid.validate(), Err(ValidationError::DuplicateValidator));
-
         let mut invalid = context(&[1, 1, 1, 1]);
         invalid.quorum.min_signers = 2;
         assert_eq!(
             invalid.validate(),
             Err(ValidationError::CountThresholdMismatch)
         );
-
         let mut oversized = context(&[1, 1, 1, 1]);
         let repeated = oversized.roster[0].clone();
         oversized
             .roster
             .resize(MAX_VALIDATORS_PER_HEIGHT + 1, repeated);
         assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
-
         let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
         assert_eq!(largest.validate(), Ok(()));
-
         let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);
         odd_rs16_symbols.da_layout.chunk_size_bytes = 3;
         assert_eq!(
             odd_rs16_symbols.validate(),
             Err(ValidationError::InvalidDataAvailabilityLayout)
         );
-
         let mut insufficient_chunk_capacity = context(&[1, 1, 1, 1]);
         insufficient_chunk_capacity.da_layout.max_chunk_count -= 1;
         assert_eq!(
             insufficient_chunk_capacity.validate(),
             Err(ValidationError::InvalidDataAvailabilityLayout)
         );
-
         let mut invalid_parent_execution = context(&[1, 1, 1, 1]);
         invalid_parent_execution.height = 2;
         let invalid_parent_round = ConsensusRound {
@@ -852,7 +792,6 @@ mod tests {
             Err(ValidationError::InvalidExecutionCommitment)
         );
     }
-
     #[test]
     fn snapshot_bootstrap_is_an_explicit_mutually_exclusive_parent_authority() {
         let mut anchored = context(&[1, 1, 1, 1]);
@@ -872,14 +811,12 @@ mod tests {
             validator_set_pops: vec![vec![0xA5]; anchored.roster.len()],
         };
         record.validate().expect("complete bootstrap record");
-
         let mut wrong_height = record.clone();
         wrong_height.context.height = 12;
         assert_eq!(
             wrong_height.validate(),
             Err(ValidationError::InvalidParentCommit)
         );
-
         let mut ambiguous = anchored;
         ambiguous.parent_commit_qc = Some(qc(
             &context(&[1, 1, 1, 1]),
@@ -891,7 +828,6 @@ mod tests {
             ambiguous.validate(),
             Err(ValidationError::InvalidParentCommit)
         );
-
         let mut unsupported = record;
         unsupported.version = SnapshotV2BootstrapRecord::VERSION + 1;
         assert_eq!(
@@ -899,7 +835,6 @@ mod tests {
             Err(ValidationError::InvalidSnapshotBootstrap)
         );
     }
-
     #[test]
     fn non_boundary_height_context_id_is_pinned() {
         let context = context(&[1, 1, 1, 1]);
@@ -914,7 +849,6 @@ mod tests {
             "intentional identity-projection changes require updating this golden"
         );
     }
-
     #[test]
     fn boundary_height_context_id_pins_the_complete_transition() {
         let mut context = context(&[1, 1, 1, 1]);
@@ -940,7 +874,6 @@ mod tests {
             "intentional transition-identity changes require updating this golden"
         );
     }
-
     #[test]
     fn height_context_id_ignores_equivalent_parent_qc_round_and_signer_evidence() {
         let mut left = context(&[1, 1, 1, 1]);
@@ -976,10 +909,8 @@ mod tests {
             signers: vec![0, 1, 3],
             aggregate_signature: vec![0x22; 48],
         });
-
         assert_ne!(left.parent_commit_qc, right.parent_commit_qc);
         assert_eq!(left.id(), right.id());
-
         let mut different_execution = right.clone();
         different_execution
             .parent_commit_qc
@@ -987,7 +918,6 @@ mod tests {
             .expect("parent certificate")
             .execution_commitment = execution_commitment(0x45);
         assert_ne!(left.id(), different_execution.id());
-
         let mut different_subject = right.clone();
         different_subject
             .parent_commit_qc
@@ -995,7 +925,6 @@ mod tests {
             .expect("parent certificate")
             .subject = subject(0x45);
         assert_ne!(left.id(), different_subject.id());
-
         right
             .parent_commit_qc
             .as_mut()
@@ -1005,7 +934,6 @@ mod tests {
             b"different parent context",
         )));
         assert_ne!(left.id(), right.id());
-
         let mut oversized_parent = left;
         oversized_parent
             .parent_commit_qc
@@ -1017,7 +945,6 @@ mod tests {
             Err(ValidationError::SignatureTooLarge)
         );
     }
-
     #[test]
     fn height_context_identity_ignores_reproposal_round_and_rejects_split_rounds() {
         let mut original = context(&[1, 1, 1, 1]);
@@ -1039,7 +966,6 @@ mod tests {
             aggregate_signature: vec![0x47; 48],
         });
         original.validate().expect("valid parent decision");
-
         let mut redecided = original.clone();
         let certificate = redecided
             .parent_commit_qc
@@ -1051,7 +977,6 @@ mod tests {
             .validate()
             .expect("unchanged re-proposal may decide in another round");
         assert_eq!(original.id(), redecided.id());
-
         let mut cross_context_origin = original.clone();
         let certificate = cross_context_origin
             .parent_commit_qc
@@ -1065,7 +990,6 @@ mod tests {
             .validate()
             .expect("a structurally valid parent can belong to another prior context");
         assert_ne!(original.id(), cross_context_origin.id());
-
         let mut wrong_height_origin = original.clone();
         let certificate = wrong_height_origin
             .parent_commit_qc
@@ -1077,7 +1001,6 @@ mod tests {
             wrong_height_origin.validate(),
             Err(ValidationError::InvalidParentCommit)
         );
-
         let mut split_round = original;
         let parent = split_round
             .parent_commit_qc
@@ -1089,7 +1012,6 @@ mod tests {
             Err(ValidationError::InvalidParentCommit)
         );
     }
-
     #[test]
     fn timeout_certificate_requires_disjoint_dual_quorum() {
         let context = context(&[1, 1, 1, 1]);
@@ -1111,7 +1033,6 @@ mod tests {
         };
         assert_eq!(certificate.validate(&context), Ok(()));
         assert_eq!(certificate.highest_prepare_qc(), Some(&prepare));
-
         let mut overlapping = certificate.clone();
         overlapping.groups[1].signers = vec![0, 2];
         assert_eq!(
@@ -1119,7 +1040,6 @@ mod tests {
             Err(ValidationError::OverlappingTimeoutSigners)
         );
     }
-
     #[test]
     fn highest_prepare_qc_uses_view_then_semantic_reference() {
         let context = context(&[1, 1, 1, 1]);
@@ -1142,7 +1062,6 @@ mod tests {
         };
         assert_eq!(certificate.highest_prepare_qc(), Some(&higher));
     }
-
     #[test]
     fn timeout_certificate_rejects_conflicting_prepare_qcs_at_one_view() {
         let context = context(&[1, 1, 1, 1]);
@@ -1172,13 +1091,11 @@ mod tests {
             round: round(&context, 2),
             groups,
         };
-
         assert_eq!(
             certificate.validate(&context),
             Err(ValidationError::ConflictingHighestPrepare)
         );
     }
-
     #[test]
     fn qc_reference_and_timeout_preimage_ignore_equivalent_quorum_subsets() {
         let context = context(&[1, 1, 1, 1]);
@@ -1186,7 +1103,6 @@ mod tests {
         let right = qc(&context, 1, GlobalPhase::Prepare, vec![0, 1, 3]);
         assert_ne!(HashOf::new(&left), HashOf::new(&right));
         assert_eq!(left.as_ref(), right.as_ref());
-
         let left_vote = TimeoutVote {
             round: round(&context, 2),
             highest_prepare_qc: Some(left),
@@ -1204,7 +1120,6 @@ mod tests {
             right_vote.signature_preimage()
         );
     }
-
     #[test]
     fn v2_envelope_norito_roundtrip() {
         let context = context(&[1, 1, 1, 1]);
@@ -1220,14 +1135,12 @@ mod tests {
             signature: vec![0x22; 48],
         };
         let message = ConsensusMessageV2::new(ConsensusMessageV2Payload::Proposal(proposal));
-
         let encoded = message.encode();
         let decoded = ConsensusMessageV2::decode(&mut &encoded[..])
             .expect("decode canonical Sumeragi v2 envelope");
         assert_eq!(decoded, message);
         assert_eq!(decoded.validate_version(), Ok(()));
     }
-
     #[test]
     fn every_v2_payload_variant_roundtrips() {
         let context = context(&[1, 1, 1, 1]);
@@ -1327,7 +1240,6 @@ mod tests {
                 bls_sig: vec![6],
             }),
         ];
-
         for payload in variants {
             let message = ConsensusMessageV2::new(payload);
             let encoded = message.encode();
@@ -1336,7 +1248,6 @@ mod tests {
             assert_eq!(decoded, message);
         }
     }
-
     #[test]
     fn voting_power_sum_fails_closed_on_u64_overflow() {
         let mut roster = vec![
@@ -1355,7 +1266,6 @@ mod tests {
             Err(ValidationError::VotingPowerOverflow)
         );
     }
-
     #[test]
     fn signed_payload_chunk_binds_session_and_manifest_fields() {
         let context = context(&[1, 1, 1, 1]);
@@ -1367,7 +1277,6 @@ mod tests {
             sender: 1,
             signature: vec![0x77; 48],
         };
-
         let payload = chunk
             .signature_payload(&context, &manifest)
             .expect("valid chunk signature payload");
@@ -1384,7 +1293,6 @@ mod tests {
                 .expect("valid signature preimage")
                 .starts_with(b"iroha:sumeragi:v2:payload-chunk")
         );
-
         let mut unsigned = chunk.clone();
         unsigned.signature.clear();
         assert!(unsigned.signature_preimage(&context, &manifest).is_ok());
@@ -1392,7 +1300,6 @@ mod tests {
             unsigned.validate(&context, &manifest),
             Err(ValidationError::MissingChunkSignature)
         );
-
         let mut corrupted = chunk.clone();
         corrupted.bytes.push(0);
         assert_eq!(
@@ -1400,34 +1307,29 @@ mod tests {
             Err(ValidationError::InvalidChunkLength)
         );
     }
-
     #[test]
     fn manifest_rejects_mutated_root_size_count_and_chunk_length() {
         let context = context(&[1, 1, 1, 1]);
         let canonical = manifest(&context);
         assert_eq!(canonical.validate(&context), Ok(()));
-
         let mut wrong_root = canonical.clone();
         wrong_root.chunk_root = Hash::new(b"not the canonical root");
         assert_eq!(
             wrong_root.validate(&context),
             Err(ValidationError::ChunkRootMismatch)
         );
-
         let mut wrong_count = canonical.clone();
         wrong_count.payload_size_bytes = 5;
         assert_eq!(
             wrong_count.validate(&context),
             Err(ValidationError::PayloadSizeMismatch)
         );
-
         let mut oversized = canonical.clone();
         oversized.payload_size_bytes = context.da_layout.max_payload_size_bytes + 1;
         assert_eq!(
             oversized.validate(&context),
             Err(ValidationError::PayloadTooLarge)
         );
-
         let short_chunk = PayloadChunk {
             manifest_hash: HashOf::new(&canonical),
             index: 0,
@@ -1440,7 +1342,6 @@ mod tests {
             Err(ValidationError::InvalidChunkLength)
         );
     }
-
     #[test]
     fn compact_v2_status_norito_roundtrip() {
         let context = context(&[1, 1, 1, 1]);
@@ -1482,18 +1383,15 @@ mod tests {
             last_commit_qc: None,
             liveness: SumeragiV2LivenessStatus::default(),
         };
-
         let encoded = status.encode();
         let decoded =
             SumeragiV2Status::decode(&mut &encoded[..]).expect("decode compact Sumeragi v2 status");
         assert_eq!(decoded, status);
     }
-
     #[test]
     fn leader_rotation_is_cyclic_and_wraps_roster() {
         let context = context(&[1, 1, 1, 1]);
         let start = context.leader(0);
-
         assert_eq!(context.leader(4), start);
         assert_eq!(
             (0..4)
@@ -1502,19 +1400,16 @@ mod tests {
             BTreeSet::from([0, 1, 2, 3])
         );
     }
-
     #[test]
     fn leader_rotation_reduces_the_maximum_view_without_truncation() {
         let context = context(&[1, 1, 1, 1]);
         let roster_len = u64::try_from(context.roster.len()).expect("fixture roster fits u64");
-
         assert_eq!(
             context.leader(u64::MAX),
             context.leader(u64::MAX % roster_len),
             "view rotation must reduce at the roster boundary before selecting an index"
         );
     }
-
     #[test]
     fn timeout_proposal_accepts_only_the_selected_prepare_subject() {
         let TimeoutProposalFixture {
@@ -1524,7 +1419,6 @@ mod tests {
             highest_prepare,
         } = timeout_proposal_fixture();
         assert_eq!(proposal.validate(&context), Ok(()));
-
         proposal.justification =
             timeout_justification(timeout_round, None, Some(highest_prepare.clone()), 0x43);
         assert_eq!(
@@ -1532,7 +1426,6 @@ mod tests {
             Err(ValidationError::InvalidProposalJustification),
             "a proposal cannot invent a repeated high absent from its TC"
         );
-
         proposal.justification = timeout_justification(
             timeout_round,
             Some(highest_prepare.clone()),
@@ -1540,7 +1433,6 @@ mod tests {
             0x43,
         );
         assert_eq!(proposal.validate(&context), Ok(()));
-
         let timeout_certificate = match &proposal.justification {
             ProposalJustification::Timeout(timeout) => timeout.timeout_certificate.clone(),
             ProposalJustification::ParentCommit(_) => {
@@ -1556,7 +1448,6 @@ mod tests {
             Err(ValidationError::InvalidProposalJustification),
             "a proposal cannot omit the exact high selected by its TC"
         );
-
         let mut alternate_evidence = highest_prepare.clone();
         alternate_evidence.signers = vec![0, 1, 3];
         alternate_evidence.aggregate_signature = vec![0x46; 48];
@@ -1571,7 +1462,6 @@ mod tests {
             Err(ValidationError::InvalidProposalJustification),
             "the repeated high must preserve the TC-selected full evidence"
         );
-
         let mismatched_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
         proposal.justification = timeout_justification(
             timeout_round,
@@ -1583,7 +1473,6 @@ mod tests {
             proposal.validate(&context),
             Err(ValidationError::InvalidProposalJustification)
         );
-
         let mut altered_carried = highest_prepare;
         altered_carried.round.view = 1;
         proposal.justification = timeout_justification(
@@ -1597,7 +1486,6 @@ mod tests {
             Err(ValidationError::InvalidProposalJustification)
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1630,7 +1518,6 @@ mod tests {
             changed_signature.signature_preimage(),
             proposal.signature_preimage()
         );
-
         let vote = Vote {
             round: proposal_round,
             proposal_round,
@@ -1687,7 +1574,6 @@ mod tests {
             vote.signature_preimage(),
             "vote signatures must authenticate the deterministic execution result"
         );
-
         let timeout = TimeoutVote {
             round: proposal_round,
             highest_prepare_qc: None,
@@ -1700,14 +1586,12 @@ mod tests {
                 .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:timeout-vote")
         );
-
         let mut oversized = vote.clone();
         oversized.signature = vec![0x45; MAX_CONSENSUS_SIGNATURE_BYTES + 1];
         assert_eq!(
             oversized.validate(&context),
             Err(ValidationError::SignatureTooLarge)
         );
-
         let mut unsigned = vote;
         unsigned.signature.clear();
         assert_eq!(
@@ -1715,7 +1599,6 @@ mod tests {
             Err(ValidationError::MissingSignature)
         );
     }
-
     #[test]
     fn view_zero_proposal_accepts_equivalent_parent_decision_across_reproposal_rounds() {
         let ParentReproposalFixture {
@@ -1723,7 +1606,6 @@ mod tests {
             parent_round,
             mut proposal,
         } = parent_reproposal_fixture();
-
         assert_eq!(proposal.validate(&context), Ok(()));
         {
             let certificate = carried_parent_certificate(&mut proposal);
@@ -1758,7 +1640,6 @@ mod tests {
             Err(ValidationError::InvalidProposalJustification)
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1890,7 +1771,6 @@ mod tests {
                 .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:certified-body-response")
         );
-
         let mut corrupted = response;
         corrupted.body.push(0);
         assert_eq!(
@@ -1898,7 +1778,6 @@ mod tests {
             Err(ValidationError::CertifiedBodyHashMismatch)
         );
     }
-
     #[test]
     fn commit_certificate_discovery_binds_network_context_request_and_commit_phase() {
         let context = context(&[1, 1, 1, 1]);
@@ -1917,7 +1796,6 @@ mod tests {
                 .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:commit-certificate-request")
         );
-
         let response = CommitCertificateResponse {
             request_hash: HashOf::new(&request),
             certificate: commit.clone(),
@@ -1930,7 +1808,6 @@ mod tests {
                 .signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:commit-certificate-response")
         );
-
         let mut cross_network = request.clone();
         cross_network.network_id = network_id(0xA2);
         assert_eq!(
@@ -1949,7 +1826,6 @@ mod tests {
             wrong_protocol.validate(&context),
             Err(ValidationError::UnsupportedProtocolVersion { .. })
         ));
-
         let mut wrong_request = response.clone();
         wrong_request.request_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"another exact request"));
@@ -1963,7 +1839,6 @@ mod tests {
             prepare.validate(&context),
             Err(ValidationError::CommitCertificateMismatch)
         );
-
         let mut changed_responder = CommitCertificateResponse {
             request_hash: HashOf::new(&request),
             certificate: commit,
@@ -1974,7 +1849,6 @@ mod tests {
         changed_responder.responder = peer(101);
         assert_ne!(changed_responder.signature_preimage(), original_preimage);
     }
-
     fn status(context: &HeightContext) -> SumeragiV2Status {
         SumeragiV2Status {
             protocol_version: PROTOCOL_VERSION,
@@ -2007,7 +1881,6 @@ mod tests {
             liveness: SumeragiV2LivenessStatus::default(),
         }
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -2015,22 +1888,18 @@ mod tests {
     )]
     fn status_validation_rejects_impossible_scalar_and_phase_states() {
         use SumeragiV2StatusValidationError as Error;
-
         let context = context(&[1, 1, 1, 1]);
         let baseline = status(&context);
         assert_eq!(baseline.validate(), Ok(()));
-
         let mut wrong_protocol = baseline.clone();
         wrong_protocol.protocol_version += 1;
         assert!(matches!(
             wrong_protocol.validate(),
             Err(Error::UnsupportedProtocolVersion { .. })
         ));
-
         let mut wrong_body = baseline.clone();
         wrong_body.body_state = SumeragiV2BodyState::Validated;
         assert_eq!(wrong_body.validate(), Err(Error::PhaseBodyMismatch));
-
         let mut commit_without_lock = baseline.clone();
         commit_without_lock.phase = SumeragiV2StatusPhase::Commit;
         commit_without_lock.body_state = SumeragiV2BodyState::Validated;
@@ -2038,18 +1907,15 @@ mod tests {
             commit_without_lock.validate(),
             Err(Error::CommitWithoutLock)
         );
-
         let mut zero_persistence = baseline.clone();
         zero_persistence.pending_persistence_id = Some(0);
         assert_eq!(zero_persistence.validate(), Err(Error::ZeroPersistenceId));
-
         let mut committed_ahead = baseline.clone();
         committed_ahead.last_committed_height = committed_ahead.height;
         assert_eq!(
             committed_ahead.validate(),
             Err(Error::CommittedHeightNotBehindActiveHeight)
         );
-
         let mut pending_apply = baseline;
         pending_apply.phase = SumeragiV2StatusPhase::PendingApply;
         pending_apply.body_state = SumeragiV2BodyState::PendingApply;
@@ -2074,7 +1940,6 @@ mod tests {
             total_power: 4,
         });
         assert_eq!(pending_apply.validate(), Ok(()));
-
         let mut invalid_commit_origin = pending_apply.clone();
         let invalid_certificate = &mut invalid_commit_origin
             .last_commit_qc
@@ -2086,25 +1951,21 @@ mod tests {
             invalid_commit_origin.validate(),
             Err(Error::CommitSummaryCertificateMismatch)
         );
-
         let mut invalid_context = status(&context);
         invalid_context.height_context.epoch_end_height = invalid_context.height - 1;
         assert_eq!(
             invalid_context.validate(),
             Err(Error::EpochEndsBeforeHeight)
         );
-
         let mut invalid_leader = status(&context);
         invalid_leader.leader = invalid_leader.height_context.validator_count;
         assert_eq!(invalid_leader.validate(), Err(Error::LeaderOutOfRange));
-
         let mut invalid_quorum = status(&context);
         invalid_quorum.height_context.quorum.min_signers -= 1;
         assert_eq!(
             invalid_quorum.validate(),
             Err(Error::InvalidHeightContextQuorum)
         );
-
         let mut invalid_commit_summary = pending_apply.clone();
         invalid_commit_summary
             .last_commit_qc
@@ -2115,7 +1976,6 @@ mod tests {
             invalid_commit_summary.validate(),
             Err(Error::InvalidCommitSummaryQuorum)
         );
-
         let mut impossible_signer_power = pending_apply;
         let impossible_summary = impossible_signer_power
             .last_commit_qc
@@ -2128,7 +1988,6 @@ mod tests {
             Err(Error::InvalidCommitSummaryQuorum),
             "the redundant signed-vote projection must equal the authenticated signer count"
         );
-
         let mut one_sided_commit = status(&context);
         one_sided_commit.height = 2;
         one_sided_commit.last_committed_height = 1;
@@ -2138,7 +1997,6 @@ mod tests {
             Err(Error::CommitFrontierAuthenticationMismatch)
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -2146,7 +2004,6 @@ mod tests {
     )]
     fn status_validation_checks_liveness_rounds_quorums_and_queue_ownership() {
         use SumeragiV2StatusValidationError as Error;
-
         let context = context(&[1, 1, 1, 1]);
         let mut baseline = status(&context);
         let active_round = round(&context, 2);
@@ -2186,14 +2043,12 @@ mod tests {
             ..SumeragiV2LivenessStatus::default()
         };
         assert_eq!(baseline.validate(), Ok(()));
-
         let mut future_round = baseline.clone();
         future_round.liveness.prepare_quorums[0].round.view = future_round.view + 1;
         assert_eq!(
             future_round.validate(),
             Err(Error::LivenessRoundFromFutureView)
         );
-
         let mut cross_context_round = baseline.clone();
         cross_context_round.liveness.prepare_quorums[0]
             .round
@@ -2205,7 +2060,6 @@ mod tests {
             Err(Error::LivenessRoundMismatch),
             "a liveness round must bind to the status height-context identity"
         );
-
         let mut cross_height_round = baseline.clone();
         cross_height_round.liveness.prepare_quorums[0].round.height =
             cross_height_round.liveness.prepare_quorums[0]
@@ -2217,19 +2071,15 @@ mod tests {
             Err(Error::LivenessRoundMismatch),
             "a liveness round must bind independently to the status height"
         );
-
         let mut wrong_origin = baseline.clone();
         wrong_origin.liveness.prepare_quorums[0].proposal_round.view -= 1;
         assert_eq!(wrong_origin.validate(), Err(Error::InvalidProposalRound));
-
         let mut wrong_quorum = baseline.clone();
         wrong_quorum.liveness.prepare_quorums[0].total_power = 5;
         assert_eq!(wrong_quorum.validate(), Err(Error::InvalidLivenessQuorum));
-
         let mut invalid_queue = baseline.clone();
         invalid_queue.liveness.queues[0].depth = 0;
         assert_eq!(invalid_queue.validate(), Err(Error::InvalidLivenessQueue));
-
         let mut every_queue_kind = baseline.clone();
         every_queue_kind.liveness.queues = [
             SumeragiV2QueueKind::Ingress,
@@ -2253,7 +2103,6 @@ mod tests {
         })
         .collect();
         assert_eq!(every_queue_kind.validate(), Ok(()));
-
         let mut too_many_queues = every_queue_kind;
         too_many_queues.liveness.queues.push(SumeragiV2QueueStatus {
             queue: SumeragiV2QueueKind::NetworkIngress,
@@ -2266,7 +2115,6 @@ mod tests {
             too_many_queues.validate(),
             Err(Error::LivenessCollectionTooLarge)
         );
-
         let mut invalid_intent = baseline.clone();
         invalid_intent.liveness.outbound_intents[0].execution_commitment =
             Some(execution_commitment(42));
@@ -2274,14 +2122,12 @@ mod tests {
             invalid_intent.validate(),
             Err(Error::InvalidOutboundIntentShape)
         );
-
         let mut missing_intent_origin = baseline.clone();
         missing_intent_origin.liveness.outbound_intents[0].proposal_round = None;
         assert_eq!(
             missing_intent_origin.validate(),
             Err(Error::InvalidOutboundIntentShape)
         );
-
         let mut mismatched_prepare_origin = baseline.clone();
         mismatched_prepare_origin.liveness.outbound_intents[0]
             .proposal_round
@@ -2292,7 +2138,6 @@ mod tests {
             mismatched_prepare_origin.validate(),
             Err(Error::InvalidProposalRound)
         );
-
         let mut cross_context_intent_origin = baseline.clone();
         cross_context_intent_origin.liveness.outbound_intents[0]
             .proposal_round
@@ -2305,7 +2150,6 @@ mod tests {
             cross_context_intent_origin.validate(),
             Err(Error::LivenessRoundMismatch)
         );
-
         let mut timeout_with_origin = baseline.clone();
         let intent = &mut timeout_with_origin.liveness.outbound_intents[0];
         intent.kind = SumeragiV2OutboundIntentKind::TimeoutVote;
@@ -2314,13 +2158,11 @@ mod tests {
             timeout_with_origin.validate(),
             Err(Error::InvalidOutboundIntentShape)
         );
-
         let mut same_round_commit = baseline.clone();
         let intent = &mut same_round_commit.liveness.outbound_intents[0];
         intent.kind = SumeragiV2OutboundIntentKind::CommitVote;
         intent.execution_commitment = Some(execution_commitment(42));
         assert_eq!(same_round_commit.validate(), Ok(()));
-
         let mut stale_commit_round = same_round_commit.clone();
         let intent = &mut stale_commit_round.liveness.outbound_intents[0];
         intent.proposal_round.as_mut().expect("proposal round").view -= 1;
@@ -2328,7 +2170,6 @@ mod tests {
             stale_commit_round.validate(),
             Err(Error::InvalidProposalRound)
         );
-
         let mut future_commit_origin = same_round_commit;
         future_commit_origin.liveness.outbound_intents[0]
             .proposal_round
@@ -2339,7 +2180,6 @@ mod tests {
             future_commit_origin.validate(),
             Err(Error::InvalidProposalRound)
         );
-
         let mut future_generation = baseline;
         future_generation
             .liveness
@@ -2352,11 +2192,9 @@ mod tests {
             Err(Error::LivenessGenerationFromFuture)
         );
     }
-
     #[test]
     fn status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry() {
         use SumeragiV2StatusValidationError as Error;
-
         let context = context(&[1, 1, 1, 1]);
         let mut exact_bound = status(&context);
         exact_bound.liveness.ignore_counts = [
@@ -2380,10 +2218,8 @@ mod tests {
             count: u64::try_from(index + 1).expect("ignore reason count fits u64"),
         })
         .collect();
-
         assert_eq!(exact_bound.liveness.ignore_counts.len(), 12);
         assert_eq!(exact_bound.validate(), Ok(()));
-
         let mut oversized = exact_bound;
         oversized
             .liveness
@@ -2394,11 +2230,9 @@ mod tests {
             });
         assert_eq!(oversized.validate(), Err(Error::LivenessCollectionTooLarge));
     }
-
     #[test]
     fn status_validation_accepts_later_view_active_height_finality_evidence() {
         use SumeragiV2StatusValidationError as Error;
-
         let context = context(&[1, 1, 1, 1]);
         let mut lagging = status(&context);
         let later_commit = qc(
@@ -2437,9 +2271,7 @@ mod tests {
             }),
             ..SumeragiV2LivenessStatus::default()
         };
-
         assert_eq!(lagging.validate(), Ok(()));
-
         lagging
             .liveness
             .last_progress
@@ -2447,7 +2279,6 @@ mod tests {
             .expect("progress record")
             .transition = SumeragiV2ProgressTransition::CommitQuorum;
         assert_eq!(lagging.validate(), Ok(()));
-
         let mut wrong_height_finality = lagging.clone();
         wrong_height_finality.liveness.outbound_intents[0]
             .round
@@ -2456,7 +2287,6 @@ mod tests {
             wrong_height_finality.validate(),
             Err(Error::LivenessRoundMismatch)
         );
-
         for kind in [
             SumeragiV2OutboundIntentKind::Proposal,
             SumeragiV2OutboundIntentKind::PrepareVote,
@@ -2472,7 +2302,6 @@ mod tests {
                 Err(Error::LivenessRoundFromFutureView)
             );
         }
-
         for transition in [
             SumeragiV2ProgressTransition::ProposalAdmitted,
             SumeragiV2ProgressTransition::BodyAvailable,
@@ -2501,11 +2330,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn status_validation_bounds_current_commit_groups_plus_historical_lock() {
         use SumeragiV2StatusValidationError as Error;
-
         let powers = vec![1; MAX_VALIDATORS_PER_HEIGHT];
         let context = context(&powers);
         let mut snapshot = status(&context);
@@ -2521,29 +2348,23 @@ mod tests {
         };
         snapshot.liveness.commit_quorums = vec![quorum; MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT];
         assert_eq!(snapshot.validate(), Ok(()));
-
         snapshot.liveness.commit_quorums.push(quorum);
         assert_eq!(snapshot.validate(), Err(Error::LivenessCollectionTooLarge));
     }
-
     #[test]
     fn status_validation_rejects_cross_context_and_future_certificates() {
         use SumeragiV2StatusValidationError as Error;
-
         let context = context(&[1, 1, 1, 1]);
         let baseline = status(&context);
         let prepare = qc(&context, 2, GlobalPhase::Prepare, vec![0, 1, 2]).as_ref();
-
         let mut with_certificates = baseline.clone();
         with_certificates.locked_prepare_qc = Some(prepare);
         with_certificates.highest_prepare_qc = Some(prepare);
         assert_eq!(with_certificates.validate(), Ok(()));
-
         let mut prepare_with_lock = with_certificates.clone();
         prepare_with_lock.phase = SumeragiV2StatusPhase::Prepare;
         prepare_with_lock.body_state = SumeragiV2BodyState::Validated;
         assert_eq!(prepare_with_lock.validate(), Err(Error::PrepareWithLock));
-
         let mut conflicting_same_view = with_certificates.clone();
         conflicting_same_view
             .highest_prepare_qc
@@ -2554,18 +2375,15 @@ mod tests {
             conflicting_same_view.validate(),
             Err(Error::ConflictingCertificatesAtSameView)
         );
-
         let mut missing_highest = with_certificates.clone();
         missing_highest.highest_prepare_qc = None;
         assert_eq!(
             missing_highest.validate(),
             Err(Error::LockedCertificateWithoutHighest)
         );
-
         let mut wrong_phase = with_certificates.clone();
         wrong_phase.highest_prepare_qc.as_mut().unwrap().phase = GlobalPhase::Commit;
         assert_eq!(wrong_phase.validate(), Err(Error::CertificatePhaseMismatch));
-
         let mut wrong_context = with_certificates.clone();
         wrong_context
             .highest_prepare_qc
@@ -2579,13 +2397,11 @@ mod tests {
             wrong_context.validate(),
             Err(Error::CertificateContextMismatch)
         );
-
         let mut future = with_certificates.clone();
         let future_certificate = future.highest_prepare_qc.as_mut().unwrap();
         future_certificate.round.view = future.view + 1;
         future_certificate.proposal_round = future_certificate.round;
         assert_eq!(future.validate(), Err(Error::CertificateFromFutureView));
-
         let mut wrong_origin = with_certificates.clone();
         wrong_origin
             .highest_prepare_qc
@@ -2594,7 +2410,6 @@ mod tests {
             .proposal_round
             .view -= 1;
         assert_eq!(wrong_origin.validate(), Err(Error::InvalidProposalRound));
-
         let mut timeout_not_past = baseline;
         timeout_not_past.last_timeout_certificate = Some(TimeoutCertificateRef {
             round: round(&context, timeout_not_past.view),
@@ -2606,7 +2421,6 @@ mod tests {
             Err(Error::TimeoutNotBeforeCurrentView)
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
@@ -2614,13 +2428,11 @@ mod tests {
         let mut snapshot = status(&context);
         snapshot.highest_prepare_qc =
             Some(qc(&context, 2, GlobalPhase::Prepare, vec![0, 1, 2]).as_ref());
-
         let mut top = norito::json::to_value(&snapshot).expect("serialize status");
         top.as_object_mut()
             .expect("status object")
             .insert("unknown".to_owned(), norito::json::Value::Bool(true));
         assert!(norito::json::from_value::<SumeragiV2Status>(top).is_err());
-
         let mut nested = norito::json::to_value(&snapshot).expect("serialize status");
         nested
             .as_object_mut()
@@ -2630,7 +2442,6 @@ mod tests {
             .expect("QC reference object")
             .insert("unknown".to_owned(), norito::json::Value::Bool(true));
         assert!(norito::json::from_value::<SumeragiV2Status>(nested).is_err());
-
         let envelope =
             ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
                 manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"manifest")),
@@ -2655,7 +2466,6 @@ mod tests {
             norito::json::from_value::<ConsensusMessageV2>(nested_envelope).is_err(),
             "nested consensus payload must reject unknown fields"
         );
-
         let mut envelope_json = norito::json::to_value(&envelope).expect("serialize envelope");
         envelope_json
             .as_object_mut()
@@ -2663,12 +2473,10 @@ mod tests {
             .insert("unknown".to_owned(), norito::json::Value::Bool(true));
         assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
         use iroha_schema::{IntoSchema as _, Metadata};
-
         let schema = ExecutionCommitment::schema();
         let Metadata::Struct(metadata) = schema
             .get::<ExecutionCommitment>()
@@ -2694,7 +2502,6 @@ mod tests {
             lane_finality_manifest.ty,
             core::any::TypeId::of::<Option<MerkleTreeCommitment<LaneFinalityStatement>>>()
         );
-
         let carrier_free = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"json parent"),
             Hash::new(b"json post"),
@@ -2717,7 +2524,6 @@ mod tests {
             assert_eq!(decoded, commitment);
             assert_eq!(decoded.encode(), commitment.encode());
         }
-
         let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
         missing
             .as_object_mut()
@@ -2726,7 +2532,6 @@ mod tests {
         let error = norito::json::from_value::<ExecutionCommitment>(missing)
             .expect_err("omitted merge carrier must reject");
         assert!(error.to_string().contains("missing field `merge_carrier`"));
-
         let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
         missing
             .as_object_mut()
@@ -2740,11 +2545,9 @@ mod tests {
                 .contains("missing field `lane_finality_manifest`")
         );
     }
-
     #[test]
     fn dual_quorum_requires_count_and_power() {
         let context = context(&[70, 10, 10, 10]);
-
         assert_eq!(context.quorum.min_signers, 3);
         assert_eq!(context.validate_signers(&[0, 1, 2]), Ok(()));
         assert_eq!(
@@ -2760,13 +2563,11 @@ mod tests {
             Err(ValidationError::SignersNotStrictlySorted)
         );
     }
-
     #[test]
     fn leader_rotation_is_power_independent_and_wraps_roster() {
         let equal = context(&[1, 1, 1, 1]);
         let weighted = context(&[70, 10, 10, 10]);
         let start = equal.leader(0);
-
         assert_eq!(weighted.leader(0), start);
         assert_eq!(equal.leader(4), start);
         assert_eq!(weighted.leader(17), equal.leader(17));

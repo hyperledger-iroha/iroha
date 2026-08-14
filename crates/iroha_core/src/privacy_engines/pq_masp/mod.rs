@@ -5,7 +5,6 @@
 //! and deterministic compiled profile are wired into typed runtime dispatch.
 //! Compilation does not create or activate a lifecycle record; governed
 //! deployment remains gated on the explicit release checks.
-
 pub(crate) mod air;
 mod facade;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -13,7 +12,6 @@ mod fixture;
 pub(crate) mod relation;
 pub(crate) mod stark;
 pub(crate) mod wire;
-
 pub use facade::{
     PqMaspProofErrorV1, encrypt_pq_masp_note_v1, encrypt_pq_masp_note_v1_with_rng,
     prove_pq_masp_v1, prove_pq_masp_v1_with_rng, verify_pq_masp_v1,

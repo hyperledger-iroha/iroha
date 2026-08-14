@@ -1,13 +1,10 @@
 //! End-to-end canonical entity registration calls through the pointer ABI.
-
-use std::collections::HashMap;
-
 use ivm::{
     IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::WsvHost,
 };
+use std::collections::HashMap;
 mod common;
-
 #[test]
 fn kotodama_register_account_and_unregister_asset() {
     // Program: register domain, then register an account, then register asset and unregister it
@@ -24,7 +21,6 @@ fn kotodama_register_account_and_unregister_asset() {
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-
     // Prepare WSV host with permissions for the caller
     let _domain: ivm::mock_wsv::DomainId =
         iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -38,11 +34,9 @@ fn kotodama_register_account_and_unregister_asset() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-
     let account_map: HashMap<u64, ivm::mock_wsv::AccountId> = HashMap::new();
     let asset_map: HashMap<u64, ivm::AssetDefinitionId> = HashMap::new();
     let host = WsvHost::new_with_subject_map(wsv, caller.clone(), account_map, asset_map);
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

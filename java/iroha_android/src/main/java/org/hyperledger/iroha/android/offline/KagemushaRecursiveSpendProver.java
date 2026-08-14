@@ -15,6 +15,8 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -1814,8 +1816,9 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static ToriiClient newToriiClient(
-      final URI baseUri, final TransportExecutor transport) {
-    return new ToriiClient(baseUri, transport);
+      final URI baseUri, final TransportExecutor transport,
+      final LocalSigningContext localSigningContext) {
+    return new ToriiClient(baseUri, transport, localSigningContext);
   }
 
   static boolean isExactBridgeAbi(final int abiVersion) {
@@ -4485,10 +4488,13 @@ public final class KagemushaRecursiveSpendProver {
 
     private final String baseUri;
     private final TransportExecutor transport;
+    private final LocalSigningContext localSigningContext;
 
-    private ToriiClient(final URI baseUri, final TransportExecutor transport) {
+    private ToriiClient(final URI baseUri, final TransportExecutor transport,
+        final LocalSigningContext localSigningContext) {
       Objects.requireNonNull(baseUri, "baseUri");
       this.transport = Objects.requireNonNull(transport, "transport");
+      this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
       if (!baseUri.isAbsolute()
           || baseUri.getRawQuery() != null
           || baseUri.getRawFragment() != null
@@ -4516,16 +4522,10 @@ public final class KagemushaRecursiveSpendProver {
     }
 
     public CompletableFuture<RecipientRegistrationLineage> getRecipientRegistrationLineage(
-        final RecipientLineageQueryV2 query) {
+        final RecipientLineageQueryV2 query, final ToriiCanonicalRequestAuth canonicalAuth) {
       return execute(
-              TransportRequest.builder()
-                  .setMethod("POST")
-                  .setUri(URI.create(baseUri + RECEIVER_LINEAGE_PATH))
-                  .addHeader("Accept", NORITO_MEDIA_TYPE)
-                  .addHeader("Content-Type", NORITO_MEDIA_TYPE)
-                  .setBody(Objects.requireNonNull(query, "query").noritoEncoded())
-                  .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
-                  .build(),
+              KagemushaToriiLineageRequest.build(
+                  baseUri, query, localSigningContext, canonicalAuth),
               200)
           .thenApply(response -> new RecipientRegistrationLineage(response.body()));
     }

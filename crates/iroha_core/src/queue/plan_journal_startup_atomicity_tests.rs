@@ -1,5 +1,4 @@
 // QueuePlan startup replay and receipt-publication atomicity regressions.
-
 #[test]
 fn queue_plan_journal_replays_matching_plan_after_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -28,7 +27,6 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
             .expect("install journal"),
         0
     );
-
     let tx = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);
     let hash = tx.hash();
@@ -46,7 +44,6 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
         .expect("journal metadata before replay")
         .len();
     drop(queue);
-
     let replay_queue =
         Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
     assert_eq!(
@@ -58,7 +55,6 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
     let summary = replay_queue
         .replay_plan_journal(&state)
         .expect("replay journal");
-
     assert_eq!(summary.records, 1);
     assert_eq!(summary.replayed, 1);
     let journal_len_after_replay = std::fs::metadata(&journal_path)
@@ -86,7 +82,6 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
         payload.as_slice()
     );
 }
-
 #[test]
 fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -124,7 +119,6 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
         .expect("persist exact QueuePlan claim");
     drop(queue);
-
     let replay_queue =
         Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
     assert_eq!(
@@ -161,7 +155,6 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
         1,
         "receipt preflight failure must retain the exact durable claim for retry"
     );
-
     let summary = replay_queue
         .replay_plan_journal(&state)
         .expect("one-shot receipt fault must leave a clean retry boundary");
@@ -174,7 +167,6 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
             .is_some()
     );
 }
-
 #[test]
 fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_stutter() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -214,7 +206,6 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
         .expect("persist exact QueuePlan claim");
     drop(queue);
-
     {
         let mut transactions = state.transactions.block();
         transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
@@ -222,7 +213,6 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
             .commit()
             .expect("commit replay fixture transaction");
     }
-
     let replay_queue =
         Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
     assert_eq!(
@@ -256,7 +246,6 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
         0,
         "a canonically committed owner may be durably removed before receipt observation",
     );
-
     assert_eq!(
         replay_queue
             .replay_plan_journal(&state)
@@ -273,7 +262,6 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
             .is_some()
     );
 }
-
 #[test]
 fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_suffix() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -305,7 +293,6 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
     queue
         .install_plan_journal(&journal_path, 1024 * 1024, true)
         .expect("install journal");
-
     let terminal = accepted_tx_by_someone(&time_source);
     let live = accepted_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(&mut state, &terminal);
@@ -325,7 +312,6 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
         .push_with_lane_with_state_and_routing_plan_strict_durable(live, &state, live_plan)
         .expect("persist live QueuePlan claim");
     drop(queue);
-
     {
         let mut transactions = state.transactions.block();
         transactions.insert_block_with_single_tx(terminal_hash, nonzero!(1_usize));
@@ -333,7 +319,6 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
             .commit()
             .expect("commit only the terminal replay transaction");
     }
-
     let replay_queue =
         Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
     assert_eq!(
@@ -367,7 +352,6 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
         1,
         "terminal cleanup must retain the independently live durable suffix",
     );
-
     let summary = replay_queue
         .replay_plan_journal(&state)
         .expect("retry authenticates and publishes the retained live suffix");
@@ -376,10 +360,7 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
     assert_eq!(replay_queue.active_len(), 1);
     assert!(!replay_queue.txs.contains_key(&terminal_hash));
     assert!(replay_queue.txs.contains_key(&live_hash));
-    assert_eq!(
-        replay_queue.fifo_snapshot_for_test(),
-        vec![live_hash]
-    );
+    assert_eq!(replay_queue.fifo_snapshot_for_test(), vec![live_hash]);
     assert!(
         replay_queue
             .plan_journal_startup_replay_receipt

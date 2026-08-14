@@ -1,5 +1,3 @@
-/// <reference types="node" />
-
 export interface ToriiBlockMerkleProof {
   readonly leaf_index: number;
   readonly audit_path: ReadonlyArray<string | null>;
@@ -95,12 +93,12 @@ export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: 16777216;
 
 export interface AuthenticatedBlockProofInputV1 {
   readonly version: 1;
-  /** Application-pinned canonical ChainId; this must not be sourced from the response. */
-  readonly chainId: string;
+  /** Application-pinned exact genesis-derived NetworkId; this must not be sourced from the response. */
+  readonly networkId: string;
   /** Application-pinned marked 32-byte HeightContextId. */
-  readonly trustedContextId: ArrayBufferView | ArrayBuffer | Buffer;
+  readonly trustedContextId: ArrayBufferView | ArrayBuffer;
   /** Application-selected marked 32-byte transaction entrypoint hash. */
-  readonly expectedEntryHash: ArrayBufferView | ArrayBuffer | Buffer;
+  readonly expectedEntryHash: ArrayBufferView | ArrayBuffer;
   /**
    * Optional last verified BridgeFinalityProof. When present, the target proof
    * must be its immediate cryptographic successor.
@@ -108,14 +106,13 @@ export interface AuthenticatedBlockProofInputV1 {
   readonly previousFinalityProofNorito?:
     | ArrayBufferView
     | ArrayBuffer
-    | Buffer
     | null;
   /** Canonical Norito BridgeFinalityProof for the target block. */
-  readonly finalityProofNorito: ArrayBufferView | ArrayBuffer | Buffer;
+  readonly finalityProofNorito: ArrayBufferView | ArrayBuffer;
   /** Exact canonical executed SignedBlockWire for the target block. */
-  readonly executedBlockWire: ArrayBufferView | ArrayBuffer | Buffer;
+  readonly executedBlockWire: ArrayBufferView | ArrayBuffer;
   /** Canonical Norito BlockProofs response returned by Torii. */
-  readonly blockProofsNorito: ArrayBufferView | ArrayBuffer | Buffer;
+  readonly blockProofsNorito: ArrayBufferView | ArrayBuffer;
 }
 
 export interface AuthenticatedBlockProofVerdictV1 {

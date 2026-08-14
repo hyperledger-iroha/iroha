@@ -1,24 +1,19 @@
 //! End-to-end tests for canonical role and permission builtins.
-
-use std::collections::HashMap;
-
 use ivm::{
     IVM,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
+use std::collections::HashMap;
 mod common;
-
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_CALLER_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-
 fn literal_account() -> ivm::mock_wsv::AccountId {
     iroha_data_model::account::AccountId::parse_encoded(TEST_ACCOUNT_LITERAL)
         .expect("parse test account literal")
         .into_account_id()
 }
-
 fn public_key_account() -> ivm::mock_wsv::AccountId {
     ivm::mock_wsv::AccountId::new(
         TEST_CALLER_PUBLIC_KEY
@@ -26,7 +21,6 @@ fn public_key_account() -> ivm::mock_wsv::AccountId {
             .expect("test public key must parse"),
     )
 }
-
 #[test]
 fn kotodama_create_and_grant_role_enables_mint() {
     let src = r#"
@@ -56,7 +50,6 @@ fn kotodama_create_and_grant_role_enables_mint() {
     vm.run()
         .expect("program should execute with role-created permissions");
 }
-
 #[test]
 fn kotodama_grant_role_accepts_runtime_account_argument() {
     let src = r#"
@@ -89,7 +82,6 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     vm.run()
         .expect("grant_role should accept runtime account arguments");
 }
-
 #[test]
 fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let src = r#"
@@ -118,7 +110,6 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     vm.run()
         .expect("grant_permission should accept runtime account arguments");
 }
-
 #[test]
 fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() {
     let src = r#"
@@ -149,7 +140,6 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     vm.run()
         .expect("runtime account arguments must survive intervening syscalls");
 }
-
 #[test]
 fn kotodama_authority_matches_domainless_account_literal() {
     let src = r#"

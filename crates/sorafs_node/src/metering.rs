@@ -5,24 +5,19 @@
 //! surface deterministic counters (GiB reserved, GiB released, order counts,
 //! uptime, PoR/PDP/PoTR health, and egress totals) that higher layers can
 //! translate into Norito telemetry payloads and fee accrual reports.
-
+use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
+use iroha_data_model::prelude::{Numeric, Quantity};
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use iroha_data_model::prelude::{Numeric, Quantity};
-
-use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
-
 /// Outstanding replication order tracked for utilisation accounting.
 #[derive(Debug, Clone, Copy)]
 struct OutstandingAllocation {
     slice_gib: u64,
     issued_at: u64,
 }
-
 /// Usage sample emitted when a replication order completes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplicationUsageSample {
@@ -31,7 +26,6 @@ pub struct ReplicationUsageSample {
     /// Duration in seconds between scheduling and completion.
     pub duration_secs: u64,
 }
-
 impl ReplicationUsageSample {
     /// Construct a new usage sample.
     #[must_use]
@@ -42,13 +36,11 @@ impl ReplicationUsageSample {
         }
     }
 }
-
 /// Parameters for exponential moving average smoothing.
 #[derive(Debug, Clone, Copy)]
 pub struct SmoothingParams {
     alpha: f64,
 }
-
 impl SmoothingParams {
     /// Construct a smoothing configuration, returning `None` when `alpha <= 0.0`.
     #[must_use]
@@ -61,21 +53,18 @@ impl SmoothingParams {
             })
         }
     }
-
     /// Return the smoothing factor (0 – 1 range) associated with this configuration.
     #[must_use]
     pub const fn alpha(self) -> f64 {
         self.alpha
     }
 }
-
 /// Optional smoothing configuration for metering outputs.
 #[derive(Debug, Clone, Copy)]
 pub struct SmoothingConfig {
     gib_hours: Option<SmoothingParams>,
     por_success: Option<SmoothingParams>,
 }
-
 impl SmoothingConfig {
     /// Return a configuration with all smoothing disabled.
     #[must_use]
@@ -85,7 +74,6 @@ impl SmoothingConfig {
             por_success: None,
         }
     }
-
     /// Construct a configuration from optional alpha parameters.
     #[must_use]
     pub fn from_optional_alphas(
@@ -97,39 +85,33 @@ impl SmoothingConfig {
             por_success: por_success_alpha.and_then(SmoothingParams::new),
         }
     }
-
     /// Access the smoothing configuration for accumulated GiB·hours.
     #[must_use]
     pub const fn gib_hours(&self) -> Option<SmoothingParams> {
         self.gib_hours
     }
-
     /// Access the smoothing configuration for PoR success sampling.
     #[must_use]
     pub const fn por_success(&self) -> Option<SmoothingParams> {
         self.por_success
     }
-
     /// Return `true` when all smoothing knobs are disabled.
     #[must_use]
     pub const fn is_disabled(&self) -> bool {
         self.gib_hours.is_none() && self.por_success.is_none()
     }
 }
-
 impl Default for SmoothingConfig {
     fn default() -> Self {
         Self::disabled()
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 struct SmoothingRuntime {
     config: SmoothingConfig,
     gib_hours: Option<f64>,
     por_success_bps: Option<f64>,
 }
-
 impl SmoothingRuntime {
     fn new(config: SmoothingConfig) -> Self {
         Self {
@@ -138,12 +120,10 @@ impl SmoothingRuntime {
             por_success_bps: None,
         }
     }
-
     fn reset(&mut self) {
         self.gib_hours = None;
         self.por_success_bps = None;
     }
-
     fn update_gib_hours(&mut self, raw: f64) -> Option<f64> {
         match self.config.gib_hours {
             Some(params) => {
@@ -161,7 +141,6 @@ impl SmoothingRuntime {
             }
         }
     }
-
     fn update_por_success_bps(&mut self, raw: f64) -> Option<f64> {
         match self.config.por_success {
             Some(params) => {
@@ -180,13 +159,11 @@ impl SmoothingRuntime {
         }
     }
 }
-
 impl Default for SmoothingRuntime {
     fn default() -> Self {
         Self::new(SmoothingConfig::default())
     }
 }
-
 #[derive(Debug, Default, Clone)]
 struct WindowCounters {
     window_start_epoch: Option<u64>,
@@ -209,28 +186,24 @@ struct WindowCounters {
     por_success_smoothed_bps: Option<f64>,
     notes: Option<String>,
 }
-
 impl WindowCounters {
     fn apply_effective_override(&mut self, effective_gib: u64) {
         let capped = effective_gib.min(self.declared_gib);
         self.effective_gib = capped;
         self.deductions_gib = self.declared_gib.saturating_sub(capped);
     }
-
     fn apply_deductions(&mut self, deducted_gib: u64) {
         let capped = deducted_gib.min(self.declared_gib);
         self.deductions_gib = capped;
         self.effective_gib = self.declared_gib.saturating_sub(capped);
     }
 }
-
 #[derive(Debug)]
 struct MeterState {
     window: WindowCounters,
     outstanding: HashMap<[u8; 32], OutstandingAllocation>,
     smoothing: SmoothingRuntime,
 }
-
 impl MeterState {
     fn new(config: SmoothingConfig) -> Self {
         Self {
@@ -239,20 +212,17 @@ impl MeterState {
             smoothing: SmoothingRuntime::new(config),
         }
     }
-
     fn outstanding_total_gib(&self) -> u64 {
         self.outstanding
             .values()
             .fold(0_u64, |acc, entry| acc.saturating_add(entry.slice_gib))
     }
 }
-
 impl Default for MeterState {
     fn default() -> Self {
         Self::new(SmoothingConfig::default())
     }
 }
-
 /// Immutable snapshot of the current metering counters.
 #[derive(Debug, Clone, Default)]
 pub struct MeteringSnapshot {
@@ -303,7 +273,6 @@ pub struct MeteringSnapshot {
     /// Optional notes carried alongside telemetry.
     pub notes: Option<String>,
 }
-
 /// Deterministic fee projection derived from a [`MeteringSnapshot`].
 #[derive(Debug, Clone)]
 pub struct FeeProjection {
@@ -330,7 +299,6 @@ pub struct FeeProjection {
     /// Exact fee increment derived from the snapshot.
     pub fee: Quantity,
 }
-
 impl FeeProjection {
     /// Derive a fee projection from `snapshot`, returning `None` when mandatory
     /// window bounds are missing or invalid.
@@ -342,7 +310,6 @@ impl FeeProjection {
             return None;
         }
         let window_duration_secs = end.saturating_sub(start);
-
         let uptime_bps = snapshot.uptime_bps.min(10_000);
         let por_success_bps = snapshot.por_success_bps.min(10_000);
         // The nominal rate is one micro-XOR per utilised GiB. Combine both
@@ -356,7 +323,6 @@ impl FeeProjection {
                 &Numeric::from(100_000_000_000_000u64),
             )
             .ok()?;
-
         Some(Self {
             provider_id,
             window_start_epoch: start,
@@ -371,14 +337,12 @@ impl FeeProjection {
             fee,
         })
     }
-
     /// Convenience helper returning accumulated GiB·hours as a floating-point value.
     #[must_use]
     pub fn accumulated_gib_hours(&self) -> f64 {
         self.accumulated_gib_seconds as f64 / SECONDS_PER_HOUR as f64
     }
 }
-
 /// Accumulates per-window capacity metrics for a provider.
 ///
 /// The meter is intentionally conservative: it only relies on deterministic
@@ -389,14 +353,12 @@ impl FeeProjection {
 pub struct CapacityMeter {
     state: Arc<RwLock<MeterState>>,
 }
-
 impl CapacityMeter {
     /// Construct a new meter with no active window.
     #[must_use]
     pub fn new() -> Self {
         Self::with_smoothing(SmoothingConfig::default())
     }
-
     /// Construct a new meter with the provided smoothing configuration.
     #[must_use]
     pub fn with_smoothing(config: SmoothingConfig) -> Self {
@@ -404,7 +366,6 @@ impl CapacityMeter {
             state: Arc::new(RwLock::new(MeterState::new(config))),
         }
     }
-
     /// Update the smoothing configuration, resetting cached EMA values.
     pub fn configure_smoothing(&self, config: SmoothingConfig) {
         let mut guard = self.state.write().expect("metering state poisoned");
@@ -412,7 +373,6 @@ impl CapacityMeter {
         guard.window.gib_hours_smoothed = None;
         guard.window.por_success_smoothed_bps = None;
     }
-
     /// Reset counters for a freshly registered capacity declaration.
     ///
     /// This clears outstanding allocations (they should be empty after a
@@ -431,7 +391,6 @@ impl CapacityMeter {
         };
         guard.smoothing.reset();
     }
-
     /// Rebuild declaration and outstanding-order gauges from a durable capacity checkpoint.
     pub(crate) fn restore_capacity_runtime(
         &self,
@@ -462,7 +421,6 @@ impl CapacityMeter {
         };
         guard.smoothing.reset();
     }
-
     /// Clear declaration and outstanding-order gauges after an authoritative rebuild removes the
     /// local provider declaration.
     pub(crate) fn clear_capacity_runtime(&self) {
@@ -471,7 +429,6 @@ impl CapacityMeter {
         guard.window = WindowCounters::default();
         guard.smoothing.reset();
     }
-
     /// Update the declared capacity counters (GiB).
     pub fn record_declared_gib(&self, declared_gib: u64) {
         let mut guard = self.state.write().expect("metering state poisoned");
@@ -480,21 +437,18 @@ impl CapacityMeter {
         let deductions = guard.window.deductions_gib.min(guard.window.declared_gib);
         guard.window.apply_deductions(deductions);
     }
-
     /// Explicitly set the effective GiB recorded for the current window.
     /// Saturates the value against the declared capacity and updates the tracked deduction.
     pub fn record_effective_gib(&self, effective_gib: u64) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.window.apply_effective_override(effective_gib);
     }
-
     /// Apply governance deductions (in GiB) to the current window.
     /// The resulting effective GiB becomes `declared_gib - deducted_gib` (never negative).
     pub fn apply_capacity_deduction(&self, deducted_gib: u64) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.window.apply_deductions(deducted_gib);
     }
-
     /// Record that an order has been scheduled for the active provider.
     pub fn on_order_scheduled(&self, plan: &ReplicationPlan) {
         let mut guard = self.state.write().expect("metering state poisoned");
@@ -507,13 +461,11 @@ impl CapacityMeter {
             },
         );
     }
-
     /// Record that an order has been completed and moved out of the backlog.
     pub fn on_order_completed(&self, release: &ReplicationRelease) -> ReplicationUsageSample {
         let completed_at = current_unix_epoch_secs();
         self.on_order_completed_at(release, completed_at)
     }
-
     /// Record that an order has been completed at a specific timestamp.
     ///
     /// This helper is primarily used by tests to inject deterministic timestamps.
@@ -539,25 +491,21 @@ impl CapacityMeter {
         guard.window.utilised_gib = guard.window.utilised_gib.saturating_add(slice_gib);
         ReplicationUsageSample::new(slice_gib, duration_secs)
     }
-
     /// Mark the current telemetry window as closed at `epoch`.
     pub fn close_window(&self, epoch: u64) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.window.window_end_epoch = Some(epoch);
     }
-
     /// Override the uptime basis-points metric for the current window.
     pub fn record_uptime_bps(&self, uptime_bps: u32) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.window.uptime_bps = uptime_bps.min(10_000);
     }
-
     /// Override the PoR success basis-points metric for the current window.
     pub fn record_por_success_bps(&self, por_success_bps: u32) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.window.por_success_bps = por_success_bps.min(10_000);
     }
-
     /// Record a single uptime probe result.
     pub fn record_uptime_sample(&self, success: bool) {
         let mut guard = self.state.write().expect("metering state poisoned");
@@ -571,12 +519,10 @@ impl CapacityMeter {
             guard.window.uptime_samples_total,
         );
     }
-
     /// Record a single PoR probe result.
     pub fn record_por_sample(&self, success: bool) {
         self.record_por_samples(if success { 1 } else { 0 }, if success { 0 } else { 1 });
     }
-
     /// Record aggregated PoR probe results.
     pub fn record_por_samples(&self, success: u64, failed: u64) {
         if success == 0 && failed == 0 {
@@ -591,7 +537,6 @@ impl CapacityMeter {
             guard.window.por_samples_total,
         );
     }
-
     /// Record that a replication order failed prior to completion.
     pub fn record_replication_failure(&self, order_id: [u8; 32]) -> Option<ReplicationUsageSample> {
         let mut guard = self.state.write().expect("metering state poisoned");
@@ -603,20 +548,17 @@ impl CapacityMeter {
         guard.window.gib_seconds_accum = guard.window.gib_seconds_accum.saturating_add(delta);
         Some(ReplicationUsageSample::new(allocation.slice_gib, elapsed))
     }
-
     /// Attach free-form notes that will be exposed alongside telemetry.
     pub fn set_notes(&self, notes: Option<String>) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.window.notes = notes.filter(|s| !s.trim().is_empty());
     }
-
     /// Produce a snapshot of the current counters.
     #[must_use]
     pub fn snapshot(&self) -> MeteringSnapshot {
         let now = current_unix_epoch_secs();
         self.snapshot_at(now)
     }
-
     /// Produce a snapshot of the current counters observed at `now_secs`.
     #[must_use]
     pub fn snapshot_at(&self, now_secs: u64) -> MeteringSnapshot {
@@ -633,7 +575,6 @@ impl CapacityMeter {
             .update_gib_hours(accumulated_gib_hours)
             .map(|value| value.max(0.0));
         guard.window.gib_hours_smoothed = smoothed_gib_hours;
-
         let raw_por_bps = guard.window.por_success_bps as f64;
         let smoothed_por_bps = guard
             .smoothing
@@ -642,7 +583,6 @@ impl CapacityMeter {
         guard.window.por_success_smoothed_bps = smoothed_por_bps;
         let smoothed_por_bps_u32 =
             smoothed_por_bps.map(|value| value.round().clamp(0.0, 10_000.0) as u32);
-
         MeteringSnapshot {
             window_start_epoch: guard.window.window_start_epoch,
             window_end_epoch: guard.window.window_end_epoch,
@@ -669,7 +609,6 @@ impl CapacityMeter {
             notes: guard.window.notes.clone(),
         }
     }
-
     /// Borrow the underlying shared state, primarily for tests.
     #[cfg(test)]
     fn outstanding_len(&self) -> usize {
@@ -677,22 +616,18 @@ impl CapacityMeter {
         guard.outstanding.len()
     }
 }
-
 impl Default for CapacityMeter {
     fn default() -> Self {
         Self::new()
     }
 }
-
 const SECONDS_PER_HOUR: u64 = 3_600;
-
 fn current_unix_epoch_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_secs()
 }
-
 fn ratio_to_bps(success: u64, total: u64) -> u32 {
     if total == 0 {
         return 0;
@@ -700,14 +635,11 @@ fn ratio_to_bps(success: u64, total: u64) -> u32 {
     let scaled = u128::from(success) * 10_000 / u128::from(total);
     u32::try_from(scaled.min(10_000)).expect("basis points fit u32")
 }
-
 #[cfg(test)]
 mod tests {
-    use sorafs_manifest::capacity::ReplicationOrderSlaV1;
-
     use super::*;
     use crate::capacity::ReplicationPlan;
-
+    use sorafs_manifest::capacity::ReplicationOrderSlaV1;
     #[test]
     fn meter_tracks_orders() {
         let meter = CapacityMeter::new();
@@ -717,7 +649,6 @@ mod tests {
             valid_until_epoch: 20,
         };
         meter.reset_for_declaration(512, window);
-
         let plan = ReplicationPlan {
             order_id: [0xAB; 32],
             provider_id: [0x11; 32],
@@ -738,10 +669,8 @@ mod tests {
             },
             metadata: Vec::new(),
         };
-
         meter.on_order_scheduled(&plan);
         assert_eq!(meter.outstanding_len(), 1);
-
         let release = ReplicationRelease {
             order_id: plan.order_id,
             provider_id: plan.provider_id,
@@ -751,10 +680,8 @@ mod tests {
             lane: plan.lane.clone(),
             remaining_lane_gib: plan.remaining_lane_gib,
         };
-
         let usage_sample = meter.on_order_completed_at(&release, plan.issued_at + 600);
         assert_eq!(meter.outstanding_len(), 0);
-
         let snapshot = meter.snapshot_at(plan.issued_at + 600);
         assert_eq!(snapshot.declared_gib, 512);
         assert_eq!(snapshot.utilised_gib, 128);
@@ -768,7 +695,6 @@ mod tests {
         assert!(snapshot.smoothed_por_success_bps.is_none());
         assert_eq!(usage_sample, ReplicationUsageSample::new(128, 600));
     }
-
     #[test]
     fn uptime_and_por_samples_update_rates() {
         let meter = CapacityMeter::new();
@@ -777,7 +703,6 @@ mod tests {
         meter.record_por_sample(true);
         meter.record_por_sample(true);
         meter.record_por_sample(false);
-
         let snapshot = meter.snapshot();
         assert_eq!(snapshot.uptime_samples_total, 2);
         assert_eq!(snapshot.uptime_samples_success, 1);
@@ -788,7 +713,6 @@ mod tests {
         assert!(snapshot.smoothed_gib_hours.is_none());
         assert!(snapshot.smoothed_por_success_bps.is_none());
     }
-
     #[test]
     fn smoothing_applies_ema_when_enabled() {
         let smoothing = SmoothingConfig::from_optional_alphas(Some(0.5), Some(0.25));
@@ -799,7 +723,6 @@ mod tests {
             valid_until_epoch: 20,
         };
         meter.reset_for_declaration(256, window);
-
         let base_plan = ReplicationPlan {
             order_id: [0x01; 32],
             provider_id: [0x02; 32],
@@ -820,7 +743,6 @@ mod tests {
             },
             metadata: Vec::new(),
         };
-
         meter.on_order_scheduled(&base_plan);
         let release = ReplicationRelease {
             order_id: base_plan.order_id,
@@ -833,7 +755,6 @@ mod tests {
         };
         meter.on_order_completed_at(&release, 600);
         meter.record_por_samples(8, 2); // 80%
-
         let first = meter.snapshot_at(600);
         let raw_first_hours = first.accumulated_gib_hours;
         let smoothed_first_hours = first.smoothed_gib_hours.expect("smoothing enabled");
@@ -842,7 +763,6 @@ mod tests {
             first.smoothed_por_success_bps.expect("por smoothing"),
             first.por_success_bps
         );
-
         let mut second_plan = base_plan;
         second_plan.order_id = [0x03; 32];
         second_plan.issued_at = 600;
@@ -858,12 +778,10 @@ mod tests {
         };
         meter.on_order_completed_at(&release_second, 900);
         meter.record_por_samples(2, 2); // total now 10/12 -> 83.33%
-
         let second = meter.snapshot_at(900);
         let expected_hours = 0.5 * second.accumulated_gib_hours + 0.5 * raw_first_hours;
         let smoothed_second_hours = second.smoothed_gib_hours.expect("hours smoothing retained");
         assert!((smoothed_second_hours - expected_hours).abs() < 1e-6);
-
         let raw_second_por = second.por_success_bps as f64;
         let expected_por =
             (0.25 * raw_second_por + 0.75 * f64::from(first.por_success_bps)).round() as u32;
@@ -872,7 +790,6 @@ mod tests {
             .expect("por smoothing should persist");
         assert_eq!(smoothed_second_por, expected_por);
     }
-
     #[test]
     fn fee_projection_matches_ledger_formula() {
         let meter = CapacityMeter::new();
@@ -882,7 +799,6 @@ mod tests {
             valid_until_epoch: 30,
         };
         meter.reset_for_declaration(512, window);
-
         let plan = ReplicationPlan {
             order_id: [0xCD; 32],
             provider_id: [0x22; 32],
@@ -903,9 +819,7 @@ mod tests {
             },
             metadata: Vec::new(),
         };
-
         meter.on_order_scheduled(&plan);
-
         let release = ReplicationRelease {
             order_id: plan.order_id,
             provider_id: plan.provider_id,
@@ -915,20 +829,16 @@ mod tests {
             lane: plan.lane.clone(),
             remaining_lane_gib: plan.remaining_lane_gib,
         };
-
         meter.on_order_completed_at(&release, plan.issued_at + 600);
-
         meter.record_uptime_sample(true);
         meter.record_uptime_sample(true);
         meter.record_por_sample(true);
         meter.record_por_sample(false);
         meter.close_window(window.valid_until_epoch);
-
         let snapshot = meter.snapshot_at(plan.issued_at + 600);
         let provider_id = [0x55; 32];
         let projection =
             FeeProjection::from_snapshot(provider_id, &snapshot).expect("fee projection");
-
         assert_eq!(projection.provider_id, provider_id);
         assert_eq!(projection.declared_gib, snapshot.declared_gib);
         assert_eq!(projection.utilised_gib, snapshot.utilised_gib);
@@ -936,7 +846,6 @@ mod tests {
             projection.accumulated_gib_seconds,
             snapshot.accumulated_gib_seconds
         );
-
         let uptime_bps = snapshot.uptime_bps.min(10_000);
         let por_bps = snapshot.por_success_bps.min(10_000);
         let expected_fee = Quantity::from(snapshot.utilised_gib)
@@ -946,14 +855,12 @@ mod tests {
             .expect("expected fee is representable");
         assert_eq!(projection.fee, expected_fee);
     }
-
     #[test]
     fn fee_projection_is_exact_at_u64_capacity_boundaries() {
         let mut snapshot = CapacityMeter::new().snapshot();
         snapshot.window_start_epoch = Some(1);
         snapshot.window_end_epoch = Some(2);
         snapshot.utilised_gib = u64::MAX;
-
         for (uptime_bps, por_success_bps, expected) in [
             (10_000, 10_000, "18446744073709.551615"),
             (9_999, 9_999, "18443054909362.25044177251615"),

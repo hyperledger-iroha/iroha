@@ -1,11 +1,4 @@
 //! Encode governance instructions and submit consensus-governed helper transactions.
-
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
-
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -31,13 +24,16 @@ use iroha_sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpPayloadV1, TransferPayloadV1,
     canonical_sccp_payload_bytes, hub_commitment_from_sccp_payload, verify_sccp_payload_structure,
 };
-
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 #[derive(Parser, Debug)]
 struct Args {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Encode a `RegisterCitizen` instruction.
@@ -117,19 +113,15 @@ enum Command {
         fee_payment_json: PathBuf,
     },
 }
-
 fn print_tx_stdin_json(bytes: &[u8]) {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
-
     let encoded = STANDARD.encode(bytes);
     println!("[\"{encoded}\"]");
 }
-
 fn print_json_value(value: &norito::json::Value) -> Result<()> {
     println!("{}", norito::json::to_string(value)?);
     Ok(())
 }
-
 fn insert_string_metadata(
     metadata: &mut Metadata,
     key: &str,
@@ -138,7 +130,6 @@ fn insert_string_metadata(
     metadata.insert(Name::from_str(key)?, Json::new(value.into()));
     Ok(())
 }
-
 fn read_fee_payment(path: &Path) -> Result<FeePaymentIntent> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read fee payment intent `{}`", path.display()))?;
@@ -149,7 +140,6 @@ fn read_fee_payment(path: &Path) -> Result<FeePaymentIntent> {
         .wrap_err("invalid signature-bound fee payment intent")?;
     Ok(intent)
 }
-
 fn read_sccp_route_governance_action(path: &Path) -> Result<SccpRouteGovernanceActionV1> {
     let raw = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read SCCP governance action `{}`", path.display()))?;
@@ -160,7 +150,6 @@ fn read_sccp_route_governance_action(path: &Path) -> Result<SccpRouteGovernanceA
         .map_err(|error| eyre!("invalid SCCP route-governance action: {error}"))?;
     Ok(action)
 }
-
 fn load_config(path: &Path) -> Result<Config> {
     Config::load(LoadPath::Explicit(path.to_path_buf())).map_err(|report| {
         eyre!(
@@ -169,17 +158,14 @@ fn load_config(path: &Path) -> Result<Config> {
         )
     })
 }
-
 fn ivm_execution_vk_id(name: &str) -> VerifyingKeyId {
     VerifyingKeyId::new(iroha_core::zk::ZK_BACKEND_HALO2_IPA, name)
 }
-
 fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<VerifyingKeyId>> {
     let list = client.get_zk_vk_list_json()?;
     let Some(items) = list.as_array() else {
         return Ok(None);
     };
-
     for item in items {
         let id = item.get("id").and_then(norito::json::Value::as_object);
         let record = item.get("record").and_then(norito::json::Value::as_object);
@@ -218,10 +204,8 @@ fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<Verify
             return Ok(Some(VerifyingKeyId::new(backend, name)));
         }
     }
-
     Ok(None)
 }
-
 fn quote_and_sign_governance_transaction(
     client: &Client,
     instructions: Vec<InstructionBox>,
@@ -250,7 +234,6 @@ fn quote_and_sign_governance_transaction(
         .try_sign_transaction_payload(payload)
         .wrap_err(context)
 }
-
 fn ensure_ivm_execution_vk(
     client: &Client,
     vk_name: &str,
@@ -268,7 +251,6 @@ fn ensure_ivm_execution_vk(
         eprintln!("ivm_execution_vk_existing={}", existing.name);
         return Ok(existing);
     }
-
     let record = iroha_core::zk::halo2_ipa_ivm_execution_vk_record("core", 1)
         .map_err(|err| eyre!("failed to build ivm-execution-v1 VK record: {err}"))?;
     let tx = quote_and_sign_governance_transaction(
@@ -304,7 +286,6 @@ fn ensure_ivm_execution_vk(
     eprintln!("ivm_execution_vk_registered={hash}");
     Ok(id)
 }
-
 fn submit_sccp_route_governance_transaction(
     client: &Client,
     tx: &SignedTransaction,
@@ -312,11 +293,9 @@ fn submit_sccp_route_governance_transaction(
     submit_sccp_route_governance_once(|| client.submit_transaction_blocking(tx))
         .map(|hash| hash.to_string())
 }
-
 fn submit_sccp_route_governance_once<T>(submit: impl FnOnce() -> Result<T>) -> Result<T> {
     submit().wrap_err("failed to submit SCCP route-governance transaction")
 }
-
 fn sccp_route_governance_action_label(action: &SccpRouteGovernanceActionV1) -> &'static str {
     match action {
         SccpRouteGovernanceActionV1::Register(_) => "register",
@@ -327,7 +306,6 @@ fn sccp_route_governance_action_label(action: &SccpRouteGovernanceActionV1) -> &
         SccpRouteGovernanceActionV1::Remove(_) => "remove",
     }
 }
-
 fn print_sccp_route_governance_output(
     tx_hash: &str,
     submit_mode: &str,
@@ -342,7 +320,6 @@ fn print_sccp_route_governance_output(
     );
     print_json_value(&norito::json::Value::Object(output))
 }
-
 fn propose_sccp_route_governance(
     config_path: &Path,
     action_path: &Path,
@@ -351,7 +328,6 @@ fn propose_sccp_route_governance(
     let config = load_config(config_path)?;
     let client = Client::new(config.clone());
     let action = read_sccp_route_governance_action(action_path)?;
-
     let mut metadata = Metadata::default();
     insert_string_metadata(&mut metadata, "action", "propose_sccp_route_governance")?;
     insert_string_metadata(
@@ -359,7 +335,6 @@ fn propose_sccp_route_governance(
         "sccp_governance_action",
         sccp_route_governance_action_label(&action),
     )?;
-
     let tx = quote_and_sign_governance_transaction(
         &client,
         vec![InstructionBox::from(ProposeSccpRouteGovernance {
@@ -383,7 +358,6 @@ fn propose_sccp_route_governance(
     let tx_hash = submit_sccp_route_governance_transaction(&client, &tx)?;
     print_sccp_route_governance_output(&tx_hash, "single", &action)
 }
-
 fn parse_canonical_hex32_argument(name: &str, value: &str) -> Result<[u8; 32]> {
     if value.len() != 64
         || !value
@@ -399,7 +373,6 @@ fn parse_canonical_hex32_argument(name: &str, value: &str) -> Result<[u8; 32]> {
         .try_into()
         .map_err(|_| eyre!("{name} must decode to exactly 32 bytes"))
 }
-
 fn parse_sccp_codec_argument(name: &str, codec: u8, value: &str) -> Result<Vec<u8>> {
     match codec {
         iroha_sccp::SCCP_CODEC_CANONICAL_TEXT => Ok(value.as_bytes().to_vec()),
@@ -454,7 +427,6 @@ fn parse_sccp_codec_argument(name: &str, codec: u8, value: &str) -> Result<Vec<u
         _ => Err(eyre!("{name} uses unsupported SCCP codec {codec}")),
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn record_sccp_transfer_payload_bytes(
     source_profile: &str,
@@ -566,7 +538,6 @@ fn record_sccp_transfer_payload_bytes(
     let payload_bytes = canonical_sccp_payload_bytes(&payload)?;
     Ok((hex::encode(commitment.message_id), context, payload_bytes))
 }
-
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -664,12 +635,9 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::Cell, time::Duration};
-
     use iroha::data_model::{ChainId, account::AccountId};
     use iroha_config::parameters::{
         actual::SorafsRolloutPhase,
@@ -681,8 +649,8 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use sorafs_orchestrator::AnonymityPolicy;
+    use std::{cell::Cell, time::Duration};
     use url::Url;
-
     fn default_alias_cache_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(
             Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -695,20 +663,16 @@ mod tests {
             Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
         )
     }
-
     fn default_anonymity_policy() -> AnonymityPolicy {
         AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
     }
-
     fn default_rollout_phase() -> SorafsRolloutPhase {
         SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
     }
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn test_config_with_chain_discriminant(chain_discriminant: u16) -> Config {
         let key_pair = fixture_key_pair(42);
         let account = AccountId::new(key_pair.public_key().clone());
@@ -734,7 +698,6 @@ mod tests {
             sorafs_rollout_phase: default_rollout_phase(),
         }
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(42).algorithm(), Algorithm::Ed25519);
@@ -743,7 +706,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn retired_sccp_ivm_proof_commands_are_not_parseable() {
         for command in [
@@ -757,13 +719,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fee_quote_selection_preserves_payer_revision_and_gas_bound() {
         let requested = FeePaymentIntent::authority(Vec::new(), None);
         let quoted = FeePaymentIntent::authority(Vec::new(), None);
         assert!(requested.has_same_payer_and_gas_bound(&quoted));
-
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let sponsor = iroha::data_model::nexus::FeeSponsorProgramId::new(
             AccountId::new(key_pair.public_key().clone()),
@@ -772,7 +732,6 @@ mod tests {
         let changed = FeePaymentIntent::sponsor(sponsor, 1, Vec::new(), None);
         assert!(!requested.has_same_payer_and_gas_bound(&changed));
     }
-
     #[test]
     fn sccp_governance_submission_never_retries_ambiguous_errors() {
         let attempts = Cell::new(0_u8);
@@ -786,7 +745,6 @@ mod tests {
         assert_eq!(attempts.get(), 1);
         assert!(error.to_string().contains("failed to submit"));
     }
-
     #[test]
     fn exact_governance_payload_checked_signing_verifies() -> Result<()> {
         let config = test_config_with_chain_discriminant(369);
@@ -797,20 +755,17 @@ mod tests {
             Metadata::default(),
         )?;
         let tx = client.try_sign_transaction_payload(payload)?;
-
         tx.verify_signature()
             .wrap_err("verify governance helper signature")?;
         assert_eq!(tx.authority(), &config.account);
         Ok(())
     }
-
     #[test]
     fn route_governance_action_reader_is_strict_and_validates_static_invariants() -> Result<()> {
         use iroha::data_model::{
             bridge::{SccpLaneIdV1, SccpNetworkV1, SccpRouteKeyV1},
             isi::bridge::SccpRouteGovernanceActionV1,
         };
-
         let action = SccpRouteGovernanceActionV1::Remove(SccpRouteKeyV1 {
             lane_id: SccpLaneIdV1 {
                 source: SccpNetworkV1::EthereumMainnet,
@@ -824,7 +779,6 @@ mod tests {
         let file = tempfile::NamedTempFile::new()?;
         std::fs::write(file.path(), &canonical)?;
         assert_eq!(read_sccp_route_governance_action(file.path())?, action);
-
         let unknown = canonical.replacen(
             "\"revision\":1",
             "\"revision\":1,\"future_authority\":true",
@@ -839,7 +793,6 @@ mod tests {
             read_sccp_route_governance_action(file.path()).is_err(),
             "unknown governance fields must fail closed"
         );
-
         let invalid = canonical.replacen("\"revision\":1", "\"revision\":0", 1);
         assert_ne!(
             invalid, canonical,
@@ -852,7 +805,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn canonical_hash_arguments_reject_aliases_and_malformed_values() {
         let valid = "ab".repeat(32);
@@ -874,7 +826,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn solana_pubkey_codec_rejects_aliases_and_malformed_values() {
         let valid = "ab".repeat(32);
@@ -906,7 +857,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn record_sccp_transfer_rejects_zero_revision_and_aliased_context_commitments() {
         let build = |binding: String, configuration: String, revision| {
@@ -929,13 +879,11 @@ mod tests {
                 "taira_eth_xor",
             )
         };
-
         assert!(build("11".repeat(32), "12".repeat(32), 0).is_err());
         assert!(build("11".repeat(32), "11".repeat(32), 1).is_err());
         assert!(build("00".repeat(32), "12".repeat(32), 1).is_err());
         assert!(build("11".repeat(32), "00".repeat(32), 1).is_err());
     }
-
     #[test]
     fn record_sccp_transfer_payload_rejects_prefixed_evm_recipient() {
         let err = record_sccp_transfer_payload_bytes(
@@ -957,10 +905,8 @@ mod tests {
             "taira_eth_xor",
         )
         .expect_err("prefixed EVM recipient should be rejected");
-
         assert!(err.to_string().contains("unprefixed lowercase hexadecimal"));
     }
-
     #[test]
     fn record_sccp_transfer_payload_accepts_canonical_tron_recipient() {
         let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
@@ -982,13 +928,11 @@ mod tests {
             "taira_tron_xor",
         )
         .expect("canonical TRON recipient should be accepted");
-
         assert_eq!(message_id.len(), 64);
         assert_eq!(context.lane.source, SccpNetworkV1::SoraTaira);
         assert_eq!(context.lane.target, SccpNetworkV1::TronMainnet);
         assert!(!payload_bytes.is_empty());
     }
-
     #[test]
     fn record_sccp_transfer_payload_accepts_canonical_solana_recipient() {
         let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
@@ -1010,13 +954,11 @@ mod tests {
             iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
         )
         .expect("canonical Solana recipient should be accepted");
-
         assert_eq!(message_id.len(), 64);
         assert_eq!(context.lane.source, SccpNetworkV1::SoraTaira);
         assert_eq!(context.lane.target, SccpNetworkV1::SolanaTestnet);
         assert!(!payload_bytes.is_empty());
     }
-
     #[test]
     fn record_sccp_transfer_payload_rejects_cross_family_or_non_xor_identity() {
         let build =
@@ -1040,7 +982,6 @@ mod tests {
                     route,
                 )
             };
-
         assert!(
             build(
                 "ethereum-mainnet",
@@ -1082,7 +1023,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn record_sccp_transfer_payload_rejects_aliases_wrong_direction_and_zero_binding() {
         let cases = [
@@ -1129,7 +1069,6 @@ mod tests {
                 "nonzero distinct destination-binding",
             ),
         ];
-
         for (source, target, binding, expected) in cases {
             let error = record_sccp_transfer_payload_bytes(
                 source,

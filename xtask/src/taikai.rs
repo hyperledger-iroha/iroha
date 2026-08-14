@@ -1,17 +1,14 @@
+use crate::{JsonTarget, write_json_output};
+use blake3::Hasher;
+use eyre::{Context as _, Result, ensure, eyre};
+use iroha_data_model::taikai::{REPLICATION_PROOF_TOKEN_VERSION_V1, ReplicationProofTokenV1};
+use norito::{codec::Decode, derive::JsonSerialize, json};
 use std::{
     borrow::Cow,
     fs,
     io::Read,
     path::{Path, PathBuf},
 };
-
-use blake3::Hasher;
-use eyre::{Context as _, Result, ensure, eyre};
-use iroha_data_model::taikai::{REPLICATION_PROOF_TOKEN_VERSION_V1, ReplicationProofTokenV1};
-use norito::{codec::Decode, derive::JsonSerialize, json};
-
-use crate::{JsonTarget, write_json_output};
-
 #[derive(Debug)]
 pub struct RptVerifyOptions {
     pub envelope_path: PathBuf,
@@ -20,14 +17,12 @@ pub struct RptVerifyOptions {
     pub bundle_path: Option<PathBuf>,
     pub output: Option<JsonTarget>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct DigestCheck {
     expected: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     verified_from: Option<String>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct RptVerificationReport {
     envelope_path: String,
@@ -44,7 +39,6 @@ struct RptVerificationReport {
     #[norito(skip_serializing_if = "Option::is_none")]
     notes: Option<String>,
 }
-
 pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
     let envelope_path = options.envelope_path.clone();
     let rpt = load_rpt(&envelope_path)?;
@@ -96,7 +90,6 @@ pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
     } else {
         None
     };
-
     let report = RptVerificationReport {
         envelope_path: envelope_path.display().to_string(),
         schema_version: rpt.schema_version,
@@ -122,7 +115,6 @@ pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
         valid_until_unix: rpt.valid_until_unix,
         notes: rpt.notes.clone(),
     };
-
     if let Some(target) = options.output {
         let value = json::to_value(&report)?;
         write_json_output(&value, target).map_err(|err| eyre!(err.to_string()))?;
@@ -131,7 +123,6 @@ pub fn run_rpt_verify(options: RptVerifyOptions) -> Result<()> {
     }
     Ok(())
 }
-
 fn load_rpt(path: &Path) -> Result<ReplicationProofTokenV1> {
     let bytes = fs::read(path).wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
     {
@@ -148,7 +139,6 @@ fn load_rpt(path: &Path) -> Result<ReplicationProofTokenV1> {
     })?;
     json::from_str(&text).wrap_err_with(|| format!("failed to parse RPT JSON `{}`", path.display()))
 }
-
 fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
@@ -162,7 +152,6 @@ fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     hash_file_entry(path, &relative, &mut hasher)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
@@ -182,7 +171,6 @@ fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
@@ -197,7 +185,6 @@ fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
         ))
     }
 }
-
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'F', hasher);
     let mut file =
@@ -214,7 +201,6 @@ fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
     }
     Ok(())
 }
-
 fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'D', hasher);
     let mut entries = Vec::new();
@@ -238,7 +224,6 @@ fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Re
     }
     Ok(())
 }
-
 fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) {
     let label: Cow<'_, str> = if relative.as_os_str().is_empty() {
         Cow::Borrowed(".")
@@ -248,11 +233,9 @@ fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) {
     hasher.update(label.as_bytes());
     hasher.update(&[0xFF, kind]);
 }
-
 fn to_hex(digest: &[u8; 32]) -> String {
     hex::encode_upper(digest)
 }
-
 fn print_report(report: &RptVerificationReport) {
     println!("Taikai replication proof token verified");
     println!("  envelope: {}", report.envelope_path);
@@ -277,31 +260,25 @@ fn print_report(report: &RptVerificationReport) {
         println!("  notes: {notes}");
     }
 }
-
 fn print_digest(label: &str, digest: &DigestCheck) {
     println!("  {label}: {}", digest.expected);
     if let Some(source) = &digest.verified_from {
         println!("    verified_from: {source}");
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
+    use super::*;
     use iroha_data_model::{
         name::Name,
         taikai::{TaikaiEventId, TaikaiRenditionId, TaikaiStreamId},
     };
     use norito::codec::Encode;
+    use std::str::FromStr;
     use tempfile::tempdir;
-
-    use super::*;
-
     fn sample_name(raw: &str) -> Name {
         Name::from_str(raw).expect("valid name")
     }
-
     fn build_rpt(
         gar_digest: [u8; 32],
         cek_digest: [u8; 32],
@@ -321,7 +298,6 @@ mod tests {
             notes: Some("test-attestation".to_string()),
         }
     }
-
     #[test]
     fn rpt_verify_accepts_matching_inputs() {
         let dir = tempdir().unwrap();
@@ -332,14 +308,12 @@ mod tests {
         let bundle_dir = dir.path().join("bundle");
         fs::create_dir_all(&bundle_dir).unwrap();
         fs::write(bundle_dir.join("artifact.bin"), b"bundle-bytes").unwrap();
-
         let gar_digest = compute_file_digest(&gar_path).unwrap();
         let cek_digest = compute_file_digest(&cek_path).unwrap();
         let bundle_digest = compute_bundle_digest(&bundle_dir).unwrap();
         let rpt = build_rpt(gar_digest, cek_digest, bundle_digest);
         let envelope_path = dir.path().join("attestation.to");
         fs::write(&envelope_path, rpt.encode()).unwrap();
-
         run_rpt_verify(RptVerifyOptions {
             envelope_path,
             gar_path: Some(gar_path),
@@ -349,7 +323,6 @@ mod tests {
         })
         .expect("verification should pass");
     }
-
     #[test]
     fn rpt_verify_rejects_mismatch() {
         let dir = tempdir().unwrap();
@@ -359,14 +332,12 @@ mod tests {
         fs::write(&cek_path, b"{\"cek\":\"receipt\"}").unwrap();
         let bundle_path = dir.path().join("bundle.tar");
         fs::write(&bundle_path, b"bundle").unwrap();
-
         let gar_digest = compute_file_digest(&gar_path).unwrap();
         let cek_digest = compute_file_digest(&cek_path).unwrap();
         let bundle_digest = compute_bundle_digest(&bundle_path).unwrap();
         let rpt = build_rpt(gar_digest, cek_digest, bundle_digest);
         let envelope_path = dir.path().join("attestation.to");
         fs::write(&envelope_path, rpt.encode()).unwrap();
-
         fs::write(&gar_path, b"{\"gar\":\"drift\"}").unwrap();
         let err = run_rpt_verify(RptVerifyOptions {
             envelope_path,
@@ -378,7 +349,6 @@ mod tests {
         .expect_err("mismatched digest must fail");
         assert!(err.to_string().contains("GAR digest mismatch"),);
     }
-
     #[test]
     fn rpt_verify_accepts_json_input() {
         let dir = tempdir().unwrap();
@@ -388,7 +358,6 @@ mod tests {
         fs::write(&cek_path, b"cek-json").unwrap();
         let bundle_path = dir.path().join("bundle.bin");
         fs::write(&bundle_path, b"bytes").unwrap();
-
         let gar_digest = compute_file_digest(&gar_path).unwrap();
         let cek_digest = compute_file_digest(&cek_path).unwrap();
         let bundle_digest = compute_bundle_digest(&bundle_path).unwrap();
@@ -396,7 +365,6 @@ mod tests {
         let envelope_path = dir.path().join("attestation.json");
         let json_text = norito::json::to_json_pretty(&rpt).expect("render JSON");
         fs::write(&envelope_path, json_text).unwrap();
-
         run_rpt_verify(RptVerifyOptions {
             envelope_path,
             gar_path: None,

@@ -1,7 +1,5 @@
 //! Error types for the Halo2 IPA commitment and proof system.
-
 use thiserror::Error as ThisError;
-
 /// Error type returned by commitment, proof creation, or verification.
 #[derive(Debug, ThisError)]
 pub enum Error {
@@ -13,19 +11,15 @@ pub enum Error {
         /// Actual dimension encountered.
         actual: usize,
     },
-
     /// Parameter `n` must be a non-zero power of two.
     #[error("invalid parameter: n must be a non-zero power of two; got n={0}")]
     InvalidN(usize),
-
     /// Attempted inversion of a zero field element.
     #[error("field inversion of zero")]
     InversionOfZero,
-
     /// Verification failed.
     #[error("verification failed")]
     VerificationFailed,
-
     /// Wire component version is not supported by this verifier.
     #[error("unsupported {component} version: {version}")]
     UnsupportedVersion {
@@ -34,7 +28,6 @@ pub enum Error {
         /// Version encountered in the payload.
         version: u16,
     },
-
     /// Curve/backend identifiers in a payload do not match.
     #[error("curve mismatch: expected {expected:?}, got {actual:?}")]
     CurveMismatch {
@@ -43,7 +36,6 @@ pub enum Error {
         /// Actual curve/backend identifier.
         actual: crate::norito_types::ZkCurveId,
     },
-
     /// Proof shape is inconsistent with the parameter domain.
     #[error("invalid proof shape for {reason}: expected {expected}, got {actual}")]
     InvalidProofShape {
@@ -54,7 +46,6 @@ pub enum Error {
         /// Actual value.
         actual: usize,
     },
-
     /// Envelope exceeded a configured verification limit.
     #[error("envelope limit exceeded for {limit}: max {max}, got {actual}")]
     EnvelopeLimitExceeded {
@@ -65,11 +56,9 @@ pub enum Error {
         /// Actual value.
         actual: usize,
     },
-
     /// Encountered non-canonical field or group encoding.
     #[error("invalid encoding")]
     InvalidEncoding,
-
     /// Backend is not compiled in or otherwise unsupported.
     #[error("unsupported backend: {backend:?}")]
     UnsupportedBackend {

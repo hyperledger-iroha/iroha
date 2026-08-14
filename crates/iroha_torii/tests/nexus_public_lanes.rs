@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for the Nexus public-lane REST endpoints.
 #![cfg(feature = "app_api")]
-
-use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
-
 use axum::{body::Body, http::Request};
 use http::{Method, StatusCode, header};
 use http_body_util::BodyExt;
@@ -38,12 +35,11 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::ErrorEnvelope;
 use norito::json::{self, Value};
+use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
     request
         .extensions_mut()
@@ -53,7 +49,6 @@ fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
         ))));
     request
 }
-
 fn enable_nexus(state: &mut State, escrow: &AccountId) {
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
@@ -63,13 +58,11 @@ fn enable_nexus(state: &mut State, escrow: &AccountId) {
         .set_nexus(nexus)
         .expect("enable Nexus for public-lane fixture");
 }
-
 fn relax_consensus_key_activation_for_tests(state: &mut State) {
     let mut sumeragi_params = state.view().world().parameters().sumeragi.clone();
     sumeragi_params.key_activation_lead_blocks = 0;
     state.set_sumeragi_parameters(&sumeragi_params);
 }
-
 #[tokio::test]
 async fn nexus_public_lane_endpoints_exist() {
     let (world, validator_keypair, validator, delegator, escrow) = sample_world();
@@ -80,7 +73,6 @@ async fn nexus_public_lane_endpoints_exist() {
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
-
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(
@@ -90,7 +82,6 @@ async fn nexus_public_lane_endpoints_exist() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(&("/v1/nexus/public-lanes/0/stake"))),
@@ -99,7 +90,6 @@ async fn nexus_public_lane_endpoints_exist() {
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
-
 #[tokio::test]
 async fn nexus_public_lane_endpoints_list_records() {
     let (world, validator_keypair, validator, delegator, escrow) = sample_world();
@@ -110,7 +100,6 @@ async fn nexus_public_lane_endpoints_list_records() {
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
-
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(
@@ -130,7 +119,6 @@ async fn nexus_public_lane_endpoints_list_records() {
         json["items"][0]["total_stake"],
         Value::from("1250".to_string())
     );
-
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(&("/v1/nexus/public-lanes/0/stake"))),
@@ -139,7 +127,6 @@ async fn nexus_public_lane_endpoints_list_records() {
     .unwrap();
     let shares = read_json(resp.into_body()).await;
     assert_eq!(shares["total"], Value::from(2));
-
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(
@@ -150,7 +137,6 @@ async fn nexus_public_lane_endpoints_list_records() {
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
-
 #[tokio::test]
 async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
     let (world, validator_keypair, _validator, _delegator, _escrow) = sample_world();
@@ -158,7 +144,6 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
-
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request(
@@ -168,7 +153,6 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
     assert_eq!(payload.code, "nexus_disabled");
@@ -178,7 +162,6 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
         payload.message
     );
 }
-
 #[tokio::test]
 async fn da_commitments_reject_when_nexus_disabled() {
     let (world, validator_keypair, _validator, _delegator, _escrow) = sample_world();
@@ -186,7 +169,6 @@ async fn da_commitments_reject_when_nexus_disabled() {
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
-
     let resp = router
         .oneshot(
             Request::builder()
@@ -199,7 +181,6 @@ async fn da_commitments_reject_when_nexus_disabled() {
         .await
         .expect("response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
     assert_eq!(payload.code, "nexus_disabled");
@@ -209,24 +190,20 @@ async fn da_commitments_reject_when_nexus_disabled() {
         payload.message
     );
 }
-
 fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     let validator_keypair =
         KeyPair::try_from_seed(vec![0x01; 32], Algorithm::BlsNormal).expect("derive validator key");
     let validator_id = AccountId::new(validator_keypair.public_key().clone());
     let validator = Account::new(validator_id.clone()).build(&validator_id);
-
     let delegator_keypair =
         KeyPair::try_from_seed(vec![0x02; 32], Algorithm::Ed25519).expect("derive delegator key");
     let delegator_id = AccountId::new(delegator_keypair.public_key().clone());
     let delegator = Account::new(delegator_id.clone()).build(&delegator_id);
-
     let escrow_keypair =
         KeyPair::try_from_seed(vec![0x04; 32], Algorithm::Ed25519).expect("derive escrow key");
     let escrow_id = AccountId::new(escrow_keypair.public_key().clone());
     let escrow = Account::new(escrow_id.clone()).build(&escrow_id);
-
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("domain id"),
@@ -239,12 +216,10 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         None,
     )
     .build(&validator_id);
-
     let validator_asset_id = AssetId::new(asset_definition_id.clone(), validator_id.clone());
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());
     let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000_u64));
     let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000_u64));
-
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let mut world = World::with_assets(
         [domain],
@@ -262,7 +237,6 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         escrow_id,
     )
 }
-
 fn seed_public_lane_state(
     state: &State,
     validator_keypair: &KeyPair,
@@ -271,7 +245,6 @@ fn seed_public_lane_state(
 ) {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
-
     let manage_consensus_keys = Permission::new(
         "CanManageConsensusKeys"
             .parse()
@@ -281,7 +254,6 @@ fn seed_public_lane_state(
     Grant::account_permission(manage_consensus_keys, validator.clone())
         .execute(validator, &mut tx)
         .expect("grant manage consensus keys");
-
     let peer_id = PeerId::from(validator_keypair.public_key().clone());
     let pop = iroha_crypto::bls_normal_pop_prove(validator_keypair.private_key())
         .expect("PoP prove for validator keypair");
@@ -289,7 +261,6 @@ fn seed_public_lane_state(
     RegisterPeerWithPop::new(peer_id.clone(), pop)
         .execute(validator, &mut tx)
         .expect("peer registration");
-
     let consensus_id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "main");
     let consensus_record = ConsensusKeyRecord {
         id: consensus_id.clone(),
@@ -311,7 +282,6 @@ fn seed_public_lane_state(
     }
     .execute(validator, &mut tx)
     .expect("consensus key registration");
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("alias").expect("alias key"),
@@ -327,7 +297,6 @@ fn seed_public_lane_state(
     }
     .execute(validator, &mut tx)
     .expect("validator registration");
-
     BondPublicLaneStake {
         lane_id: LaneId::SINGLE,
         validator: validator.clone(),
@@ -337,11 +306,9 @@ fn seed_public_lane_state(
     }
     .execute(delegator, &mut tx)
     .expect("bond stake");
-
     tx.apply();
     block.commit().expect("commit block");
 }
-
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let queue_cfg = Queue::default();
@@ -361,7 +328,6 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
     );
     torii.router()
 }
-
 fn block_header(height: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("height must be non-zero"),
@@ -372,11 +338,9 @@ fn block_header(height: u64) -> BlockHeader {
         0,
     )
 }
-
 async fn read_json(body: Body) -> Value {
     json::from_slice(&collect_body(body).await).expect("valid JSON payload")
 }
-
 async fn collect_body(body: Body) -> Vec<u8> {
     body.collect()
         .await

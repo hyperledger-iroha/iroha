@@ -1,7 +1,4 @@
 //! Sealed restart join for WAL-ahead Validate vote continuations.
-
-use iroha_data_model::block::consensus_v2 as wire;
-
 use super::{
     CandidateAdmission, CapacityClass, DurablePayloadReference, DurableValidateReplayEvidenceV1,
     InitialLifecycleState, LifecycleStageKind, LifecycleWorkClass, PredecessorScope,
@@ -33,7 +30,7 @@ use crate::sumeragi::{
         project_recovered_lifecycle_next_wal_vote_candidate,
     },
 };
-
+use iroha_data_model::block::consensus_v2 as wire;
 /// Why one recovered WAL vote could not join its exact Validate predecessor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecoveredWalVoteLifecycleRepairErrorKind {
@@ -46,7 +43,6 @@ enum RecoveredWalVoteLifecycleRepairErrorKind {
     ForeignOwner,
     ForeignLineage,
 }
-
 /// Drop-safe failure which returns every move-only recovery input.
 ///
 /// The caller may retry after rebuilding the surrounding startup cut. No
@@ -57,7 +53,6 @@ pub(super) struct RecoveredWalVoteLifecycleRepairError {
     kind: RecoveredWalVoteLifecycleRepairErrorKind,
     _retained: RecoveredWalVoteLifecycleRepairRetained,
 }
-
 enum RecoveredWalVoteLifecycleRepairRetained {
     Successor {
         _successor: RecoveredWalVoteSuccessor,
@@ -66,7 +61,6 @@ enum RecoveredWalVoteLifecycleRepairRetained {
         _projection: AuthenticatedRecoveredWalVoteProjection,
     },
 }
-
 /// Consuming projection retaining the recovered successor beside both candidates.
 ///
 /// Construction requires a runtime-private permit and the wrapper has no
@@ -77,7 +71,6 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalVoteProjection {
     parent: CandidateAdmission,
     child: CandidateAdmission,
 }
-
 /// Closed runtime projection of one recovered Proposal/Timeout control Sign.
 ///
 /// The complete WAL identity, canonical replay evidence, effect, pending
@@ -92,7 +85,6 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalControlProjection {
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
 }
-
 /// Opaque signed Broadcast successor of one recovered lifecycle Sign.
 ///
 /// The complete signed envelope, pending causal binding, and canonical replay
@@ -106,7 +98,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastProjectionV1 {
     candidate: CandidateAdmission,
     cold_proposal_output: Option<crate::sumeragi::v2::RecoveredLifecycleColdProposalOutputV1>,
 }
-
 /// Opaque recovered signature successor retaining both reducer children.
 ///
 /// The signed Broadcast has been projected through its exact recovered parent,
@@ -120,7 +111,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastAndSignProjectio
     next_sign: super::replay_authority::RecoveredLifecycleNextWalVoteCandidateProjectionV1,
     cold_adapter_authority_minted: bool,
 }
-
 /// Opaque durable source for refanout of one recovered signed Broadcast.
 ///
 /// The live Broadcast row remains the crash-recovery owner. Only the exact
@@ -133,7 +123,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastOutputAuthorityV
     message: wire::ConsensusMessageV2,
     cold_proposal_output: Option<crate::sumeragi::v2::RecoveredLifecycleColdProposalOutputV1>,
 }
-
 impl RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
     /// Build one context-bound output authority for focused service tests.
     #[cfg(test)]
@@ -148,7 +137,6 @@ impl RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
             cold_proposal_output: None,
         }
     }
-
     /// Build one cold Proposal output authority for focused service tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_cold_proposal_test(
@@ -163,7 +151,6 @@ impl RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
             cold_proposal_output: Some(output),
         }
     }
-
     /// Release the fixed output projection only to the service-private permit.
     pub(in crate::sumeragi) fn consume_for_service(
         self,
@@ -182,7 +169,6 @@ impl RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
         )
     }
 }
-
 /// WAL-module permit for unpacking an adapter-authenticated Broadcast.
 ///
 /// Construction is private here; the adapter authority accepts it only by
@@ -191,27 +177,22 @@ impl RecoveredLifecycleSignedBroadcastOutputAuthorityV1 {
 pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastProjectionPermitV1 {
     _linearity: RecoveredLifecycleSignBroadcastProjectionPermitLinearityV1,
 }
-
 struct RecoveredLifecycleSignBroadcastProjectionPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleSignBroadcastProjectionPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleSignBroadcastProjectionPermitV1 {
     fn new() -> Self {
         Self {
             _linearity: RecoveredLifecycleSignBroadcastProjectionPermitLinearityV1,
         }
     }
-
     /// Mint the same move-only permit for a directly coupled adapter fixture.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test() -> Self {
         Self::new()
     }
 }
-
 impl RecoveredLifecycleSignedBroadcastProjectionV1 {
     /// Compare two complete sealed child projections without exposing parts.
     pub(super) fn exactly_matches(&self, other: &Self) -> bool {
@@ -224,17 +205,14 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
                 (Some(_), None) | (None, Some(_)) => false,
             }
     }
-
     /// Return the exact installed digest while retaining all replay authority.
     pub(super) fn digest(&self) -> super::LifecycleDigest {
         super::LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
     }
-
     /// Borrow the closed admission for one staged parent-to-child transition.
     pub(super) const fn candidate(&self) -> &CandidateAdmission {
         &self.candidate
     }
-
     /// Rejoin one signed Vote to its opaque WAL parent for scheduler tests.
     ///
     /// This keeps the effect and pending binding inside the ordinary closed
@@ -279,7 +257,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             cold_proposal_output: self.cold_proposal_output.clone(),
         })
     }
-
     /// Compare the complete Ready child against one exact LedgerV1 row.
     pub(super) fn exactly_matches_record(
         &self,
@@ -296,7 +273,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && record.continuation() == Some(super::schema::DurableContinuation::None)
             && record.replay_matches_candidate(&self.candidate)
     }
-
     /// Insert this exact live child during typed cold recovery.
     pub(super) fn splice_candidate_from_record(
         &self,
@@ -310,7 +286,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
                 .insert(self.candidate.key, self.candidate.clone())
                 .is_none()
     }
-
     /// Recheck that the cold recovery census retained only this child key.
     pub(super) fn owns_spliced_candidate(
         &self,
@@ -318,7 +293,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-
     /// Compare the exact Ready Broadcast row, indexes, and physical geometry.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -356,7 +330,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
             && coordinator.ready_index.contains(&address.ordinal)
     }
-
     /// Compare the exact live Broadcast state accepted at height finalization.
     ///
     /// Ordinary and cold-start scheduling remain Ready-only. The sole extra
@@ -455,7 +428,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
             && !coordinator.ready_index.contains(&address.ordinal)
     }
-
     fn validates_at_raw_context(
         &self,
         context: super::LifecycleContext,
@@ -478,7 +450,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && universe == std::collections::BTreeSet::from([slot])
             && consumed == universe
     }
-
     /// Recheck the sealed child at one deterministic registry address.
     pub(super) fn validates_at(
         &self,
@@ -504,7 +475,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && universe == std::collections::BTreeSet::from([slot])
             && consumed == universe
     }
-
     /// Revalidate the complete broadcast binding and canonical admission.
     fn validates_from_sign(
         &self,
@@ -524,7 +494,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             .as_ref()
                 == Some(&self.candidate)
     }
-
     /// Revalidate this child against one exact standalone recovered WAL Vote.
     pub(super) fn validates_from_next_wal_vote(
         &self,
@@ -540,7 +509,6 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             )
     }
 }
-
 impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
     fn children_are_exact(&self, verified: &VerifiedHeightContext) -> bool {
         let context = projection::lifecycle_context(verified.context());
@@ -562,7 +530,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
                 .next_sign
                 .is_distinct_from_broadcast_candidate(&self.broadcast.candidate)
     }
-
     /// Compare the retained Broadcast with one independently frame-authenticated child.
     pub(super) fn broadcast_exactly_matches(
         &self,
@@ -570,7 +537,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
     ) -> bool {
         self.broadcast.exactly_matches(expected)
     }
-
     /// Mint one comparison-only authority for replaying the historical Sign.
     ///
     /// The executable pair stays retained here for Ledger/registry recovery.
@@ -596,7 +562,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
         self.cold_adapter_authority_minted = true;
         Some(authority)
     }
-
     /// Clone both inert admissions only under the transition module's affine permit.
     ///
     /// The executable Broadcast and next-Sign carriers remain owned here; the
@@ -611,7 +576,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
             .project_candidate_for_combined_transition(permit);
         (self.broadcast.candidate.clone(), next_sign)
     }
-
     /// Rejoin both opaque children to one staged coordinator successor.
     ///
     /// This is the sole live bridge between inert admission staging and the
@@ -678,7 +642,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
                 coordinator,
             )
     }
-
     /// Split executable ownership only in the assertion-only post-fsync registry tail.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn into_registry_children(
@@ -690,7 +653,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
     ) {
         (self.broadcast, self.next_sign)
     }
-
     /// Compare both opaque children with two exact fresh standalone rows.
     ///
     /// The Broadcast retains its inherited Sign causal root. The follow-on
@@ -717,7 +679,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
                 .next_sign
                 .exactly_matches_fresh_record(context, next_sign_record)
     }
-
     /// Splice both candidates only after the complete fresh-row pair matches.
     ///
     /// The preflight checks both keys before either insertion, so a rejected
@@ -752,7 +713,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
         }
         true
     }
-
     /// Require the complete cold census to retain both exact opaque children.
     ///
     /// Unrelated authenticated carriers are deliberately preserved: the pair
@@ -766,7 +726,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {
             && self.next_sign.owns_spliced_candidate(candidates)
     }
 }
-
 fn project_recovered_signed_broadcast(
     verified: &VerifiedHeightContext,
     sign_effect: &AdapterEffect,
@@ -790,7 +749,6 @@ fn project_recovered_signed_broadcast(
         .validates_from_sign(verified, sign_effect, sign_pending)
         .then_some(projection)
 }
-
 /// Rejoin one adapter-authenticated signed Broadcast to its exact standalone
 /// recovered WAL Vote without exposing either projection's constituent parts.
 pub(super) fn project_recovered_next_wal_vote_signed_broadcast(
@@ -816,7 +774,6 @@ pub(super) fn project_recovered_next_wal_vote_signed_broadcast(
         .validates_from_next_wal_vote(verified, parent)
         .then_some((key, projection))
 }
-
 /// Rejoin an adapter-authenticated Broadcast-and-next-Sign pair to its exact
 /// standalone recovered WAL Vote parent.
 ///
@@ -858,7 +815,6 @@ pub(super) fn project_recovered_next_wal_vote_signed_broadcast_and_sign(
         && combined.children_are_exact(verified))
     .then_some((key, combined))
 }
-
 /// Dedicated durable/registry handoff for one recovered control Sign.
 ///
 /// This carrier permanently retains the complete projection beside its exact
@@ -873,7 +829,6 @@ pub(super) struct DurableRecoveredWalControlSignCarrierV1 {
     slot: super::PhysicalSlotId,
     digest: super::LifecycleDigest,
 }
-
 /// Closed runtime projection of one exact recovered Decision Fetch.
 ///
 /// The authenticated WAL identity, complete Fetch effect, replay evidence,
@@ -887,7 +842,6 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalDecisionFetchProjection 
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
 }
-
 /// Opaque first body-backed successor of one recovered WAL Decision Fetch.
 ///
 /// The original Fetch projection remains installed while this value is
@@ -901,31 +855,26 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreProjectionV1 {
     body: RecoveredDecisionFetchStoreBodyAuthorityV1,
     candidate: CandidateAdmission,
 }
-
 /// Carrier-authenticated input for the direct recovered Fetch body preview.
 #[must_use = "recovered Decision Store adapter authority must be consumed exactly once"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreAdapterAuthorityV1 {
     tag: crate::sumeragi::v2_core::EventTag,
     body: RecoveredDecisionFetchStoreBodyAuthorityV1,
 }
-
 impl RecoveredDecisionFetchStoreAdapterAuthorityV1 {
     /// Borrow the exact reducer tag retained by the WAL Fetch.
     pub(in crate::sumeragi) const fn tag(&self) -> crate::sumeragi::v2_core::EventTag {
         self.tag
     }
-
     /// Borrow the body manifest only for the fixed direct adapter preview.
     pub(in crate::sumeragi) const fn manifest(&self) -> &wire::PayloadManifest {
         self.body.manifest()
     }
-
     /// Consume the authority into its still-opaque body frame after preview.
     pub(in crate::sumeragi) fn into_body(self) -> RecoveredDecisionFetchStoreBodyAuthorityV1 {
         self.body
     }
 }
-
 /// Closed pending-binding lineage for the fixed recovered-Decision body preview.
 ///
 /// The original Fetch binding remains inside its authenticated projection.
@@ -937,7 +886,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyPendingLineageV1 {
     validate: PendingRuntimeEffectBinding,
     apply: PendingRuntimeEffectBinding,
 }
-
 impl RecoveredDecisionApplyPendingLineageV1 {
     /// Recheck each predecessor-derived binding against its exact stage effect.
     pub(in crate::sumeragi) fn exactly_matches(
@@ -950,7 +898,6 @@ impl RecoveredDecisionApplyPendingLineageV1 {
             && self.validate.exactly_binds_adapter_effect(validate)
             && self.apply.exactly_binds_adapter_effect(apply)
     }
-
     /// Consume the three fixed bindings into one candidate lineage and retain
     /// only the final Apply binding needed by the live carrier.
     ///
@@ -1009,7 +956,6 @@ impl RecoveredDecisionApplyPendingLineageV1 {
         Ok((lineage, apply_pending))
     }
 }
-
 /// Dedicated durable/registry carrier for one recovered Decision Fetch.
 #[must_use = "the recovered Decision Fetch carrier must remain installed"]
 pub(super) struct DurableRecoveredWalDecisionFetchCarrierV1 {
@@ -1019,7 +965,6 @@ pub(super) struct DurableRecoveredWalDecisionFetchCarrierV1 {
     slot: super::PhysicalSlotId,
     digest: super::LifecycleDigest,
 }
-
 impl AuthenticatedRecoveredWalControlProjection {
     /// Seal the runtime-private recovered-frame projection.
     pub(in crate::sumeragi) fn from_runtime_projection(
@@ -1037,7 +982,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             candidate: candidate.into_candidate(),
         }
     }
-
     /// Revalidate every nested authority without releasing any component.
     pub(super) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
         self.wal_identity.is_exact()
@@ -1056,18 +1000,15 @@ impl AuthenticatedRecoveredWalControlProjection {
                 )
             && control_candidate_shape_is_exact(&self.candidate)
     }
-
     /// Compare the sealed candidate with one exact lifecycle context.
     pub(super) fn belongs_to_context(&self, context: super::LifecycleContext) -> bool {
         self.candidate.key.context() == context.id()
             && self.candidate.key.round().height() == context.height()
     }
-
     /// Whether a durable row has this projection's exact semantic key.
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)
     }
-
     /// Compare every persisted admission field, including standalone owner identity.
     pub(super) fn exactly_matches_record(
         &self,
@@ -1084,7 +1025,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             && record.continuation() == Some(super::schema::DurableContinuation::None)
             && record.replay_matches_candidate(&self.candidate)
     }
-
     fn signed_broadcast_edge(&self) -> Option<super::schema::DurableContinuationEdge> {
         match self.candidate.stage.kind() {
             super::LifecycleStageKind::SignProposal => {
@@ -1096,7 +1036,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             _ => None,
         }
     }
-
     /// Compare this exact Sign as the Advanced parent of one durable Broadcast.
     pub(super) fn exactly_matches_advanced_record(
         &self,
@@ -1120,7 +1059,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             })
             && record.replay_matches_candidate(&self.candidate)
     }
-
     /// Reconstruct and roster-authenticate the selected durable Broadcast child.
     pub(super) fn recover_durable_signed_broadcast(
         &self,
@@ -1135,7 +1073,6 @@ impl AuthenticatedRecoveredWalControlProjection {
         verified.verify_consensus_message(message).ok()?;
         project_recovered_signed_broadcast(verified, &self.effect, &self.pending, &broadcast)
     }
-
     /// Seal the already-authenticated durable child for cold adapter replay.
     pub(super) fn project_cold_adapter_authority(
         &self,
@@ -1155,7 +1092,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             broadcast.effect.clone(),
         )
     }
-
     /// Preview one exact durable Proposal Broadcast and its follow-on Vote Sign.
     ///
     /// Unlike live completion, this cold path has no worker dispatch key. The
@@ -1190,7 +1126,6 @@ impl AuthenticatedRecoveredWalControlProjection {
         .ok_or("recovered control Broadcast is not an exact Proposal child")?;
         startup.prepare_recovered_lifecycle_signed_broadcast_and_sign(verified, authority)
     }
-
     /// Rejoin the cold adapter/body seal to this exact control WAL parent.
     ///
     /// The returned startup is still at the historical Sign fence. The caller
@@ -1233,7 +1168,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             .children_are_exact(verified)
             .then_some((startup, combined))
     }
-
     /// Prove one opened ledger contains this exact standalone row once.
     pub(super) fn exactly_matches_ledger_at(
         &self,
@@ -1261,7 +1195,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             && record.ordinal() == ordinal
             && self.exactly_matches_record(record)
     }
-
     /// Build the sole fresh standalone Ready row at the ledger-selected ordinal.
     pub(super) fn fresh_record(
         &self,
@@ -1280,7 +1213,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             super::schema::DurableContinuation::None,
         )
     }
-
     /// Insert the exact candidate only after the installed ledger row matches it.
     pub(super) fn splice_candidate_from_record(
         &self,
@@ -1293,7 +1225,6 @@ impl AuthenticatedRecoveredWalControlProjection {
                 .insert(self.candidate.key, self.candidate.clone())
                 .is_none()
     }
-
     /// Return whether recovery retained this one exact candidate and no substitute.
     pub(super) fn owns_spliced_candidate(
         &self,
@@ -1301,7 +1232,6 @@ impl AuthenticatedRecoveredWalControlProjection {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-
     /// Match a concrete registry address and digest without exposing effect or pending parts.
     pub(super) fn validates_installation(
         &self,
@@ -1322,7 +1252,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             && physical.get(&slot) == Some(&digest)
             && digest == super::LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
     }
-
     /// Match the exact Ready coordinator row, metadata, indexes, geometry, and carrier.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -1362,7 +1291,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&owner)
             && coordinator.ready_index.contains(&ordinal)
     }
-
     fn matches_claimed_record(
         &self,
         owner: super::OwnerId,
@@ -1408,7 +1336,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&owner)
             && !coordinator.ready_index.contains(&ordinal)
     }
-
     /// Consume the projection into its one exact dedicated registry carrier.
     pub(super) fn into_durable_carrier(
         self,
@@ -1439,13 +1366,11 @@ impl AuthenticatedRecoveredWalControlProjection {
         })
     }
 }
-
 impl DurableRecoveredWalControlSignCarrierV1 {
     /// Return the digest only while it remains paired with the sealed carrier.
     pub(super) const fn installed_digest(&self) -> super::LifecycleDigest {
         self.digest
     }
-
     /// Compare the complete installed address and physical identity.
     pub(super) fn validates_at(
         &self,
@@ -1462,13 +1387,11 @@ impl DurableRecoveredWalControlSignCarrierV1 {
                 .projection
                 .validates_installation(owner, ordinal, slot, digest)
     }
-
     /// Reopen and match the exact durable standalone row.
     pub(super) fn validates_in_store(&self, store: &super::ledger::LifecycleLedgerStoreV1) -> bool {
         store.revalidates_authenticated_wal_control_sign(&self.projection, self.ordinal)
             && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
-
     /// Compare the current Ready record, metadata, indexes, geometry, and carrier.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -1482,7 +1405,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             coordinator,
         )
     }
-
     /// Compare the sole current claimed lease with this complete carrier.
     pub(super) fn matches_claimed_record(
         &self,
@@ -1498,7 +1420,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             lease,
         )
     }
-
     /// Project the complete exact Sign effect into its dedicated worker task.
     ///
     /// The registry-minted identity rehashes the retained tag/request pair.
@@ -1516,7 +1437,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             request.clone(),
         )
     }
-
     /// Project the mandatory signed Broadcast while retaining this exact WAL carrier.
     pub(super) fn project_authenticated_signed_broadcast(
         &self,
@@ -1536,7 +1456,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
         )?;
         Some((key, projection))
     }
-
     /// Project the exact signed Broadcast while retaining its WAL/body-bound Sign.
     ///
     /// Live publication consumes this pair atomically. Cold owner assembly must
@@ -1572,7 +1491,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             .children_are_exact(verified)
             .then_some((key, combined))
     }
-
     /// Reconstruct a durable signed child only through this exact control WAL owner.
     pub(super) fn recover_durable_signed_broadcast(
         &self,
@@ -1582,7 +1500,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
         self.projection
             .recover_durable_signed_broadcast(verified, child)
     }
-
     /// Bind the durable child back to this exact Sign for cold adapter replay.
     pub(super) fn project_cold_adapter_authority(
         &self,
@@ -1592,7 +1509,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
         self.projection
             .project_cold_adapter_authority(verified, broadcast)
     }
-
     /// Recheck a retained Broadcast successor against this exact control Sign.
     pub(super) fn matches_signed_broadcast(
         &self,
@@ -1601,7 +1517,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
     ) -> bool {
         broadcast.validates_from_sign(verified, &self.projection.effect, &self.projection.pending)
     }
-
     /// Prove the authenticated recovery cut retains this exact logical Sign.
     pub(super) fn owns_recovery(
         &self,
@@ -1609,7 +1524,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
     ) -> bool {
         recovery.owns_recovered_wal_control_sign(&self.projection)
     }
-
     /// Reopen the exact Advanced Sign/live Broadcast pair retained by this parent.
     pub(super) fn validates_signed_broadcast_in_store(
         &self,
@@ -1626,7 +1540,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             child_ordinal,
         )
     }
-
     /// Recheck the storage-only census under this exact control WAL parent.
     pub(super) fn owns_signed_broadcast_recovery(
         &self,
@@ -1636,7 +1549,6 @@ impl DurableRecoveredWalControlSignCarrierV1 {
         recovery.owns_recovered_control_broadcast(&self.projection, broadcast)
     }
 }
-
 impl AuthenticatedRecoveredWalDecisionFetchProjection {
     /// Seal the runtime-private recovered Decision Fetch projection.
     pub(in crate::sumeragi) fn from_runtime_projection(
@@ -1654,7 +1566,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             candidate: candidate.into_candidate(),
         }
     }
-
     /// Revalidate the complete nested authority against one verified height.
     pub(super) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
         self.wal_identity.is_exact()
@@ -1673,7 +1584,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
                 )
             && decision_fetch_candidate_shape_is_exact(&self.candidate)
     }
-
     /// Recheck that one closed Store/Validate/Apply lineage is the sole
     /// continuation of this exact payload-free Decision Fetch.
     pub(in crate::sumeragi) fn owns_apply_lineage(
@@ -1685,13 +1595,11 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && lineage.is_exact(projection::lifecycle_context(verified.context()))
             && lineage.exactly_follows_fetch_candidate(&self.candidate)
     }
-
     /// Compare this projection with one lifecycle context.
     pub(in crate::sumeragi) fn belongs_to_context(&self, context: super::LifecycleContext) -> bool {
         self.candidate.key.context() == context.id()
             && self.candidate.key.round().height() == context.height()
     }
-
     /// Compare the cold adapter's reconstructed Fetch under the body-cut permit.
     pub(in crate::sumeragi) fn matches_fast_forward_fetch(
         &self,
@@ -1701,7 +1609,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     ) -> bool {
         self.is_exact(verified) && &self.effect == effect
     }
-
     /// Derive the only pending-binding chain accepted by the fixed body preview.
     ///
     /// The body-cut permit prevents this otherwise pure projection from being
@@ -1733,7 +1640,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             .exactly_matches(store, validate, apply)
             .then_some(lineage)
     }
-
     /// Derive the exact first Store successor from one fsynced body and reducer preview.
     pub(in crate::sumeragi) fn project_decision_fetch_store(
         &self,
@@ -1788,7 +1694,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             candidate,
         })
     }
-
     /// Bind one exact durable body to the current recovered Fetch adapter event.
     pub(in crate::sumeragi) fn project_store_adapter_authority(
         &self,
@@ -1814,12 +1719,10 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && certificate.subject == *subject)
             .then_some(RecoveredDecisionFetchStoreAdapterAuthorityV1 { tag: *tag, body })
     }
-
     /// Return whether one durable row names this exact Fetch key.
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)
     }
-
     /// Compare every persisted standalone admission field.
     pub(super) fn exactly_matches_record(
         &self,
@@ -1836,7 +1739,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && record.continuation() == Some(super::schema::DurableContinuation::None)
             && record.replay_matches_candidate(&self.candidate)
     }
-
     /// Compare the exact terminal Fetch parent of the recovered body chain.
     pub(super) fn exactly_matches_advanced_apply_parent(
         &self,
@@ -1858,7 +1760,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
                 ))
             && record.replay_matches_candidate(&self.candidate)
     }
-
     /// Prove the opened ledger contains this standalone row exactly once.
     pub(super) fn exactly_matches_ledger_at(
         &self,
@@ -1886,7 +1787,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && record.ordinal() == ordinal
             && self.exactly_matches_record(record)
     }
-
     /// Construct the deterministic fresh Ready Fetch row.
     pub(super) fn fresh_record(
         &self,
@@ -1905,7 +1805,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             super::schema::DurableContinuation::None,
         )
     }
-
     /// Splice the exact candidate after its durable row matches.
     pub(super) fn splice_candidate_from_record(
         &self,
@@ -1918,7 +1817,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
                 .insert(self.candidate.key, self.candidate.clone())
                 .is_none()
     }
-
     /// Check that recovery retained this one exact Fetch candidate.
     pub(super) fn owns_spliced_candidate(
         &self,
@@ -1926,7 +1824,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-
     /// Compare an exact semantically revalidated body marker without exposing coordinates.
     pub(in crate::sumeragi) fn matches_validated_body(
         &self,
@@ -1937,7 +1834,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             validated.execution_commitment(),
         )
     }
-
     /// Derive the private recovered-Decision body replay family.
     ///
     /// Only the same-store body cut can mint the permit, so arbitrary manifest
@@ -1961,7 +1857,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             durable,
         )
     }
-
     /// Compare a quarantined success marker without treating it as revalidated authority.
     ///
     /// This equality is only a fail-closed duplicate-prevention check. It does
@@ -1976,7 +1871,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
         };
         execution_commitment == expected_commitment
     }
-
     /// Compare only the exact durable body coordinates.
     ///
     /// This rejection-only check lets startup fail closed on a deterministic
@@ -1985,7 +1879,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     pub(in crate::sumeragi) fn matches_durable_body(&self, durable: &DurableBodyReceipt) -> bool {
         self.durable_body_execution_commitment(durable).is_some()
     }
-
     fn durable_body_execution_commitment(
         &self,
         durable: &DurableBodyReceipt,
@@ -2004,7 +1897,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && durable.subject() == *subject)
             .then_some(certificate.execution_commitment)
     }
-
     /// Compare a concrete registry address and digest.
     pub(super) fn validates_installation(
         &self,
@@ -2025,7 +1917,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && physical.get(&slot) == Some(&digest)
             && digest == super::LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
     }
-
     /// Compare the exact Ready coordinator record and its complete indexes.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -2065,7 +1956,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&owner)
             && coordinator.ready_index.contains(&ordinal)
     }
-
     fn matches_claimed_record(
         &self,
         owner: super::OwnerId,
@@ -2111,7 +2001,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&owner)
             && !coordinator.ready_index.contains(&ordinal)
     }
-
     /// Consume the projection into its dedicated installed carrier.
     pub(super) fn into_durable_carrier(
         self,
@@ -2142,7 +2031,6 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
         })
     }
 }
-
 impl RecoveredDecisionFetchStoreProjectionV1 {
     /// Revalidate the closed Store candidate against its exact body and height.
     pub(super) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
@@ -2167,7 +2055,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
                 },
             )
     }
-
     /// Project the logical child only inside recovered-specific coordinator staging.
     pub(super) fn candidate_for_transition(
         &self,
@@ -2175,14 +2062,12 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
     ) -> Option<CandidateAdmission> {
         self.is_exact(verified).then(|| self.candidate.clone())
     }
-
     /// Return the exact derived child digest without exposing the effect binding.
     pub(super) fn digest(&self) -> super::LifecycleDigest {
         let mut bytes = [0_u8; 32];
         bytes.copy_from_slice(self.pending.exact_effect_identity().as_ref());
         super::LifecycleDigest::new(bytes)
     }
-
     /// Return the immutable lifecycle context retained by the child candidate.
     pub(super) fn context(&self) -> super::LifecycleContext {
         super::LifecycleContext::new(
@@ -2190,7 +2075,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             self.candidate.key.round().height(),
         )
     }
-
     /// Recheck one installed child address without releasing successor parts.
     pub(super) fn validates_at(
         &self,
@@ -2217,7 +2101,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
                 },
             )
     }
-
     /// Compare one Store ledger row against the complete closed projection.
     pub(super) fn exactly_matches_record(
         &self,
@@ -2234,7 +2117,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && record.continuation() == Some(super::schema::DurableContinuation::None)
             && record.replay_matches_candidate(&self.candidate)
     }
-
     /// Construct the deterministic live Store row for LedgerV1 publication.
     pub(super) fn fresh_record(
         &self,
@@ -2254,7 +2136,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             super::schema::DurableContinuation::None,
         )
     }
-
     /// Insert the exact live Store candidate during typed cold recovery.
     pub(super) fn splice_candidate_from_record(
         &self,
@@ -2268,7 +2149,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
                 .insert(self.candidate.key, self.candidate.clone())
                 .is_none()
     }
-
     /// Check that cold recovery retained this exact Store candidate.
     pub(super) fn owns_spliced_candidate(
         &self,
@@ -2276,7 +2156,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-
     /// Compare the exact Ready Store coordinator record and its complete indexes.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -2315,23 +2194,19 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && coordinator.ready_index.contains(&address.ordinal)
     }
 }
-
 impl DurableRecoveredWalDecisionFetchCarrierV1 {
     /// Return the digest only while paired with the complete carrier.
     pub(super) const fn installed_digest(&self) -> super::LifecycleDigest {
         self.digest
     }
-
     /// Revalidate the carrier's sealed original Fetch coordinates.
     pub(super) fn is_exact(&self) -> bool {
         self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
-
     /// Return the immutable causal owner while retaining the complete carrier.
     pub(super) const fn causal_root(&self) -> super::CausalRoot {
         self.owner.causal_root()
     }
-
     /// Compare the complete installed address and physical identity.
     pub(super) fn validates_at(
         &self,
@@ -2348,13 +2223,11 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
                 .projection
                 .validates_installation(owner, ordinal, slot, digest)
     }
-
     /// Reopen and match the exact durable standalone Fetch row.
     pub(super) fn validates_in_store(&self, store: &super::ledger::LifecycleLedgerStoreV1) -> bool {
         store.revalidates_authenticated_wal_decision_fetch(&self.projection, self.ordinal)
             && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
-
     /// Reopen and match the exact advanced Fetch plus live Store crash cut.
     pub(super) fn validates_recovered_store_in_store(
         &self,
@@ -2367,7 +2240,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
             store_projection,
         ) && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
-
     /// Compare the current Ready coordinator record and carrier.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -2381,7 +2253,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
             coordinator,
         )
     }
-
     /// Compare the sole active claimed lease with this exact recovered Fetch.
     pub(super) fn matches_claimed_record(
         &self,
@@ -2397,7 +2268,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
             lease,
         )
     }
-
     /// Project the complete payload-free Fetch into a sealed request authority.
     pub(super) fn project_recovered_decision_fetch_request(
         &self,
@@ -2423,7 +2293,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
             certificate.clone(),
         )
     }
-
     /// Project only the exact body-preview authority for the claimed Fetch carrier.
     pub(super) fn project_store_adapter_authority(
         &self,
@@ -2431,7 +2300,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
     ) -> Option<RecoveredDecisionFetchStoreAdapterAuthorityV1> {
         self.projection.project_store_adapter_authority(body)
     }
-
     /// Derive the closed Store successor from the reducer preview.
     pub(super) fn project_store_successor(
         &self,
@@ -2442,7 +2310,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
         self.projection
             .project_decision_fetch_store(verified, body, store_effect)
     }
-
     /// Prove the authenticated recovery cut retains this exact Fetch.
     pub(super) fn owns_recovery(
         &self,
@@ -2450,7 +2317,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
     ) -> bool {
         recovery.owns_recovered_wal_decision_fetch(&self.projection)
     }
-
     /// Prove cold recovery retains the Store child of this exact WAL Fetch.
     pub(super) fn owns_store_recovery(
         &self,
@@ -2460,7 +2326,6 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
         recovery.owns_recovered_decision_store(&self.projection, store)
     }
 }
-
 fn decision_fetch_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bool {
     let Ok((physical, universe, consumed)) = candidate.physical_geometry.normalized() else {
         return false;
@@ -2484,7 +2349,6 @@ fn decision_fetch_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bo
             .keys()
             .all(|slot| slot.capacity_class() == Some(CapacityClass::Effect))
 }
-
 fn control_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bool {
     let expected = match (
         candidate.work_class,
@@ -2523,7 +2387,6 @@ fn control_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bool {
             .keys()
             .all(|slot| slot.capacity_class() == Some(CapacityClass::Effect))
 }
-
 impl AuthenticatedRecoveredWalVoteProjection {
     /// Assemble the one successful result of the consuming runtime projection.
     pub(in crate::sumeragi) fn from_runtime_projection(
@@ -2538,28 +2401,22 @@ impl AuthenticatedRecoveredWalVoteProjection {
             child,
         }
     }
-
     const fn parent(&self) -> &CandidateAdmission {
         &self.parent
     }
-
     const fn child(&self) -> &CandidateAdmission {
         &self.child
     }
-
     fn concrete_pair_is_exact(&self) -> bool {
         self.successor.replay_evidence_is_exact() && self.successor.concrete_pair_is_exact()
     }
-
     fn concrete_pair_matches_validation(&self, validated: &ValidatedBodyReceipt) -> bool {
         self.successor.concrete_pair_matches_validation(validated)
     }
-
     const fn installed_child_effect(&self) -> &AdapterEffect {
         self.successor.installed_child_effect()
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredWalVoteLifecycleRepairError {
     /// Return a stable diagnostic classification without exposing authority.
@@ -2592,7 +2449,6 @@ impl RecoveredWalVoteLifecycleRepairError {
         }
     }
 }
-
 /// Authenticated, move-only WAL-ahead parent/child lifecycle repair.
 ///
 /// Both logical candidates are projected from sealed runtime bindings. The
@@ -2606,7 +2462,6 @@ pub(super) struct AuthenticatedWalVoteLifecycleRepair {
     projection: AuthenticatedRecoveredWalVoteProjection,
     edge: DurableContinuationEdge,
 }
-
 /// Post-fsync WAL recovery authority bound to one exact LedgerV1 replacement.
 ///
 /// The token still retains the concrete Validate parent and Sign successor.
@@ -2618,29 +2473,24 @@ pub(super) struct DurableAuthenticatedWalVoteLifecycleRepair {
     repair: AuthenticatedWalVoteLifecycleRepair,
     receipt: DurableWalVoteLedgerRepairReceipt,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl AuthenticatedWalVoteLifecycleRepair {
     /// Borrow the exact recovered Validate admission projection.
     pub(super) const fn parent(&self) -> &CandidateAdmission {
         self.projection.parent()
     }
-
     /// Borrow the exact recovered Sign admission projection.
     pub(super) const fn child(&self) -> &CandidateAdmission {
         self.projection.child()
     }
-
     /// Return the typed durable Validate-to-Sign continuation edge.
     pub(super) const fn edge(&self) -> DurableContinuationEdge {
         self.edge
     }
-
     /// Revalidate both retained concrete effects against their sealed bindings.
     pub(super) fn concrete_pair_is_exact(&self) -> bool {
         self.projection.concrete_pair_is_exact()
     }
-
     /// Return whether one durable validation is the exact outcome carried by
     /// this concrete Validate-to-Sign recovery pair.
     ///
@@ -2663,7 +2513,6 @@ impl AuthenticatedWalVoteLifecycleRepair {
             && Some(self.parent().payload) == expected_payload
             && self.projection.concrete_pair_matches_validation(validated)
     }
-
     /// Reconstruct a roster-authenticated durable Broadcast child.
     ///
     /// The caller must still bind this repair to the exact opened LedgerV1
@@ -2697,7 +2546,6 @@ impl AuthenticatedWalVoteLifecycleRepair {
         self.matches_signed_broadcast(verified, &projection)
             .then_some(projection)
     }
-
     /// Recheck one signed child against this recovered Validate→Sign repair.
     pub(super) fn matches_signed_broadcast(
         &self,
@@ -2715,7 +2563,6 @@ impl AuthenticatedWalVoteLifecycleRepair {
             .as_ref()
                 == Some(&broadcast.candidate)
     }
-
     /// Seal this exact vote signature for cold reducer replay.
     pub(super) fn project_cold_adapter_authority(
         &self,
@@ -2735,7 +2582,6 @@ impl AuthenticatedWalVoteLifecycleRepair {
             broadcast.effect.clone(),
         )
     }
-
     /// Bind this move-only repair to the exact post-fsync ledger receipt.
     #[allow(clippy::result_large_err)]
     pub(super) fn bind_durable_ledger_receipt(
@@ -2752,24 +2598,20 @@ impl AuthenticatedWalVoteLifecycleRepair {
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableAuthenticatedWalVoteLifecycleRepair {
     /// Return the durable Sign child ordinal.
     pub(super) const fn child_ordinal(&self) -> u128 {
         self.receipt.child_ordinal()
     }
-
     /// Return the hash of the complete fsynced LedgerV1 frame.
     pub(super) const fn ledger_frame_hash(&self) -> super::LifecycleDigest {
         self.receipt.ledger_frame_hash()
     }
-
     /// Borrow the authenticated repair for idempotent post-fsync verification.
     pub(super) const fn repair(&self) -> &AuthenticatedWalVoteLifecycleRepair {
         &self.repair
     }
-
     /// Match one validation to the retained concrete Validate-to-Sign pair.
     pub(super) fn concrete_pair_matches_validation(
         &self,
@@ -2777,7 +2619,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
     ) -> bool {
         self.repair.concrete_pair_matches_validation(validated)
     }
-
     /// Borrow only the recovered Sign effect retained by this durable repair.
     ///
     /// This narrow view exists solely so the closed concrete-registry carrier
@@ -2786,7 +2627,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
     pub(super) const fn installed_child_effect(&self) -> &AdapterEffect {
         self.repair.projection.installed_child_effect()
     }
-
     /// Project the mandatory signed Broadcast from the exact recovered vote owner.
     pub(super) fn project_authenticated_signed_broadcast(
         &self,
@@ -2815,7 +2655,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         self.matches_signed_broadcast(verified, &projection)
             .then_some((key, projection))
     }
-
     /// Project the exact signed Broadcast while retaining its WAL/body-bound Sign.
     ///
     /// Live publication consumes this pair atomically. Cold owner assembly must
@@ -2860,7 +2699,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
             && combined.children_are_exact(verified))
         .then_some((key, combined))
     }
-
     /// Reconstruct a durable signed child only through this exact phase-vote WAL owner.
     pub(super) fn recover_durable_signed_broadcast(
         &self,
@@ -2870,7 +2708,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         self.repair
             .recover_durable_signed_broadcast(verified, child)
     }
-
     /// Bind the durable vote child back to this exact WAL Sign for cold replay.
     pub(super) fn project_cold_adapter_authority(
         &self,
@@ -2880,7 +2717,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         self.repair
             .project_cold_adapter_authority(verified, broadcast)
     }
-
     /// Preview an exact durable Prepare Broadcast and its follow-on Commit Sign.
     ///
     /// The historical Prepare Sign remains owned by this repair. The adapter
@@ -2911,7 +2747,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         .ok_or("recovered phase Broadcast is not an exact Prepare-vote child")?;
         startup.prepare_recovered_lifecycle_signed_broadcast_and_sign(verified, authority)
     }
-
     /// Rejoin the cold adapter/body seal to this exact phase-vote repair.
     ///
     /// The returned startup is still at the historical Prepare-Sign fence.
@@ -2958,7 +2793,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
             && combined.children_are_exact(verified))
         .then_some((startup, combined))
     }
-
     /// Recheck a retained Broadcast successor against the sealed recovered vote.
     pub(super) fn matches_signed_broadcast(
         &self,
@@ -2967,7 +2801,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
     ) -> bool {
         self.repair.matches_signed_broadcast(verified, broadcast)
     }
-
     /// Bind this authority to one frame already loaded from the exact store.
     pub(super) fn belongs_to_loaded(
         &self,
@@ -2977,7 +2810,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         self.receipt.belongs_to_loaded(store, ledger)
     }
 }
-
 /// Join one recovered Validate binding to the exact current vote continuation
 /// authenticated from its latest matching WAL frame.
 ///
@@ -2995,7 +2827,6 @@ pub(super) fn authenticate_recovered_wal_vote_lifecycle_from_ledger_parent(
         successor,
     )
 }
-
 /// Join one recovered Validate binding to the exact durable body retained by
 /// its installed completion carrier.
 #[allow(clippy::result_large_err)]
@@ -3014,7 +2845,6 @@ pub(super) fn authenticate_recovered_wal_vote_lifecycle_from_durable_body(
         successor,
     )
 }
-
 #[allow(variant_size_differences)]
 enum RecoveredValidatePayloadAuthority<'a> {
     Ledger(&'a AuthenticatedRecoveredWalValidateLedgerParent),
@@ -3023,7 +2853,6 @@ enum RecoveredValidatePayloadAuthority<'a> {
         replay_evidence: &'a DurableValidateReplayEvidenceV1,
     },
 }
-
 #[allow(clippy::result_large_err)]
 fn authenticate_recovered_wal_vote_lifecycle(
     verified: &VerifiedHeightContext,
@@ -3068,7 +2897,6 @@ fn authenticate_recovered_wal_vote_lifecycle(
             });
         }
     };
-
     let structural = (|| {
         let parent = projection.parent();
         let child = projection.child();
@@ -3119,7 +2947,6 @@ fn authenticate_recovered_wal_vote_lifecycle(
         }),
     }
 }
-
 fn candidate_shape_is_exact(
     candidate: &CandidateAdmission,
     expected_work_class: LifecycleWorkClass,

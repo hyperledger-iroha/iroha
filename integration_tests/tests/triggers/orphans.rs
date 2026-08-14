@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Orphaned trigger cleanup scenarios.
-
-use std::time::{Duration, Instant};
-
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -11,15 +8,13 @@ use iroha::{
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
+use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
-
 const TRIGGER_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TRIGGER_STATE_TIMEOUT: Duration = Duration::from_secs(30);
-
 async fn start_network(context: &'static str) -> eyre::Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
 }
-
 async fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> eyre::Result<Option<Trigger>> {
     let client = iroha.clone();
     let trigger_id = trigger_id.clone();
@@ -36,7 +31,6 @@ async fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> eyre::Result<Op
     })
     .await?
 }
-
 async fn wait_for_trigger_state(
     iroha: &Client,
     trigger_id: &TriggerId,
@@ -45,7 +39,6 @@ async fn wait_for_trigger_state(
 ) -> eyre::Result<Option<Trigger>> {
     let deadline = Instant::now() + TRIGGER_STATE_TIMEOUT;
     let mut last_observed = "trigger was not queried".to_owned();
-
     while Instant::now() < deadline {
         let observed = find_trigger(iroha, trigger_id).await?;
         last_observed = if observed.is_some() {
@@ -56,25 +49,20 @@ async fn wait_for_trigger_state(
         if observed.is_some() == expected_present {
             return Ok(observed);
         }
-
         tokio::time::sleep(TRIGGER_STATE_POLL_INTERVAL).await;
     }
-
     Err(eyre::eyre!(
         "timed out waiting for trigger {trigger_id} present={expected_present} after {context}; last_observed={last_observed}"
     ))
 }
-
 async fn set_up_trigger(
     network: &sandbox::SerializedNetwork,
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
     let failand: DomainId = DomainId::try_new("failand", "universal")?;
     let create_failand = domain_setup_instruction(&failand, &iroha.account)?;
-
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
     let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
-
     let fail_on_account_events = "fail".parse::<TriggerId>()?;
     let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let register_fail_on_account_events = Register::trigger(Trigger::new(
@@ -130,7 +118,6 @@ async fn set_up_trigger(
     .await??;
     Ok((failand, the_one_who_fails, fail_on_account_events))
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::Result<()> {
     let Some(network) = start_network(stringify!(
@@ -176,7 +163,6 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
     );
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<()> {
     let Some(network) = start_network(stringify!(

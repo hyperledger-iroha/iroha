@@ -3,27 +3,21 @@ use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
 use norito::to_bytes;
-
 mod common;
-
 const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland.universal";
 const ALT_NFT_ID: &[u8] = b"lily$wonderland.universal";
-
 fn account_id_literal(public_key: &str) -> Vec<u8> {
     let public_key: PublicKey = public_key.parse().expect("valid public key");
     ivm::mock_wsv::AccountId::new(public_key)
         .to_string()
         .into_bytes()
 }
-
 fn alice_account_id_literal() -> Vec<u8> {
     account_id_literal("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03")
 }
-
 fn bob_account_id_literal() -> Vec<u8> {
     account_id_literal("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4")
 }
-
 fn assemble(code: &[u8]) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -37,7 +31,6 @@ fn assemble(code: &[u8]) -> Vec<u8> {
     out.extend_from_slice(code);
     out
 }
-
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let scall = wide::system::SCALL;
     let mut bytes = Vec::new();
@@ -45,7 +38,6 @@ fn encode_prog_syscall(num: u32) -> Vec<u8> {
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     assemble(&bytes)
 }
-
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -59,21 +51,17 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
-
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
     let buf = to_bytes(&dataspace).expect("encode DataSpaceId into Norito");
     make_tlv(PointerType::DataSpaceId as u16, 1, &buf)
 }
-
 #[test]
 fn set_account_detail_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-
     // Prepare TLVs in INPUT
     let acc = make_tlv(
         PointerType::AccountId as u16,
@@ -91,16 +79,13 @@ fn set_account_detail_validates_tlvs() {
     off += key.len() as u64 + 16;
     vm.memory.preload_input(off, &val).expect("preload input");
     let p_val = Memory::INPUT_START + off;
-
     vm.set_register(10, p_acc);
     vm.set_register(11, p_key);
     vm.set_register(12, p_val);
-
     let prog = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
     vm.load_program(&prog).unwrap();
     vm.run().expect("set_account_detail tlvs should validate");
 }
-
 #[test]
 fn set_account_detail_rejects_wrong_type() {
     let mut vm = IVM::new(u64::MAX);
@@ -120,13 +105,11 @@ fn set_account_detail_rejects_wrong_type() {
         .preload_input(acc.len() as u64 + 16, &json)
         .expect("preload input");
     vm.set_register(12, Memory::INPUT_START + acc.len() as u64 + 16);
-
     let prog = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn nft_mint_asset_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
@@ -147,7 +130,6 @@ fn nft_mint_asset_validates_tlvs() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("nft_mint_asset tlvs should validate");
 }
-
 #[test]
 fn transfer_asset_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
@@ -196,7 +178,6 @@ fn transfer_asset_validates_tlvs() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer_asset tlvs should validate");
 }
-
 #[test]
 fn transfer_asset_rejects_wrong_asset_type() {
     let mut vm = IVM::new(u64::MAX);
@@ -237,7 +218,6 @@ fn transfer_asset_rejects_wrong_asset_type() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn nft_set_metadata_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
@@ -261,7 +241,6 @@ fn nft_set_metadata_validates_tlvs() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("nft_set_metadata tlvs should validate");
 }
-
 #[test]
 fn nft_set_metadata_rejects_wrong_type() {
     let mut vm = IVM::new(u64::MAX);
@@ -287,7 +266,6 @@ fn nft_set_metadata_rejects_wrong_type() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn nft_burn_asset_validates_tlv() {
     let mut vm = IVM::new(u64::MAX);
@@ -299,7 +277,6 @@ fn nft_burn_asset_validates_tlv() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("nft_burn_asset tlv should validate");
 }
-
 #[test]
 fn nft_burn_asset_rejects_wrong_type() {
     let mut vm = IVM::new(u64::MAX);
@@ -317,7 +294,6 @@ fn nft_burn_asset_rejects_wrong_type() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn nft_burn_asset_rejects_name_type() {
     // Pass &Name where &NftId is required
@@ -331,7 +307,6 @@ fn nft_burn_asset_rejects_name_type() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn nft_burn_asset_rejects_blob_type() {
     // Pass &Blob where &NftId is required

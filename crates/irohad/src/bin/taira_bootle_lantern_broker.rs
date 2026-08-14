@@ -1,5 +1,4 @@
 //! Native Falcon-backed Taira Bootle/Lantern issuance broker executable.
-
 #[tokio::main]
 async fn main() {
     if let Err(error) =

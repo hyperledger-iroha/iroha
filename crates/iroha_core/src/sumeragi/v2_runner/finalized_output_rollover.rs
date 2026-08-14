@@ -28,7 +28,6 @@ fn rollover_finalized_height_outputs(
         })?;
     lane_work.prune_finalized_merge_sidecars()?;
     lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
-
     loop {
         apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
         apply_certified_merge_sidecar_chunk_admissions(
@@ -60,7 +59,6 @@ fn rollover_finalized_height_outputs(
             ));
         }
     }
-
     let _ = services
         .handoff_applied_height_output_to_durable_reconstruction(
             receipt,

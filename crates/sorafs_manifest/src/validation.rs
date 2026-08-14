@@ -1,16 +1,11 @@
 //! Validation helpers for manifests destined for the Pin Registry.
-
 #![allow(unexpected_cfgs)]
-
-use std::collections::BTreeSet;
-
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-
 use crate::{
     ChunkingProfileV1, EMPTY_POR_ROOT_V1, GovernanceProofs, MANIFEST_VERSION_V1, ManifestV1,
     PinPolicy, ProfileId, StorageClass, chunker_registry,
 };
-
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use std::collections::BTreeSet;
 /// Maximum canonical Norito manifest size admitted by first-release nodes.
 pub const MAX_MANIFEST_ENCODED_BYTES: usize = 512 * 1024;
 /// Exact binary length of the canonical first-release manifest root CID.
@@ -35,7 +30,6 @@ const MAX_MANIFEST_DECODE_TOTAL_ELEMENTS: usize = MAX_MANIFEST_ENCODED_BYTES * 2
 const MAX_MANIFEST_DECODE_ALLOCATED_BYTES: usize = MAX_MANIFEST_ENCODED_BYTES * 4;
 const MAX_MANIFEST_DECODE_DEPTH: usize = 64;
 const MAX_MANIFEST_BASE64_BYTES: usize = MAX_MANIFEST_ENCODED_BYTES.div_ceil(3) * 4;
-
 /// Errors emitted while decoding an attacker-controlled manifest payload.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ManifestDecodeError {
@@ -61,7 +55,6 @@ pub enum ManifestDecodeError {
     #[error("manifest payload is not the exact canonical Norito encoding")]
     NonCanonicalEncoding,
 }
-
 /// Decode one exact canonical manifest under first-release resource limits.
 ///
 /// This helper is intended for every untrusted manifest byte boundary. It
@@ -89,7 +82,6 @@ pub fn decode_manifest_v1_canonical(bytes: &[u8]) -> Result<ManifestV1, Manifest
         },
     })
 }
-
 /// Decode one exact canonical padded-base64 V1 manifest under resource limits.
 ///
 /// The encoded length is checked before base64 allocation. The decoded bytes
@@ -116,7 +108,6 @@ pub fn decode_manifest_v1_base64_canonical(
     }
     decode_manifest_v1_canonical(&bytes)
 }
-
 /// Encode a V1 manifest as exact canonical padded standard base64.
 ///
 /// This does not perform semantic or policy validation; callers that admit the
@@ -137,7 +128,6 @@ pub fn encode_manifest_v1_base64_canonical(
     }
     Ok(BASE64_STANDARD.encode(bytes))
 }
-
 /// Constraints applied to the pin policy during manifest validation.
 #[derive(Debug, Clone)]
 pub struct PinPolicyConstraints {
@@ -152,7 +142,6 @@ pub struct PinPolicyConstraints {
     /// Whether a manifest must carry council signatures.
     pub require_council_signatures: bool,
 }
-
 impl Default for PinPolicyConstraints {
     fn default() -> Self {
         Self {
@@ -164,7 +153,6 @@ impl Default for PinPolicyConstraints {
         }
     }
 }
-
 /// Errors surfaced while validating a manifest for registry submission.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestValidationError {
@@ -273,7 +261,6 @@ pub enum ManifestValidationError {
     #[error("canonical manifest encoding has {found} bytes; maximum is {maximum}")]
     ManifestTooLarge { found: usize, maximum: usize },
 }
-
 /// Validates the manifest according to registry policy.
 pub fn validate_manifest(
     manifest: &ManifestV1,
@@ -285,14 +272,12 @@ pub fn validate_manifest(
             found: manifest.version,
         });
     }
-
     validate_manifest_geometry(manifest)?;
     validate_registered_chunker_profile(&manifest.chunking)?;
     validate_pin_policy(&manifest.pin_policy, policy)?;
     validate_alias_claims(manifest)?;
     validate_metadata(manifest)?;
     validate_governance(manifest, policy.require_council_signatures)?;
-
     let encoded = manifest
         .encode()
         .map_err(|error| ManifestValidationError::ManifestEncoding {
@@ -304,10 +289,8 @@ pub fn validate_manifest(
             maximum: MAX_MANIFEST_ENCODED_BYTES,
         });
     }
-
     Ok(())
 }
-
 /// Validate an entire registered chunker snapshot, including immutable geometry.
 ///
 /// A registered profile identifier is a commitment to every chunk-boundary
@@ -344,7 +327,6 @@ pub fn validate_registered_chunker_profile(
             });
         }
     }
-
     let descriptor = validate_chunker_handle(
         profile.profile_id,
         &profile.namespace,
@@ -353,7 +335,6 @@ pub fn validate_registered_chunker_profile(
         profile.multihash_code,
         Some(&profile.aliases),
     )?;
-
     if usize::try_from(profile.min_size) != Ok(descriptor.profile.min_size) {
         return Err(ManifestValidationError::ChunkerDescriptorMismatch {
             field: "min_size",
@@ -395,10 +376,8 @@ pub fn validate_registered_chunker_profile(
             found: profile.aliases.join(","),
         });
     }
-
     Ok(descriptor)
 }
-
 /// Validates chunker metadata against the registry.
 #[allow(clippy::needless_pass_by_value)]
 pub fn validate_chunker_handle(
@@ -414,7 +393,6 @@ pub fn validate_chunker_handle(
             profile_id: profile_id.0,
         },
     )?;
-
     if namespace != descriptor.namespace {
         return Err(ManifestValidationError::ChunkerDescriptorMismatch {
             field: "namespace",
@@ -443,7 +421,6 @@ pub fn validate_chunker_handle(
             found: multihash_code.to_string(),
         });
     }
-
     if let Some(aliases) = aliases {
         let expected_aliases: BTreeSet<String> = descriptor
             .aliases
@@ -451,7 +428,6 @@ pub fn validate_chunker_handle(
             .map(|value| value.to_string())
             .collect();
         let provided_aliases: BTreeSet<String> = aliases.iter().cloned().collect();
-
         for alias in &provided_aliases {
             if !expected_aliases.contains(alias) {
                 return Err(ManifestValidationError::UnknownChunkerAlias {
@@ -459,7 +435,6 @@ pub fn validate_chunker_handle(
                 });
             }
         }
-
         let canonical = format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
@@ -468,10 +443,8 @@ pub fn validate_chunker_handle(
             return Err(ManifestValidationError::MissingCanonicalAlias { canonical });
         }
     }
-
     Ok(descriptor)
 }
-
 fn validate_manifest_geometry(manifest: &ManifestV1) -> Result<(), ManifestValidationError> {
     validate_manifest_root_cid(
         &manifest.root_cid,
@@ -503,7 +476,6 @@ fn validate_manifest_geometry(manifest: &ManifestV1) -> Result<(), ManifestValid
     }
     Ok(())
 }
-
 /// Validates the canonical first-release binary manifest-root CID.
 ///
 /// Only CIDv1 with the dag-cbor codec and BLAKE3-256 multihash is accepted.
@@ -558,7 +530,6 @@ pub fn validate_manifest_root_cid(
     }
     Ok(())
 }
-
 fn validate_manifest_label(value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err("must not be empty".to_owned());
@@ -580,7 +551,6 @@ fn validate_manifest_label(value: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_alias_claims(manifest: &ManifestV1) -> Result<(), ManifestValidationError> {
     if manifest.alias_claims.len() > MAX_MANIFEST_ALIAS_CLAIMS {
         return Err(ManifestValidationError::TooManyAliasClaims {
@@ -588,7 +558,6 @@ fn validate_alias_claims(manifest: &ManifestV1) -> Result<(), ManifestValidation
             maximum: MAX_MANIFEST_ALIAS_CLAIMS,
         });
     }
-
     let mut aliases = BTreeSet::new();
     let mut proof_bytes = 0usize;
     for (index, claim) in manifest.alias_claims.iter().enumerate() {
@@ -634,7 +603,6 @@ fn validate_alias_claims(manifest: &ManifestV1) -> Result<(), ManifestValidation
     }
     Ok(())
 }
-
 fn validate_metadata(manifest: &ManifestV1) -> Result<(), ManifestValidationError> {
     if manifest.metadata.len() > MAX_MANIFEST_METADATA_ENTRIES {
         return Err(ManifestValidationError::TooManyMetadataEntries {
@@ -642,7 +610,6 @@ fn validate_metadata(manifest: &ManifestV1) -> Result<(), ManifestValidationErro
             maximum: MAX_MANIFEST_METADATA_ENTRIES,
         });
     }
-
     let mut keys = BTreeSet::new();
     let mut total_bytes = 0usize;
     for (index, entry) in manifest.metadata.iter().enumerate() {
@@ -685,7 +652,6 @@ fn validate_metadata(manifest: &ManifestV1) -> Result<(), ManifestValidationErro
     }
     Ok(())
 }
-
 pub fn validate_pin_policy(
     pin_policy: &PinPolicy,
     constraints: &PinPolicyConstraints,
@@ -724,10 +690,8 @@ pub fn validate_pin_policy(
             found: pin_policy.storage_class,
         });
     }
-
     Ok(())
 }
-
 fn validate_governance(
     manifest: &ManifestV1,
     require_council_signatures: bool,
@@ -745,7 +709,6 @@ fn validate_governance(
     if proofs.council_signatures.is_empty() {
         return Ok(());
     }
-
     let mut previous_signer = None;
     for (index, signature) in proofs.council_signatures.iter().enumerate() {
         if previous_signer.is_some_and(|previous| previous >= signature.signer) {
@@ -764,7 +727,6 @@ fn validate_governance(
         crate::checked_ed25519_signature_from_bytes(&signature_bytes)
             .map_err(|reason| ManifestValidationError::InvalidCouncilSignature { index, reason })?;
     }
-
     let mut unsigned = manifest.clone();
     unsigned.governance.council_signatures.clear();
     let unsigned_bytes =
@@ -797,16 +759,13 @@ fn validate_governance(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
-    use ed25519_dalek::{Signer as _, SigningKey};
-
     use super::*;
     use crate::{AliasClaim, CouncilSignature, GovernanceProofs, ManifestBuilder, MetadataEntry};
+    use base64::Engine as _;
+    use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_chunker::ChunkProfile;
-
     fn manifest_with_defaults() -> ManifestV1 {
         let mut manifest = ManifestBuilder::new()
             .root_cid(crate::canonical_manifest_root_cid([0xAA; 32]))
@@ -834,7 +793,6 @@ mod tests {
         };
         manifest
     }
-
     fn default_constraints() -> PinPolicyConstraints {
         PinPolicyConstraints {
             min_replicas_floor: 1,
@@ -844,27 +802,21 @@ mod tests {
             require_council_signatures: false,
         }
     }
-
     #[test]
     fn validates_manifest_successfully() {
         let manifest = manifest_with_defaults();
         let constraints = default_constraints();
-
         let result = validate_manifest(&manifest, &constraints);
-
         assert!(result.is_ok());
     }
-
     #[test]
     fn bounded_manifest_decoder_accepts_only_exact_canonical_bytes() {
         let manifest = manifest_with_defaults();
         let canonical = norito::encode_canonical(&manifest).expect("canonical manifest");
-
         assert_eq!(
             decode_manifest_v1_canonical(&canonical).expect("canonical manifest decodes"),
             manifest
         );
-
         let mut with_trailing_bytes = canonical;
         with_trailing_bytes.extend_from_slice(&[0x00, 0xA5]);
         assert!(matches!(
@@ -873,11 +825,9 @@ mod tests {
                 | Err(ManifestDecodeError::Decode { .. })
         ));
     }
-
     #[test]
     fn bounded_manifest_decoder_rejects_oversized_input_before_decode() {
         let oversized = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
-
         assert_eq!(
             decode_manifest_v1_canonical(&oversized),
             Err(ManifestDecodeError::PayloadTooLarge {
@@ -886,13 +836,11 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn canonical_base64_manifest_codec_round_trips_and_rejects_malformed_text() {
         let manifest = manifest_with_defaults();
         let encoded =
             encode_manifest_v1_base64_canonical(&manifest).expect("encode canonical base64");
-
         assert_eq!(
             decode_manifest_v1_base64_canonical(&encoded)
                 .expect("decode canonical base64 manifest"),
@@ -911,7 +859,6 @@ mod tests {
             Err(ManifestDecodeError::Base64Decode { .. })
         ));
     }
-
     #[test]
     fn canonical_base64_manifest_codec_rejects_alternate_norito_layout() {
         let manifest = manifest_with_defaults();
@@ -923,13 +870,11 @@ mod tests {
             norito::to_bytes(&manifest).expect("alternate manifest")
         };
         assert_ne!(alternate, canonical);
-
         assert_eq!(
             decode_manifest_v1_base64_canonical(&BASE64_STANDARD.encode(alternate)),
             Err(ManifestDecodeError::NonCanonicalEncoding)
         );
     }
-
     #[test]
     fn canonical_base64_manifest_encoder_ignores_ambient_norito_layout() {
         let manifest = manifest_with_defaults();
@@ -941,14 +886,11 @@ mod tests {
             let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             encode_manifest_v1_base64_canonical(&manifest).expect("canonical base64 manifest")
         };
-
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn canonical_base64_manifest_decoder_rejects_oversized_text_before_decode() {
         let oversized = "A".repeat(MAX_MANIFEST_BASE64_BYTES + 1);
-
         assert_eq!(
             decode_manifest_v1_base64_canonical(&oversized),
             Err(ManifestDecodeError::Base64PayloadTooLarge {
@@ -957,13 +899,11 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn canonical_base64_manifest_decoder_checks_decoded_size_at_equal_text_bound() {
         let oversized_bytes = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
         let encoded = BASE64_STANDARD.encode(oversized_bytes);
         assert_eq!(encoded.len(), MAX_MANIFEST_BASE64_BYTES);
-
         assert_eq!(
             decode_manifest_v1_base64_canonical(&encoded),
             Err(ManifestDecodeError::PayloadTooLarge {
@@ -972,7 +912,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn canonical_base64_manifest_encoder_enforces_wire_size_bound() {
         let mut manifest = manifest_with_defaults();
@@ -980,7 +919,6 @@ mod tests {
             key: "oversized".to_owned(),
             value: "A".repeat(MAX_MANIFEST_ENCODED_BYTES),
         }];
-
         assert!(matches!(
             encode_manifest_v1_base64_canonical(&manifest),
             Err(ManifestDecodeError::PayloadTooLarge {
@@ -989,7 +927,6 @@ mod tests {
             }) if found > MAX_MANIFEST_ENCODED_BYTES
         ));
     }
-
     #[test]
     fn rejects_inline_chunker_profile_manifest() {
         let mut manifest = manifest_with_defaults();
@@ -1001,16 +938,13 @@ mod tests {
         };
         manifest.chunking =
             crate::ChunkingProfileV1::from_profile(profile, crate::BLAKE3_256_MULTIHASH_CODE);
-
         let error = validate_manifest(&manifest, &default_constraints())
             .expect_err("first release accepts only registered profiles");
-
         assert!(matches!(
             error,
             ManifestValidationError::UnknownChunkerProfile { profile_id: 0 }
         ));
     }
-
     #[test]
     fn inline_profile_cannot_bypass_registry_by_changing_aliases() {
         let mut manifest = manifest_with_defaults();
@@ -1023,36 +957,28 @@ mod tests {
         manifest.chunking =
             crate::ChunkingProfileV1::from_profile(profile, crate::BLAKE3_256_MULTIHASH_CODE);
         manifest.chunking.aliases.clear();
-
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
-
         assert!(matches!(
             err,
             ManifestValidationError::UnknownChunkerProfile { profile_id: 0 }
         ));
     }
-
     #[test]
     fn rejects_unknown_chunker_profile() {
         let mut manifest = manifest_with_defaults();
         manifest.chunking.profile_id = crate::ProfileId(u32::MAX);
-
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
-
         assert!(matches!(
             err,
             ManifestValidationError::UnknownChunkerProfile { profile_id }
             if profile_id == u32::MAX
         ));
     }
-
     #[test]
     fn rejects_chunker_metadata_mismatch() {
         let mut manifest = manifest_with_defaults();
         manifest.chunking.semver = "2.0.0".to_string();
-
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
-
         assert!(matches!(
             err,
             ManifestValidationError::ChunkerDescriptorMismatch {
@@ -1061,7 +987,6 @@ mod tests {
             } if field == "semver"
         ));
     }
-
     #[test]
     fn rejects_registered_chunker_geometry_substitution() {
         for field in ["min_size", "target_size", "max_size", "break_mask"] {
@@ -1073,7 +998,6 @@ mod tests {
                 "break_mask" => manifest.chunking.break_mask += 1,
                 _ => unreachable!("fixed adversarial field list"),
             }
-
             let error = validate_manifest(&manifest, &default_constraints())
                 .expect_err("registered geometry substitution must fail");
             assert!(matches!(
@@ -1085,26 +1009,21 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn rejects_alias_without_canonical() {
         let mut manifest = manifest_with_defaults();
         manifest.chunking.aliases.clear();
         manifest.chunking.aliases.push("sorafs-sf1".to_string());
-
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
-
         assert!(matches!(
             err,
             ManifestValidationError::MissingCanonicalAlias { .. }
         ));
     }
-
     #[test]
     fn enforces_pin_policy_constraints() {
         let mut manifest = manifest_with_defaults();
         manifest.pin_policy.min_replicas = 0;
-
         let err = validate_manifest(
             &manifest,
             &PinPolicyConstraints {
@@ -1122,7 +1041,6 @@ mod tests {
             if required == 1 && found == 0
         ));
     }
-
     #[test]
     fn enforces_pin_policy_ceiling_retention_and_storage_class() {
         let mut manifest = manifest_with_defaults();
@@ -1135,7 +1053,6 @@ mod tests {
                 found: 6
             }
         ));
-
         let mut manifest = manifest_with_defaults();
         manifest.pin_policy.retention_epoch = 21;
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
@@ -1146,7 +1063,6 @@ mod tests {
                 found: 21
             }
         ));
-
         let mut manifest = manifest_with_defaults();
         manifest.pin_policy.storage_class = StorageClass::Cold;
         let mut constraints = default_constraints();
@@ -1159,31 +1075,25 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn accepts_missing_signatures_by_default() {
         let mut manifest = manifest_with_defaults();
         manifest.governance.council_signatures.clear();
-
         validate_manifest(&manifest, &default_constraints())
             .expect("should allow permissionless pins");
     }
-
     #[test]
     fn rejects_missing_signatures_when_required() {
         let mut manifest = manifest_with_defaults();
         manifest.governance.council_signatures.clear();
         let mut constraints = default_constraints();
         constraints.require_council_signatures = true;
-
         let err = validate_manifest(&manifest, &constraints).expect_err("should fail");
-
         assert!(matches!(
             err,
             ManifestValidationError::MissingCouncilSignature
         ));
     }
-
     #[test]
     fn chunker_handle_valid_without_aliases() {
         let descriptor = chunker_registry::default_descriptor();
@@ -1197,7 +1107,6 @@ mod tests {
         )
         .expect("handle validates");
     }
-
     #[test]
     fn pin_policy_helper_enforces_constraints() {
         let policy = PinPolicy {
@@ -1221,7 +1130,6 @@ mod tests {
             ManifestValidationError::MinReplicasTooLow { .. }
         ));
     }
-
     #[test]
     fn pin_policy_rejects_zero_retention() {
         let mut policy = manifest_with_defaults().pin_policy;
@@ -1231,7 +1139,6 @@ mod tests {
             Err(ManifestValidationError::InvalidRetentionEpoch)
         ));
     }
-
     #[test]
     fn rejects_inert_or_inconsistent_manifest_geometry() {
         let mut empty_root = manifest_with_defaults();
@@ -1240,28 +1147,24 @@ mod tests {
             validate_manifest(&empty_root, &default_constraints()),
             Err(ManifestValidationError::InvalidRootCidLength { .. })
         ));
-
         let mut zero_root = manifest_with_defaults();
         zero_root.root_cid.fill(0);
         assert!(matches!(
             validate_manifest(&zero_root, &default_constraints()),
             Err(ManifestValidationError::InertRootCid)
         ));
-
         let mut wrong_version = manifest_with_defaults();
         wrong_version.root_cid[0] = 2;
         assert!(matches!(
             validate_manifest(&wrong_version, &default_constraints()),
             Err(ManifestValidationError::InvalidRootCidVersion { found: 2 })
         ));
-
         let mut wrong_codec = manifest_with_defaults();
         wrong_codec.root_cid[1] = 0x55;
         assert!(matches!(
             validate_manifest(&wrong_codec, &default_constraints()),
             Err(ManifestValidationError::RootCidCodecMismatch { .. })
         ));
-
         let mut unsupported_codec = manifest_with_defaults();
         unsupported_codec.dag_codec.0 = 0x55;
         unsupported_codec.root_cid[1] = 0x55;
@@ -1269,75 +1172,64 @@ mod tests {
             validate_manifest(&unsupported_codec, &default_constraints()),
             Err(ManifestValidationError::UnsupportedDagCodec { .. })
         ));
-
         let mut wrong_multihash = manifest_with_defaults();
         wrong_multihash.root_cid[2] ^= 1;
         assert!(matches!(
             validate_manifest(&wrong_multihash, &default_constraints()),
             Err(ManifestValidationError::RootCidMultihashMismatch { .. })
         ));
-
         let mut wrong_digest_length = manifest_with_defaults();
         wrong_digest_length.root_cid[3] = 31;
         assert!(matches!(
             validate_manifest(&wrong_digest_length, &default_constraints()),
             Err(ManifestValidationError::InvalidRootCidDigestLength { .. })
         ));
-
         let mut zero_digest = manifest_with_defaults();
         zero_digest.root_cid[4..].fill(0);
         assert!(matches!(
             validate_manifest(&zero_digest, &default_constraints()),
             Err(ManifestValidationError::InertRootCidDigest)
         ));
-
         let mut trailing_data = manifest_with_defaults();
         trailing_data.root_cid.push(0);
         assert!(matches!(
             validate_manifest(&trailing_data, &default_constraints()),
             Err(ManifestValidationError::InvalidRootCidLength { .. })
         ));
-
         let mut zero_codec = manifest_with_defaults();
         zero_codec.dag_codec.0 = 0;
         assert!(matches!(
             validate_manifest(&zero_codec, &default_constraints()),
             Err(ManifestValidationError::InvalidDagCodec)
         ));
-
         let mut zero_chunk_digest = manifest_with_defaults();
         zero_chunk_digest.chunk_digest_sha3_256.fill(0);
         assert!(matches!(
             validate_manifest(&zero_chunk_digest, &default_constraints()),
             Err(ManifestValidationError::InertChunkDigest)
         ));
-
         let mut zero_por_root = manifest_with_defaults();
         zero_por_root.por_root = EMPTY_POR_ROOT_V1;
         assert!(matches!(
             validate_manifest(&zero_por_root, &default_constraints()),
             Err(ManifestValidationError::InertPorRoot)
         ));
-
         let mut noncanonical_empty_por_root = manifest_with_defaults();
         noncanonical_empty_por_root.content_length = 0;
         assert!(matches!(
             validate_manifest(&noncanonical_empty_por_root, &default_constraints()),
             Err(ManifestValidationError::NonCanonicalEmptyPorRoot)
         ));
-
         let mut canonical_empty_por_root = manifest_with_defaults();
         canonical_empty_por_root.content_length = 0;
         canonical_empty_por_root.por_root = EMPTY_POR_ROOT_V1;
         assert!(validate_manifest_geometry(&canonical_empty_por_root).is_ok());
-
         let mut zero_car_digest = manifest_with_defaults();
         zero_car_digest.car_digest.fill(0);
         assert!(matches!(
             validate_manifest(&zero_car_digest, &default_constraints()),
             Err(ManifestValidationError::InertCarDigest)
         ));
-
         let mut undersized_car = manifest_with_defaults();
         undersized_car.car_size = undersized_car.content_length - 1;
         assert!(matches!(
@@ -1345,7 +1237,6 @@ mod tests {
             Err(ManifestValidationError::CarSmallerThanContent { .. })
         ));
     }
-
     #[test]
     fn rejects_alias_claim_resource_and_ambiguity_attacks() {
         let mut duplicate = manifest_with_defaults();
@@ -1365,7 +1256,6 @@ mod tests {
             validate_manifest(&duplicate, &default_constraints()),
             Err(ManifestValidationError::DuplicateAliasClaim { .. })
         ));
-
         let mut oversized = manifest_with_defaults();
         oversized.alias_claims.push(AliasClaim {
             name: "docs".to_owned(),
@@ -1376,7 +1266,6 @@ mod tests {
             validate_manifest(&oversized, &default_constraints()),
             Err(ManifestValidationError::AliasProofBytesExceeded { .. })
         ));
-
         let mut invalid_label = manifest_with_defaults();
         invalid_label.alias_claims.push(AliasClaim {
             name: "Docs".to_owned(),
@@ -1388,7 +1277,6 @@ mod tests {
             Err(ManifestValidationError::InvalidAliasClaim { field: "name", .. })
         ));
     }
-
     #[test]
     fn rejects_metadata_resource_and_duplicate_key_attacks() {
         let mut duplicate = manifest_with_defaults();
@@ -1406,7 +1294,6 @@ mod tests {
             validate_manifest(&duplicate, &default_constraints()),
             Err(ManifestValidationError::DuplicateMetadataKey { .. })
         ));
-
         let mut flood = manifest_with_defaults();
         flood.metadata = (0..=MAX_MANIFEST_METADATA_ENTRIES)
             .map(|index| MetadataEntry {
@@ -1418,7 +1305,6 @@ mod tests {
             validate_manifest(&flood, &default_constraints()),
             Err(ManifestValidationError::TooManyMetadataEntries { .. })
         ));
-
         let mut control = manifest_with_defaults();
         control.metadata.push(MetadataEntry {
             key: "note".to_owned(),
@@ -1429,7 +1315,6 @@ mod tests {
             Err(ManifestValidationError::InvalidMetadataEntry { field: "value", .. })
         ));
     }
-
     #[test]
     fn verifies_manifest_council_signatures_and_rejects_replay_shapes() {
         let mut invalid = manifest_with_defaults();
@@ -1439,7 +1324,6 @@ mod tests {
             Err(ManifestValidationError::CouncilSignatureVerificationFailed { .. })
                 | Err(ManifestValidationError::InvalidCouncilSignature { .. })
         ));
-
         let mut duplicate = manifest_with_defaults();
         duplicate
             .governance
@@ -1449,7 +1333,6 @@ mod tests {
             validate_manifest(&duplicate, &default_constraints()),
             Err(ManifestValidationError::NonCanonicalCouncilSignerOrder { .. })
         ));
-
         let mut flood = manifest_with_defaults();
         flood.governance.council_signatures = (0..=MAX_MANIFEST_COUNCIL_SIGNATURES)
             .map(|index| CouncilSignature {

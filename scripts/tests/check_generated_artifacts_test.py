@@ -245,7 +245,7 @@ def test_nexus_connect_transfer_fixture_has_closed_unique_staging_owner() -> Non
 
     check = owner["check"]
     assert "nexus-connect-fixture --check" in check
-    assert '--output-root \"$PWD\"' in check
+    assert '--output-root "$PWD"' in check
     assert "IROHA_NEXUS_CONNECT_FIXTURE_STAGE" not in check
 
     for command in (generator, check):
@@ -306,6 +306,129 @@ def test_kagemusha_peer_payment_fixture_has_complete_unique_replay_owner() -> No
         assert "--jobs 1" in command
         assert "--lockfile-path Cargo.lock" in command
         assert "--bin swift_kagemusha_peer_payment_v4" in command
+
+
+def test_connect_recipient_fixtures_have_one_safe_external_stage_owner() -> None:
+    outputs = {
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_receive_offer_v2.hex",
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex",
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2_fresh_amount.hex",
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_registration_lineage_v2.hex",
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_checkpoint_envelope.hex",
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_checkpoint_publisher_public_key.hex",
+        "crates/connect_norito_bridge/tests/fixtures/offline_recipient_trusted_checkpoint_v2.hex",
+    }
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owner = next(
+        entry
+        for entry in manifest["generated"]
+        if entry["name"] == "connect-kagemusha-recipient-v2-fixtures"
+    )
+
+    assert set(owner["outputs"]) == outputs
+    for output in outputs:
+        assert sum(output in entry["outputs"] for entry in manifest["generated"]) == 1
+        assert output not in owner["generator"]
+    assert set(owner["generator_sources"]) == {
+        "crates/connect_norito_bridge/Cargo.toml",
+        "crates/connect_norito_bridge/src/lib.rs",
+        "crates/connect_norito_bridge/src/kagemusha_bridge_tests/tests/recipient_fixture_owner.rs",
+    }
+    assert "IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE" in owner["generator"]
+    for command in (owner["generator"], owner["check"]):
+        assert "IROHA_CONNECT_RECIPIENT_FIXTURE_CARGO_TARGET_DIR" in command
+    assert "env -u IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE" in owner["check"]
+    for command in (owner["generator"], owner["check"]):
+        assert "cargo test" in command
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "-p connect_norito_bridge" in command
+        assert "recipient_receive_offer_v2_fixture_owner" in command
+        assert "--ignored" in command
+
+
+def test_mochi_canonical_binary_fixtures_have_one_safe_external_stage_owner() -> None:
+    outputs = {
+        "mochi/mochi-core/tests/fixtures/canonical_block_wire.bin",
+        "mochi/mochi-core/tests/fixtures/canonical_event_message.bin",
+        "mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin",
+        "mochi/mochi-core/tests/fixtures/canonical_data_event_message.bin",
+    }
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owner = next(
+        entry
+        for entry in manifest["generated"]
+        if entry["name"] == "mochi-canonical-torii-binary-fixtures"
+    )
+
+    assert set(owner["outputs"]) == outputs
+    for output in outputs:
+        assert sum(output in entry["outputs"] for entry in manifest["generated"]) == 1
+        assert output not in owner["generator"]
+    assert set(owner["generator_sources"]) == {
+        "mochi/mochi-core/Cargo.toml",
+        "mochi/mochi-core/src/torii.rs",
+        "mochi/mochi-core/src/torii/tests/canonical_fixture_owner.rs",
+        "mochi/mochi-core/src/torii/tests_part1.rs",
+    }
+    assert "IROHA_MOCHI_CANONICAL_FIXTURE_STAGE" in owner["generator"]
+    for command in (owner["generator"], owner["check"]):
+        assert "IROHA_MOCHI_CANONICAL_FIXTURE_CARGO_TARGET_DIR" in command
+    assert "env -u IROHA_MOCHI_CANONICAL_FIXTURE_STAGE" in owner["check"]
+    for command in (owner["generator"], owner["check"]):
+        assert "cargo test" in command
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "-p mochi-core" in command
+        assert "canonical_torii_binary_fixture_owner" in command
+        assert "--ignored" in command
+
+
+def test_mochi_replay_fixtures_have_one_safe_exact_owner_without_orphans() -> None:
+    outputs = {
+        "mochi/mochi-integration/tests/fixtures/torii_replay/status.json",
+        "mochi/mochi-integration/tests/fixtures/torii_replay/sumeragi.json",
+        "mochi/mochi-integration/tests/fixtures/torii_replay/sumeragi_diagnostics.json",
+        "mochi/mochi-integration/tests/fixtures/torii_replay/configuration.json",
+        "mochi/mochi-integration/tests/fixtures/torii_replay/metrics.prom",
+        "mochi/mochi-integration/tests/fixtures/torii_replay/query.bin",
+    }
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owner = next(
+        entry
+        for entry in manifest["generated"]
+        if entry["name"] == "mochi-torii-replay-fixtures"
+    )
+
+    assert set(owner["outputs"]) == outputs
+    assert not any(
+        output.endswith(("block.bin", "event.bin")) for output in owner["outputs"]
+    )
+    for output in outputs:
+        assert sum(output in entry["outputs"] for entry in manifest["generated"]) == 1
+        assert output not in owner["generator"]
+    assert set(owner["generator_sources"]) == {
+        "mochi/mochi-integration/Cargo.toml",
+        "mochi/mochi-integration/src/mock_torii.rs",
+        "mochi/mochi-integration/src/mock_torii/tests/replay_fixture_owner.rs",
+    }
+    assert "IROHA_MOCHI_REPLAY_FIXTURE_STAGE" in owner["generator"]
+    for command in (owner["generator"], owner["check"]):
+        assert "IROHA_MOCHI_REPLAY_FIXTURE_CARGO_TARGET_DIR" in command
+    assert "env -u IROHA_MOCHI_REPLAY_FIXTURE_STAGE" in owner["check"]
+    for command in (owner["generator"], owner["check"]):
+        assert "cargo test" in command
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "-p mochi-integration" in command
+        assert "torii_replay_fixture_owner" in command
+        assert "--ignored" in command
 
 
 def test_single_star_input_does_not_cross_directory_boundary(tmp_path: Path) -> None:

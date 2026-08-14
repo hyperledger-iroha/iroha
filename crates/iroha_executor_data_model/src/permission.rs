@@ -6,14 +6,11 @@
 //! Resource-scoped tokens may also define a native use-time ownership root or an explicit wider
 //! parent token; ownership of an adjacent component of the scope is never sufficient.
 #![allow(clippy::missing_errors_doc)]
-
-use std::{format, string::String, vec::Vec};
-
 use iroha_data_model::prelude::*;
 pub use iroha_executor_data_model_derive::Permission;
 use iroha_schema::{Ident, IntoSchema};
 use norito::json::{JsonDeserializeOwned, JsonSerialize};
-
+use std::{format, string::String, vec::Vec};
 /// Used to check if the permission token is owned by the account.
 pub trait Permission: JsonSerialize + JsonDeserializeOwned + IntoSchema {
     /// Permission id, according to [`IntoSchema`].
@@ -21,7 +18,6 @@ pub trait Permission: JsonSerialize + JsonDeserializeOwned + IntoSchema {
         Self::type_name()
     }
 }
-
 macro_rules! permission {
     ($item:item) => {
         #[derive(
@@ -37,34 +33,28 @@ macro_rules! permission {
         $item
     };
 }
-
 /// Permission tokens related to peer management.
 pub mod peer {
     use super::*;
-
     permission! {
         /// Permission allowing the peer manager to add or remove peers.
         #[derive(Copy)]
         pub struct CanManagePeers;
     }
-
     permission! {
         /// Permission allowing a multisig operator to manage lane-relay emergency rosters.
         #[derive(Copy)]
         pub struct CanManageLaneRelayEmergency;
     }
 }
-
 /// Permission tokens scoped to domains.
 pub mod domain {
     use super::*;
-
     permission! {
         /// Permission to register a new domain.
         #[derive(Copy)]
         pub struct CanRegisterDomain;
     }
-
     permission! {
         /// Permission to unregister the specified domain.
         pub struct CanUnregisterDomain {
@@ -72,7 +62,6 @@ pub mod domain {
             pub domain: DomainId,
         }
     }
-
     permission! {
         /// Permission to modify metadata for the specified domain.
         pub struct CanModifyDomainMetadata {
@@ -81,11 +70,9 @@ pub mod domain {
         }
     }
 }
-
 /// Permission tokens scoped to asset definitions.
 pub mod asset_definition {
     use super::*;
-
     /// Scope carried by asset-definition-alias management permissions.
     #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
     #[allow(variant_size_differences)]
@@ -98,7 +85,6 @@ pub mod asset_definition {
         /// Permission scoped to one catalog-pinned alias and exact asset definition.
         Alias(ResolvedAssetDefinitionAliasV1),
     }
-
     impl norito::json::JsonSerialize for AssetDefinitionAliasPermissionScope {
         fn json_serialize(&self, out: &mut String) {
             out.push_str("{\"scope\":\"");
@@ -119,14 +105,12 @@ pub mod asset_definition {
             out.push('}');
         }
     }
-
     impl norito::json::JsonDeserialize for AssetDefinitionAliasPermissionScope {
         fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
             let value =
                 <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(p)?;
             Self::json_from_value(&value)
         }
-
         fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
             let object = value.as_object().ok_or_else(|| {
                 norito::json::Error::Message(
@@ -146,7 +130,6 @@ pub mod asset_definition {
                     "missing asset-definition alias permission scope value".into(),
                 )
             })?;
-
             match scope {
                 "domain" => Ok(Self::Domain(
                     <DomainId as norito::json::JsonDeserialize>::json_from_value(value)?,
@@ -163,7 +146,6 @@ pub mod asset_definition {
             }
         }
     }
-
     permission! {
         /// Permission to unregister the specified asset definition.
         pub struct CanUnregisterAssetDefinition {
@@ -171,7 +153,6 @@ pub mod asset_definition {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to modify metadata for the specified asset definition.
         pub struct CanModifyAssetDefinitionMetadata {
@@ -179,7 +160,6 @@ pub mod asset_definition {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to manage confidential policy and verifier roles for the specified asset definition.
         pub struct CanManageAssetDefinitionConfidentialPolicy {
@@ -187,7 +167,6 @@ pub mod asset_definition {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to register, bind, clear, or replace asset-definition aliases in one scope.
         ///
@@ -197,22 +176,18 @@ pub mod asset_definition {
             pub scope: AssetDefinitionAliasPermissionScope,
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use iroha_schema::{IntoSchema, Metadata};
-
         #[test]
         fn asset_alias_scope_serializes_as_snake_case() {
             let json = norito::json::to_json(&AssetDefinitionAliasPermissionScope::Dataspace(
                 DataSpaceId::UNIVERSAL,
             ))
             .expect("serialize asset alias scope");
-
             assert_eq!(json, "{\"scope\":\"dataspace\",\"value\":0}");
         }
-
         #[test]
         fn asset_alias_scope_schema_uses_independent_tags() {
             let schema = AssetDefinitionAliasPermissionScope::schema();
@@ -220,7 +195,6 @@ pub mod asset_definition {
             else {
                 panic!("asset alias scope schema must be an enum");
             };
-
             let tags = meta
                 .variants
                 .iter()
@@ -228,7 +202,6 @@ pub mod asset_definition {
                 .collect::<Vec<_>>();
             assert_eq!(tags, vec!["domain", "dataspace", "alias"]);
         }
-
         #[test]
         fn exact_asset_alias_scope_roundtrips() {
             let scope =
@@ -245,13 +218,11 @@ pub mod asset_definition {
             let json = norito::json::to_json(&scope).expect("serialize exact asset alias scope");
             let decoded: AssetDefinitionAliasPermissionScope =
                 norito::json::from_str(&json).expect("deserialize exact asset alias scope");
-
             assert_eq!(decoded, scope);
             assert!(json.contains("usd#banka.paynet"));
             assert!(json.contains("\"dataspace_id\":7"));
             assert!(json.contains("\"asset_definition_id\""));
         }
-
         #[test]
         fn confidential_policy_permission_is_exactly_asset_definition_scoped() {
             let pkr = AssetDefinitionId::derive_from_components(
@@ -269,18 +240,15 @@ pub mod asset_definition {
                 .expect("serialize confidential policy permission");
             let decoded: CanManageAssetDefinitionConfidentialPolicy =
                 norito::json::from_str(&json).expect("deserialize confidential policy permission");
-
             assert_eq!(decoded, permission);
             assert_eq!(decoded.asset_definition, pkr);
             assert_ne!(decoded.asset_definition, usd);
         }
     }
 }
-
 /// Permission tokens scoped to accounts.
 pub mod account {
     use super::*;
-
     /// Scope carried by account-alias permissions.
     #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
     #[allow(variant_size_differences)]
@@ -293,7 +261,6 @@ pub mod account {
         /// Permission scoped to one exact resolved account alias.
         Alias(ResolvedAccountAliasV1),
     }
-
     impl norito::json::JsonSerialize for AccountAliasPermissionScope {
         fn json_serialize(&self, out: &mut String) {
             out.push_str("{\"scope\":\"");
@@ -314,14 +281,12 @@ pub mod account {
             out.push('}');
         }
     }
-
     impl norito::json::JsonDeserialize for AccountAliasPermissionScope {
         fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
             let value =
                 <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(p)?;
             Self::json_from_value(&value)
         }
-
         fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
             let object = value.as_object().ok_or_else(|| {
                 norito::json::Error::Message("expected alias permission scope object".into())
@@ -337,7 +302,6 @@ pub mod account {
             let value = object.get("value").ok_or_else(|| {
                 norito::json::Error::Message("missing alias permission scope value".into())
             })?;
-
             match scope {
                 "domain" => Ok(Self::Domain(
                     <DomainId as norito::json::JsonDeserialize>::json_from_value(value)?,
@@ -356,7 +320,6 @@ pub mod account {
             }
         }
     }
-
     permission! {
         /// Permission to register an account within the provided domain.
         pub struct CanRegisterAccount {
@@ -364,7 +327,6 @@ pub mod account {
             pub domain: DomainId,
         }
     }
-
     permission! {
         /// Permission to unregister the specified account.
         pub struct CanUnregisterAccount {
@@ -379,7 +341,6 @@ pub mod account {
             pub account: AccountId,
         }
     }
-
     permission! {
         /// Permission to replace the controller for the specified account.
         pub struct CanReplaceAccountController {
@@ -387,7 +348,6 @@ pub mod account {
             pub account: AccountId,
         }
     }
-
     permission! {
         /// Permission to resolve account aliases in the specified scope.
         ///
@@ -399,7 +359,6 @@ pub mod account {
             pub scope: AccountAliasPermissionScope,
         }
     }
-
     permission! {
         /// Permission to grant or revoke alias-resolution access in the specified scope.
         ///
@@ -412,7 +371,6 @@ pub mod account {
             pub scope: AccountAliasPermissionScope,
         }
     }
-
     permission! {
         /// Permission to register, bind, or update account aliases in the specified scope.
         pub struct CanManageAccountAlias {
@@ -420,50 +378,41 @@ pub mod account {
             pub scope: AccountAliasPermissionScope,
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use iroha_schema::{IntoSchema, Metadata};
-
         #[test]
         fn alias_scope_serializes_as_snake_case() {
             let json = norito::json::to_json(&AccountAliasPermissionScope::Dataspace(
                 DataSpaceId::UNIVERSAL,
             ))
             .expect("serialize alias scope");
-
             assert_eq!(json, "{\"scope\":\"dataspace\",\"value\":0}");
         }
-
         #[test]
         fn alias_scope_deserializes_snake_case() {
             let scope: AccountAliasPermissionScope =
                 norito::json::from_str("{\"scope\":\"dataspace\",\"value\":0}")
                     .expect("deserialize alias scope");
-
             assert_eq!(
                 scope,
                 AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL)
             );
         }
-
         #[test]
         fn alias_scope_schema_uses_snake_case_tags() {
             let schema = AccountAliasPermissionScope::schema();
             let Some(Metadata::Enum(meta)) = schema.get::<AccountAliasPermissionScope>() else {
                 panic!("alias scope schema must be an enum");
             };
-
             let tags = meta
                 .variants
                 .iter()
                 .map(|variant| variant.tag.as_str())
                 .collect::<Vec<_>>();
-
             assert_eq!(tags, vec!["domain", "dataspace", "alias"]);
         }
-
         #[test]
         fn alias_scope_roundtrips_exact_resolved_alias() {
             let scope = AccountAliasPermissionScope::Alias(ResolvedAccountAliasV1::new(
@@ -475,16 +424,13 @@ pub mod account {
             let json = norito::json::to_json(&scope).expect("serialize exact alias scope");
             let decoded: AccountAliasPermissionScope =
                 norito::json::from_str(&json).expect("deserialize exact alias scope");
-
             assert_eq!(decoded, scope);
             assert!(json.contains("merchant"));
             assert!(json.contains("\"dataspace_id\":7"));
         }
-
         #[test]
         fn exact_alias_scope_matches_shared_alias_setup_fixture() {
             use norito::json::JsonDeserialize;
-
             let fixture: norito::json::Value = norito::json::from_str(include_str!(
                 "../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
             ))
@@ -501,14 +447,12 @@ pub mod account {
                     .expect("canonical account alias"),
                 DataSpaceId::new(7),
             ));
-
             assert_eq!(scope, expected);
             let encoded = norito::json::to_json(&scope).expect("encode shared exact alias scope");
             let encoded: norito::json::Value =
                 norito::json::from_str(&encoded).expect("decode encoded exact alias scope");
             assert_eq!(&encoded, raw_scope);
         }
-
         #[test]
         fn alias_resolution_delegation_roundtrips_with_an_exact_scope() {
             let permission = CanDelegateAccountAliasResolution {
@@ -520,17 +464,14 @@ pub mod account {
                 .expect("serialize alias-resolution delegation permission");
             let decoded: CanDelegateAccountAliasResolution = norito::json::from_str(&encoded)
                 .expect("deserialize alias-resolution delegation permission");
-
             assert_eq!(decoded, permission);
             assert!(encoded.contains("hbl.sbp"));
         }
     }
 }
-
 /// Permission tokens governing reads from ledger state.
 pub mod query {
     use super::*;
-
     permission! {
         /// Permission to read ledger-wide state, including account rosters,
         /// balances, transactions, blocks, and other global records.
@@ -540,7 +481,6 @@ pub mod query {
         #[derive(Copy)]
         pub struct CanReadAllLedgerData;
     }
-
     permission! {
         /// Permission to read private data belonging to one exact account.
         pub struct CanReadAccountData {
@@ -548,7 +488,6 @@ pub mod query {
             pub account: AccountId,
         }
     }
-
     permission! {
         /// Permission to read non-public ledger data from one exact dataspace.
         ///
@@ -561,11 +500,9 @@ pub mod query {
         }
     }
 }
-
 /// Permission tokens covering asset operations.
 pub mod asset {
     use super::*;
-
     permission! {
         /// Permission to mint assets belonging to the specified definition.
         pub struct CanMintAssetWithDefinition {
@@ -573,7 +510,6 @@ pub mod asset {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to burn assets belonging to the specified definition.
         pub struct CanBurnAssetWithDefinition {
@@ -581,7 +517,6 @@ pub mod asset {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to transfer assets belonging to the specified definition.
         pub struct CanTransferAssetWithDefinition {
@@ -589,7 +524,6 @@ pub mod asset {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to mint one asset definition into one exact account.
         ///
@@ -603,7 +537,6 @@ pub mod asset {
             pub account: AccountId,
         }
     }
-
     permission! {
         /// Permission to burn the specified asset instance.
         pub struct CanBurnAsset {
@@ -611,7 +544,6 @@ pub mod asset {
             pub asset: AssetId,
         }
     }
-
     permission! {
         /// Permission to transfer the specified asset instance.
         pub struct CanTransferAsset {
@@ -619,7 +551,6 @@ pub mod asset {
             pub asset: AssetId,
         }
     }
-
     permission! {
         /// Permission to modify metadata for assets belonging to the specified definition.
         pub struct CanModifyAssetMetadataWithDefinition {
@@ -627,7 +558,6 @@ pub mod asset {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to modify metadata for the specified asset instance.
         pub struct CanModifyAssetMetadata {
@@ -635,7 +565,6 @@ pub mod asset {
             pub asset: AssetId,
         }
     }
-
     permission! {
         /// Permission to set directional transfer availability for one exact account and asset.
         pub struct CanSetAssetTransferAvailability {
@@ -645,7 +574,6 @@ pub mod asset {
             pub asset_definition: AssetDefinitionId,
         }
     }
-
     permission! {
         /// Permission to set the daily transfer limit for one asset definition.
         pub struct CanSetAssetTransferDailyLimit {
@@ -657,7 +585,6 @@ pub mod asset {
             pub account_dataspace: iroha_data_model::nexus::DataSpaceId,
         }
     }
-
     permission! {
         /// Permission to set a native holding limit for one exact account and asset.
         pub struct CanSetAssetHoldingLimit {
@@ -668,45 +595,37 @@ pub mod asset {
         }
     }
 }
-
 /// Permission tokens covering native asset escrow operations.
 pub mod escrow {
     use super::*;
-
     permission! {
         /// Permission to resolve a disputed native asset escrow.
         #[derive(Copy)]
         pub struct CanResolveEscrowDispute;
     }
 }
-
 /// Permission tokens covering governed offline-settlement releases.
 pub mod offline {
     use super::*;
-
     permission! {
         /// Permission to manage native offline escrow issuance and settlement.
         #[derive(Copy)]
         pub struct CanManageOfflineEscrow;
     }
-
     permission! {
         /// Permission to activate an authenticated Kagemusha ABI-21/V4 recursive release.
         #[derive(Copy)]
         pub struct CanActivateKagemushaRecursiveReleaseV4;
     }
-
     permission! {
         /// Permission to publish or rotate the governed offline device-attestation policy.
         #[derive(Copy)]
         pub struct CanManageOfflineDeviceAttestationPolicy;
     }
 }
-
 /// Permission tokens covering NFT operations.
 pub mod nft {
     use super::*;
-
     permission! {
         /// Permission to register an NFT for the given domain.
         pub struct CanRegisterNft {
@@ -714,7 +633,6 @@ pub mod nft {
             pub domain: DomainId,
         }
     }
-
     permission! {
         /// Permission to unregister the specified NFT.
         pub struct CanUnregisterNft {
@@ -722,7 +640,6 @@ pub mod nft {
             pub nft: NftId,
         }
     }
-
     permission! {
         /// Permission to transfer the specified NFT.
         pub struct CanTransferNft {
@@ -730,7 +647,6 @@ pub mod nft {
             pub nft: NftId,
         }
     }
-
     permission! {
         /// Permission to modify metadata for the specified NFT.
         pub struct CanModifyNftMetadata {
@@ -739,11 +655,9 @@ pub mod nft {
         }
     }
 }
-
 /// Permission tokens covering trigger management.
 pub mod trigger {
     use super::*;
-
     permission! {
         /// Permission to register triggers on behalf of the provided authority.
         pub struct CanRegisterTrigger {
@@ -751,7 +665,6 @@ pub mod trigger {
             pub authority: AccountId,
         }
     }
-
     permission! {
         /// Permission to unregister the specified trigger.
         pub struct CanUnregisterTrigger {
@@ -759,7 +672,6 @@ pub mod trigger {
             pub trigger: TriggerId,
         }
     }
-
     permission! {
         /// Permission to modify the configuration of a trigger.
         pub struct CanModifyTrigger {
@@ -767,7 +679,6 @@ pub mod trigger {
             pub trigger: TriggerId,
         }
     }
-
     permission! {
         /// Permission to execute a trigger manually.
         pub struct CanExecuteTrigger {
@@ -775,7 +686,6 @@ pub mod trigger {
             pub trigger: TriggerId,
         }
     }
-
     permission! {
         /// Permission to modify metadata of the specified trigger.
         pub struct CanModifyTriggerMetadata {
@@ -784,67 +694,55 @@ pub mod trigger {
         }
     }
 }
-
 /// Permission tokens for configuration parameters.
 pub mod parameter {
     use super::*;
-
     permission! {
         /// Permission to set configuration parameters.
         #[derive(Copy)]
         pub struct CanSetParameters;
     }
 }
-
 /// Permission tokens for governed SCCP consensus state.
 pub mod sccp {
     use super::*;
-
     permission! {
         /// Permission to enact governed SCCP registry actions.
         #[derive(Copy)]
         pub struct CanManageSccpGovernance;
     }
-
     permission! {
         /// Permission to submit typed SCCP route-governance proposals.
         #[derive(Copy)]
         pub struct CanProposeSccpRouteGovernance;
     }
 }
-
 /// Permission tokens affecting role lifecycle.
 pub mod role {
     use super::*;
-
     permission! {
         /// Permission to manage role lifecycle.
         #[derive(Copy)]
         pub struct CanManageRoles;
     }
 }
-
 /// Permission tokens affecting executor upgrades.
 pub mod executor {
     use super::*;
-
     permission! {
         /// Permission to upgrade the executor implementation.
         #[derive(Copy)]
         pub struct CanUpgradeExecutor;
     }
 }
-
 /// Smart contract related permissions
 pub mod smart_contract {
     use super::*;
-
     permission! {
         /// Permission to register smart contract code artifacts.
         #[derive(Copy)]
         pub struct CanRegisterSmartContractCode;
     }
-
     permission! {
         /// Permission to invoke one exact entrypoint of one deployed contract instance.
         pub struct CanInvokeContractEntrypoint {
@@ -855,12 +753,10 @@ pub mod smart_contract {
         }
     }
 }
-
 /// Permission tokens governing native FX corridors.
 pub mod settlement {
     use super::*;
     use iroha_data_model::isi::SettlementId;
-
     permission! {
         /// Exact consent from a debited counterparty for one bilateral settlement intent.
         ///
@@ -878,13 +774,11 @@ pub mod settlement {
             pub intent_hash: Hash,
         }
     }
-
     permission! {
         /// Root permission for delegating native FX corridor governance.
         #[derive(Copy)]
         pub struct CanManageFxCorridors;
     }
-
     permission! {
         /// Permission to publish the next revision of one FX corridor policy.
         pub struct CanSetFxCorridorPolicy {
@@ -893,11 +787,9 @@ pub mod settlement {
         }
     }
 }
-
 /// Nexus / Space Directory permissions.
 pub mod nexus {
     use super::*;
-
     permission! {
         /// Permission to publish capability manifests for a dataspace.
         #[derive(Copy)]
@@ -906,7 +798,6 @@ pub mod nexus {
             pub dataspace: DataSpaceId,
         }
     }
-
     permission! {
         /// Permission to publish, replace, revoke, or expire one exact UAID manifest.
         #[derive(Copy)]
@@ -917,7 +808,6 @@ pub mod nexus {
             pub uaid: iroha_data_model::nexus::UniversalAccountId,
         }
     }
-
     permission! {
         /// Permission to manage manifests for accounts bound to one exact account-alias domain.
         pub struct CanPublishSpaceDirectoryManifestForAccountDomain {
@@ -927,7 +817,6 @@ pub mod nexus {
             pub domain: DomainId,
         }
     }
-
     permission! {
         /// Permission to manage fee sponsor programs owned by one sponsor account.
         pub struct CanManageFeeSponsorProgram {
@@ -935,7 +824,6 @@ pub mod nexus {
             pub sponsor: AccountId,
         }
     }
-
     permission! {
         /// Permission to enroll or unenroll beneficiaries in one exact sponsor program.
         pub struct CanEnrollFeeSponsorProgram {
@@ -944,11 +832,9 @@ pub mod nexus {
         }
     }
 }
-
 /// Governance-related permissions
 pub mod governance {
     use super::*;
-
     permission! {
         /// Allow proposing deployment of a smart contract via governance
         pub struct CanProposeContractDeployment {
@@ -956,7 +842,6 @@ pub mod governance {
             pub contract_address: ContractAddress,
         }
     }
-
     permission! {
         /// Allow proposing a runtime upgrade for one exact ABI target.
         #[derive(Copy)]
@@ -967,7 +852,6 @@ pub mod governance {
             pub abi_hash: [u8; 32],
         }
     }
-
     permission! {
         /// Allow submitting a governance ballot to a referendum/election
         pub struct CanSubmitGovernanceBallot {
@@ -975,25 +859,21 @@ pub mod governance {
             pub referendum_id: String,
         }
     }
-
     permission! {
         /// Allow enacting an approved referendum
         #[derive(Copy)]
         pub struct CanEnactGovernance;
     }
-
     permission! {
         /// Allow managing sortition parliament parameters/membership
         #[derive(Copy)]
         pub struct CanManageParliament;
     }
-
     permission! {
         /// Allow registering and rotating ledger verifying keys.
         #[derive(Copy)]
         pub struct CanManageVerifyingKeys;
     }
-
     permission! {
         /// Allow recording citizen service discipline events.
         pub struct CanRecordCitizenService {
@@ -1001,7 +881,6 @@ pub mod governance {
             pub owner: AccountId,
         }
     }
-
     permission! {
         /// Allow slashing governance bond locks for a referendum.
         pub struct CanSlashGovernanceLock {
@@ -1009,7 +888,6 @@ pub mod governance {
             pub referendum_id: String,
         }
     }
-
     permission! {
         /// Allow restituting governance bond locks after appeal.
         pub struct CanRestituteGovernanceLock {
@@ -1018,84 +896,70 @@ pub mod governance {
         }
     }
 }
-
 /// Permission tokens governing `SoraFS` operations.
 pub mod sorafs {
     use super::*;
     use iroha_data_model::sorafs::prelude::ProviderId;
-
     permission! {
         /// Permission to bind or update a `SoraFS` manifest alias.
         #[derive(Copy)]
         pub struct CanBindSorafsAlias;
     }
-
     permission! {
         /// Permission to declare storage capacity for a `SoraFS` provider.
         #[derive(Copy)]
         pub struct CanDeclareSorafsCapacity;
     }
-
     permission! {
         /// Permission to submit capacity telemetry for a `SoraFS` provider.
         #[derive(Copy)]
         pub struct CanSubmitSorafsTelemetry;
     }
-
     permission! {
         /// Permission to file a `SoraFS` capacity dispute.
         #[derive(Copy)]
         pub struct CanFileSorafsCapacityDispute;
     }
-
     permission! {
         /// Permission to issue `SoraFS` replication orders.
         #[derive(Copy)]
         pub struct CanIssueSorafsReplicationOrder;
     }
-
     permission! {
         /// Permission to complete `SoraFS` replication orders.
         #[derive(Copy)]
         pub struct CanCompleteSorafsReplicationOrder;
     }
-
     permission! {
         /// Permission to set `SoraFS` pricing schedules.
         #[derive(Copy)]
         pub struct CanSetSorafsPricing;
     }
-
     permission! {
         /// Permission to govern the authoritative `SoraFS` reserve and rent ledger.
         #[derive(Copy)]
         pub struct CanSetSorafsReservePolicy;
     }
-
     permission! {
         /// Permission to configure, open, resolve, and finalize authoritative `SoraFS` moderation ballots.
         #[derive(Copy)]
         pub struct CanManageSorafsModeration;
     }
-
     permission! {
         /// Permission to activate or rotate the authoritative `SoraFS` `PoP` issuer policy.
         #[derive(Copy)]
         pub struct CanManageSorafsPopRegistry;
     }
-
     permission! {
         /// Permission to publish authoritative `SoraFS` `PoP` credential and revocation state.
         #[derive(Copy)]
         pub struct CanOperateSorafsPopIssuer;
     }
-
     permission! {
         /// Permission to upsert `SoraFS` provider credit records.
         #[derive(Copy)]
         pub struct CanUpsertSorafsProviderCredit;
     }
-
     permission! {
         /// Permission to operate `SoraFS` repair tickets for a provider.
         #[derive(Copy)]
@@ -1104,13 +968,11 @@ pub mod sorafs {
             pub provider_id: ProviderId,
         }
     }
-
     permission! {
         /// Permission to activate or rotate governed PDP/PoTR validation keys.
         #[derive(Copy)]
         pub struct CanManageSorafsProofOutcomePolicy;
     }
-
     permission! {
         /// Permission to record unsigned scheduler-only proof outcomes for a provider.
         #[derive(Copy)]
@@ -1119,25 +981,21 @@ pub mod sorafs {
             pub provider_id: ProviderId,
         }
     }
-
     permission! {
         /// Permission to activate or rotate the authoritative reputation recorder policy.
         #[derive(Copy)]
         pub struct CanManageSorafsReputationJournalPolicy;
     }
-
     permission! {
         /// Permission to submit policy-authorized `PoR` or stream-token reputation entries.
         #[derive(Copy)]
         pub struct CanRecordSorafsReputationJournal;
     }
-
     permission! {
         /// Permission to commit the terminal outcome of an authoritative capacity dispute.
         #[derive(Copy)]
         pub struct CanResolveSorafsCapacityDispute;
     }
-
     permission! {
         /// Legacy permission accepted only for submitting a `SoraFS` provider-governance proposal.
         ///
@@ -1146,7 +1004,6 @@ pub mod sorafs {
         #[derive(Copy)]
         pub struct CanRegisterSorafsProviderOwner;
     }
-
     permission! {
         /// Legacy permission accepted only for submitting a `SoraFS` provider-removal proposal.
         ///
@@ -1156,47 +1013,39 @@ pub mod sorafs {
         pub struct CanUnregisterSorafsProviderOwner;
     }
 }
-
 /// Permission tokens governing `SoraNet` services.
 pub mod soranet {
     use super::*;
-
     permission! {
         /// Permission to authorize accounts and roles that may issue `SoraNet` VPN quotes.
         #[derive(Copy)]
         pub struct CanManageSoranetVpnQuoteIssuers;
     }
-
     permission! {
         /// Permission to issue operator-signed `SoraNet` VPN lease quotes.
         #[derive(Copy)]
         pub struct CanIssueSoranetVpnQuote;
     }
-
     permission! {
         /// Permission to ingest `SoraNet` privacy events or shares.
         #[derive(Copy)]
         pub struct CanIngestSoranetPrivacy;
     }
 }
-
 /// Permission tokens governing operator-managed oracle state.
 pub mod oracle {
     use super::*;
     use iroha_data_model::oracle::OracleChangeStage;
-
     permission! {
         /// Permission to register oracle feed configurations.
         #[derive(Copy)]
         pub struct CanRegisterOracleFeed;
     }
-
     permission! {
         /// Permission to propose oracle feed governance changes.
         #[derive(Copy)]
         pub struct CanProposeOracleChange;
     }
-
     permission! {
         /// Permission to vote in a specific oracle change stage.
         #[derive(Copy)]
@@ -1205,26 +1054,22 @@ pub mod oracle {
             pub stage: OracleChangeStage,
         }
     }
-
     permission! {
         /// Permission to roll back oracle change proposals.
         #[derive(Copy)]
         pub struct CanRollbackOracleChange;
     }
-
     permission! {
         /// Permission to resolve oracle disputes.
         #[derive(Copy)]
         pub struct CanResolveOracleDispute;
     }
-
     permission! {
         /// Permission to record or revoke oracle-backed Twitter bindings.
         #[derive(Copy)]
         pub struct CanManageTwitterBindings;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::account::CanRegisterAccount;
@@ -1244,16 +1089,13 @@ mod tests {
         AccountId, DomainId, account::rekey::AccountAliasDomain, asset::AssetDefinitionId,
         nexus::DataSpaceId,
     };
-
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
         let perm = CanRegisterAccount {
             domain: DomainId::try_new("wonderland", "universal").expect("valid domain"),
         };
-
         let json = norito::json::to_json(&perm).expect("serialize to JSON");
         assert_eq!(json, "{\"domain\":\"wonderland.universal\"}");
-
         let value = norito::json::to_value(&perm).expect("serialize to JSON value");
         assert_eq!(
             value,
@@ -1262,7 +1104,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn transfer_control_permissions_use_exact_availability_target_and_scoped_daily_limit() {
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -1285,7 +1126,6 @@ mod tests {
             account_domain,
             account_dataspace,
         };
-
         let availability_value =
             norito::json::to_value(&availability).expect("availability permission JSON");
         let availability_object = availability_value
@@ -1311,7 +1151,6 @@ mod tests {
             holding_object["account"].as_str(),
             Some(account_literal.as_str())
         );
-
         let daily_limit_value =
             norito::json::to_value(&daily_limit).expect("daily-limit permission JSON");
         let daily_limit_object = daily_limit_value
@@ -1320,7 +1159,6 @@ mod tests {
         assert_eq!(daily_limit_object.len(), 3);
         assert_eq!(daily_limit_object["account_domain"].as_str(), Some("hbl"));
         assert_eq!(daily_limit_object["account_dataspace"].as_u64(), Some(10));
-
         let broad_legacy_scope = norito::json!({
             "asset_definition": (availability.asset_definition.to_string()),
             "account_domain": "hbl",
@@ -1346,7 +1184,6 @@ mod tests {
             "holding-limit permission must require an exact account",
         );
     }
-
     #[test]
     fn escrow_court_permission_uses_expected_name() {
         assert_eq!(
@@ -1354,7 +1191,6 @@ mod tests {
             "CanResolveEscrowDispute"
         );
     }
-
     #[test]
     fn manage_verifying_keys_is_an_exact_unit_capability() {
         let canonical: iroha_data_model::permission::Permission = CanManageVerifyingKeys.into();
@@ -1363,7 +1199,6 @@ mod tests {
             CanManageVerifyingKeys::try_from(&canonical).expect("decode canonical unit payload"),
             CanManageVerifyingKeys
         );
-
         let malformed = iroha_data_model::permission::Permission::new(
             "CanManageVerifyingKeys".into(),
             norito::json!({"circuit_id": "not-a-scope"}),
@@ -1373,7 +1208,6 @@ mod tests {
             "the global capability must not accept an invented resource scope"
         );
     }
-
     #[test]
     fn runtime_upgrade_proposal_permission_binds_the_exact_abi_target() {
         let expected = CanProposeRuntimeUpgrade {
@@ -1387,7 +1221,6 @@ mod tests {
                 .expect("decode exact runtime-upgrade proposal scope"),
             expected
         );
-
         let other_target: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
             abi_version: 1,
             abi_hash: [0x5A; 32],
@@ -1409,14 +1242,12 @@ mod tests {
             "runtime-upgrade permission must require the exact ABI hash"
         );
     }
-
     #[test]
     fn restricted_dataspace_read_permission_is_exact_and_typed() {
         let permission = CanReadRestrictedDataspace {
             dataspace: DataSpaceId::new(10),
         };
         let json = norito::json::to_json(&permission).expect("serialize permission");
-
         assert_eq!(
             CanReadRestrictedDataspace::name().as_str(),
             "CanReadRestrictedDataspace"
@@ -1428,7 +1259,6 @@ mod tests {
             "restricted read grants must carry a numeric DataSpaceId"
         );
     }
-
     #[test]
     fn ledger_read_permissions_are_exact_and_typed() {
         let account = AccountId::new(KeyPair::random().public_key().clone());
@@ -1437,7 +1267,6 @@ mod tests {
         };
         let account_json =
             norito::json::to_json(&account_read).expect("serialize account-read permission");
-
         assert_eq!(CanReadAllLedgerData::name(), "CanReadAllLedgerData");
         assert_eq!(CanReadAccountData::name(), "CanReadAccountData");
         assert_eq!(
@@ -1445,7 +1274,6 @@ mod tests {
             format!("{{\"account\":\"{account}\"}}"),
             "account-read permission must bind exactly one universal account"
         );
-
         let global: iroha_data_model::permission::Permission = CanReadAllLedgerData.into();
         assert_eq!(
             CanReadAllLedgerData::try_from(&global).expect("decode canonical global read token"),
@@ -1464,7 +1292,6 @@ mod tests {
             "account reads must require an exact account"
         );
     }
-
     #[test]
     fn oracle_permissions_use_expected_names_and_payloads() {
         assert_eq!(
@@ -1475,7 +1302,6 @@ mod tests {
             CanManageTwitterBindings::name().as_str(),
             "CanManageTwitterBindings"
         );
-
         let stage_vote = CanVoteOracleChangeStage {
             stage: OracleChangeStage::PolicyJury,
         };

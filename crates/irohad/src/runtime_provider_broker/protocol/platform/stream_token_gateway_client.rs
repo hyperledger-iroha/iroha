@@ -1,10 +1,7 @@
 //! Broker client facade for deployment-owned stream-token gateway admission.
-
 use super::*;
-
 fn map_error(error: BrokerError) -> iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1 {
     use iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1 as Error;
-
     match error {
         BrokerError::Unavailable => Error::Unavailable,
         BrokerError::Rejected => Error::Rejected,
@@ -15,7 +12,6 @@ fn map_error(error: BrokerError) -> iroha_torii::sorafs::StreamTokenGatewayAdmis
         BrokerError::BindingMismatch => Error::BindingMismatch,
     }
 }
-
 #[derive(Clone)]
 pub(super) struct StreamTokenGatewayAdmissionBrokerProvider {
     pub(super) session: Arc<BrokerSession>,
@@ -23,7 +19,6 @@ pub(super) struct StreamTokenGatewayAdmissionBrokerProvider {
     pub(super) metadata_digest: [u8; 32],
     pub(super) qualification: iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1,
 }
-
 impl std::fmt::Debug for StreamTokenGatewayAdmissionBrokerProvider {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -33,14 +28,12 @@ impl std::fmt::Debug for StreamTokenGatewayAdmissionBrokerProvider {
             .finish_non_exhaustive()
     }
 }
-
 impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1
     for StreamTokenGatewayAdmissionBrokerProvider
 {
     fn handle(&self) -> &str {
         &self.binding.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -51,7 +44,6 @@ impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1
             .map_err(map_error)?;
         Ok(self.qualification)
     }
-
     fn admit(
         &self,
         request: &iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
@@ -79,7 +71,6 @@ impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1
         admission.validate_for_request(request, self.qualification)?;
         Ok(admission)
     }
-
     fn pending(
         &self,
         max_items: u32,
@@ -118,7 +109,6 @@ impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1
         }
         Ok(pending)
     }
-
     fn acknowledge(
         &self,
         record: iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
@@ -128,7 +118,6 @@ impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1
     > {
         self.ack_or_release(record, OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1)
     }
-
     fn release_lease(
         &self,
         record: iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
@@ -144,7 +133,6 @@ impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1
         self.ack_or_release(record, OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1)
     }
 }
-
 impl StreamTokenGatewayAdmissionBrokerProvider {
     fn ack_or_release(
         &self,

@@ -4,10 +4,8 @@
 //! step to CUDA when the build enables it and a device is available. They fall
 //! back to deterministic CPU ordering otherwise so callers can rely on the
 //! same output regardless of hardware.
-
 #[cfg(feature = "cuda")]
 use std::convert::TryFrom;
-
 /// Error reported when GPU sorting cannot be completed.
 #[derive(Copy, Clone, Debug)]
 pub enum GpuSortError {
@@ -20,7 +18,6 @@ pub enum GpuSortError {
     /// The CUDA kernel launched but returned an error.
     LaunchFailed,
 }
-
 /// Triplet `(key, tx_index, rw_flag)` encoded for GPU sorting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccessTriplet {
@@ -31,7 +28,6 @@ pub struct AccessTriplet {
     /// Read (`0`) or write (`1`) flag for the access.
     pub flag: u8,
 }
-
 /// Attempt to sort triplets using the CUDA bitonic path.
 ///
 /// Returns `Ok(())` when the GPU produced a sorted ordering, or a
@@ -48,13 +44,11 @@ pub fn sort_triplets_gpu(triplets: &mut [AccessTriplet]) -> Result<(), GpuSortEr
     if triplets.len() > (u32::MAX as usize) {
         return Err(GpuSortError::LengthOverflow);
     }
-
     #[cfg(feature = "cuda")]
     {
         if !ivm::cuda_available() {
             return Err(GpuSortError::Unsupported);
         }
-
         // Prepare high/low words preserving stability: high word stores
         // (key << 32) | tx_index, low word stores (flag << 32) | position.
         let mut hi = Vec::with_capacity(triplets.len());
@@ -67,7 +61,6 @@ pub fn sort_triplets_gpu(triplets: &mut [AccessTriplet]) -> Result<(), GpuSortEr
             hi.push(hi_word);
             lo.push(lo_word);
         }
-
         match ivm::bitonic_sort_pairs(&mut hi, &mut lo) {
             Some(()) => {
                 for (out, (hi_word, lo_word)) in triplets.iter_mut().zip(hi.into_iter().zip(lo)) {
@@ -80,7 +73,6 @@ pub fn sort_triplets_gpu(triplets: &mut [AccessTriplet]) -> Result<(), GpuSortEr
             None => Err(GpuSortError::LaunchFailed),
         }
     }
-
     #[cfg(not(feature = "cuda"))]
     {
         let _ = triplets;
@@ -102,11 +94,9 @@ pub fn sort_triplets_gpu_or_cpu(triplets: &mut [AccessTriplet]) -> bool {
         false
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn cpu_fallback_matches_reference_order() {
         let mut triplets = vec![
@@ -139,7 +129,6 @@ mod tests {
                 .then_with(|| a.tx_index.cmp(&b.tx_index))
                 .then_with(|| a.flag.cmp(&b.flag))
         });
-
         let used_gpu = sort_triplets_gpu_or_cpu(&mut triplets);
         // Regardless of backend availability, the ordering must match the reference.
         assert_eq!(
@@ -157,7 +146,6 @@ mod tests {
             assert_eq!(triplets.first().unwrap().key, 3);
         }
     }
-
     #[test]
     fn gpu_sort_failure_preserves_adversarial_inputs_for_cpu_retry() {
         let mut triplets = vec![
@@ -178,7 +166,6 @@ mod tests {
             },
         ];
         let original = triplets.clone();
-
         assert!(
             sort_triplets_gpu(&mut triplets).is_err(),
             "direct GPU sort should reject unsupported or unencodable adversarial inputs"
@@ -188,7 +175,6 @@ mod tests {
             "failed GPU sort must leave caller input intact for deterministic CPU retry"
         );
     }
-
     #[test]
     fn gpu_or_cpu_sort_orders_extreme_values_after_gpu_rejection() {
         let mut triplets = vec![
@@ -225,9 +211,7 @@ mod tests {
                 .then_with(|| a.tx_index.cmp(&b.tx_index))
                 .then_with(|| a.flag.cmp(&b.flag))
         });
-
         let used_gpu = sort_triplets_gpu_or_cpu(&mut triplets);
-
         assert!(
             !used_gpu,
             "usize::MAX transaction indices must force CPU fallback instead of truncated CUDA keys"

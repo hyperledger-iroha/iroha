@@ -1,7 +1,5 @@
 //! Native account controller replacement and social recovery instructions.
-
 use super::*;
-
 isi! {
     /// Replace the controller governing an existing account while preserving linked state.
     pub struct ReplaceAccountController {
@@ -11,14 +9,11 @@ isi! {
         pub new_controller: crate::account::AccountController,
     }
 }
-
 impl ReplaceAccountController {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.controller.replace";
 }
-
 impl crate::seal::Instruction for ReplaceAccountController {}
-
 isi! {
     /// Set or replace the alias-keyed recovery policy for an account.
     pub struct SetAccountRecoveryPolicy {
@@ -28,14 +23,11 @@ isi! {
         pub policy: crate::account::AccountRecoveryPolicy,
     }
 }
-
 impl SetAccountRecoveryPolicy {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.policy.set";
 }
-
 impl crate::seal::Instruction for SetAccountRecoveryPolicy {}
-
 isi! {
     /// Clear the alias-keyed recovery policy for an account.
     pub struct ClearAccountRecoveryPolicy {
@@ -43,14 +35,11 @@ isi! {
         pub account: AccountId,
     }
 }
-
 impl ClearAccountRecoveryPolicy {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.policy.clear";
 }
-
 impl crate::seal::Instruction for ClearAccountRecoveryPolicy {}
-
 isi! {
     /// Propose a controller replacement through the social-recovery workflow.
     pub struct ProposeAccountRecovery {
@@ -60,14 +49,11 @@ isi! {
         pub new_controller: crate::account::AccountController,
     }
 }
-
 impl ProposeAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.propose";
 }
-
 impl crate::seal::Instruction for ProposeAccountRecovery {}
-
 isi! {
     /// Record a guardian approval for the active recovery request of an alias.
     pub struct ApproveAccountRecovery {
@@ -75,14 +61,11 @@ isi! {
         pub alias: crate::account::AccountAlias,
     }
 }
-
 impl ApproveAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.approve";
 }
-
 impl crate::seal::Instruction for ApproveAccountRecovery {}
-
 isi! {
     /// Cancel a pending social-recovery request for an alias.
     pub struct CancelAccountRecovery {
@@ -90,14 +73,11 @@ isi! {
         pub alias: crate::account::AccountAlias,
     }
 }
-
 impl CancelAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.cancel";
 }
-
 impl crate::seal::Instruction for CancelAccountRecovery {}
-
 isi! {
     /// Finalize a pending social-recovery request once quorum and timelock are satisfied.
     pub struct FinalizeAccountRecovery {
@@ -105,18 +85,14 @@ isi! {
         pub alias: crate::account::AccountAlias,
     }
 }
-
 impl FinalizeAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.finalize";
 }
-
 impl crate::seal::Instruction for FinalizeAccountRecovery {}
-
 fn account_recovery_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_decode_one_field {
     ($ty:ident { $field:ident: $field_ty:ty }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -125,7 +101,6 @@ macro_rules! impl_decode_one_field {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let $field = super::decode_aos_canonical_field::<$field_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -140,7 +115,6 @@ macro_rules! impl_decode_one_field {
         }
     };
 }
-
 macro_rules! impl_decode_two_fields {
     ($ty:ident { $first:ident: $first_ty:ty, $second:ident: $second_ty:ty }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -149,7 +123,6 @@ macro_rules! impl_decode_two_fields {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let $first = super::decode_aos_canonical_field::<$first_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -168,7 +141,6 @@ macro_rules! impl_decode_two_fields {
         }
     };
 }
-
 impl_decode_two_fields!(ReplaceAccountController {
     account: AccountId,
     new_controller: crate::account::AccountController
@@ -191,14 +163,8 @@ impl_decode_one_field!(CancelAccountRecovery {
 impl_decode_one_field!(FinalizeAccountRecovery {
     alias: crate::account::AccountAlias
 });
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
-    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         account::{
@@ -207,17 +173,17 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
-
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use norito::core::DecodeFromSlice;
+    use std::num::NonZeroU64;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked account-recovery ISI fixture keypair");
         key_pair.public_key().clone()
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(public_key(seed))
     }
-
     fn alias() -> AccountAlias {
         AccountAlias::new(
             "recoverable".parse().expect("alias label"),
@@ -227,11 +193,9 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
     }
-
     fn controller(seed: u8) -> AccountController {
         AccountController::single(public_key(seed))
     }
-
     fn policy() -> AccountRecoveryPolicy {
         AccountRecoveryPolicy::new(
             vec![RecoveryGuardian::new(account(0xD1), 1)],
@@ -240,7 +204,6 @@ mod tests {
         )
         .expect("recovery policy")
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -251,7 +214,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &'static str,
@@ -271,7 +233,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn account_recovery_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(ReplaceAccountController {
@@ -293,7 +254,6 @@ mod tests {
         assert_slice_roundtrip(CancelAccountRecovery { alias: alias() });
         assert_slice_roundtrip(FinalizeAccountRecovery { alias: alias() });
     }
-
     #[test]
     fn account_recovery_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -306,7 +266,6 @@ mod tests {
             .register_with_id_slice::<ApproveAccountRecovery>(ApproveAccountRecovery::WIRE_ID)
             .register_with_id_slice::<CancelAccountRecovery>(CancelAccountRecovery::WIRE_ID)
             .register_with_id_slice::<FinalizeAccountRecovery>(FinalizeAccountRecovery::WIRE_ID);
-
         assert_registry_decodes(
             &registry,
             ReplaceAccountController::WIRE_ID,

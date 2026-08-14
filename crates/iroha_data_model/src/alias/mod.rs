@@ -3,25 +3,19 @@
 //! This module currently provides data model primitives for alias records,
 //! attestation tracking, and Merkle snapshot bookkeeping. Iroha v1 does not
 //! define or expose an OPRF/VOPRF protocol for alias lookup.
-
-use std::vec::Vec;
-
+pub use self::model::*;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{Decode, codec::Encode};
-
-pub use self::model::*;
-
+use std::vec::Vec;
 #[model]
 mod model {
     use super::*;
     use crate::{account::AccountId, asset::AssetId, peer::PeerId};
-
     /// Unique identifier assigned to an alias record in the Merkle store.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     pub struct AliasIndex(pub u64);
-
     /// Alias to entity mapping recorded on-chain.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasRecord {
@@ -36,7 +30,6 @@ mod model {
         /// Hashes of attestations that ratify this alias.
         pub attestation_hashes: Vec<HashOf<AliasAttestation>>,
     }
-
     /// Types of entities an alias may resolve to.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub enum AliasTarget {
@@ -49,7 +42,6 @@ mod model {
         /// Arbitrary opaque payload (reserved for future integrations).
         Custom(Vec<u8>),
     }
-
     /// Attestation emitted by an authorised attester.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasAttestation {
@@ -62,7 +54,6 @@ mod model {
         /// Optional context for the signature domain separation (future use).
         pub context: Vec<u8>,
     }
-
     /// Merkle bookkeeping snapshot for alias storage.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasMerkleSnapshot {
@@ -71,7 +62,6 @@ mod model {
         /// Leaf hashes required for incremental verification.
         pub frontier: Vec<HashOf<AliasRecord>>,
     }
-
     /// Audit/event stream entries produced by alias attesters.
     /// Payload describing an alias record alongside the attestation that produced it.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -81,7 +71,6 @@ mod model {
         /// Attestation responsible for the update.
         pub attestation: AliasAttestation,
     }
-
     /// Payload describing alias revocation details.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasRevokedEvent {
@@ -90,7 +79,6 @@ mod model {
         /// Authority performing the revoke operation.
         pub attester: AccountId,
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub enum AliasEvent {
         /// Alias recorded or updated with attestation.
@@ -101,7 +89,6 @@ mod model {
         FrontierCheckpoint(AliasMerkleSnapshot),
     }
 }
-
 impl AliasRecord {
     /// Construct a new alias record.
     #[must_use]
@@ -119,7 +106,6 @@ impl AliasRecord {
             attestation_hashes: Vec::new(),
         }
     }
-
     /// Register an attestation hash if it is not already tracked.
     pub fn push_attestation(&mut self, hash: HashOf<AliasAttestation>) {
         if !self.attestation_hashes.contains(&hash) {
@@ -127,7 +113,6 @@ impl AliasRecord {
         }
     }
 }
-
 impl AliasAttestation {
     /// Construct a new attestation payload.
     #[must_use]
@@ -145,10 +130,8 @@ impl AliasAttestation {
         }
     }
 }
-
 /// Domain separation tag for alias frontier hashing.
 pub const ALIAS_FRONTIER_HASH_DOMAIN: &[u8] = b"iroha:alias:frontier:v1|";
-
 /// Deterministic digest for alias frontier checkpoints.
 ///
 /// Combines the domain tag, exact genesis-derived network id, block height, root hash, and a
@@ -170,7 +153,6 @@ pub fn alias_frontier_digest(
         })
         .collect::<Vec<_>>();
     frontier.sort_unstable();
-
     let mut buf = Vec::with_capacity(
         ALIAS_FRONTIER_HASH_DOMAIN.len()
             + Hash::LENGTH
@@ -187,26 +169,20 @@ pub fn alias_frontier_digest(
     }
     Hash::new(buf)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use iroha_crypto::KeyPair;
-
     use super::*;
     use crate::{account::AccountId, domain::DomainId, name::Name};
-
+    use iroha_crypto::KeyPair;
+    use std::str::FromStr;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked alias fixture keypair")
     }
-
     fn sample_account_id() -> AccountId {
         let key_pair = checked_random_keypair();
         let _domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn alias_record_attestation_tracking() {
         let alias = Name::from_str("demo").expect("valid alias");
@@ -244,7 +220,6 @@ mod tests {
             _ => panic!("unexpected variant"),
         }
     }
-
     #[test]
     fn frontier_digest_is_order_independent_and_height_scoped() {
         let alias = Name::from_str("demo").expect("valid alias");
@@ -263,7 +238,6 @@ mod tests {
                 b"alias-frontier-network",
             )),
         );
-
         let snap_ab = AliasMerkleSnapshot {
             root,
             frontier: vec![f1, f2],
@@ -272,14 +246,11 @@ mod tests {
             root,
             frontier: vec![f2, f1],
         };
-
         let digest_ab = alias_frontier_digest(&network_id, 42, &snap_ab);
         let digest_ba = alias_frontier_digest(&network_id, 42, &snap_ba);
         assert_eq!(digest_ab, digest_ba);
-
         let digest_height_variation = alias_frontier_digest(&network_id, 43, &snap_ab);
         assert_ne!(digest_ab, digest_height_variation);
-
         let foreign_network = crate::NetworkId::from_genesis_hash(HashOf::<
             crate::block::BlockHeader,
         >::from_untyped_unchecked(

@@ -3,25 +3,20 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-
 //! Etenraku scheduling for the monitor's gagaku-inspired intro.
 //!
 //! The score focuses on hichiriki melodic primacy, slower shō breathing, lighter heterophonic
 //! ryūteki support, and sparse string/percussion punctuation. It provides timed events, MIDI export
 //! helpers, and small helpers that keep the ASCII prologue in sync with the audio rendition.
-
+use eyre::Result;
 use std::{
     cmp::Ordering,
     f32::consts::{LN_2, PI},
 };
-
-use eyre::Result;
-
 pub const HYOSHI_BEATS: f32 = 16.0;
 pub const OBACHI_OFFSET_BEATS: f32 = HYOSHI_BEATS * 0.5;
 #[allow(dead_code)]
 pub const PRELUDE_BEATS: f32 = 0.0;
-
 const TOTAL_SECTIONS: usize = 3;
 const BEATS_PER_SECTION: f32 = HYOSHI_BEATS;
 const TOTAL_BEATS: f32 = BEATS_PER_SECTION * TOTAL_SECTIONS as f32;
@@ -39,7 +34,6 @@ const MIDI_TICKS_PER_BEAT: u16 = 480;
 )]
 const A4_TUNING_HZ: f32 = 430.0;
 const APPROX_SECONDS_PER_BEAT: f32 = 74.0 / TOTAL_BEATS;
-
 const HICHIRIKI_EVENTS: &[(f32, f32, &str)] = &[
     // Section 1 (Jo)
     (0.0, 2.0, "B4"),
@@ -78,7 +72,6 @@ const HICHIRIKI_EVENTS: &[(f32, f32, &str)] = &[
     (46.0, 1.0, "A4"),
     (47.0, 1.0, "B4"),
 ];
-
 const SHO_CHORD_PROGRESSION: &[(f32, f32, &str)] = &[
     // Jo
     (0.0, 16.0, "Kotsu"),
@@ -90,7 +83,6 @@ const SHO_CHORD_PROGRESSION: &[(f32, f32, &str)] = &[
     (36.0, 4.0, "Ichikotsu"),
     (40.0, 8.0, "Kotsu"),
 ];
-
 const KOTO_ARPEGGIOS: &[(f32, f32, &[&str])] = &[
     (0.5, 6.5, &["A3", "E4", "A4", "C#5"]),
     (8.5, 5.5, &["B3", "F#4", "B4", "D5"]),
@@ -100,7 +92,6 @@ const KOTO_ARPEGGIOS: &[(f32, f32, &[&str])] = &[
     (40.0, 6.0, &["E3", "B3", "E4", "A4"]),
     (46.0, 4.0, &["A3", "C#4", "E4", "A4"]),
 ];
-
 const BIWA_SWELLS: &[(f32, f32, &str, bool)] = &[
     (1.0, 2.5, "E3", true),
     (9.0, 2.0, "F#3", false),
@@ -110,7 +101,6 @@ const BIWA_SWELLS: &[(f32, f32, &str, bool)] = &[
     (41.0, 3.0, "E3", true),
     (47.0, 2.5, "A3", true),
 ];
-
 const TAIKO_ACCENTS: &[(f32, u8)] = &[
     // Jo
     (10.0, 108),
@@ -122,7 +112,6 @@ const TAIKO_ACCENTS: &[(f32, u8)] = &[
     (42.0, 110),
     (44.0, 124),
 ];
-
 const SHOKO_STRIKES: &[f32] = &[13.0, 29.0, 45.0];
 const KAKKO_STRIKES: &[(f32, bool)] = &[
     (0.0, true),
@@ -139,12 +128,10 @@ const KAKKO_STRIKES: &[(f32, bool)] = &[
     (44.0, false),
     (46.0, true),
 ];
-
 const TAIKO_NOTE: u8 = 48;
 const SHOKO_NOTE: u8 = 81;
 const KAKKO_HIGH_NOTE: u8 = 76;
 const KAKKO_LOW_NOTE: u8 = 77;
-
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SequenceLayer {
@@ -157,7 +144,6 @@ pub enum SequenceLayer {
     Shoko,
     Kakko,
 }
-
 #[derive(Clone, Copy, Debug)]
 pub struct SequenceEvent {
     pub t: f32,
@@ -175,14 +161,12 @@ pub struct SequenceEvent {
     )]
     pub ornaments: Ornaments,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScoreSection {
     Jo,
     Ha,
     Kyu,
 }
-
 impl ScoreSection {
     fn index(self) -> usize {
         match self {
@@ -191,7 +175,6 @@ impl ScoreSection {
             Self::Kyu => 2,
         }
     }
-
     fn from_beat(beat: f32) -> Self {
         let section = (beat / BEATS_PER_SECTION)
             .floor()
@@ -203,7 +186,6 @@ impl ScoreSection {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct NoteSpec {
     start_beats: f32,
@@ -213,28 +195,23 @@ struct NoteSpec {
     velocities: (u8, u8),
     ornaments: Ornaments,
 }
-
 impl NoteSpec {
     fn end_beats(&self) -> f32 {
         self.start_beats + self.duration_beats
     }
-
     fn section(&self) -> ScoreSection {
         ScoreSection::from_beat(self.start_beats)
     }
 }
-
 #[derive(Clone)]
 struct TempoMap {
     step_beats: f32,
     times: Vec<f32>,
 }
-
 impl TempoMap {
     fn total_seconds(&self) -> f32 {
         *self.times.last().unwrap_or(&0.0)
     }
-
     fn seconds_at(&self, beat: f32) -> f32 {
         if self.times.is_empty() {
             return 0.0;
@@ -252,7 +229,6 @@ impl TempoMap {
         let t1 = self.times[idx + 1];
         t0 + (t1 - t0).mul_add(frac, 0.0)
     }
-
     #[cfg_attr(
         not(any(
             target_os = "macos",
@@ -287,13 +263,11 @@ impl TempoMap {
         frac.mul_add(self.step_beats, base_beat)
     }
 }
-
 #[derive(Clone)]
 pub struct ScoreTimeline {
     tempo: TempoMap,
     total_beats: f32,
 }
-
 impl ScoreTimeline {
     fn new(tempo: TempoMap) -> Self {
         Self {
@@ -301,15 +275,12 @@ impl ScoreTimeline {
             total_beats: TOTAL_BEATS,
         }
     }
-
     pub fn total_seconds(&self) -> f32 {
         self.tempo.total_seconds()
     }
-
     pub fn seconds_at(&self, beat: f32) -> f32 {
         self.tempo.seconds_at(beat)
     }
-
     #[cfg_attr(
         not(any(
             target_os = "macos",
@@ -321,7 +292,6 @@ impl ScoreTimeline {
     pub fn beat_at(&self, seconds: f32) -> f32 {
         self.tempo.beat_at(seconds)
     }
-
     pub fn average_seconds_per_beat(&self) -> f32 {
         if self.total_beats <= f32::EPSILON {
             0.0
@@ -330,7 +300,6 @@ impl ScoreTimeline {
         }
     }
 }
-
 fn approx_seconds_to_beats(seconds: f32) -> f32 {
     if seconds <= f32::EPSILON {
         0.0
@@ -338,7 +307,6 @@ fn approx_seconds_to_beats(seconds: f32) -> f32 {
         seconds / APPROX_SECONDS_PER_BEAT
     }
 }
-
 fn base_hichiriki_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::with_capacity(HICHIRIKI_EVENTS.len());
     for &(start_beats, duration_beats, name) in HICHIRIKI_EVENTS {
@@ -358,7 +326,6 @@ fn base_hichiriki_specs() -> Vec<NoteSpec> {
     enforce_monophonic_line(&mut specs);
     specs
 }
-
 fn base_ryuteki_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::new();
     for (idx, &(start_beats, duration_beats, name)) in HICHIRIKI_EVENTS.iter().enumerate() {
@@ -398,7 +365,6 @@ fn base_ryuteki_specs() -> Vec<NoteSpec> {
     enforce_monophonic_line(&mut specs);
     specs
 }
-
 /// Ensure single-line winds (hichiriki, ryūteki) never emit overlapping notes.
 fn enforce_monophonic_line(notes: &mut [NoteSpec]) {
     if notes.is_empty() {
@@ -412,7 +378,6 @@ fn enforce_monophonic_line(notes: &mut [NoteSpec]) {
         last_end = note.end_beats();
     }
 }
-
 fn base_sho_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::new();
     for &(start_beats, duration_beats, chord) in SHO_CHORD_PROGRESSION {
@@ -432,7 +397,6 @@ fn base_sho_specs() -> Vec<NoteSpec> {
     }
     specs
 }
-
 fn base_koto_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::new();
     let voice_offsets = [0.0_f32, 0.23, 0.49];
@@ -463,7 +427,6 @@ fn base_koto_specs() -> Vec<NoteSpec> {
     }
     specs
 }
-
 fn base_biwa_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::new();
     for &(start_beats, sustain_beats, name, accent) in BIWA_SWELLS {
@@ -485,7 +448,6 @@ fn base_biwa_specs() -> Vec<NoteSpec> {
     }
     specs
 }
-
 fn base_taiko_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::with_capacity(TAIKO_ACCENTS.len());
     for &(start_beats, velocity) in TAIKO_ACCENTS {
@@ -501,7 +463,6 @@ fn base_taiko_specs() -> Vec<NoteSpec> {
     }
     specs
 }
-
 fn base_shoko_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::with_capacity(SHOKO_STRIKES.len());
     for &start_beats in SHOKO_STRIKES {
@@ -517,7 +478,6 @@ fn base_shoko_specs() -> Vec<NoteSpec> {
     }
     specs
 }
-
 fn base_kakko_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::with_capacity(KAKKO_STRIKES.len());
     for &(beat, high) in KAKKO_STRIKES {
@@ -538,7 +498,6 @@ fn base_kakko_specs() -> Vec<NoteSpec> {
     }
     specs
 }
-
 fn nearest_obachi(beat: f32) -> f32 {
     if TOTAL_BEATS <= f32::EPSILON {
         return 0.0;
@@ -548,7 +507,6 @@ fn nearest_obachi(beat: f32) -> f32 {
     let obachi = idx.mul_add(HYOSHI_BEATS, OBACHI_OFFSET_BEATS);
     obachi.clamp(0.0, TOTAL_BEATS)
 }
-
 fn apply_obachi_anchor(notes: &mut [NoteSpec], window: f32, offset: f32) {
     if notes.is_empty() {
         return;
@@ -560,7 +518,6 @@ fn apply_obachi_anchor(notes: &mut [NoteSpec], window: f32, offset: f32) {
         }
     }
 }
-
 fn apply_section_entry_alignment(notes: &mut [NoteSpec], landing_offset: f32) {
     for section_idx in 0..TOTAL_SECTIONS {
         let section_start = section_idx as f32 * BEATS_PER_SECTION;
@@ -579,7 +536,6 @@ fn apply_section_entry_alignment(notes: &mut [NoteSpec], landing_offset: f32) {
         }
     }
 }
-
 fn apply_hichiriki_phrasing(notes: &mut [NoteSpec]) {
     for note in notes.iter_mut() {
         let section = note.section();
@@ -615,7 +571,6 @@ fn apply_hichiriki_phrasing(notes: &mut [NoteSpec]) {
         note.start_beats = (note.start_beats + shift).max(section_start);
     }
 }
-
 fn apply_hichiriki_tataku_timing(notes: &mut [NoteSpec]) {
     let target = approx_seconds_to_beats(0.2);
     for note in notes.iter_mut() {
@@ -626,7 +581,6 @@ fn apply_hichiriki_tataku_timing(notes: &mut [NoteSpec]) {
         }
     }
 }
-
 fn apply_sho_member_stagger(notes: &mut [NoteSpec]) {
     if notes.is_empty() {
         return;
@@ -666,7 +620,6 @@ fn apply_sho_member_stagger(notes: &mut [NoteSpec]) {
         idx = end_idx;
     }
 }
-
 fn apply_jitter(
     notes: &mut [NoteSpec],
     section_std: [f32; TOTAL_SECTIONS],
@@ -696,13 +649,11 @@ fn apply_jitter(
         note.start_beats = (note.start_beats + jitter).max(0.0);
     }
 }
-
 fn build_tempo_map() -> TempoMap {
     let step_beats = 1.0 / TEMPO_SUBDIVISIONS_PER_BEAT as f32;
     let total_steps = (TOTAL_BEATS / step_beats).ceil() as usize;
     let mut times = Vec::with_capacity(total_steps.saturating_add(2));
     times.push(0.0);
-
     let hyoshi_count = (TOTAL_BEATS / HYOSHI_BEATS).ceil() as usize;
     let mut rng = ScoreRng::new(0x41C6_4E6DA5);
     let mut pre_amp = Vec::with_capacity(hyoshi_count);
@@ -713,7 +664,6 @@ fn build_tempo_map() -> TempoMap {
         pre_amp.push(range * rng.next_signed());
         post_amp.push(range * rng.next_signed());
     }
-
     let mut beat = 0.0;
     for _ in 0..total_steps {
         let section = ScoreSection::from_beat(beat);
@@ -740,20 +690,16 @@ fn build_tempo_map() -> TempoMap {
         times.push(last + seconds);
         beat += step_beats;
     }
-
     TempoMap { step_beats, times }
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ornaments {
     bits: u8,
 }
-
 impl Ornaments {
     pub const fn empty() -> Self {
         Self { bits: 0 }
     }
-
     pub fn with(marks: &[OrnamentMark]) -> Self {
         let mut bits = 0;
         let mut idx = 0;
@@ -763,12 +709,10 @@ impl Ornaments {
         }
         Self { bits }
     }
-
     pub fn contains(self, mark: OrnamentMark) -> bool {
         self.bits & mark.bit() != 0
     }
 }
-
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum OrnamentMark {
@@ -781,7 +725,6 @@ pub enum OrnamentMark {
     Suriage,
     Orite,
 }
-
 impl OrnamentMark {
     const fn bit(self) -> u8 {
         match self {
@@ -796,7 +739,6 @@ impl OrnamentMark {
         }
     }
 }
-
 pub fn hyoshi_breath_scalar(beat: f32) -> f32 {
     if HYOSHI_BEATS <= 0.0 {
         return 1.0;
@@ -805,7 +747,6 @@ pub fn hyoshi_breath_scalar(beat: f32) -> f32 {
     let sin = (PI * phase).sin().abs();
     0.55_f32.mul_add(sin.powi(2), 0.45)
 }
-
 #[cfg_attr(
     not(any(
         target_os = "macos",
@@ -830,18 +771,15 @@ pub fn layer_intonation_cents(layer: SequenceLayer, note: u8) -> f32 {
         _ => 0.0,
     }
 }
-
 pub fn total_beats() -> f32 {
     TOTAL_BEATS
 }
-
 #[derive(Clone)]
 struct MidiEvent {
     tick: u32,
     order: u8,
     data: Vec<u8>,
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MidiTrackId {
     Hichiriki,
@@ -851,7 +789,6 @@ enum MidiTrackId {
     Biwa,
     Percussion,
 }
-
 #[derive(Clone, Copy)]
 struct MidiTrackConfig {
     id: MidiTrackId,
@@ -863,7 +800,6 @@ struct MidiTrackConfig {
     reverb: u8,
     expression: u8,
 }
-
 const MIDI_TRACKS: [MidiTrackConfig; 6] = [
     MidiTrackConfig {
         id: MidiTrackId::Hichiriki,
@@ -926,7 +862,6 @@ const MIDI_TRACKS: [MidiTrackConfig; 6] = [
         expression: 112,
     },
 ];
-
 pub fn write_demo_midi_file() -> Result<String> {
     let (events, timeline) = synth_events();
     let ticks_per_beat = MIDI_TICKS_PER_BEAT;
@@ -944,7 +879,6 @@ pub fn write_demo_midi_file() -> Result<String> {
             .cmp(&right.tick)
             .then_with(|| left.order.cmp(&right.order))
     });
-
     let mut file = Vec::new();
     file.extend_from_slice(b"MThd");
     file.extend_from_slice(&6u32.to_be_bytes());
@@ -956,7 +890,6 @@ pub fn write_demo_midi_file() -> Result<String> {
     );
     file.extend_from_slice(&ticks_per_beat.to_be_bytes());
     write_track_chunk(&mut file, &encode_midi_track(conductor));
-
     for track in MIDI_TRACKS {
         let mut track_events = vec![track_name_event(0, track.name)];
         if let Some(program) = track.program {
@@ -966,7 +899,6 @@ pub fn write_demo_midi_file() -> Result<String> {
         track_events.push(controller_event(0, track.channel, 0x0A, track.pan));
         track_events.push(controller_event(0, track.channel, 0x0B, track.expression));
         track_events.push(controller_event(0, track.channel, 0x5B, track.reverb));
-
         for event in &events {
             if midi_track_id(event.layer) != track.id {
                 continue;
@@ -984,44 +916,35 @@ pub fn write_demo_midi_file() -> Result<String> {
         let encoded = encode_midi_track(track_events);
         write_track_chunk(&mut file, &encoded);
     }
-
     let path = std::env::temp_dir().join("iroha_monitor_etenraku.mid");
     std::fs::write(&path, &file)?;
     Ok(path.to_string_lossy().into_owned())
 }
-
 pub fn synth_events() -> (Vec<SequenceEvent>, ScoreTimeline) {
     let timeline = ScoreTimeline::new(build_tempo_map());
-
     let mut hichiriki = base_hichiriki_specs();
     apply_section_entry_alignment(&mut hichiriki, -0.01);
     apply_hichiriki_phrasing(&mut hichiriki);
     apply_hichiriki_tataku_timing(&mut hichiriki);
     apply_obachi_anchor(&mut hichiriki, 0.05, -0.005);
     apply_jitter(&mut hichiriki, [0.008, 0.006, 0.005], 0.015, 0xB137_1F11);
-
     let mut ryuteki = base_ryuteki_specs();
     apply_obachi_anchor(&mut ryuteki, 0.05, 0.003);
     apply_jitter(&mut ryuteki, [0.007, 0.006, 0.005], 0.015, 0xC001_FEED);
-
     let mut sho = base_sho_specs();
     apply_sho_member_stagger(&mut sho);
     apply_obachi_anchor(&mut sho, 0.04, 0.0);
     apply_jitter(&mut sho, [0.004, 0.003, 0.002], 0.012, 0xA11D_CAFE);
-
     let mut koto = base_koto_specs();
     apply_obachi_anchor(&mut koto, 0.08, 0.012);
     apply_jitter(&mut koto, [0.006, 0.005, 0.004], 0.012, 0x5AA5_F011);
-
     let mut biwa = base_biwa_specs();
     apply_obachi_anchor(&mut biwa, 0.08, -0.006);
     apply_jitter(&mut biwa, [0.006, 0.005, 0.005], 0.012, 0xB1A0_5EED);
-
     let taiko = base_taiko_specs();
     let shoko = base_shoko_specs();
     let mut kakko = base_kakko_specs();
     apply_jitter(&mut kakko, [0.002, 0.002, 0.001], 0.01, 0xCACC_0D0E);
-
     let mut note_specs = Vec::new();
     note_specs.extend(hichiriki);
     note_specs.extend(ryuteki);
@@ -1031,7 +954,6 @@ pub fn synth_events() -> (Vec<SequenceEvent>, ScoreTimeline) {
     note_specs.extend(taiko);
     note_specs.extend(shoko);
     note_specs.extend(kakko);
-
     let mut events = Vec::with_capacity(note_specs.len() * 2);
     for note in note_specs {
         let start_seconds = timeline.seconds_at(note.start_beats);
@@ -1055,17 +977,14 @@ pub fn synth_events() -> (Vec<SequenceEvent>, ScoreTimeline) {
             ornaments: Ornaments::empty(),
         });
     }
-
     events.sort_by(|a, b| {
         a.t.partial_cmp(&b.t)
             .unwrap_or(Ordering::Equal)
             .then_with(|| b.on.cmp(&a.on))
             .then_with(|| a.note.cmp(&b.note))
     });
-
     (events, timeline)
 }
-
 fn midi_track_id(layer: SequenceLayer) -> MidiTrackId {
     match layer {
         SequenceLayer::Hichiriki => MidiTrackId::Hichiriki,
@@ -1078,7 +997,6 @@ fn midi_track_id(layer: SequenceLayer) -> MidiTrackId {
         }
     }
 }
-
 fn track_name_event(tick: u32, name: &str) -> MidiEvent {
     let mut data = vec![0xFF, 0x03, u8::try_from(name.len()).unwrap_or(0)];
     data.extend_from_slice(name.as_bytes());
@@ -1088,7 +1006,6 @@ fn track_name_event(tick: u32, name: &str) -> MidiEvent {
         data,
     }
 }
-
 fn tempo_event(tick: u32, tempo_micros: u32) -> MidiEvent {
     MidiEvent {
         tick,
@@ -1103,7 +1020,6 @@ fn tempo_event(tick: u32, tempo_micros: u32) -> MidiEvent {
         ],
     }
 }
-
 fn time_signature_event(tick: u32) -> MidiEvent {
     MidiEvent {
         tick,
@@ -1111,7 +1027,6 @@ fn time_signature_event(tick: u32) -> MidiEvent {
         data: vec![0xFF, 0x58, 0x04, 4, 2, 24, 8],
     }
 }
-
 fn program_event(tick: u32, channel: u8, program: u8) -> MidiEvent {
     MidiEvent {
         tick,
@@ -1119,7 +1034,6 @@ fn program_event(tick: u32, channel: u8, program: u8) -> MidiEvent {
         data: vec![0xC0 | channel, program],
     }
 }
-
 fn controller_event(tick: u32, channel: u8, controller: u8, value: u8) -> MidiEvent {
     MidiEvent {
         tick,
@@ -1127,7 +1041,6 @@ fn controller_event(tick: u32, channel: u8, controller: u8, value: u8) -> MidiEv
         data: vec![0xB0 | channel, controller, value],
     }
 }
-
 fn note_event(tick: u32, on: bool, channel: u8, note: u8, velocity: u8) -> MidiEvent {
     MidiEvent {
         tick,
@@ -1139,7 +1052,6 @@ fn note_event(tick: u32, on: bool, channel: u8, note: u8, velocity: u8) -> MidiE
         ],
     }
 }
-
 fn end_of_track_event(tick: u32) -> MidiEvent {
     MidiEvent {
         tick,
@@ -1147,14 +1059,12 @@ fn end_of_track_event(tick: u32) -> MidiEvent {
         data: vec![0xFF, 0x2F, 0x00],
     }
 }
-
 fn encode_midi_track(mut events: Vec<MidiEvent>) -> Vec<u8> {
     events.sort_by(|left, right| {
         left.tick
             .cmp(&right.tick)
             .then_with(|| left.order.cmp(&right.order))
     });
-
     let mut bytes = Vec::new();
     let mut last_tick = 0;
     for event in events {
@@ -1164,13 +1074,11 @@ fn encode_midi_track(mut events: Vec<MidiEvent>) -> Vec<u8> {
     }
     bytes
 }
-
 fn write_track_chunk(file: &mut Vec<u8>, track_bytes: &[u8]) {
     file.extend_from_slice(b"MTrk");
     file.extend_from_slice(&(track_bytes.len() as u32).to_be_bytes());
     file.extend_from_slice(track_bytes);
 }
-
 fn ornaments_for_hichiriki_beats(duration_beats: f32) -> Ornaments {
     let long_threshold = approx_seconds_to_beats(6.0);
     let short_threshold = approx_seconds_to_beats(2.0);
@@ -1186,7 +1094,6 @@ fn ornaments_for_hichiriki_beats(duration_beats: f32) -> Ornaments {
         Ornaments::with(&[OrnamentMark::Seme, OrnamentMark::Fukura])
     }
 }
-
 fn ornaments_for_ryuteki_beats(duration_beats: f32) -> Ornaments {
     let long_threshold = approx_seconds_to_beats(6.0);
     let short_threshold = approx_seconds_to_beats(2.0);
@@ -1198,7 +1105,6 @@ fn ornaments_for_ryuteki_beats(duration_beats: f32) -> Ornaments {
         Ornaments::empty()
     }
 }
-
 fn chord_note_names(name: &str) -> &'static [&'static str] {
     match name {
         "Kotsu" => &["A4", "B4", "E5", "F#5", "A5", "B5"],
@@ -1206,7 +1112,6 @@ fn chord_note_names(name: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
-
 fn note_name_to_midi(name: &str) -> u8 {
     let (prefix, octave_str) = name.split_at(name.len() - 1);
     let octave: i32 = octave_str.parse().expect("invalid octave");
@@ -1228,7 +1133,6 @@ fn note_name_to_midi(name: &str) -> u8 {
     let midi = 12 * (octave + 1) + semitone;
     midi.clamp(0, 127) as u8
 }
-
 fn seconds_to_ticks(seconds: f32, seconds_per_beat: f32, ticks_per_beat: u16) -> u32 {
     if seconds_per_beat <= f32::EPSILON {
         return 0;
@@ -1236,16 +1140,13 @@ fn seconds_to_ticks(seconds: f32, seconds_per_beat: f32, ticks_per_beat: u16) ->
     let beats = seconds.max(0.0) / seconds_per_beat;
     (beats * f32::from(ticks_per_beat)).round().max(0.0) as u32
 }
-
 #[derive(Clone, Debug)]
 struct ScoreRng(u64);
-
 impl ScoreRng {
     fn new(seed: u64) -> Self {
         let seed = if seed == 0 { 0x000D_ECAF_CAFE } else { seed };
         Self(seed)
     }
-
     fn next_u32(&mut self) -> u32 {
         // Simple splitmix64 variant; sufficient for deterministic humanisation.
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -1255,23 +1156,19 @@ impl ScoreRng {
         z ^= z >> 31;
         (z >> 32) as u32
     }
-
     fn next_f32(&mut self) -> f32 {
         let bits = 0x3F80_0000 | (self.next_u32() >> 9);
         f32::from_bits(bits) - 1.0
     }
-
     fn next_signed(&mut self) -> f32 {
         self.next_f32().mul_add(2.0, -1.0)
     }
-
     fn next_gaussian(&mut self) -> f32 {
         let u1 = self.next_f32().abs().max(1.0e-6);
         let u2 = self.next_f32();
         (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
     }
 }
-
 fn write_var_len(mut value: u32, out: &mut Vec<u8>) {
     let mut buffer = [0u8; 4];
     let mut index = 3;
@@ -1285,11 +1182,9 @@ fn write_var_len(mut value: u32, out: &mut Vec<u8>) {
     }
     out.extend_from_slice(&buffer[index..]);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn assert_monophonic(notes: &[NoteSpec], label: &str) {
         let mut last_end = 0.0_f32;
         for note in notes {
@@ -1302,14 +1197,12 @@ mod tests {
             last_end = note.end_beats();
         }
     }
-
     #[test]
     fn note_name_conversion() {
         assert_eq!(note_name_to_midi("C4"), 60);
         assert_eq!(note_name_to_midi("A4"), 69);
         assert_eq!(note_name_to_midi("C#5"), 73);
     }
-
     #[test]
     fn synth_events_cover_duration() {
         let (events, timeline) = synth_events();
@@ -1317,13 +1210,11 @@ mod tests {
         let max = events.iter().fold(0.0_f32, |acc, ev| acc.max(ev.t));
         assert!(max <= timeline.total_seconds());
     }
-
     #[test]
     fn midi_file_is_written() {
         let path = write_demo_midi_file().expect("midi generation");
         let midi_path = std::path::Path::new(&path);
         assert!(midi_path.exists());
-
         let bytes = std::fs::read(midi_path).expect("read generated midi");
         assert!(bytes.starts_with(b"MThd"), "midi header must be present");
         assert_eq!(u16::from_be_bytes([bytes[8], bytes[9]]), 1);
@@ -1335,7 +1226,6 @@ mod tests {
             "multitrack export should name melodic tracks"
         );
     }
-
     #[test]
     fn breath_scalar_stays_in_range() {
         for step in 0..64 {
@@ -1344,7 +1234,6 @@ mod tests {
             assert!((0.0..=1.5).contains(&scalar));
         }
     }
-
     #[test]
     fn tempo_drift_resets_at_obachi() {
         let timeline = ScoreTimeline::new(build_tempo_map());
@@ -1364,19 +1253,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn synth_events_cover_extended_layers() {
         let (events, timeline) = synth_events();
         assert!(timeline.total_seconds() > 0.0);
-
         let mut has_koto = false;
         let mut has_biwa = false;
         let mut has_taiko = false;
         let mut has_shoko = false;
         let mut has_kakko = false;
         let mut last_taiko_time = 0.0_f32;
-
         for event in &events {
             if !event.on {
                 continue;
@@ -1393,7 +1279,6 @@ mod tests {
                 _ => {}
             }
         }
-
         assert!(
             has_koto,
             "koto strums must be present in the rendered sequence"
@@ -1418,7 +1303,6 @@ mod tests {
             last_taiko_time > timeline.total_seconds() - 6.0,
             "final taiko cadence should reach the closing section"
         );
-
         let kakko_hits = events
             .iter()
             .filter(|event| event.on && matches!(event.layer, SequenceLayer::Kakko))
@@ -1428,13 +1312,11 @@ mod tests {
             "kakko cadence should remain present without becoming grid-like (found {kakko_hits})"
         );
     }
-
     #[test]
     fn hichiriki_sequence_is_monophonic() {
         let specs = base_hichiriki_specs();
         assert_monophonic(&specs, "hichiriki");
     }
-
     #[test]
     fn ryuteki_sequence_is_monophonic() {
         let specs = base_ryuteki_specs();

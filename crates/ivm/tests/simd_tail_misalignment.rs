@@ -8,11 +8,8 @@
 //! The tests are deterministic and do not require any specific hardware
 //! features. On platforms without SIMD, `ivm::vector` falls back to scalar
 //! intrinsics, so parity still holds.
-
 #![allow(clippy::needless_range_loop)]
-
 use ivm::{vadd32, vadd64, vand, vor, vrot32, vxor};
-
 // Simple deterministic PRNG (xoshiro-like) to avoid external deps.
 #[derive(Clone)]
 struct Rng(u64);
@@ -33,7 +30,6 @@ impl Rng {
         (self.next_u32() & 0xff) as u8
     }
 }
-
 fn scalar_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
     assert_eq!(a.len(), b.len());
     assert_eq!(a.len(), out.len());
@@ -41,7 +37,6 @@ fn scalar_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i] = a[i].wrapping_add(b[i]);
     }
 }
-
 fn simd_chunked_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
     assert_eq!(a.len(), b.len());
     assert_eq!(a.len(), out.len());
@@ -58,7 +53,6 @@ fn simd_chunked_add32(a: &[u32], b: &[u32], out: &mut [u32]) {
         i += 1;
     }
 }
-
 fn scalar_bit<F: Fn(u32, u32) -> u32>(a: &[u32], b: &[u32], out: &mut [u32], f: F) {
     assert_eq!(a.len(), b.len());
     assert_eq!(a.len(), out.len());
@@ -66,7 +60,6 @@ fn scalar_bit<F: Fn(u32, u32) -> u32>(a: &[u32], b: &[u32], out: &mut [u32], f: 
         out[i] = f(a[i], b[i]);
     }
 }
-
 fn simd_chunked_bit(
     a: &[u32],
     b: &[u32],
@@ -89,14 +82,12 @@ fn simd_chunked_bit(
         i += 1;
     }
 }
-
 fn scalar_rot32(a: &[u32], k: u32, out: &mut [u32]) {
     assert_eq!(a.len(), out.len());
     for i in 0..a.len() {
         out[i] = a[i].rotate_left(k);
     }
 }
-
 fn simd_chunked_rot32(a: &[u32], k: u32, out: &mut [u32]) {
     assert_eq!(a.len(), out.len());
     let mut i = 0;
@@ -111,7 +102,6 @@ fn simd_chunked_rot32(a: &[u32], k: u32, out: &mut [u32]) {
         i += 1;
     }
 }
-
 fn scalar_add64_pairs(a: &[u32], b: &[u32], out: &mut [u32]) {
     assert_eq!(a.len(), b.len());
     assert_eq!(a.len(), out.len());
@@ -124,7 +114,6 @@ fn scalar_add64_pairs(a: &[u32], b: &[u32], out: &mut [u32]) {
         out[i + 1] = (r >> 32) as u32;
     }
 }
-
 fn simd_chunked_add64_pairs(a: &[u32], b: &[u32], out: &mut [u32]) {
     assert_eq!(a.len(), b.len());
     assert_eq!(a.len(), out.len());
@@ -147,7 +136,6 @@ fn simd_chunked_add64_pairs(a: &[u32], b: &[u32], out: &mut [u32]) {
         i += 2;
     }
 }
-
 #[test]
 fn simd_tail_and_misalignment_add32_parity() {
     let mut rng = Rng::new(0xDEADBEEFCAFEBABE);
@@ -156,7 +144,6 @@ fn simd_tail_and_misalignment_add32_parity() {
         let len = (rng.next_u32() as usize % 257) + 1; // 1..=257 to cover small/medium
         let off_a = (rng.next_u8() % 4) as usize;
         let off_b = (rng.next_u8() % 4) as usize;
-
         let mut buf_a = vec![0u32; len + 8];
         let mut buf_b = vec![0u32; len + 8];
         for v in &mut buf_a {
@@ -167,7 +154,6 @@ fn simd_tail_and_misalignment_add32_parity() {
         }
         let a = &buf_a[off_a..off_a + len];
         let b = &buf_b[off_b..off_b + len];
-
         let mut out_scalar = vec![0u32; len];
         let mut out_simd = vec![0u32; len];
         scalar_add32(a, b, &mut out_scalar);
@@ -178,7 +164,6 @@ fn simd_tail_and_misalignment_add32_parity() {
         );
     }
 }
-
 #[test]
 fn simd_tail_and_misalignment_bitwise_parity() {
     let mut rng = Rng::new(0xABCDEF0123456789);
@@ -186,7 +171,6 @@ fn simd_tail_and_misalignment_bitwise_parity() {
         let len = (rng.next_u32() as usize % 257) + 1;
         let off_a = (rng.next_u8() % 4) as usize;
         let off_b = (rng.next_u8() % 4) as usize;
-
         let mut buf_a = vec![0u32; len + 8];
         let mut buf_b = vec![0u32; len + 8];
         for v in &mut buf_a {
@@ -197,26 +181,22 @@ fn simd_tail_and_misalignment_bitwise_parity() {
         }
         let a = &buf_a[off_a..off_a + len];
         let b = &buf_b[off_b..off_b + len];
-
         // AND
         let mut s = vec![0u32; len];
         let mut d = vec![0u32; len];
         scalar_bit(a, b, &mut s, |x, y| x & y);
         simd_chunked_bit(a, b, &mut d, vand, |x, y| x & y);
         assert_eq!(s, d, "AND len={len}, off_a={off_a}, off_b={off_b}");
-
         // XOR
         scalar_bit(a, b, &mut s, |x, y| x ^ y);
         simd_chunked_bit(a, b, &mut d, vxor, |x, y| x ^ y);
         assert_eq!(s, d, "XOR len={len}, off_a={off_a}, off_b={off_b}");
-
         // OR
         scalar_bit(a, b, &mut s, |x, y| x | y);
         simd_chunked_bit(a, b, &mut d, vor, |x, y| x | y);
         assert_eq!(s, d, "OR len={len}, off_a={off_a}, off_b={off_b}");
     }
 }
-
 #[test]
 fn simd_tail_and_misalignment_rot32_parity() {
     let mut rng = Rng::new(0x0123_4567_89AB_CDEF);
@@ -229,7 +209,6 @@ fn simd_tail_and_misalignment_rot32_parity() {
         }
         let a = &buf[off..off + len];
         let k = (rng.next_u8() % 32) as u32;
-
         let mut s = vec![0u32; len];
         let mut d = vec![0u32; len];
         scalar_rot32(a, k, &mut s);
@@ -237,7 +216,6 @@ fn simd_tail_and_misalignment_rot32_parity() {
         assert_eq!(s, d, "ROT len={len}, off={off}, k={k}");
     }
 }
-
 #[test]
 fn simd_tail_and_misalignment_add64_parity_even_lengths() {
     let mut rng = Rng::new(0x1337_C0DE_F00D_BAAD);
@@ -246,7 +224,6 @@ fn simd_tail_and_misalignment_add64_parity_even_lengths() {
         let len = (((rng.next_u32() as usize % 256) + 2) / 2) * 2; // even in [2, 256]
         let off_a = (rng.next_u8() % 2) as usize * 2; // keep base 8-byte aligned vs unaligned in 8-byte terms
         let off_b = (rng.next_u8() % 2) as usize * 2;
-
         let mut buf_a = vec![0u32; len + 8];
         let mut buf_b = vec![0u32; len + 8];
         for v in &mut buf_a {
@@ -257,7 +234,6 @@ fn simd_tail_and_misalignment_add64_parity_even_lengths() {
         }
         let a = &buf_a[off_a..off_a + len];
         let b = &buf_b[off_b..off_b + len];
-
         let mut s = vec![0u32; len];
         let mut d = vec![0u32; len];
         scalar_add64_pairs(a, b, &mut s);

@@ -3,16 +3,6 @@
 //! The composer utilities provide lightweight building blocks for
 //! transaction previews so front ends can offer form-based instruction
 //! builders without pulling additional crates.
-
-use std::{
-    collections::BTreeSet,
-    fmt,
-    num::{NonZeroU32, NonZeroU64},
-    str::FromStr,
-    sync::LazyLock,
-    time::Duration,
-};
-
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     NetworkId,
@@ -39,7 +29,14 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
 use norito::json::{self, Map, Value};
-
+use std::{
+    collections::BTreeSet,
+    fmt,
+    num::{NonZeroU32, NonZeroU64},
+    str::FromStr,
+    sync::LazyLock,
+    time::Duration,
+};
 /// Permission categories used to gate high-level instruction templates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InstructionPermission {
@@ -68,7 +65,6 @@ pub enum InstructionPermission {
     /// Set chain parameters, including Nexus lane lifecycle topology.
     SetParameters,
 }
-
 impl InstructionPermission {
     /// Return a static list containing every permission variant.
     #[must_use]
@@ -88,7 +84,6 @@ impl InstructionPermission {
             Self::SetParameters,
         ]
     }
-
     /// Human-readable label used in error messages and tooltips.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -107,7 +102,6 @@ impl InstructionPermission {
             Self::SetParameters => "set chain parameters",
         }
     }
-
     /// Stable key used for persistence.
     #[must_use]
     pub const fn key(self) -> &'static str {
@@ -126,7 +120,6 @@ impl InstructionPermission {
             Self::SetParameters => "set_parameters",
         }
     }
-
     /// Convert a persisted key back into an [`InstructionPermission`].
     #[must_use]
     pub fn from_key(key: &str) -> Option<Self> {
@@ -147,13 +140,11 @@ impl InstructionPermission {
         }
     }
 }
-
 impl fmt::Display for InstructionPermission {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 /// Errors that can occur while preparing transaction previews.
 #[derive(Debug, thiserror::Error)]
 pub enum ComposeError {
@@ -237,7 +228,6 @@ pub enum ComposeError {
         reason: String,
     },
 }
-
 /// Named signing authority used to author transactions in local workflows.
 #[derive(Debug, Clone)]
 pub struct SigningAuthority {
@@ -247,14 +237,12 @@ pub struct SigningAuthority {
     allowed: BTreeSet<InstructionPermission>,
     roles: BTreeSet<RoleId>,
 }
-
 impl SigningAuthority {
     /// Create a new signing authority entry.
     #[must_use]
     pub fn new(label: impl Into<String>, account: AccountId, key_pair: KeyPair) -> Self {
         Self::with_permissions(label, account, key_pair, InstructionPermission::all())
     }
-
     /// Create a signing authority with an explicit permission set.
     #[must_use]
     pub fn with_permissions(
@@ -271,7 +259,6 @@ impl SigningAuthority {
             roles: BTreeSet::new(),
         }
     }
-
     /// Create a signing authority with explicit permissions and roles.
     #[must_use]
     pub fn with_permissions_and_roles(
@@ -289,41 +276,34 @@ impl SigningAuthority {
             roles: roles.into_iter().collect(),
         }
     }
-
     /// Human-readable label suitable for UI selectors.
     #[must_use]
     pub fn label(&self) -> &str {
         self.label.as_str()
     }
-
     /// Account identifier that will act as the transaction authority.
     #[must_use]
     pub fn account_id(&self) -> &AccountId {
         &self.account
     }
-
     /// Key pair used for signing.
     #[must_use]
     pub fn key_pair(&self) -> &KeyPair {
         &self.key_pair
     }
-
     /// Iterator over permission categories allowed for this authority.
     pub fn permissions(&self) -> impl Iterator<Item = InstructionPermission> + '_ {
         self.allowed.iter().copied()
     }
-
     /// Iterator over configured role identifiers for this authority.
     pub fn roles(&self) -> impl Iterator<Item = &RoleId> + '_ {
         self.roles.iter()
     }
-
     /// Check whether the authority may execute the provided permission.
     #[must_use]
     pub fn allows_permission(&self, permission: InstructionPermission) -> bool {
         self.allowed.contains(&permission)
     }
-
     /// Ensure that every draft in the provided slice is authorised for this signer.
     ///
     /// # Errors
@@ -343,7 +323,6 @@ impl SigningAuthority {
         Ok(())
     }
 }
-
 static DEVELOPMENT_AUTHORITIES: LazyLock<Vec<SigningAuthority>> = LazyLock::new(|| {
     let all_permissions = InstructionPermission::all();
     vec![
@@ -361,25 +340,21 @@ static DEVELOPMENT_AUTHORITIES: LazyLock<Vec<SigningAuthority>> = LazyLock::new(
         ),
     ]
 });
-
 static ACCOUNT_ADMISSION_POLICY_KEY: LazyLock<Name> = LazyLock::new(|| {
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY
         .parse()
         .expect("account admission policy metadata key must be valid")
 });
-
 fn default_authority() -> &'static SigningAuthority {
     DEVELOPMENT_AUTHORITIES
         .first()
         .expect("development authorities must not be empty")
 }
-
 /// Access the bundled development signing authorities.
 #[must_use]
 pub fn development_signing_authorities() -> &'static [SigningAuthority] {
     DEVELOPMENT_AUTHORITIES.as_slice()
 }
-
 /// Optional overrides applied when composing transactions.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionComposeOptions {
@@ -387,7 +362,6 @@ pub struct TransactionComposeOptions {
     creation_time: Option<Duration>,
     nonce: Option<NonZeroU32>,
 }
-
 impl TransactionComposeOptions {
     /// Create a new options struct with no overrides.
     #[must_use]
@@ -398,53 +372,45 @@ impl TransactionComposeOptions {
             nonce: None,
         }
     }
-
     /// Override the time-to-live field using the supplied duration.
     #[must_use]
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = Some(ttl);
         self
     }
-
     /// Freeze the creation time to a specific timestamp.
     #[must_use]
     pub fn with_creation_time(mut self, creation_time: Duration) -> Self {
         self.creation_time = Some(creation_time);
         self
     }
-
     /// Override the nonce recorded in the transaction payload.
     #[must_use]
     pub fn with_nonce(mut self, nonce: NonZeroU32) -> Self {
         self.nonce = Some(nonce);
         self
     }
-
     /// Access the configured TTL override, if any.
     #[must_use]
     pub const fn ttl(&self) -> Option<Duration> {
         self.ttl
     }
-
     /// Access the configured creation timestamp override, if any.
     #[must_use]
     pub const fn creation_time(&self) -> Option<Duration> {
         self.creation_time
     }
-
     /// Access the configured nonce override, if any.
     #[must_use]
     pub const fn nonce(&self) -> Option<NonZeroU32> {
         self.nonce
     }
 }
-
 impl Default for TransactionComposeOptions {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Lightweight summary of a composed transaction ready for preview or submission.
 #[derive(Debug, Clone)]
 pub struct TransactionPreview {
@@ -454,63 +420,53 @@ pub struct TransactionPreview {
     hash: String,
     authority: String,
 }
-
 impl TransactionPreview {
     /// Canonical transaction hash derived from the signed payload.
     #[must_use]
     pub fn hash(&self) -> &str {
         &self.hash
     }
-
     /// Hex-encoded Norito payload suitable for Torii submission.
     #[must_use]
     pub fn encoded_hex(&self) -> &str {
         &self.encoded_hex
     }
-
     /// Versioned Norito payload bytes ready to POST to `/transaction`.
     #[must_use]
     pub fn encoded_bytes(&self) -> Vec<u8> {
         self.signed.encode_versioned()
     }
-
     /// Human-readable list of instruction descriptions contained in the transaction.
     #[must_use]
     pub fn instructions(&self) -> &[String] {
         &self.instructions
     }
-
     /// Authority account recorded in the transaction payload.
     #[must_use]
     pub fn authority(&self) -> &str {
         &self.authority
     }
-
     /// Access the underlying signed transaction for advanced consumers.
     #[must_use]
     pub fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed
     }
-
     /// Time-to-live override expressed as a duration, if present.
     #[must_use]
     pub fn time_to_live(&self) -> Option<Duration> {
         self.signed.time_to_live()
     }
-
     /// Creation timestamp attached to the transaction payload.
     #[must_use]
     pub fn creation_time(&self) -> Duration {
         self.signed.creation_time()
     }
-
     /// Nonce recorded in the payload, if supplied.
     #[must_use]
     pub fn nonce(&self) -> Option<NonZeroU32> {
         self.signed.nonce()
     }
 }
-
 impl TransactionPreview {
     fn new(signed: SignedTransaction) -> Self {
         let encoded_hex = encode_hex(&signed.encode_versioned());
@@ -548,7 +504,6 @@ impl TransactionPreview {
         }
     }
 }
-
 /// Compose an asset quantity mint transaction assigned to the default MOCHI signer.
 ///
 /// The helper signs the transaction with the sample Alice key pair so local
@@ -570,7 +525,6 @@ pub fn mint_quantity_preview(
     };
     compose_preview_with_authority(network_id, &[draft], default_authority())
 }
-
 /// Compose a transaction preview for an exact network from a list of
 /// [`InstructionDraft`] entries.
 ///
@@ -583,7 +537,6 @@ pub fn compose_preview(
 ) -> Result<TransactionPreview, ComposeError> {
     compose_preview_with_authority(network_id, drafts, default_authority())
 }
-
 /// Compose a transaction preview for an exact network signed by the provided authority.
 ///
 /// # Errors
@@ -601,7 +554,6 @@ pub fn compose_preview_with_authority(
         &TransactionComposeOptions::default(),
     )
 }
-
 /// Compose an exact-network preview while applying the supplied
 /// [`TransactionComposeOptions`].
 ///
@@ -644,7 +596,6 @@ pub fn compose_preview_with_options(
         })?;
     Ok(TransactionPreview::new(signed))
 }
-
 /// Declarative specification for a high-level instruction created in the UI.
 #[derive(Debug, Clone)]
 pub enum InstructionDraft {
@@ -726,7 +677,6 @@ pub enum InstructionDraft {
         transaction_ttl_ms: Option<NonZeroU64>,
     },
 }
-
 impl InstructionDraft {
     /// Create a mint draft by parsing textual inputs collected from the UI.
     ///
@@ -738,7 +688,6 @@ impl InstructionDraft {
         let quantity = parse_quantity(quantity)?;
         Ok(Self::MintAsset { asset, quantity })
     }
-
     /// Create a burn draft by parsing textual inputs collected from the UI.
     ///
     /// # Errors
@@ -749,7 +698,6 @@ impl InstructionDraft {
         let quantity = parse_quantity(quantity)?;
         Ok(Self::BurnAsset { asset, quantity })
     }
-
     /// Create a transfer draft by parsing textual inputs collected from the UI.
     ///
     /// # Errors
@@ -769,7 +717,6 @@ impl InstructionDraft {
             destination,
         })
     }
-
     /// Create an account registration draft by parsing textual inputs.
     ///
     /// # Errors
@@ -779,7 +726,6 @@ impl InstructionDraft {
         let account = parse_account_id(account)?;
         Ok(Self::RegisterAccount { account })
     }
-
     /// Create an asset definition registration draft from textual inputs.
     ///
     /// # Errors
@@ -802,7 +748,6 @@ impl InstructionDraft {
             mintable,
         })
     }
-
     /// Create a Space Directory manifest publication draft from JSON input.
     ///
     /// # Errors
@@ -817,7 +762,6 @@ impl InstructionDraft {
             })?;
         Ok(Self::PublishSpaceDirectoryManifest { manifest })
     }
-
     /// Create a pin manifest registration draft from JSON input.
     ///
     /// # Errors
@@ -830,7 +774,6 @@ impl InstructionDraft {
             })?;
         Ok(Self::RegisterPinManifest { request })
     }
-
     /// Create an account admission policy draft by parsing textual inputs.
     ///
     /// # Errors
@@ -843,7 +786,6 @@ impl InstructionDraft {
         let domain = parse_domain_id(domain)?;
         Ok(Self::SetAccountAdmissionPolicy { domain, policy })
     }
-
     /// Create a grant role draft by parsing textual inputs.
     ///
     /// # Errors
@@ -854,7 +796,6 @@ impl InstructionDraft {
         let account = parse_account_id(account)?;
         Ok(Self::GrantRole { role, account })
     }
-
     /// Create a revoke role draft by parsing textual inputs.
     ///
     /// # Errors
@@ -865,7 +806,6 @@ impl InstructionDraft {
         let account = parse_account_id(account)?;
         Ok(Self::RevokeRole { role, account })
     }
-
     /// Create a multisig proposal draft from JSON-encoded instruction drafts.
     ///
     /// # Errors
@@ -899,7 +839,6 @@ impl InstructionDraft {
             transaction_ttl_ms,
         })
     }
-
     /// Permission category associated with this draft.
     #[must_use]
     pub const fn permission(&self) -> InstructionPermission {
@@ -925,7 +864,6 @@ impl InstructionDraft {
             InstructionDraft::MultisigPropose { .. } => InstructionPermission::MultisigPropose,
         }
     }
-
     /// Produce a human-readable summary suitable for list views.
     #[must_use]
     pub fn summary(&self) -> String {
@@ -987,7 +925,6 @@ impl InstructionDraft {
             ),
         }
     }
-
     fn instruction(&self) -> InstructionBox {
         match self {
             InstructionDraft::MintAsset { asset, quantity } => {
@@ -1058,7 +995,6 @@ impl InstructionDraft {
             }
         }
     }
-
     /// Convert the draft into a JSON object suitable for the raw editor.
     #[must_use]
     pub fn to_json_value(&self) -> Value {
@@ -1183,7 +1119,6 @@ impl InstructionDraft {
         }
         Value::Object(object)
     }
-
     /// Construct a draft by parsing a JSON value emitted by [`Self::to_json_value`].
     ///
     /// # Errors
@@ -1195,7 +1130,6 @@ impl InstructionDraft {
                 reason: "expected object".to_owned(),
             });
         };
-
         let kind = extract_string(map, "kind")?;
         match kind.as_str() {
             "mint_asset" => {
@@ -1310,7 +1244,6 @@ impl InstructionDraft {
         }
     }
 }
-
 fn format_admission_policy_summary(policy: &AccountAdmissionPolicy) -> String {
     let mode = match policy.mode {
         AccountAdmissionMode::ImplicitReceive => "implicit receive",
@@ -1344,7 +1277,6 @@ fn format_admission_policy_summary(policy: &AccountAdmissionPolicy) -> String {
     }
     format!("{mode}, {}", details.join(", "))
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -1354,22 +1286,18 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn account_literal(account_id: &AccountId) -> String {
     account_id.to_string()
 }
-
 fn asset_literal(asset_id: &AssetId) -> String {
     asset_id.to_string()
 }
-
 fn parse_asset_id(value: &str) -> Result<AssetId, ComposeError> {
     AssetId::from_str(value).map_err(|err| ComposeError::InvalidAssetId {
         asset: value.to_owned(),
         reason: err.reason().into(),
     })
 }
-
 fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
     AccountId::parse_encoded(value)
         .map(|parsed| parsed.into_account_id())
@@ -1378,35 +1306,30 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
             reason: err.to_string(),
         })
 }
-
 fn parse_quantity(value: &str) -> Result<Quantity, ComposeError> {
     Quantity::from_str(value).map_err(|err| ComposeError::InvalidQuantity {
         quantity: value.to_owned(),
         reason: err.to_string(),
     })
 }
-
 fn parse_domain_id(value: &str) -> Result<DomainId, ComposeError> {
     DomainId::parse_fully_qualified(value).map_err(|err| ComposeError::InvalidDomainId {
         domain: value.to_owned(),
         reason: err.to_string(),
     })
 }
-
 fn parse_asset_definition_id(value: &str) -> Result<AssetDefinitionId, ComposeError> {
     AssetDefinitionId::from_str(value).map_err(|err| ComposeError::InvalidAssetDefinitionId {
         definition: value.to_owned(),
         reason: err.to_string(),
     })
 }
-
 fn parse_role_id(value: &str) -> Result<RoleId, ComposeError> {
     RoleId::from_str(value).map_err(|err| ComposeError::InvalidRoleId {
         role: value.to_owned(),
         reason: err.to_string(),
     })
 }
-
 fn extract_string(map: &Map, key: &str) -> Result<String, ComposeError> {
     match map.get(key) {
         Some(Value::String(value)) => Ok(value.clone()),
@@ -1418,7 +1341,6 @@ fn extract_string(map: &Map, key: &str) -> Result<String, ComposeError> {
         }),
     }
 }
-
 fn extract_optional_nonzero_u64(map: &Map, key: &str) -> Result<Option<NonZeroU64>, ComposeError> {
     let Some(value) = map.get(key) else {
         return Ok(None);
@@ -1458,7 +1380,6 @@ fn extract_optional_nonzero_u64(map: &Map, key: &str) -> Result<Option<NonZeroU6
         }),
     }
 }
-
 fn format_mintable(mintable: Mintable) -> String {
     match mintable {
         Mintable::Infinitely => "Infinitely",
@@ -1468,7 +1389,6 @@ fn format_mintable(mintable: Mintable) -> String {
     }
     .to_owned()
 }
-
 fn parse_mintable_label(label: &str) -> Result<Mintable, ComposeError> {
     let trimmed = label.trim();
     let lower = trimmed.to_ascii_lowercase();
@@ -1503,7 +1423,6 @@ fn parse_mintable_label(label: &str) -> Result<Mintable, ComposeError> {
         }),
     }
 }
-
 fn apply_mintable(builder: NewAssetDefinition, mintable: Mintable) -> NewAssetDefinition {
     match mintable {
         Mintable::Infinitely => builder,
@@ -1512,13 +1431,11 @@ fn apply_mintable(builder: NewAssetDefinition, mintable: Mintable) -> NewAssetDe
         other => builder.with_mintable(other),
     }
 }
-
 /// Serialize a list of drafts to a JSON array representation.
 #[must_use]
 pub fn drafts_to_json_value(drafts: &[InstructionDraft]) -> Value {
     Value::Array(drafts.iter().map(|draft| draft.to_json_value()).collect())
 }
-
 /// Serialize a list of drafts into a formatted JSON string.
 ///
 /// # Errors
@@ -1531,7 +1448,6 @@ pub fn drafts_to_pretty_json(drafts: &[InstructionDraft]) -> Result<String, Comp
         }
     })
 }
-
 /// Decode a list of drafts from a JSON array representation.
 ///
 /// # Errors
@@ -1548,7 +1464,6 @@ pub fn drafts_from_json_value(value: &Value) -> Result<Vec<InstructionDraft>, Co
         }),
     }
 }
-
 /// Parse drafts from a JSON string.
 ///
 /// # Errors
@@ -1560,23 +1475,19 @@ pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, Compos
     })?;
     drafts_from_json_value(&value)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        num::{NonZeroU32, NonZeroU64},
-        time::Duration,
-    };
-
+    use super::*;
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountCreationFee},
         asset::prelude::AssetDefinitionId,
     };
     use iroha_version::Version;
-
-    use super::*;
-
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
     const FIXTURE_ADMISSION_POLICY: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/composer/draft_account_admission_policy.json"
@@ -1597,18 +1508,15 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/composer/draft_pin_manifest.json"
     ));
-
     fn test_network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("test network id")
     }
-
     fn draft_from_fixture(fixture: &str) -> InstructionDraft {
         let value: Value = json::from_str(fixture).expect("fixture json");
         InstructionDraft::from_json_value(&value).expect("fixture draft")
     }
-
     #[test]
     fn mint_preview_produces_summary() {
         let account = account_literal(&ALICE_ID);
@@ -1616,10 +1524,8 @@ mod tests {
             .parse()
             .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
-
         let network_id = test_network_id();
         let preview = mint_quantity_preview(network_id, &asset_id, 5_u32).expect("preview");
-
         assert_eq!(preview.authority(), account);
         assert!(
             !preview.instructions().is_empty(),
@@ -1631,21 +1537,18 @@ mod tests {
         );
         assert!(!preview.hash().is_empty(), "hash must not be empty");
         assert_eq!(preview.signed_transaction().network_id(), Some(&network_id));
-
         // Ensure Norito payload roundtrips back to a transaction.
         assert!(
             SignedTransaction::supported_versions().contains(&preview.encoded_bytes()[0]),
             "unexpected signed transaction version"
         );
     }
-
     #[test]
     fn invalid_asset_id_reports_error() {
         let err = mint_quantity_preview(test_network_id(), "invalid-format", 1_u32)
             .expect_err("invalid identifiers should produce compose error");
         matches!(err, ComposeError::InvalidAssetId { .. });
     }
-
     #[test]
     fn transfer_draft_parses_inputs() {
         let asset_id = AssetId::new(
@@ -1663,7 +1566,6 @@ mod tests {
             "summary should mention transfer action"
         );
     }
-
     #[test]
     fn asset_draft_rejects_negative_quantity() {
         let asset_id = AssetId::new(
@@ -1674,7 +1576,6 @@ mod tests {
             .expect_err("negative quantity must not enter an asset instruction draft");
         assert!(matches!(error, ComposeError::InvalidQuantity { .. }));
     }
-
     #[test]
     fn burn_draft_parses_inputs() {
         let asset_id = AssetId::new(
@@ -1690,14 +1591,12 @@ mod tests {
             "summary should mention burn action"
         );
     }
-
     #[test]
     fn compose_preview_requires_instructions() {
         let err =
             compose_preview(test_network_id(), &[]).expect_err("empty instructions should fail");
         matches!(err, ComposeError::EmptyInstructions);
     }
-
     #[test]
     fn compose_preview_accepts_multiple_instructions() {
         let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -1721,7 +1620,6 @@ mod tests {
             "preview should include both instructions"
         );
     }
-
     #[test]
     fn transaction_preview_preserves_mixed_batch_order() {
         let first: InstructionBox = iroha_data_model::isi::Log::new(
@@ -1764,7 +1662,6 @@ mod tests {
         ])
         .try_sign(ALICE_KEYPAIR.private_key())
         .expect("sign mixed batch");
-
         let preview = TransactionPreview::new(signed);
         assert_eq!(
             preview.instructions(),
@@ -1775,7 +1672,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn development_signing_authorities_present() {
         let authorities = development_signing_authorities();
@@ -1790,7 +1686,6 @@ mod tests {
             "expected Alice development signer to be available"
         );
     }
-
     #[test]
     fn raw_domain_registration_draft_is_not_supported() {
         let value = norito::json!({
@@ -1803,7 +1698,6 @@ mod tests {
             matches!(err, ComposeError::InvalidRawDraft { ref reason } if reason.contains("unknown instruction kind"))
         );
     }
-
     #[test]
     fn drafts_json_roundtrip_covers_all_variants() {
         let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -1813,7 +1707,6 @@ mod tests {
         let asset_id_str = asset_literal(&asset_id);
         let account = account_literal(&ALICE_ID);
         let domain = "wonderland.universal";
-
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "10").expect("mint draft");
         let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
         let transfer = InstructionDraft::transfer_from_input(&asset_id_str, "5", &account)
@@ -1838,7 +1731,6 @@ mod tests {
         };
         let admission = InstructionDraft::account_admission_policy_from_input(domain, policy)
             .expect("policy draft");
-
         let grant_role =
             InstructionDraft::grant_role_from_input("council", &account).expect("grant draft");
         let revoke_role =
@@ -1848,7 +1740,6 @@ mod tests {
         let multisig =
             InstructionDraft::multisig_propose_from_json(&account, &nested_json, Some(60_000))
                 .expect("multisig draft");
-
         let drafts = vec![
             mint,
             burn,
@@ -1862,21 +1753,17 @@ mod tests {
             revoke_role,
             multisig,
         ];
-
         let json = drafts_to_pretty_json(&drafts).expect("serialize drafts");
         let parsed = drafts_from_json_str(&json).expect("parse drafts");
-
         assert_eq!(parsed.len(), drafts.len());
         for (expected, actual) in drafts.iter().zip(parsed.iter()) {
             assert_eq!(expected.summary(), actual.summary());
         }
     }
-
     #[test]
     fn register_account_instruction_uses_canonical_account_id() {
         let account = account_literal(&ALICE_ID);
         let draft = InstructionDraft::register_account_from_input(&account).expect("account draft");
-
         let instruction = draft.instruction();
         let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction;
         let Some(register_box) = instruction_ref
@@ -1888,10 +1775,8 @@ mod tests {
         let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
             panic!("expected Register<Account> instruction");
         };
-
         assert_eq!(register.object.id, ALICE_ID.clone());
     }
-
     #[test]
     fn register_account_instruction_rejects_domain_suffix_literal() {
         let domain_suffixed_account = format!("{}@wonderland", account_literal(&ALICE_ID));
@@ -1899,14 +1784,12 @@ mod tests {
             .expect_err("domain-suffixed account literal must be rejected");
         assert!(matches!(err, ComposeError::InvalidAccountId { .. }));
     }
-
     #[test]
     fn drafts_from_json_str_rejects_non_array() {
         let err = drafts_from_json_str("{\"kind\":\"mint_asset\"}")
             .expect_err("non-array payload should be rejected");
         assert!(matches!(err, ComposeError::InvalidRawDraft { .. }));
     }
-
     #[test]
     fn grant_role_draft_parses_inputs() {
         let account = account_literal(&ALICE_ID);
@@ -1918,7 +1801,6 @@ mod tests {
             format!("Grant role council to {expected_account}")
         );
     }
-
     #[test]
     fn revoke_role_draft_parses_inputs() {
         let account = account_literal(&ALICE_ID);
@@ -1930,11 +1812,9 @@ mod tests {
             format!("Revoke role auditor from {expected_account}")
         );
     }
-
     #[test]
     fn development_signer_permissions_match_expectations() {
         use std::collections::BTreeSet;
-
         let authorities = development_signing_authorities();
         let alice = authorities
             .iter()
@@ -1944,14 +1824,12 @@ mod tests {
             .iter()
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
-
         let alice_permissions: BTreeSet<_> = alice.permissions().collect();
         assert_eq!(
             alice_permissions,
             InstructionPermission::all().into_iter().collect(),
             "Alice should support every instruction template"
         );
-
         let bob_permissions: Vec<_> = bob.permissions().collect();
         assert_eq!(
             bob_permissions,
@@ -1959,7 +1837,6 @@ mod tests {
             "Bob should default to transfer-only permissions"
         );
     }
-
     #[test]
     fn account_admission_policy_draft_parses_domain() {
         let policy = AccountAdmissionPolicy::default();
@@ -1971,7 +1848,6 @@ mod tests {
             "summary should mention domain"
         );
     }
-
     #[test]
     fn multisig_propose_from_json_requires_instructions() {
         let account = account_literal(&ALICE_ID);
@@ -1979,21 +1855,18 @@ mod tests {
             .expect_err("empty proposal should be rejected");
         assert!(matches!(err, ComposeError::InvalidRawDraft { .. }));
     }
-
     #[test]
     fn space_directory_manifest_from_json_rejects_invalid_payload() {
         let err = InstructionDraft::publish_space_directory_manifest_from_json("{\"bad\":true}")
             .expect_err("invalid manifest should be rejected");
         assert!(matches!(err, ComposeError::InvalidRawDraft { .. }));
     }
-
     #[test]
     fn pin_manifest_from_json_rejects_invalid_payload() {
         let err = InstructionDraft::register_pin_manifest_from_json("{\"digest\":\"bad\"}")
             .expect_err("invalid pin manifest should be rejected");
         assert!(matches!(err, ComposeError::InvalidRawDraft { .. }));
     }
-
     #[test]
     fn signing_authority_roles_roundtrip() {
         let role: RoleId = "basic_user".parse().expect("role id");
@@ -2007,7 +1880,6 @@ mod tests {
         let roles: Vec<_> = authority.roles().collect();
         assert_eq!(roles, vec![&role]);
     }
-
     #[test]
     fn instruction_permission_keys_roundtrip() {
         for permission in InstructionPermission::all() {
@@ -2024,7 +1896,6 @@ mod tests {
             "unknown permission keys should be rejected"
         );
     }
-
     #[test]
     fn draft_fixtures_parse_to_expected_variants() {
         let cases = [
@@ -2034,7 +1905,6 @@ mod tests {
             (FIXTURE_SPACE_MANIFEST_HANDLE, "space directory handle"),
             (FIXTURE_PIN_MANIFEST, "pin manifest"),
         ];
-
         for (fixture, label) in cases {
             let draft = draft_from_fixture(fixture);
             match (label, draft) {
@@ -2056,7 +1926,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn admission_policy_summary_surfaces_caps_fee_and_role() {
         let policy = AccountAdmissionPolicy {
@@ -2083,7 +1952,6 @@ mod tests {
         assert!(summary.contains("fee 1 62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
         assert!(summary.contains("default role basic_user"));
     }
-
     #[test]
     fn compose_preview_rejects_unauthorised_instruction() {
         let authorities = development_signing_authorities();
@@ -2091,12 +1959,10 @@ mod tests {
             .iter()
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
-
         let draft = InstructionDraft::register_account_from_input(&account_literal(&ALICE_ID))
             .expect("account draft");
         let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to register accounts");
-
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
                 assert_eq!(action, InstructionPermission::RegisterAccount);
@@ -2104,7 +1970,6 @@ mod tests {
             other => panic!("unexpected compose error: {other:?}"),
         }
     }
-
     #[test]
     fn compose_preview_rejects_unauthorised_multisig_proposal() {
         let authorities = development_signing_authorities();
@@ -2112,7 +1977,6 @@ mod tests {
             .iter()
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
-
         let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
             .parse()
             .expect("definition id");
@@ -2126,10 +1990,8 @@ mod tests {
             None,
         )
         .expect("multisig draft");
-
         let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to propose multisig transactions");
-
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
                 assert_eq!(action, InstructionPermission::MultisigPropose);
@@ -2137,7 +1999,6 @@ mod tests {
             other => panic!("unexpected compose error: {other:?}"),
         }
     }
-
     #[test]
     fn compose_preview_rejects_unauthorised_space_manifest() {
         let authorities = development_signing_authorities();
@@ -2146,10 +2007,8 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_SPACE_MANIFEST_TOUCH);
-
         let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
-
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
                 assert_eq!(action, InstructionPermission::PublishSpaceDirectoryManifest);
@@ -2157,7 +2016,6 @@ mod tests {
             other => panic!("unexpected compose error: {other:?}"),
         }
     }
-
     #[test]
     fn compose_preview_rejects_unauthorised_pin_manifest_json() {
         let authorities = development_signing_authorities();
@@ -2166,10 +2024,8 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_PIN_MANIFEST);
-
         let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
-
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
                 assert_eq!(action, InstructionPermission::RegisterPinManifest);
@@ -2177,7 +2033,6 @@ mod tests {
             other => panic!("unexpected compose error: {other:?}"),
         }
     }
-
     #[test]
     fn compose_preview_rejects_unauthorised_space_directory_manifest() {
         let authorities = development_signing_authorities();
@@ -2196,10 +2051,8 @@ mod tests {
 }"#;
         let draft = InstructionDraft::publish_space_directory_manifest_from_json(manifest_json)
             .expect("space directory draft");
-
         let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
-
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
                 assert_eq!(action, InstructionPermission::PublishSpaceDirectoryManifest);
@@ -2207,7 +2060,6 @@ mod tests {
             other => panic!("unexpected compose error: {other:?}"),
         }
     }
-
     #[test]
     fn compose_preview_rejects_unauthorised_pin_manifest() {
         let authorities = development_signing_authorities();
@@ -2223,10 +2075,8 @@ mod tests {
 }"#;
         let draft = InstructionDraft::register_pin_manifest_from_json(pin_manifest_json)
             .expect("pin manifest draft");
-
         let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
-
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
                 assert_eq!(action, InstructionPermission::RegisterPinManifest);
@@ -2234,7 +2084,6 @@ mod tests {
             other => panic!("unexpected compose error: {other:?}"),
         }
     }
-
     #[test]
     fn compose_preview_with_options_applies_overrides() {
         let authorities = development_signing_authorities();
@@ -2248,15 +2097,12 @@ mod tests {
             .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
         let draft = InstructionDraft::mint_from_input(&asset_id, "5").expect("mint draft");
-
         let options = TransactionComposeOptions::new()
             .with_ttl(Duration::from_secs(5))
             .with_creation_time(Duration::from_millis(1_234))
             .with_nonce(NonZeroU32::new(42).expect("non-zero nonce"));
-
         let preview = compose_preview_with_options(test_network_id(), &[draft], signer, &options)
             .expect("compose with overrides");
-
         assert_eq!(
             preview.time_to_live(),
             Some(Duration::from_secs(5)),

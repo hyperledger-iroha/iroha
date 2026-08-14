@@ -1,5 +1,5 @@
 //! Typed X.509 native-resource capture and installed-pin enforcement.
-
+use super::*;
 use iroha_core::privacy_release_evidence::{
     PrivacyReleaseCaseKindV1, PrivacyReleaseZkX509ResourceCertificateV1,
     PrivacyReleaseZkX509ResourceEnvironmentV1, PrivacyReleaseZkX509ResourceObservationV1,
@@ -9,13 +9,9 @@ use iroha_core::privacy_release_evidence::{
     validate_privacy_release_zk_x509_resource_capture_v1,
 };
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
-
-use super::*;
-
 const MAX_X509_RESOURCE_NORITO_BYTES_V1: u64 = 64 * 1024;
 const MAX_X509_RESOURCE_JSON_BYTES_V1: u64 = 64 * 1024;
 const MAX_X509_HOST_METADATA_JSON_BYTES_V1: u64 = 16 * 1024;
-
 pub(super) fn capture_option_names() -> Vec<&'static str> {
     vec![
         "exact12-matrix",
@@ -29,13 +25,11 @@ pub(super) fn capture_option_names() -> Vec<&'static str> {
         "address-space-ceiling-bytes",
     ]
 }
-
 #[derive(Clone)]
 pub(super) struct ResourceInputPathsV1 {
     pub(super) norito: PathBuf,
     pub(super) json: PathBuf,
 }
-
 impl ResourceInputPathsV1 {
     pub(super) fn parse(options: &BTreeMap<String, String>) -> Result<Self, DynError> {
         Ok(Self {
@@ -44,14 +38,12 @@ impl ResourceInputPathsV1 {
         })
     }
 }
-
 #[derive(Clone)]
 pub(super) struct CaptureResourceOptionsV1 {
     pub(super) host_metadata_json: PathBuf,
     pub(super) norito_out: PathBuf,
     pub(super) json_out: PathBuf,
 }
-
 impl CaptureResourceOptionsV1 {
     pub(super) fn parse(options: &BTreeMap<String, String>) -> Result<Self, DynError> {
         Ok(Self {
@@ -60,24 +52,20 @@ impl CaptureResourceOptionsV1 {
             json_out: path_option(options, "x509-resource-json-out")?,
         })
     }
-
     pub(super) fn output_paths(&self) -> [PathBuf; 2] {
         [self.norito_out.clone(), self.json_out.clone()]
     }
 }
-
 pub(super) struct CaptureResourceArtifactsV1 {
     pub(super) norito: Vec<u8>,
     pub(super) json: Vec<u8>,
 }
-
 pub(super) struct CaptureResourceMeasurementsV1 {
     positive: PrivacyReleaseZkX509ResourceObservationV1,
     maximum: PrivacyReleaseZkX509ResourceObservationV1,
     kat_proof_bytes: u32,
     kat_proof_sha256: [u8; 32],
 }
-
 pub(super) struct LoadedResourceCertificateV1 {
     pub(super) certificate: PrivacyReleaseZkX509ResourceCertificateV1,
     pub(super) norito_bytes: Vec<u8>,
@@ -85,7 +73,6 @@ pub(super) struct LoadedResourceCertificateV1 {
     pub(super) norito_identity: FileIdentityV1,
     pub(super) json_identity: FileIdentityV1,
 }
-
 pub(super) fn load_capture_environment_v1(
     options: &CaptureResourceOptionsV1,
     exact12: &SecureInputV1,
@@ -116,7 +103,6 @@ pub(super) fn load_capture_environment_v1(
     }
     Ok(environment)
 }
-
 pub(super) fn build_capture_artifacts_v1(
     measurements: CaptureResourceMeasurementsV1,
     expectations_norito: &[u8],
@@ -150,7 +136,6 @@ pub(super) fn build_capture_artifacts_v1(
     )?;
     Ok(CaptureResourceArtifactsV1 { norito, json })
 }
-
 pub(super) fn capture_measurements_v1(
     measured: &[MeasuredStageV1],
 ) -> Result<CaptureResourceMeasurementsV1, DynError> {
@@ -167,7 +152,6 @@ pub(super) fn capture_measurements_v1(
         kat_proof_sha256,
     })
 }
-
 fn exact_observation_v1(
     measured: &[MeasuredStageV1],
     case_kind: PrivacyReleaseCaseKindV1,
@@ -187,7 +171,6 @@ fn exact_observation_v1(
         relation_depth_ceiling: resources.relation_depth_ceiling,
     })
 }
-
 fn exact_stage_v1(
     measured: &[MeasuredStageV1],
     case_kind: PrivacyReleaseCaseKindV1,
@@ -204,7 +187,6 @@ fn exact_stage_v1(
     }
     Ok(stage)
 }
-
 fn exact_positive_kat_v1(measured: &[MeasuredStageV1]) -> Result<(u32, [u8; 32]), DynError> {
     let stage = exact_stage_v1(
         measured,
@@ -222,7 +204,6 @@ fn exact_positive_kat_v1(measured: &[MeasuredStageV1]) -> Result<(u32, [u8; 32])
         .map_err(|_| "X.509 positive KAT proof length exceeds u32")?;
     Ok((proof_bytes, artifact.proof_sha256))
 }
-
 pub(super) fn load_capture_pair_v1(
     norito_path: &Path,
     json_path: &Path,
@@ -265,7 +246,6 @@ pub(super) fn load_capture_pair_v1(
         json_identity: json.identity,
     })
 }
-
 pub(super) fn load_pinned_pair_v1(
     norito_path: &Path,
     json_path: &Path,
@@ -278,7 +258,6 @@ pub(super) fn load_pinned_pair_v1(
     }
     Ok(loaded)
 }
-
 pub(super) fn validate_capture_expectation_binding_v1(
     certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
     expectations: &PrivacyReleaseExpectationsV1,
@@ -296,7 +275,6 @@ pub(super) fn validate_capture_expectation_binding_v1(
     {
         return Err("X.509 resource certificate binds a different expectation pair".into());
     }
-
     let positive = exact_expected_stage_v1(
         expectations,
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
@@ -317,12 +295,10 @@ pub(super) fn validate_capture_expectation_binding_v1(
     {
         return Err("X.509 resource certificate does not bind the expectation KAT proof".into());
     }
-
     validate_capture_observation_binding_v1(certificate, positive, certificate.positive)?;
     validate_capture_observation_binding_v1(certificate, maximum, certificate.maximum)?;
     Ok(())
 }
-
 fn exact_expected_stage_v1(
     expectations: &PrivacyReleaseExpectationsV1,
     case_kind: PrivacyReleaseCaseKindV1,
@@ -343,7 +319,6 @@ fn exact_expected_stage_v1(
     }
     Ok(stage)
 }
-
 fn validate_capture_observation_binding_v1(
     certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
     expected: &PrivacyReleaseExpectedStageV1,
@@ -379,11 +354,9 @@ fn validate_capture_observation_binding_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn measured_stage_v1(case_kind: PrivacyReleaseCaseKindV1) -> MeasuredStageV1 {
         MeasuredStageV1 {
             evidence: expectation_pins::empty_expected_evidence(
@@ -399,7 +372,6 @@ mod tests {
             peak_address_space_bytes: 64 * 1024 * 1024,
         }
     }
-
     #[test]
     fn capture_derives_the_kat_and_both_exact_resource_observations() {
         let measured = [
@@ -436,7 +408,6 @@ mod tests {
             PrivacyReleaseCaseKindV1::MaximumShapeResource
         );
     }
-
     #[test]
     fn capture_rejects_missing_duplicate_and_corrupt_positive_kat_stages() {
         let positive = measured_stage_v1(PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd);
@@ -453,7 +424,6 @@ mod tests {
         corrupt.evidence.proof_artifacts[0].proof_sha256[0] ^= 1;
         assert!(exact_positive_kat_v1(&[corrupt, maximum]).is_err());
     }
-
     #[test]
     fn capture_loader_rejects_fake_nrt_bytes() {
         let directory = tempfile::tempdir().expect("temporary resource fixture directory");
@@ -465,7 +435,6 @@ mod tests {
         let json_path = physical_directory.join("resource.json");
         fs::write(&norito_path, b"NRT0\0not-canonical-norito").expect("write fake resource Norito");
         fs::write(&json_path, b"{}\n").expect("write resource JSON");
-
         let error = load_capture_pair_v1(&norito_path, &json_path)
             .err()
             .expect("fake resource Norito must reject");

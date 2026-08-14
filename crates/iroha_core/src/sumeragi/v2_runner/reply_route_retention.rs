@@ -4,7 +4,6 @@
 fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
     retain_active_owned_reply_routes_with_snapshot_hook(effect, || {})
 }
-
 #[cfg(test)]
 fn retain_active_owned_reply_routes_after_snapshot<AfterSnapshot>(
     effect: &mut V2LaneWorkEffect,
@@ -15,7 +14,6 @@ where
 {
     retain_active_owned_reply_routes_with_snapshot_hook(effect, after_snapshot)
 }
-
 fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(
     effect: &mut V2LaneWorkEffect,
     after_snapshot: AfterSnapshot,

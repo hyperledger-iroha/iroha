@@ -139,6 +139,17 @@ Torii exposes both Norito and JSON APIs. Common operator endpoints:
 - `GET /v1/parameters`
 - `GET /v1/events/sse`
 
+Node-local reads that expose peer addresses, clock state, pipeline load or
+policy, and recovery/retention internals are not public projections. In the
+first release, `GET /v1/peers`, `/v1/time/status`,
+`/v1/pipeline/preflight`, `/v1/pipeline/recovery/{height}`, `/v1/policy`, and
+`/v1/proofs/retention` require a fresh `OperatorSignature` bound to the exact
+genesis `NetworkId`, method, substituted path, query, and empty body. Operator
+clients dispatch each read once with redirects and retries disabled; bearer or
+API-token fallback is not accepted. The peer diagnostic response is bounded by
+the resolved P2P total-connection ceiling, and proof-retention status aggregates
+counts in one pass without materializing proof identifiers.
+
 For liveness checks, prefer the queue-aware fields in `/status`: use
 `queue_size` as the gate and compare `time_since_last_block_ms` or
 `time_since_last_non_empty_block_ms` against the

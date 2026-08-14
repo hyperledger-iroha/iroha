@@ -1,7 +1,5 @@
 //! Confidential-tree default-state invariants.
-
 use iroha_core::state::ZkAssetState;
-
 #[test]
 fn default_confidential_tree_metadata_is_canonical() {
     ZkAssetState::default()

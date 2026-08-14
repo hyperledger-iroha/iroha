@@ -6,13 +6,6 @@
     clippy::ignored_unit_patterns,
     clippy::unused_async
 )]
-
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
-
 use bytes::Bytes;
 use norito::{
     deserialize_from,
@@ -31,9 +24,13 @@ use quinn::{
     },
 };
 use rustls::{client::danger::ServerCertVerifier, pki_types::PrivatePkcs8KeyDer};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 const CONTROL_STREAM_PREFACE: &[u8; 5] = b"NSC/1";
 const CONTROL_TYPE_PUBLISHER_TO_VIEWER: u8 = 0x01;
 const CONTROL_TYPE_VIEWER_TO_PUBLISHER: u8 = 0x02;
@@ -42,13 +39,10 @@ const DEFAULT_DATAGRAM_BUFFER: usize = 1 << 20;
 const MAX_CONTROL_FRAME_LEN: usize = 512 * 1024;
 const ALPN: &[u8] = b"nsc/1";
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Fingerprint that pins one streaming server certificate.
 pub type CertificateFingerprint = [u8; iroha_crypto::Hash::LENGTH];
-
 /// Result type used by the streaming QUIC helpers.
 pub type Result<T> = core::result::Result<T, Error>;
-
 /// Errors produced by the streaming QUIC transport helpers.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -122,7 +116,6 @@ pub enum Error {
     #[error("protocol violation: {0}")]
     ProtocolViolation(String),
 }
-
 /// Direction of the dedicated QUIC control stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlStreamDirection {
@@ -131,7 +124,6 @@ pub enum ControlStreamDirection {
     /// Viewer → Publisher control flow.
     ViewerToPublisher,
 }
-
 impl ControlStreamDirection {
     const fn marker(self) -> u8 {
         match self {
@@ -139,7 +131,6 @@ impl ControlStreamDirection {
             Self::ViewerToPublisher => CONTROL_TYPE_VIEWER_TO_PUBLISHER,
         }
     }
-
     fn from_marker(marker: u8) -> Option<Self> {
         match marker {
             CONTROL_TYPE_PUBLISHER_TO_VIEWER => Some(Self::PublisherToViewer),
@@ -147,7 +138,6 @@ impl ControlStreamDirection {
             _ => None,
         }
     }
-
     const fn opposite(self) -> Self {
         match self {
             Self::PublisherToViewer => Self::ViewerToPublisher,
@@ -155,7 +145,6 @@ impl ControlStreamDirection {
         }
     }
 }
-
 /// Local endpoint role (publisher or viewer).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndpointRole {
@@ -164,7 +153,6 @@ pub enum EndpointRole {
     /// Viewer side of the session.
     Viewer,
 }
-
 impl EndpointRole {
     const fn outgoing_direction(self) -> ControlStreamDirection {
         match self {
@@ -172,12 +160,10 @@ impl EndpointRole {
             Self::Viewer => ControlStreamDirection::ViewerToPublisher,
         }
     }
-
     const fn incoming_direction(self) -> ControlStreamDirection {
         self.outgoing_direction().opposite()
     }
 }
-
 /// Transport tuning knobs shared by viewers and publishers.
 #[derive(Clone, Copy, Debug)]
 pub struct TransportConfigSettings {
@@ -190,7 +176,6 @@ pub struct TransportConfigSettings {
     /// Idle timeout advertised at the transport layer.
     pub idle_timeout: Duration,
 }
-
 impl Default for TransportConfigSettings {
     fn default() -> Self {
         Self {
@@ -201,7 +186,6 @@ impl Default for TransportConfigSettings {
         }
     }
 }
-
 /// Listener for incoming viewer connections.
 #[derive(Clone)]
 pub struct StreamingServer {
@@ -209,7 +193,6 @@ pub struct StreamingServer {
     settings: TransportConfigSettings,
     certificate_fingerprint: CertificateFingerprint,
 }
-
 impl StreamingServer {
     /// Bind a QUIC listener on `addr` using the provided transport settings.
     pub async fn bind(addr: SocketAddr, settings: TransportConfigSettings) -> Result<Self> {
@@ -219,7 +202,6 @@ impl StreamingServer {
         let cert_der = cert.der().clone().into_owned();
         let certificate_fingerprint = crate::transport::certificate_fingerprint(cert_der.as_ref());
         let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-
         let mut rustls_config =
             rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_no_client_auth()
@@ -228,34 +210,27 @@ impl StreamingServer {
         rustls_config.max_early_data_size = 0;
         rustls_config.alpn_protocols = vec![ALPN.to_vec()];
         let rustls_config = Arc::new(rustls_config);
-
         let crypto = QuinnRustlsServerConfig::try_from(rustls_config)
             .map_err(|e| Error::TlsServer(e.to_string()))?;
-
         let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
         let transport = build_transport_config(settings)?;
         server_config.transport_config(transport);
-
         let endpoint = Endpoint::server(server_config, addr)?;
-
         Ok(Self {
             endpoint,
             settings,
             certificate_fingerprint,
         })
     }
-
     /// Retrieve the socket address the server is listening on.
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint.local_addr().map_err(Error::from)
     }
-
     /// Return the fingerprint clients must obtain through an authenticated channel.
     #[must_use]
     pub const fn certificate_fingerprint(&self) -> CertificateFingerprint {
         self.certificate_fingerprint
     }
-
     /// Accept the next inbound streaming connection.
     pub async fn accept(&self) -> Result<StreamingConnection> {
         let incoming = self
@@ -269,20 +244,17 @@ impl StreamingServer {
         let connection = connecting.await?;
         StreamingConnection::new(connection, EndpointRole::Publisher, self.settings).await
     }
-
     /// Close the listener and wait for active connections to drain.
     pub async fn shutdown(&self) {
         self.endpoint.close(VarInt::from_u32(0), &[]);
         self.endpoint.wait_idle().await;
     }
 }
-
 /// Viewer-side QUIC connector.
 pub struct StreamingClient {
     endpoint: Endpoint,
     connection: StreamingConnection,
 }
-
 impl StreamingClient {
     /// Connect to the remote publisher described by `multiaddr`.
     ///
@@ -297,7 +269,6 @@ impl StreamingClient {
     ) -> Result<Self> {
         let parsed = parse_multiaddr(multiaddr)?;
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())?;
-
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
             crate::transport::CertificateKeyProofVerifier::pinned(expected_certificate_fingerprint),
         );
@@ -314,24 +285,20 @@ impl StreamingClient {
         let transport = build_transport_config(settings)?;
         client_config.transport_config(transport);
         endpoint.set_default_client_config(client_config);
-
         let server_addr = SocketAddr::new(parsed.host, parsed.port);
         let connecting = endpoint.connect(server_addr, &parsed.server_name)?;
         let connection = connecting.await?;
         let connection =
             StreamingConnection::new(connection, EndpointRole::Viewer, settings).await?;
-
         Ok(Self {
             endpoint,
             connection,
         })
     }
-
     /// Access the underlying connection mutably.
     pub fn connection(&mut self) -> &mut StreamingConnection {
         &mut self.connection
     }
-
     /// Close the connection and wait for idle shutdown.
     pub async fn close(self) {
         self.connection.close();
@@ -339,7 +306,6 @@ impl StreamingClient {
         self.endpoint.wait_idle().await;
     }
 }
-
 /// Active streaming session over QUIC.
 pub struct StreamingConnection {
     role: EndpointRole,
@@ -348,7 +314,6 @@ pub struct StreamingConnection {
     control_recv: ControlStreamReader,
     max_datagram: usize,
 }
-
 impl StreamingConnection {
     async fn new(
         connection: Connection,
@@ -365,7 +330,6 @@ impl StreamingConnection {
         // deadlock waiting for the other side to "open" its control stream.
         let recv = connection.accept_uni().await?;
         let control_recv = ControlStreamReader::new(recv, role.incoming_direction()).await?;
-
         Ok(Self {
             role,
             connection,
@@ -374,22 +338,18 @@ impl StreamingConnection {
             max_datagram: settings.max_datagram_size,
         })
     }
-
     /// Return the local role.
     pub const fn role(&self) -> EndpointRole {
         self.role
     }
-
     /// Send a control frame to the peer.
     pub async fn send_control_frame(&mut self, frame: &ControlFrame) -> Result<()> {
         self.control_send.send_frame(frame).await
     }
-
     /// Receive the next control frame from the peer.
     pub async fn next_control_frame(&mut self) -> Result<ControlFrame> {
         self.control_recv.next_frame().await
     }
-
     /// Send a datagram payload.
     pub async fn send_datagram(&self, payload: &[u8]) -> Result<()> {
         if payload.len() > self.max_datagram {
@@ -402,32 +362,26 @@ impl StreamingConnection {
             .send_datagram(Bytes::copy_from_slice(payload))?;
         Ok(())
     }
-
     /// Receive the next datagram payload.
     pub async fn recv_datagram(&self) -> Result<Bytes> {
         Ok(self.connection.read_datagram().await?)
     }
-
     /// Return the negotiated DATAGRAM payload limit for this session.
     pub const fn max_datagram_size(&self) -> usize {
         self.max_datagram
     }
-
     /// Return `true` if DATAGRAM delivery is enabled for this session.
     pub const fn datagram_enabled(&self) -> bool {
         self.max_datagram > 0
     }
-
     /// Close the underlying QUIC connection.
     pub fn close(&self) {
         self.connection.close(VarInt::from_u32(0), &[]);
     }
-
     /// Borrow the underlying QUIC connection.
     pub fn quic_connection(&self) -> &Connection {
         &self.connection
     }
-
     fn apply_transport_resolution(&mut self, resolution: TransportCapabilityResolution) {
         let negotiated = if resolution.use_datagram {
             usize::from(resolution.max_segment_datagram_size)
@@ -446,11 +400,9 @@ impl StreamingConnection {
         };
     }
 }
-
 /// Capability negotiation helpers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CapabilityNegotiation;
-
 impl CapabilityNegotiation {
     /// Perform viewer-side negotiation: send `report` and await `CapabilityAck`.
     pub async fn viewer_handshake<F>(
@@ -494,13 +446,11 @@ impl CapabilityNegotiation {
                 }
             }
         };
-
         let mut resolution = streaming::resolve_transport_capabilities(
             &local_frame.capabilities,
             &remote_caps.capabilities,
         )
         .map_err(Error::TransportCapability)?;
-
         if resolution.use_datagram {
             if report.max_datagram_size == 0 {
                 return Err(Error::ProtocolViolation(
@@ -511,7 +461,6 @@ impl CapabilityNegotiation {
                 .max_segment_datagram_size
                 .min(report.max_datagram_size);
         }
-
         let expected_stream_id = report.stream_id;
         let expected_version = report.protocol_version;
         let expected_dplpmtud = report.dplpmtud;
@@ -547,7 +496,6 @@ impl CapabilityNegotiation {
             }
         }
     }
-
     /// Await the viewer's capability report (publisher side).
     pub async fn publisher_handshake<F>(
         conn: &mut StreamingConnection,
@@ -579,20 +527,17 @@ impl CapabilityNegotiation {
                 )));
             }
         };
-
         let local_frame = TransportCapabilitiesFrame {
             endpoint_role: streaming::CapabilityRole::Publisher,
             capabilities,
         };
         conn.send_control_frame(&ControlFrame::TransportCapabilities(local_frame.clone()))
             .await?;
-
         let mut resolution = streaming::resolve_transport_capabilities(
             &local_frame.capabilities,
             &viewer_caps.capabilities,
         )
         .map_err(Error::TransportCapability)?;
-
         loop {
             let frame = conn.next_control_frame().await?;
             match frame {
@@ -628,7 +573,6 @@ impl CapabilityNegotiation {
         }
     }
 }
-
 fn validate_capability_report(report: &CapabilityReport) -> Result<()> {
     if report.endpoint_role != streaming::CapabilityRole::Viewer {
         return Err(Error::ProtocolViolation(format!(
@@ -643,7 +587,6 @@ fn validate_capability_report(report: &CapabilityReport) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_capability_ack_binding(
     ack: &CapabilityAck,
     expected_stream_id: streaming::Hash,
@@ -676,11 +619,9 @@ fn validate_capability_ack_binding(
     }
     Ok(())
 }
-
 struct ControlStreamWriter {
     stream: SendStream,
 }
-
 impl ControlStreamWriter {
     async fn new(mut stream: SendStream, direction: ControlStreamDirection) -> Result<Self> {
         stream
@@ -697,7 +638,6 @@ impl ControlStreamWriter {
             .map_err(|e| Error::Io(std::io::Error::from(e)))?;
         Ok(Self { stream })
     }
-
     async fn send_frame(&mut self, frame: &ControlFrame) -> Result<()> {
         let bytes = to_bytes(frame)?;
         if bytes.len() > MAX_CONTROL_FRAME_LEN {
@@ -721,11 +661,9 @@ impl ControlStreamWriter {
         Ok(())
     }
 }
-
 struct ControlStreamReader {
     stream: RecvStream,
 }
-
 impl ControlStreamReader {
     async fn new(mut stream: RecvStream, expected: ControlStreamDirection) -> Result<Self> {
         let mut preface = [0u8; CONTROL_STREAM_PREFACE.len()];
@@ -748,10 +686,8 @@ impl ControlStreamReader {
         if found != expected {
             return Err(Error::WrongDirection { expected, found });
         }
-
         Ok(Self { stream })
     }
-
     async fn next_frame(&mut self) -> Result<ControlFrame> {
         let mut len_buf = [0u8; 4];
         match self.stream.read_exact(&mut len_buf).await {
@@ -776,14 +712,12 @@ impl ControlStreamReader {
         Ok(frame)
     }
 }
-
 #[derive(Debug)]
 struct ParsedMultiaddr {
     host: IpAddr,
     port: u16,
     server_name: String,
 }
-
 fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr> {
     let trimmed = addr.trim();
     if trimmed.is_empty() {
@@ -828,7 +762,6 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr> {
         other => Err(Error::UnsupportedProtocol(other.into())),
     }
 }
-
 fn parse_port<'a, I>(parts: &mut I, original: &str) -> Result<u16>
 where
     I: Iterator<Item = &'a str>,
@@ -851,7 +784,6 @@ where
     }
     Ok(port)
 }
-
 fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<TransportConfig>> {
     let mut transport = TransportConfig::default();
     // Quinn defaults to zero concurrent streams, which makes `open_uni()`/`accept_uni()` hang
@@ -867,11 +799,9 @@ fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<Trans
     transport.max_idle_timeout(Some(idle));
     Ok(Arc::new(transport))
 }
-
 #[cfg(all(test, feature = "quic"))]
 mod tests {
-    use std::future::Future;
-
+    use super::*;
     use iroha_crypto::streaming::StreamingSession;
     use norito::streaming::{
         AudioCapability, CapabilityAck, CapabilityFlags, CapabilityReport, CapabilityRole,
@@ -879,22 +809,17 @@ mod tests {
         ManifestAnnounceFrame, ManifestV1, ProfileId, ReceiverReport, Resolution, StreamMetadata,
         TransportCapabilities,
     };
+    use std::future::Future;
     use tokio::time::{Duration as TokioDuration, sleep, timeout};
-
-    use super::*;
-
     const TEST_TIMEOUT: TokioDuration = TokioDuration::from_secs(10);
-
     async fn within<T>(label: &'static str, fut: impl Future<Output = T>) -> T {
         timeout(TEST_TIMEOUT, fut)
             .await
             .unwrap_or_else(|_| panic!("{label} timed out"))
     }
-
     fn hash(byte: u8) -> Hash {
         [byte; 32]
     }
-
     fn manifest() -> ManifestAnnounceFrame {
         ManifestAnnounceFrame {
             manifest: ManifestV1 {
@@ -933,7 +858,6 @@ mod tests {
             },
         }
     }
-
     fn capability_report(protocol_version: u16) -> CapabilityReport {
         CapabilityReport {
             stream_id: hash(11),
@@ -953,7 +877,6 @@ mod tests {
             dplpmtud: false,
         }
     }
-
     fn capability_ack(report: &CapabilityReport, max_datagram_size: u16) -> CapabilityAck {
         CapabilityAck {
             stream_id: report.stream_id,
@@ -963,7 +886,6 @@ mod tests {
             dplpmtud: report.dplpmtud,
         }
     }
-
     fn capability_resolution() -> TransportCapabilityResolution {
         let capabilities = TransportCapabilities {
             max_segment_datagram_size: 1_024,
@@ -972,7 +894,6 @@ mod tests {
         norito::streaming::resolve_transport_capabilities(&capabilities, &capabilities)
             .expect("default capabilities resolve")
     }
-
     #[test]
     fn streaming_certificate_pin_rejects_another_certificate() {
         let rcgen::CertifiedKey { cert, .. } =
@@ -983,12 +904,10 @@ mod tests {
         let server_name =
             rustls::pki_types::ServerName::try_from("nsc.local").expect("valid server name");
         let now = rustls::pki_types::UnixTime::since_unix_epoch(Duration::ZERO);
-
         let verifier = crate::transport::CertificateKeyProofVerifier::pinned(fingerprint);
         verifier
             .verify_server_cert(&cert_der, &[], &server_name, &[], now)
             .expect("matching certificate fingerprint");
-
         let mut wrong_fingerprint = fingerprint;
         wrong_fingerprint[0] ^= 1;
         let verifier = crate::transport::CertificateKeyProofVerifier::pinned(wrong_fingerprint);
@@ -997,7 +916,6 @@ mod tests {
             .expect_err("different certificate fingerprint must fail closed");
         assert!(error.to_string().contains("fingerprint mismatch"));
     }
-
     #[test]
     fn capability_report_zero_protocol_version_rejected() {
         let report = capability_report(0);
@@ -1009,7 +927,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn capability_report_non_viewer_role_rejected() {
         let mut report = capability_report(1);
@@ -1022,7 +939,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn capability_ack_binding_rejects_mismatched_report_echo() {
         let report = capability_report(3);
@@ -1036,7 +952,6 @@ mod tests {
             resolution,
         )
         .expect("matching ack accepted");
-
         let mut wrong_stream = valid_ack.clone();
         wrong_stream.stream_id = hash(12);
         let err = validate_capability_ack_binding(
@@ -1051,7 +966,6 @@ mod tests {
             Error::ProtocolViolation(reason) => assert!(reason.contains("stream_id")),
             other => panic!("unexpected error: {other:?}"),
         }
-
         let mut wrong_version = valid_ack.clone();
         wrong_version.accepted_version = 2;
         let err = validate_capability_ack_binding(
@@ -1066,7 +980,6 @@ mod tests {
             Error::ProtocolViolation(reason) => assert!(reason.contains("accepted_version")),
             other => panic!("unexpected error: {other:?}"),
         }
-
         let mut wrong_datagram = valid_ack;
         wrong_datagram.max_datagram_size = resolution.max_segment_datagram_size - 1;
         let err = validate_capability_ack_binding(
@@ -1081,7 +994,6 @@ mod tests {
             Error::ProtocolViolation(reason) => assert!(reason.contains("max_datagram_size")),
             other => panic!("unexpected error: {other:?}"),
         }
-
         let mut wrong_dplpmtud = capability_ack(&report, resolution.max_segment_datagram_size);
         wrong_dplpmtud.dplpmtud = !report.dplpmtud;
         let err = validate_capability_ack_binding(
@@ -1097,7 +1009,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn capability_negotiation_and_datagram_roundtrip() {
         let settings = TransportConfigSettings::default();
@@ -1112,7 +1023,6 @@ mod tests {
         };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
-
         let server_task = {
             let server = server.clone();
             async move {
@@ -1162,7 +1072,6 @@ mod tests {
                 within("send_ack", conn.send_control_frame(&ack_frame))
                     .await
                     .expect("ack");
-
                 let announce = manifest();
                 let transport_hash = transport_resolution.capabilities_hash();
                 let mut manifest_with_hash = announce.clone();
@@ -1175,23 +1084,19 @@ mod tests {
                 )
                 .await
                 .expect("announce");
-
                 let chunk = vec![0xDE, 0xAD, 0xBE, 0xEF];
                 within("send_datagram", conn.send_datagram(&chunk))
                     .await
                     .expect("datagram");
-
                 // allow the viewer to read before we close
                 sleep(TokioDuration::from_millis(50)).await;
                 conn.close();
             }
         };
-
         let viewer_task = async {
             let multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port());
             let parsed = parse_multiaddr(&multiaddr).expect("multiaddr");
             let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("endpoint");
-
             let verifier: Arc<dyn ServerCertVerifier> =
                 Arc::new(crate::transport::CertificateKeyProofVerifier::pinned(
                     server_certificate_fingerprint,
@@ -1209,7 +1114,6 @@ mod tests {
             let transport = build_transport_config(settings).expect("transport");
             client_config.transport_config(transport);
             endpoint.set_default_client_config(client_config);
-
             let server_addr = SocketAddr::new(parsed.host, parsed.port);
             let connecting = endpoint
                 .connect(server_addr, &parsed.server_name)
@@ -1223,12 +1127,10 @@ mod tests {
             )
             .await
             .expect("streaming conn");
-
             let mut client = StreamingClient {
                 endpoint,
                 connection,
             };
-
             let recorded_hash = Arc::new(std::sync::Mutex::new(None));
             let max_size =
                 u16::try_from(settings.max_datagram_size).expect("max_datagram_size fits u16");
@@ -1275,7 +1177,6 @@ mod tests {
                 *recorded_hash.lock().expect("recorded hash checked"),
                 Some(transport_resolution.capabilities_hash())
             );
-
             let frame = within(
                 "next_control_frame",
                 client.connection().next_control_frame(),
@@ -1292,19 +1193,15 @@ mod tests {
                 }
                 other => panic!("unexpected frame: {other:?}"),
             }
-
             let chunk = within("recv_datagram", client.connection().recv_datagram())
                 .await
                 .unwrap();
             assert_eq!(chunk.as_ref(), &[0xDE, 0xAD, 0xBE, 0xEF]);
-
             within("client.close", client.close()).await;
         };
-
         tokio::join!(server_task, viewer_task);
         within("server.shutdown", server.shutdown()).await;
     }
-
     #[tokio::test]
     async fn feedback_frames_roundtrip_over_quic() {
         let settings = TransportConfigSettings::default();
@@ -1319,7 +1216,6 @@ mod tests {
         };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
-
         let server_task = {
             let server = server.clone();
             async move {
@@ -1327,7 +1223,6 @@ mod tests {
                     .await
                     .expect("accept");
                 let mut session = StreamingSession::new(CapabilityRole::Publisher);
-
                 let publisher_caps = TransportCapabilities::kyber768_default();
                 let (report, resolution) = within(
                     "publisher_handshake",
@@ -1342,7 +1237,6 @@ mod tests {
                 session
                     .record_transport_capabilities(resolution.clone())
                     .expect("negotiated transport capabilities are valid");
-
                 let ack = CapabilityAck {
                     stream_id: report.stream_id,
                     accepted_version: report.protocol_version,
@@ -1356,7 +1250,6 @@ mod tests {
                 )
                 .await
                 .expect("ack");
-
                 let mut received_hint = false;
                 let mut received_report = false;
                 while !(received_hint && received_report) {
@@ -1383,12 +1276,10 @@ mod tests {
                         other => panic!("unexpected frame: {other:?}"),
                     }
                 }
-
                 assert_eq!(session.latest_feedback_parity(), Some(2));
                 conn.close();
             }
         };
-
         let viewer_task = async move {
             let mut client = within(
                 "client.connect",
@@ -1400,7 +1291,6 @@ mod tests {
             )
             .await
             .expect("client");
-
             let report = CapabilityReport {
                 stream_id: hash(11),
                 endpoint_role: CapabilityRole::Viewer,
@@ -1433,7 +1323,6 @@ mod tests {
             )
             .await
             .expect("viewer handshake");
-
             let hint = FeedbackHintFrame {
                 stream_id: hash(11),
                 loss_ewma_q16: (0.08_f64 * 65536.0).round() as u32,
@@ -1459,7 +1348,6 @@ mod tests {
                 fec_budget: 1,
                 sync_diagnostics: None,
             };
-
             within(
                 "send_hint",
                 client
@@ -1476,7 +1364,6 @@ mod tests {
             )
             .await
             .expect("send report");
-
             // Wait for the publisher to process frames and close the connection before we tear down
             // our endpoint. Closing immediately can race with stream delivery and spuriously abort
             // the server-side receive loop.
@@ -1487,11 +1374,9 @@ mod tests {
             .await;
             within("client.close", client.close()).await;
         };
-
         tokio::join!(server_task, viewer_task);
         within("server.shutdown", server.shutdown()).await;
     }
-
     #[tokio::test]
     async fn mtu_negotiation_clamps_to_smallest_limit() {
         let settings = TransportConfigSettings::default();
@@ -1506,14 +1391,12 @@ mod tests {
         };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
-
         let server_task = {
             let server = server.clone();
             async move {
                 let mut conn = within("server.accept", server.accept())
                     .await
                     .expect("accept");
-
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
                 publisher_caps.max_segment_datagram_size = 1100;
                 let (report, resolution) = within(
@@ -1526,7 +1409,6 @@ mod tests {
                 assert_eq!(resolution.max_segment_datagram_size, 900);
                 assert_eq!(conn.max_datagram_size(), 900);
                 assert!(conn.datagram_enabled());
-
                 let ack = CapabilityAck {
                     stream_id: report.stream_id,
                     accepted_version: report.protocol_version,
@@ -1542,11 +1424,9 @@ mod tests {
                 )
                 .await
                 .expect("ack");
-
                 let _ = within("wait_client_close", conn.quic_connection().closed()).await;
             }
         };
-
         let viewer_task = async move {
             let mut client = within(
                 "client.connect",
@@ -1558,10 +1438,8 @@ mod tests {
             )
             .await
             .expect("client");
-
             let mut viewer_caps = TransportCapabilities::kyber768_default();
             viewer_caps.max_segment_datagram_size = 1024;
-
             let report = CapabilityReport {
                 stream_id: hash(7),
                 endpoint_role: CapabilityRole::Viewer,
@@ -1579,7 +1457,6 @@ mod tests {
                 max_datagram_size: 900,
                 dplpmtud: true,
             };
-
             let (ack, resolution) = within(
                 "viewer_handshake",
                 CapabilityNegotiation::viewer_handshake(
@@ -1596,7 +1473,6 @@ mod tests {
             assert_eq!(ack.max_datagram_size, 900);
             assert_eq!(client.connection().max_datagram_size(), 900);
             assert!(client.connection().datagram_enabled());
-
             let payload = vec![0_u8; 901];
             let err = within(
                 "send_oversized_datagram",
@@ -1608,14 +1484,11 @@ mod tests {
                 Error::DatagramTooLarge { max, .. } => assert_eq!(max, 900),
                 other => panic!("unexpected error: {other:?}"),
             }
-
             within("client.close", client.close()).await;
         };
-
         tokio::join!(server_task, viewer_task);
         within("server.shutdown", server.shutdown()).await;
     }
-
     #[tokio::test]
     async fn datagram_disabled_sets_zero_limit() {
         let settings = TransportConfigSettings::default();
@@ -1630,14 +1503,12 @@ mod tests {
         };
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
-
         let server_task = {
             let server = server.clone();
             async move {
                 let mut conn = within("server.accept", server.accept())
                     .await
                     .expect("accept");
-
                 let mut publisher_caps = TransportCapabilities::kyber768_default();
                 publisher_caps.supports_datagram = false;
                 let (report, resolution) = within(
@@ -1650,7 +1521,6 @@ mod tests {
                 assert_eq!(resolution.max_segment_datagram_size, 0);
                 assert_eq!(conn.max_datagram_size(), 0);
                 assert!(!conn.datagram_enabled());
-
                 let ack = CapabilityAck {
                     stream_id: report.stream_id,
                     accepted_version: report.protocol_version,
@@ -1664,11 +1534,9 @@ mod tests {
                 )
                 .await
                 .expect("ack");
-
                 let _ = within("wait_client_close", conn.quic_connection().closed()).await;
             }
         };
-
         let viewer_task = async move {
             let mut client = within(
                 "client.connect",
@@ -1680,10 +1548,8 @@ mod tests {
             )
             .await
             .expect("client");
-
             let mut viewer_caps = TransportCapabilities::kyber768_default();
             viewer_caps.max_segment_datagram_size = 1024;
-
             let report = CapabilityReport {
                 stream_id: hash(8),
                 endpoint_role: CapabilityRole::Viewer,
@@ -1701,7 +1567,6 @@ mod tests {
                 max_datagram_size: 1200,
                 dplpmtud: false,
             };
-
             let (ack, resolution) = within(
                 "viewer_handshake",
                 CapabilityNegotiation::viewer_handshake(
@@ -1718,7 +1583,6 @@ mod tests {
             assert_eq!(ack.max_datagram_size, 0);
             assert_eq!(client.connection().max_datagram_size(), 0);
             assert!(!client.connection().datagram_enabled());
-
             let payload = vec![0_u8; 1];
             let err = within("send_datagram", client.connection().send_datagram(&payload))
                 .await
@@ -1727,10 +1591,8 @@ mod tests {
                 Error::DatagramTooLarge { max, .. } => assert_eq!(max, 0),
                 other => panic!("unexpected error: {other:?}"),
             }
-
             within("client.close", client.close()).await;
         };
-
         tokio::join!(server_task, viewer_task);
         within("server.shutdown", server.shutdown()).await;
     }

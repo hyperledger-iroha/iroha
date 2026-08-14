@@ -4,7 +4,14 @@
 //! resulting assignments, receipts, and provider reports remain identical.
 //! Instrumentation captures concurrency limits so the resulting metrics can be
 //! recorded in the GA parity report shared with other SDKs.
-
+use blake3::hash as blake3_hash;
+use norito::json::{self, Value};
+use sorafs_car::{
+    fetch_plan::chunk_fetch_plan_from_json,
+    fixtures::MultiPeerFixture,
+    multi_fetch::{ChunkResponse, FetchRequest},
+};
+use sorafs_orchestrator::{Orchestrator, OrchestratorConfig, PolicyStatus};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -16,19 +23,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use blake3::hash as blake3_hash;
-use norito::json::{self, Value};
-use sorafs_car::{
-    fetch_plan::chunk_fetch_plan_from_json,
-    fixtures::MultiPeerFixture,
-    multi_fetch::{ChunkResponse, FetchRequest},
-};
-use sorafs_orchestrator::{Orchestrator, OrchestratorConfig, PolicyStatus};
-
 /// Maximum parallel chunk fetches enforced during the parity suite.
 const MAX_PARALLEL_FETCHES: usize = 3;
-
 #[test]
 fn shared_fixture_matches_multi_peer_template() {
     let fixture = MultiPeerFixture::with_providers(4).expect("build multi-peer fixture");
@@ -38,24 +34,20 @@ fn shared_fixture_matches_multi_peer_template() {
         "fixture directory missing: {}",
         fixture_dir.display()
     );
-
     validate_plan(&fixture, &fixture_dir.join("plan.json"));
     validate_providers(&fixture, &fixture_dir.join("providers.json"));
     validate_telemetry(&fixture, &fixture_dir.join("telemetry.json"));
     validate_options(&fixture_dir.join("options.json"));
     validate_metadata(&fixture, &fixture_dir.join("metadata.json"));
 }
-
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_orchestrator_fetch_suite_is_deterministic() {
     let (first_report, first_metrics) = execute_parity_run().await;
     let (second_report, second_metrics) = execute_parity_run().await;
-
     assert_eq!(
         first_report, second_report,
         "fetch outcomes must remain deterministic across runs"
     );
-
     assert_eq!(
         first_metrics.total_bytes, second_metrics.total_bytes,
         "payload bytes fetched must match across runs"
@@ -64,7 +56,6 @@ async fn rust_orchestrator_fetch_suite_is_deterministic() {
         first_metrics.max_inflight, second_metrics.max_inflight,
         "peak in-flight fetch count should remain stable"
     );
-
     assert!(
         first_metrics.max_inflight <= MAX_PARALLEL_FETCHES,
         "max inflight ({}) must not exceed configured parallel limit ({MAX_PARALLEL_FETCHES})",
@@ -75,7 +66,6 @@ async fn rust_orchestrator_fetch_suite_is_deterministic() {
         "max inflight ({}) must not exceed configured parallel limit ({MAX_PARALLEL_FETCHES})",
         second_metrics.max_inflight
     );
-
     assert!(
         first_metrics.duration_ms <= 2_000,
         "parity run exceeded 2 s ({} ms)",
@@ -86,7 +76,6 @@ async fn rust_orchestrator_fetch_suite_is_deterministic() {
         "parity run exceeded 2 s ({} ms)",
         second_metrics.duration_ms
     );
-
     println!(
         "Rust orchestrator parity: duration_ms={} total_bytes={} max_inflight={} peak_reserved_bytes={}",
         first_metrics.duration_ms,
@@ -95,7 +84,6 @@ async fn rust_orchestrator_fetch_suite_is_deterministic() {
         first_metrics.peak_reserved_bytes
     );
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParityReport {
     chunk_assignments: Vec<ParityChunk>,
@@ -105,7 +93,6 @@ struct ParityReport {
     total_chunks: usize,
     total_bytes: usize,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParityChunk {
     chunk_index: usize,
@@ -113,7 +100,6 @@ struct ParityChunk {
     attempts: u32,
     bytes: u32,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParityProvider {
     provider_id: String,
@@ -121,7 +107,6 @@ struct ParityProvider {
     failures: usize,
     disabled: bool,
 }
-
 impl ParityReport {
     fn from_outcome(
         outcome: &sorafs_car::multi_fetch::FetchOutcome,
@@ -131,7 +116,6 @@ impl ParityReport {
         for chunk in &plan.chunks {
             chunk_digests.push(chunk.digest);
         }
-
         let chunk_assignments = outcome
             .chunk_receipts
             .iter()
@@ -142,7 +126,6 @@ impl ParityReport {
                 bytes: receipt.bytes,
             })
             .collect::<Vec<_>>();
-
         let mut provider_reports = outcome
             .provider_reports
             .iter()
@@ -154,11 +137,9 @@ impl ParityReport {
             })
             .collect::<Vec<_>>();
         provider_reports.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-
         let assembled_bytes = outcome.assemble_payload();
         let mut payload_digest = [0_u8; 32];
         payload_digest.copy_from_slice(blake3_hash(&assembled_bytes).as_bytes());
-
         Self {
             chunk_assignments,
             provider_reports,
@@ -169,7 +150,6 @@ impl ParityReport {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 struct RunMetrics {
     duration_ms: u128,
@@ -177,7 +157,6 @@ struct RunMetrics {
     max_inflight: usize,
     peak_reserved_bytes: usize,
 }
-
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -185,7 +164,6 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
         .to_path_buf()
 }
-
 fn read_json_array(path: &Path) -> Vec<Value> {
     let data = fs::read_to_string(path).unwrap_or_else(|err| {
         panic!("failed to read {}: {err}", path.display());
@@ -194,7 +172,6 @@ fn read_json_array(path: &Path) -> Vec<Value> {
         panic!("failed to parse {}: {err}", path.display());
     })
 }
-
 fn read_json_value(path: &Path) -> Value {
     let data = fs::read_to_string(path).unwrap_or_else(|err| {
         panic!("failed to read {}: {err}", path.display());
@@ -203,7 +180,6 @@ fn read_json_value(path: &Path) -> Value {
         panic!("failed to parse {}: {err}", path.display());
     })
 }
-
 fn validate_plan(fixture: &MultiPeerFixture, path: &Path) {
     let plan_value = read_json_value(path);
     let parsed = chunk_fetch_plan_from_json(&plan_value).expect("canonical V1 fixture plan");
@@ -249,7 +225,6 @@ fn validate_plan(fixture: &MultiPeerFixture, path: &Path) {
         );
     }
 }
-
 fn validate_providers(fixture: &MultiPeerFixture, path: &Path) {
     let providers_json = read_json_array(path);
     assert_eq!(
@@ -354,7 +329,6 @@ fn validate_providers(fixture: &MultiPeerFixture, path: &Path) {
         );
     }
 }
-
 fn validate_telemetry(fixture: &MultiPeerFixture, path: &Path) {
     let telemetry_json = read_json_array(path);
     #[derive(Debug, Clone)]
@@ -458,7 +432,6 @@ fn validate_telemetry(fixture: &MultiPeerFixture, path: &Path) {
         expected.keys().collect::<Vec<_>>()
     );
 }
-
 fn validate_options(path: &Path) {
     let options = read_json_value(path);
     assert_eq!(Some(3), options.get("max_parallel").and_then(Value::as_u64));
@@ -491,7 +464,6 @@ fn validate_options(path: &Path) {
         scoreboard.get("now_unix_secs").and_then(Value::as_u64)
     );
 }
-
 fn validate_metadata(fixture: &MultiPeerFixture, path: &Path) {
     let metadata = read_json_value(path);
     assert_eq!(
@@ -511,10 +483,8 @@ fn validate_metadata(fixture: &MultiPeerFixture, path: &Path) {
         metadata.get("payload_bytes").and_then(Value::as_u64)
     );
 }
-
 async fn execute_parity_run() -> (ParityReport, RunMetrics) {
     let fixture = MultiPeerFixture::with_providers(4).expect("build multi-peer fixture");
-
     let mut config = OrchestratorConfig::default();
     config.scoreboard.now_unix_secs = fixture.now_unix_secs();
     config.scoreboard.telemetry_grace_period = Duration::from_hours(1);
@@ -524,12 +494,10 @@ async fn execute_parity_run() -> (ParityReport, RunMetrics) {
     config.fetch.global_parallel_limit = Some(MAX_PARALLEL_FETCHES);
     config.max_providers = NonZeroUsize::new(3);
     config.telemetry_region = Some("fixture".into());
-
     let orchestrator = Orchestrator::new(config);
     let scoreboard = orchestrator
         .build_scoreboard(fixture.plan(), fixture.providers(), fixture.telemetry())
         .expect("scoreboard build");
-
     let provider_payloads = fixture
         .providers()
         .iter()
@@ -538,12 +506,10 @@ async fn execute_parity_run() -> (ParityReport, RunMetrics) {
         .map(|(id, payload)| (id.clone(), Arc::new(payload.clone())))
         .collect::<HashMap<String, Arc<Vec<u8>>>>();
     let provider_payloads = Arc::new(provider_payloads);
-
     let transient_failures = Arc::new(Mutex::new(HashSet::new()));
     let corrupt_once = Arc::new(Mutex::new(HashSet::new()));
     let tracker = Arc::new(InflightTracker::new());
     let total_bytes = Arc::new(AtomicUsize::new(0));
-
     let fetcher = {
         let provider_payloads = Arc::clone(&provider_payloads);
         let transient_failures = Arc::clone(&transient_failures);
@@ -560,47 +526,40 @@ async fn execute_parity_run() -> (ParityReport, RunMetrics) {
                 let _guard = tracker.enter();
                 let provider_id = request.provider.id().as_str().to_owned();
                 let chunk_index = request.spec.chunk_index;
-
                 if provider_id.ends_with('1') {
                     let mut guard = transient_failures.lock().expect("lock transient failures");
                     if guard.insert((provider_id.clone(), chunk_index)) {
                         return Err(FetchError("simulated transport error"));
                     }
                 }
-
                 let payload = provider_payloads
                     .get(&provider_id)
                     .expect("fixture provider present");
                 let start = request.spec.offset as usize;
                 let end = start + request.spec.length as usize;
                 let mut bytes = payload[start..end].to_vec();
-
                 if provider_id.ends_with('2') {
                     let mut guard = corrupt_once.lock().expect("lock corruption flag");
                     if guard.insert((provider_id.clone(), chunk_index)) {
                         bytes[0] ^= 0xFF;
                     }
                 }
-
                 total_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
                 Ok::<ChunkResponse, FetchError>(ChunkResponse::new(bytes))
             }
         }
     };
-
     let started = Instant::now();
     let session = orchestrator
         .fetch_with_scoreboard(fixture.plan(), &scoreboard, fetcher)
         .await
         .expect("fetch outcome");
     let duration = started.elapsed();
-
     assert_eq!(
         session.policy_report.status,
         PolicyStatus::NotApplicable,
         "fixture does not enforce a PQ policy"
     );
-
     let run_metrics = RunMetrics {
         duration_ms: duration.as_millis(),
         total_bytes: total_bytes.load(Ordering::Relaxed),
@@ -609,33 +568,26 @@ async fn execute_parity_run() -> (ParityReport, RunMetrics) {
             * usize::try_from(fixture.max_chunk_length()).expect("chunk lengths fit usize"),
     };
     let report = ParityReport::from_outcome(&session.outcome, fixture.plan());
-
     assert_eq!(
         report.total_bytes,
         fixture.payload().len(),
         "assembled payload must match fixture payload size"
     );
-
     (report, run_metrics)
 }
-
 #[derive(Debug)]
 struct FetchError(&'static str);
-
 impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0)
     }
 }
-
 impl std::error::Error for FetchError {}
-
 #[derive(Debug, Default)]
 struct InflightTracker {
     current: AtomicUsize,
     max: AtomicUsize,
 }
-
 impl InflightTracker {
     fn new() -> Self {
         Self {
@@ -643,7 +595,6 @@ impl InflightTracker {
             max: AtomicUsize::new(0),
         }
     }
-
     fn enter(self: &Arc<Self>) -> InflightGuard {
         let active = self.current.fetch_add(1, Ordering::AcqRel) + 1;
         self.update_max(active);
@@ -651,7 +602,6 @@ impl InflightTracker {
             tracker: Arc::clone(self),
         }
     }
-
     fn update_max(&self, value: usize) {
         let mut observed = self.max.load(Ordering::Relaxed);
         while value > observed {
@@ -664,20 +614,16 @@ impl InflightTracker {
             }
         }
     }
-
     fn leave(&self) {
         self.current.fetch_sub(1, Ordering::AcqRel);
     }
-
     fn max(&self) -> usize {
         self.max.load(Ordering::Relaxed)
     }
 }
-
 struct InflightGuard {
     tracker: Arc<InflightTracker>,
 }
-
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         self.tracker.leave();

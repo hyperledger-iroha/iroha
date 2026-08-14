@@ -7,23 +7,6 @@
 //! deployable code hash before skipping compilation. Cache reads are bounded so
 //! a corrupted or adversarial local target directory cannot force unbounded
 //! allocation before authentication.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    error::Error,
-    fmt, fs,
-    io::{Read as _, Write as _},
-    path::{Component, Path, PathBuf},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-use iroha_crypto::Hash;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
-use norito::json;
-
 use crate::{
     ast::SourceUnitKind,
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan},
@@ -37,14 +20,26 @@ use crate::{
     source::SourceFile,
     spanned_ast::{AstNodeKind, SpannedProgram},
 };
-
+use iroha_crypto::Hash;
+use iroha_data_model::smart_contract::manifest::ContractManifest;
+use norito::json;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    error::Error,
+    fmt, fs,
+    io::{Read as _, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 const BUILD_RECORD_SCHEMA: &str = "kotodama-build-v1";
 const DEFAULT_TARGET_ROOT: &str = "target/kotodama";
 const MAX_BUILD_RECORD_BYTES: usize = 4 * 1024;
 const MAX_CACHED_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CURRENT_TOOLCHAIN_FINGERPRINT: OnceLock<String> = OnceLock::new();
-
 /// Whether generated files may be updated or must already match exactly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PublishMode {
@@ -54,7 +49,6 @@ pub enum PublishMode {
     /// Verify that every output and build record is current without writing.
     Verify,
 }
-
 /// Stable output paths known before compilation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublishLayout {
@@ -66,14 +60,12 @@ pub struct PublishLayout {
     pub interface: Option<PathBuf>,
     manifest_storage: ManifestStorage,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ManifestStorage {
     #[default]
     Output,
     Sidecar,
 }
-
 impl PublishLayout {
     /// Construct standard paths below `target/kotodama/<profile>/`.
     pub fn standard(
@@ -92,7 +84,6 @@ impl PublishLayout {
             manifest_storage: ManifestStorage::Output,
         })
     }
-
     /// Construct standard paths below the repository default target root.
     pub fn default_target(
         profile: &str,
@@ -101,7 +92,6 @@ impl PublishLayout {
     ) -> Result<Self, BuildError> {
         Self::standard(DEFAULT_TARGET_ROOT, profile, stem, include_interface)
     }
-
     /// Construct a layout around an explicit artifact path.
     pub fn for_artifact(
         artifact: PathBuf,
@@ -124,7 +114,6 @@ impl PublishLayout {
             manifest_storage: ManifestStorage::Output,
         })
     }
-
     /// Keep the authenticated manifest as a content-addressed build sidecar.
     ///
     /// This is used when a frontend returns the manifest through another
@@ -136,7 +125,6 @@ impl PublishLayout {
         self.manifest_storage = ManifestStorage::Sidecar;
         self
     }
-
     fn resolve(&self, artifact_hash: &str, input_fingerprint: &str) -> BuildPaths {
         let parent = output_parent(&self.artifact);
         let sidecars = parent
@@ -163,7 +151,6 @@ impl PublishLayout {
             record,
         }
     }
-
     fn static_paths(&self) -> Vec<PathBuf> {
         let provisional = self.resolve("artifact", "input");
         let mut paths = vec![
@@ -175,7 +162,6 @@ impl PublishLayout {
         paths
     }
 }
-
 /// Every output path for a completed build.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildPaths {
@@ -192,7 +178,6 @@ pub struct BuildPaths {
     /// Transactional build commit record.
     pub record: PathBuf,
 }
-
 impl BuildPaths {
     fn all_paths(&self) -> Vec<PathBuf> {
         let mut paths = vec![
@@ -206,7 +191,6 @@ impl BuildPaths {
         paths
     }
 }
-
 /// Whether compilation was skipped or performed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildStatus {
@@ -215,7 +199,6 @@ pub enum BuildStatus {
     /// Compilation ran and outputs were published or verified.
     Built,
 }
-
 /// Successful content-addressed build result.
 #[derive(Clone, Debug)]
 pub struct BuildOutcome {
@@ -230,7 +213,6 @@ pub struct BuildOutcome {
     /// Published or verified paths.
     pub paths: BuildPaths,
 }
-
 /// One lint finding paired with the project source that owns it.
 #[derive(Clone, Debug)]
 pub struct ProjectLintWarning {
@@ -242,7 +224,6 @@ pub struct ProjectLintWarning {
     /// Canonical compiler lint finding.
     pub warning: crate::lint::LintWarning,
 }
-
 #[derive(norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SourceProjectManifestV1 {
@@ -251,14 +232,12 @@ struct SourceProjectManifestV1 {
     imports: Vec<SourceProjectImportV1>,
     packages: Vec<SourceProjectPackageV1>,
 }
-
 #[derive(norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SourceProjectImportV1 {
     alias: String,
     package: String,
 }
-
 #[derive(norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SourceProjectPackageV1 {
@@ -267,7 +246,6 @@ struct SourceProjectPackageV1 {
     exports: Vec<String>,
     imports: Vec<SourceProjectImportV1>,
 }
-
 /// Unambiguous owner of one source in a locked Kotodama project graph.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProjectSourceKey {
@@ -276,7 +254,6 @@ pub struct ProjectSourceKey {
     /// Canonical project-relative logical source path.
     pub source_name: String,
 }
-
 /// Exact source graph loaded from a versioned, explicit project manifest.
 #[derive(Clone, Debug)]
 pub struct LoadedSourceProject {
@@ -285,7 +262,6 @@ pub struct LoadedSourceProject {
     /// Canonical physical path for every graph-owned logical source.
     pub source_paths: BTreeMap<ProjectSourceKey, PathBuf>,
 }
-
 fn project_source_unit_span(
     source: &SourceModuleUnit,
     program: &SpannedProgram,
@@ -302,7 +278,6 @@ fn project_source_unit_span(
     );
     Some(SourceSpan::from_range(&file, node.range))
 }
-
 /// One ordinary source build request.
 #[derive(Clone, Debug)]
 pub struct SourceBuildRequest {
@@ -317,7 +292,6 @@ pub struct SourceBuildRequest {
     /// Write or verification policy.
     pub mode: PublishMode,
 }
-
 /// One locked source-module graph built lazily after cache authentication.
 #[derive(Clone, Debug)]
 pub struct LinkedSourceBuildRequest {
@@ -332,7 +306,6 @@ pub struct LinkedSourceBuildRequest {
     /// Write or verification policy.
     pub mode: PublishMode,
 }
-
 /// Shared compiler, cache validator, and atomic publisher.
 #[derive(Clone)]
 pub struct BuildDriver {
@@ -340,7 +313,6 @@ pub struct BuildDriver {
     toolchain_fingerprint: String,
     graph: Arc<ModuleBuildGraph>,
 }
-
 impl fmt::Debug for BuildDriver {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -350,7 +322,6 @@ impl fmt::Debug for BuildDriver {
             .finish_non_exhaustive()
     }
 }
-
 impl BuildDriver {
     /// Create a driver with an explicit compiler/tool executable identity.
     pub fn new(session: CompilerSession, toolchain_fingerprint: impl Into<String>) -> Self {
@@ -360,7 +331,6 @@ impl BuildDriver {
             graph: Arc::new(ModuleBuildGraph::default()),
         }
     }
-
     /// Create a driver whose cache identity includes the complete running executable.
     pub fn for_current_executable(session: CompilerSession) -> Result<Self, BuildError> {
         if let Some(fingerprint) = CURRENT_TOOLCHAIN_FINGERPRINT.get() {
@@ -387,7 +357,6 @@ impl BuildDriver {
                 .unwrap_or(fingerprint),
         ))
     }
-
     /// Build one source unit, authenticating all cached outputs before a hit.
     pub fn build_source(&self, request: SourceBuildRequest) -> Result<BuildOutcome, BuildError> {
         let SourceBuildRequest {
@@ -399,7 +368,6 @@ impl BuildDriver {
         } = request;
         self.build_source_fields(&source, &source_name, &profile, &layout, mode)
     }
-
     fn build_source_fields(
         &self,
         source: &str,
@@ -424,7 +392,6 @@ impl BuildDriver {
             .map_err(BuildError::Compile)?;
         self.finish_build(output, layout, &input_fingerprint.to_string(), mode)
     }
-
     /// Build a locked source-module graph without compiling an authenticated hit.
     ///
     /// The graph fingerprint is cheap preflight work over bounded input bytes.
@@ -468,7 +435,6 @@ impl BuildDriver {
             request.mode,
         )
     }
-
     /// Build one project through this driver's reusable typed-module graph.
     ///
     /// Frontends should prefer this entry point over constructing a private
@@ -481,7 +447,6 @@ impl BuildDriver {
     ) -> Result<BuildOutcome, BuildError> {
         self.build_linked_source(&self.graph, request)
     }
-
     /// Link and compile one project without publishing generated files.
     ///
     /// Documentation and editor frontends use this to consume the exact linked
@@ -501,7 +466,6 @@ impl BuildDriver {
             .build_typed_program(linked.program, Some(source_name))
             .map_err(BuildError::Compile)
     }
-
     /// Validate one reusable package through this driver's shared graph.
     pub fn validate_package_project(
         &self,
@@ -512,7 +476,6 @@ impl BuildDriver {
             .validate_package(request, self.session.linker_options())
             .map_err(BuildError::SourceGraph)
     }
-
     /// Type-check and lint one exact deployable source graph without publishing files.
     ///
     /// Unlike loose/editor validation, this entry point links the supplied module
@@ -538,7 +501,6 @@ impl BuildDriver {
         self.graph
             .link(graph, self.session.linker_options())
             .map_err(BuildError::SourceGraph)?;
-
         scoped_sources.sort_by(|left, right| {
             left.0
                 .cmp(&right.0)
@@ -569,7 +531,6 @@ impl BuildDriver {
             })
             .collect())
     }
-
     /// Check explicitly listed loose sources without inventing a module graph.
     ///
     /// One deployable root is checked with an empty exact import graph. Module
@@ -647,7 +608,6 @@ impl BuildDriver {
                 packages: Vec::new(),
             });
         }
-
         let mut warnings = Vec::new();
         let mut diagnostics = Vec::new();
         for source in sources {
@@ -671,7 +631,6 @@ impl BuildDriver {
             Err(BuildError::Compile(DiagnosticBundle::new(diagnostics)))
         }
     }
-
     /// Validate retained editor documents without inventing graph authority.
     ///
     /// Until an editor supplies an explicit version-1 project manifest, open
@@ -684,7 +643,6 @@ impl BuildDriver {
     ) -> Result<Vec<ProjectLintWarning>, BuildError> {
         self.check_explicit_sources(sources)
     }
-
     /// Build independent source roots in parallel and return results in request order.
     pub fn build_source_batch(
         &self,
@@ -724,7 +682,6 @@ impl BuildDriver {
         }
         Ok(outcomes)
     }
-
     /// Build independent project roots in parallel through one shared graph.
     pub fn build_project_batch(
         &self,
@@ -756,7 +713,6 @@ impl BuildDriver {
         }
         Ok(outcomes)
     }
-
     fn input_fingerprint(
         &self,
         kind: &[u8],
@@ -773,7 +729,6 @@ impl BuildDriver {
         append_field(&mut transcript, payload);
         Hash::new(transcript)
     }
-
     fn try_fresh(&self, layout: &PublishLayout, input: &str) -> Option<BuildOutcome> {
         let provisional = layout.resolve("artifact", input);
         let record_bytes = read_bounded_file(&provisional.record, MAX_BUILD_RECORD_BYTES)?;
@@ -832,7 +787,6 @@ impl BuildDriver {
             paths,
         })
     }
-
     fn finish_build(
         &self,
         output: CompileOutput,
@@ -881,7 +835,6 @@ impl BuildDriver {
                 .map(|value| output_hash("interface", value.as_bytes()).to_string()),
         };
         let record_text = record.render();
-
         let mut expected = vec![
             (&paths.artifact, output.artifact.as_slice()),
             (&paths.manifest, manifest.as_bytes()),
@@ -916,7 +869,6 @@ impl BuildDriver {
         })
     }
 }
-
 /// Render the canonical generated interface used by developer tooling.
 pub fn render_interface_json(manifest: &ContractManifest) -> Result<String, BuildError> {
     let manifest_value =
@@ -943,7 +895,6 @@ pub fn render_interface_json(manifest: &ContractManifest) -> Result<String, Buil
     }))
     .map_err(|error| BuildError::Render(error.to_string()))
 }
-
 /// Read one bounded UTF-8 Kotodama source and map I/O failures for build tools.
 pub fn read_source_file(path: &Path) -> Result<String, BuildError> {
     crate::source::read_source_file(path).map_err(|error| match error {
@@ -966,7 +917,6 @@ pub fn read_source_file(path: &Path) -> Result<String, BuildError> {
         },
     })
 }
-
 /// Map one physical source path to its portable project-relative graph name.
 ///
 /// Absolute sources must remain below `project_root`; relative sources are
@@ -1018,7 +968,6 @@ pub fn logical_source_name(source_path: &Path, project_root: &Path) -> Result<St
     }
     Ok(components.join("/"))
 }
-
 /// Select the deterministic physical root for one explicitly selected source.
 ///
 /// Sources below `preferred_root` retain that common project. A source outside
@@ -1052,7 +1001,6 @@ pub fn project_root_for_source(
             message: "Kotodama source has no project parent directory".to_owned(),
         })
 }
-
 /// Discover every `.ko` source below a reusable package root deterministically.
 ///
 /// Discovery ignores generated/cache directories, does not follow symlinks,
@@ -1067,7 +1015,6 @@ pub fn discover_source_modules(root: &Path) -> Result<Vec<SourceModuleUnit>, Bui
     let mut files = Vec::new();
     discover_source_files(&root, &root, 0, &mut files)?;
     files.sort();
-
     let mut modules = Vec::new();
     let mut source_bytes = 0_usize;
     for relative in files {
@@ -1093,7 +1040,6 @@ pub fn discover_source_modules(root: &Path) -> Result<Vec<SourceModuleUnit>, Bui
     }
     Ok(modules)
 }
-
 /// Read one deployable root and construct the canonical typed-module request.
 ///
 /// Package manifests and lockfiles remain responsible for supplying explicit
@@ -1137,7 +1083,6 @@ pub fn discover_source_link_request(
         packages,
     })
 }
-
 /// Load one explicit, versioned Kotodama project graph from canonical Norito JSON.
 ///
 /// The manifest owns all module authority: root and package imports, package
@@ -1174,7 +1119,6 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
             ),
         });
     }
-
     let (root, root_path) = load_project_source(project_root, &manifest.root, path)?;
     let root_key = ProjectSourceKey {
         package_identity: None,
@@ -1278,14 +1222,12 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
         source_paths,
     })
 }
-
 fn project_source_key_description(key: &ProjectSourceKey) -> String {
     key.package_identity.as_ref().map_or_else(
         || format!("root `{}`", key.source_name),
         |package| format!("package `{package}` source `{}`", key.source_name),
     )
 }
-
 fn load_project_source(
     project_root: &Path,
     manifest_relative_path: &str,
@@ -1326,7 +1268,6 @@ fn load_project_source(
         canonical_path,
     ))
 }
-
 fn discover_source_files(
     root: &Path,
     current: &Path,
@@ -1382,7 +1323,6 @@ fn discover_source_files(
     }
     Ok(())
 }
-
 /// Atomically replace a generated file only when its bytes changed.
 ///
 /// Returns `true` when publication occurred. Returning `false` performs no
@@ -1473,13 +1413,11 @@ pub fn atomic_write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, BuildE
     }
     publication.map(|()| true)
 }
-
 fn output_parent(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
 }
-
 fn read_bounded_file(path: &Path, limit: usize) -> Option<Vec<u8>> {
     let file = fs::File::open(path).ok()?;
     let declared = file.metadata().ok()?.len();
@@ -1494,7 +1432,6 @@ fn read_bounded_file(path: &Path, limit: usize) -> Option<Vec<u8>> {
         .ok()?;
     (bytes.len() <= limit).then_some(bytes)
 }
-
 fn file_equals(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
     let mut file = fs::File::open(path)?;
     if file.metadata()?.len() != u64::try_from(expected.len()).unwrap_or(u64::MAX) {
@@ -1514,7 +1451,6 @@ fn file_equals(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
         offset = end;
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BuildRecord {
     input: String,
@@ -1525,7 +1461,6 @@ struct BuildRecord {
     budget: String,
     interface: Option<String>,
 }
-
 impl BuildRecord {
     fn render(&self) -> String {
         format!(
@@ -1539,7 +1474,6 @@ impl BuildRecord {
             self.interface.as_deref().unwrap_or("-"),
         )
     }
-
     fn parse(raw: &str) -> Option<Self> {
         let mut fields = HashMap::new();
         for line in raw.lines() {
@@ -1575,7 +1509,6 @@ impl BuildRecord {
         })
     }
 }
-
 fn output_hash(kind: &str, bytes: &[u8]) -> Hash {
     let length = (bytes.len() as u64).to_le_bytes();
     Hash::new_from_chunks(&[
@@ -1586,7 +1519,6 @@ fn output_hash(kind: &str, bytes: &[u8]) -> Hash {
         bytes,
     ])
 }
-
 fn valid_sidecar(bytes: &[u8], kind: &str, artifact_hash: &str) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
@@ -1597,7 +1529,6 @@ fn valid_sidecar(bytes: &[u8], kind: &str, artifact_hash: &str) -> bool {
     value.get("kind").and_then(json::Value::as_str) == Some(kind)
         && value.get("artifact_hash").and_then(json::Value::as_str) == Some(artifact_hash)
 }
-
 fn valid_interface(bytes: &[u8], artifact_hash: &str) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
@@ -1619,12 +1550,10 @@ fn valid_interface(bytes: &[u8], artifact_hash: &str) -> bool {
         .as_ref()
         .is_some_and(|hash| hash.to_string() == artifact_hash)
 }
-
 fn append_field(transcript: &mut Vec<u8>, value: &[u8]) {
     transcript.extend_from_slice(&(value.len() as u64).to_le_bytes());
     transcript.extend_from_slice(value);
 }
-
 fn validate_profile(profile: &str) -> Result<(), BuildError> {
     let mut chars = profile.chars();
     if !chars
@@ -1636,7 +1565,6 @@ fn validate_profile(profile: &str) -> Result<(), BuildError> {
     }
     Ok(())
 }
-
 fn validate_stem(stem: &str) -> Result<(), BuildError> {
     if stem.is_empty()
         || matches!(stem, "." | "..")
@@ -1647,7 +1575,6 @@ fn validate_stem(stem: &str) -> Result<(), BuildError> {
     }
     Ok(())
 }
-
 fn reject_output_collisions(requests: &[SourceBuildRequest]) -> Result<(), BuildError> {
     let mut owners = HashMap::<PathBuf, String>::new();
     for request in requests {
@@ -1664,7 +1591,6 @@ fn reject_output_collisions(requests: &[SourceBuildRequest]) -> Result<(), Build
     }
     Ok(())
 }
-
 fn reject_linked_output_collisions(
     requests: &[LinkedSourceBuildRequest],
 ) -> Result<(), BuildError> {
@@ -1683,11 +1609,9 @@ fn reject_linked_output_collisions(
     }
     Ok(())
 }
-
 fn reject_layout_collisions(layout: &PublishLayout, owner: &str) -> Result<(), BuildError> {
     reject_path_collisions(layout.static_paths(), owner)
 }
-
 fn reject_path_collisions(
     paths: impl IntoIterator<Item = PathBuf>,
     owner: &str,
@@ -1705,7 +1629,6 @@ fn reject_path_collisions(
     }
     Ok(())
 }
-
 fn normalize_path(path: &Path) -> Result<PathBuf, BuildError> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -1719,7 +1642,6 @@ fn normalize_path(path: &Path) -> Result<PathBuf, BuildError> {
             .join(path)
     };
     let normalized = normalize_lexically(&absolute);
-
     // Resolve the longest existing prefix so two lexical paths that traverse
     // different symlinked directories cannot evade parallel-output collision
     // checks. Nonexistent output suffixes are then appended without touching
@@ -1746,7 +1668,6 @@ fn normalize_path(path: &Path) -> Result<PathBuf, BuildError> {
     }
     Ok(normalize_lexically(&physical))
 }
-
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -1760,7 +1681,6 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     }
     normalized
 }
-
 fn verify_exact(path: &Path, expected: &[u8]) -> Result<(), BuildError> {
     match file_equals(path, expected) {
         Ok(true) => Ok(()),
@@ -1775,7 +1695,6 @@ fn verify_exact(path: &Path, expected: &[u8]) -> Result<(), BuildError> {
         }),
     }
 }
-
 /// Build driver failure.
 #[derive(Clone, Debug)]
 pub enum BuildError {
@@ -1844,7 +1763,6 @@ pub enum BuildError {
     /// Compiler/driver invariant failure.
     Internal(String),
 }
-
 impl BuildError {
     /// Recover canonical compiler diagnostics without rendering them to text.
     ///
@@ -1870,7 +1788,6 @@ impl BuildError {
         }
     }
 }
-
 impl fmt::Display for BuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1945,15 +1862,12 @@ impl fmt::Display for BuildError {
         }
     }
 }
-
 impl Error for BuildError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::linker::{ImportBinding, SourceModuleUnit, SourcePackageUnit};
     use std::collections::BTreeSet;
-
     fn temp_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "kotodama-driver-{label}-{}-{}",
@@ -1961,7 +1875,6 @@ mod tests {
             TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ))
     }
-
     fn request(root: &Path, source: &str) -> SourceBuildRequest {
         SourceBuildRequest {
             source: source.to_owned(),
@@ -1971,7 +1884,6 @@ mod tests {
             mode: PublishMode::Write,
         }
     }
-
     fn linked_request(root: &Path, module_source: &str) -> LinkedSourceBuildRequest {
         LinkedSourceBuildRequest {
             graph: SourceLinkRequest {
@@ -2001,7 +1913,6 @@ mod tests {
             mode: PublishMode::Write,
         }
     }
-
     #[test]
     fn bounded_source_reader_preserves_typed_budget_and_utf8_failures() {
         let root = temp_root("source-errors");
@@ -2016,7 +1927,6 @@ mod tests {
                 ..
             })
         ));
-
         let invalid = root.join("invalid.ko");
         fs::write(&invalid, [0xff]).expect("write invalid UTF-8 source");
         assert!(matches!(
@@ -2029,7 +1939,6 @@ mod tests {
         ));
         fs::remove_dir_all(root).expect("remove source error root");
     }
-
     #[test]
     fn explicit_project_manifest_loads_exact_locked_graph_and_rejects_unknown_fields() {
         let root = temp_root("project-manifest");
@@ -2058,7 +1967,6 @@ mod tests {
             }]
         }"#;
         fs::write(&manifest, valid).expect("write project manifest");
-
         let loaded = load_source_project_manifest(&manifest).expect("load exact project graph");
         assert_eq!(loaded.graph.root.source_name, "contracts/app.ko");
         assert_eq!(loaded.graph.imports[0].alias, "Math");
@@ -2067,7 +1975,6 @@ mod tests {
             package_identity: Some("example/math@1.0.0".to_owned()),
             source_name: "modules/math.ko".to_owned(),
         }));
-
         fs::write(
             &manifest,
             valid.replacen("\"version\": 1,", "\"version\": 1, \"wildcard\": true,", 1),
@@ -2084,7 +1991,6 @@ mod tests {
                 .code,
             "E_PROJECT_MANIFEST"
         );
-
         fs::write(
             &manifest,
             valid.replacen("\"version\": 1,", "\"version\": 1, \"version\": 1,", 1),
@@ -2098,12 +2004,10 @@ mod tests {
         );
         fs::remove_dir_all(root).expect("remove project manifest root");
     }
-
     #[cfg(unix)]
     #[test]
     fn explicit_project_manifest_rejects_symlinked_cross_owner_sources() {
         use std::os::unix::fs::symlink;
-
         let root = temp_root("project-source-owner");
         fs::create_dir_all(root.join("aliases")).expect("create alias directory");
         fs::write(
@@ -2121,7 +2025,6 @@ mod tests {
         symlink(root.join("math.ko"), root.join("aliases/math.ko"))
             .expect("symlink package source under a second package");
         let manifest = root.join("kotodama.project.json");
-
         fs::write(
             &manifest,
             r#"{
@@ -2140,7 +2043,6 @@ mod tests {
         let error = load_source_project_manifest(&manifest)
             .expect_err("one canonical file cannot be root and package-owned");
         assert!(error.to_string().contains("owned by both"), "{error}");
-
         fs::write(
             &manifest,
             r#"{
@@ -2169,7 +2071,6 @@ mod tests {
         assert!(error.to_string().contains("owned by both"), "{error}");
         fs::remove_dir_all(root).expect("remove source-owner root");
     }
-
     #[test]
     fn shared_discovery_is_portable_sorted_and_fail_closed() {
         let root = temp_root("discovery");
@@ -2191,7 +2092,6 @@ mod tests {
             "module Ignored {}",
         )
         .expect("write generated source");
-
         let modules = discover_source_modules(&root).expect("discover package sources");
         assert_eq!(
             modules
@@ -2211,7 +2111,6 @@ mod tests {
         assert!(matches!(error, BuildError::InvalidPath { .. }));
         fs::remove_dir_all(root).expect("remove discovery root");
     }
-
     #[test]
     fn lsp_open_sources_require_explicit_graph_and_reuse_cached_parses() {
         let driver = BuildDriver::new(CompilerSession::default(), "editor-test");
@@ -2246,7 +2145,6 @@ mod tests {
             "an unchanged editor graph must reuse both parsed sources",
         );
     }
-
     #[test]
     fn exact_project_check_links_only_declared_imports_and_preserves_lint_owner() {
         let driver = BuildDriver::new(CompilerSession::default(), "check-test");
@@ -2283,7 +2181,6 @@ mod tests {
             2,
             "typed linking and lint collection must share cached parses",
         );
-
         let mut missing_import = graph;
         missing_import.imports.clear();
         let error = driver
@@ -2303,7 +2200,6 @@ mod tests {
             Some("contracts/app.ko")
         );
     }
-
     #[test]
     fn lsp_open_sources_reject_multiple_seiyaku_roots_with_cross_file_spans() {
         let driver = BuildDriver::new(CompilerSession::default(), "editor-test");
@@ -2335,7 +2231,6 @@ mod tests {
             Some("open/b.ko")
         );
     }
-
     #[test]
     fn cache_reader_rejects_sparse_oversized_files_without_allocating_them() {
         let root = temp_root("bounded-cache");
@@ -2349,13 +2244,11 @@ mod tests {
         )
         .expect("extend sparse cache output");
         drop(file);
-
         assert!(read_bounded_file(&path, MAX_CACHED_OUTPUT_BYTES).is_none());
         assert!(atomic_write_if_changed(&path, b"repaired").expect("replace hostile cache output"));
         assert_eq!(fs::read(&path).expect("read repaired output"), b"repaired");
         fs::remove_dir_all(root).expect("remove bounded cache root");
     }
-
     #[test]
     fn authenticated_noop_build_writes_nothing_and_tampering_rebuilds() {
         let root = temp_root("fresh");
@@ -2386,7 +2279,6 @@ mod tests {
             .map(|path| fs::metadata(path).expect("output metadata").modified().ok())
             .collect::<Vec<_>>();
         assert_eq!(before, after, "a fresh build must not rewrite any output");
-
         for path in &tracked {
             let original = fs::read(path).expect("read generated output");
             fs::write(path, b"tampered").expect("tamper generated output");
@@ -2407,13 +2299,11 @@ mod tests {
         }
         fs::remove_dir_all(root).expect("remove test build root");
     }
-
     #[test]
     fn authenticated_module_graph_hit_with_fresh_driver_performs_zero_work_or_writes() {
         let root = temp_root("linked-fresh");
         let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
         let module_v1 = "module Math { fn value() -> int { return 1; } }";
-
         let first = driver
             .build_project(linked_request(&root, module_v1))
             .expect("initial linked build");
@@ -2432,7 +2322,6 @@ mod tests {
             .iter()
             .map(|path| fs::metadata(path).expect("output metadata").modified().ok())
             .collect::<Vec<_>>();
-
         let fresh_driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
         let fresh = fresh_driver
             .build_project(linked_request(&root, module_v1))
@@ -2456,7 +2345,6 @@ mod tests {
             before, after,
             "an authenticated module-graph hit must rewrite none of its six outputs",
         );
-
         let changed = driver
             .build_project(linked_request(
                 &root,
@@ -2473,7 +2361,6 @@ mod tests {
         assert_ne!(first.artifact_hash, changed.artifact_hash);
         fs::remove_dir_all(root).expect("remove linked build root");
     }
-
     #[test]
     fn linked_build_errors_recover_the_complete_structured_bundle() {
         let root = temp_root("linked-diagnostics");
@@ -2513,7 +2400,6 @@ mod tests {
         assert_eq!(spellings, ["helpers::hidden", "helpers::also_hidden"]);
         assert!(!root.join("test/app.to").exists());
     }
-
     #[test]
     fn sidecar_manifest_avoids_an_unrequested_sibling_and_remains_cacheable() {
         let root = temp_root("sidecar-manifest");
@@ -2522,20 +2408,17 @@ mod tests {
         let mut build = request(&root, source);
         let sibling_manifest = build.layout.manifest.clone();
         build.layout = build.layout.with_sidecar_manifest();
-
         let first = driver.build_source(build.clone()).expect("initial build");
         assert_eq!(first.status, BuildStatus::Built);
         assert!(!sibling_manifest.exists());
         assert!(first.paths.manifest.is_file());
         assert!(first.paths.manifest.to_string_lossy().contains(".sidecars"));
-
         let second = driver.build_source(build).expect("authenticated no-op");
         assert_eq!(second.status, BuildStatus::Fresh);
         assert_eq!(second.paths.manifest, first.paths.manifest);
         assert!(!sibling_manifest.exists());
         fs::remove_dir_all(root).expect("remove sidecar manifest root");
     }
-
     #[test]
     fn record_parser_rejects_duplicates_unknown_fields_and_truncation() {
         let valid = BuildRecord {
@@ -2553,7 +2436,6 @@ mod tests {
         assert!(BuildRecord::parse(&format!("{valid}unknown=value\n")).is_none());
         assert!(BuildRecord::parse("schema=kotodama-build-v1\ninput=x\n").is_none());
     }
-
     #[test]
     fn batch_rejects_lexically_colliding_outputs_before_building() {
         let root = temp_root("collision");
@@ -2569,7 +2451,6 @@ mod tests {
         assert!(matches!(error, BuildError::OutputCollision { .. }));
         assert!(!root.exists(), "preflight failure must not publish outputs");
     }
-
     #[test]
     fn direct_build_rejects_colliding_artifact_and_manifest_paths() {
         let root = temp_root("direct-collision");
@@ -2587,12 +2468,10 @@ mod tests {
         assert!(matches!(error, BuildError::OutputCollision { .. }));
         assert!(!output.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn batch_rejects_output_aliases_through_symlinked_directories() {
         use std::os::unix::fs::symlink;
-
         let root = temp_root("symlink-collision");
         let real = root.join("real");
         let alias = root.join("alias");
@@ -2611,7 +2490,6 @@ mod tests {
         assert!(!real.join("test/demo.to").exists());
         fs::remove_dir_all(root).expect("remove symlink collision root");
     }
-
     #[test]
     fn profile_and_policy_are_cache_dimensions() {
         let root = temp_root("policy");
@@ -2648,7 +2526,6 @@ mod tests {
             Err(BuildError::InvalidProfile(_))
         ));
     }
-
     #[test]
     fn atomic_writer_does_not_replace_equal_file() {
         let root = temp_root("atomic");
@@ -2657,7 +2534,6 @@ mod tests {
         assert!(!atomic_write_if_changed(&path, b"same").expect("no-op write"));
         fs::remove_dir_all(root).expect("remove atomic test root");
     }
-
     #[test]
     fn atomic_writer_supports_relative_leaf_outputs() {
         let path = PathBuf::from(format!(

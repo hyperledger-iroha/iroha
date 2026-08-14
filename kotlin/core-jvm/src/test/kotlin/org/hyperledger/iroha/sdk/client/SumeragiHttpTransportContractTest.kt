@@ -11,8 +11,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 
@@ -30,6 +32,8 @@ class SumeragiHttpTransportContractTest {
         assertEquals("GET", executor.request.method)
         assertTrue(executor.request.body.isEmpty())
         assertEquals(listOf("application/json"), executor.request.headers["Accept"])
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
         assertEquals(1L * 1024L * 1024L, executor.request.maximumResponseBytes)
     }
 
@@ -49,6 +53,8 @@ class SumeragiHttpTransportContractTest {
         assertEquals("GET", executor.request.method)
         assertTrue(executor.request.body.isEmpty())
         assertEquals(listOf("application/json"), executor.request.headers["Accept"])
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
         assertEquals(16L * 1024L * 1024L, executor.request.maximumResponseBytes)
     }
 
@@ -129,10 +135,37 @@ class SumeragiHttpTransportContractTest {
         assertFails { defaultClient.getSumeragiStatus().join() }
     }
 
+    @Test
+    fun `operator reads reject missing and fallback authentication before dispatch`() {
+        val executor = FixedResponseExecutor(jsonResponse(statusJson().toByteArray()))
+        val missing = HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build(),
+        )
+        assertFails { missing.getSumeragiStatus() }
+        assertTrue(!executor.hasRequest())
+
+        val fallback = HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .setOperatorSigningContext(operatorContext())
+                .putDefaultHeader("Authorization", "Bearer retired")
+                .build(),
+        )
+        assertFails { fallback.getSumeragiStatus() }
+        assertTrue(!executor.hasRequest())
+    }
+
     private fun transport(executor: HttpTransportExecutor): HttpClientTransport =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .setOperatorSigningContext(operatorContext())
+                .build(),
         )
 
     private fun jsonResponse(payload: ByteArray): TransportResponse =
@@ -150,15 +183,29 @@ class SumeragiHttpTransportContractTest {
     private class FixedResponseExecutor(
         private val response: TransportResponse,
     ) : HttpTransportExecutor {
-        lateinit var request: TransportRequest
+        private var recordedRequest: TransportRequest? = null
+
+        val request: TransportRequest get() = checkNotNull(recordedRequest)
+
+        fun hasRequest(): Boolean = recordedRequest != null
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-            this.request = request
+            this.recordedRequest = request
             return CompletableFuture.completedFuture(response)
         }
     }
 
     companion object {
+        private fun operatorContext(): OperatorSigningContext {
+            val bytes = ByteArray(32) { 0x5a }
+            bytes[31] = (bytes[31].toInt() or 1).toByte()
+            return OperatorSigningContext(
+                NetworkId.fromBytes(bytes),
+                "ed0120${"66".repeat(32)}",
+                OperatorRequestSignatureProvider { ByteArray(64) { 0x55 } },
+            )
+        }
+
         private fun hash(seed: Int): String =
             HashLiteral.canonicalize(ByteArray(32) { seed.toByte() })
 

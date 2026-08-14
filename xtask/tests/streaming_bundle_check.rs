@@ -1,24 +1,20 @@
-use std::{fs, path::PathBuf};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::{
     json::{self as serde_json, Value},
     streaming::BUNDLED_RANS_BUILD_AVAILABLE,
 };
+use std::{fs, path::PathBuf};
 use tempfile::TempDir;
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf()
 }
-
 fn run_bundle_check(config_relative: &str) -> Value {
     let temp = TempDir::new().expect("temp dir");
     let json_out = temp.path().join("summary.json");
     let config_path = workspace_root().join(config_relative);
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -29,11 +25,9 @@ fn run_bundle_check(config_relative: &str) -> Value {
         json_out.to_str().expect("utf8 json path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(json_out).expect("bundle summary JSON");
     serde_json::from_str(&raw).expect("parse bundle summary JSON")
 }
-
 fn assert_tables_path(summary: &Value) {
     let tables = summary["tables"]
         .as_object()
@@ -54,14 +48,12 @@ fn assert_tables_path(summary: &Value) {
         "tables checksum should be a 32-byte hex digest"
     );
 }
-
 #[test]
 fn streaming_bundle_check_reports_bundled_requirements() {
     if !BUNDLED_RANS_BUILD_AVAILABLE {
         eprintln!("skipping bundled entropy test (ENABLE_RANS_BUNDLES not enabled)");
         return;
     }
-
     let summary = run_bundle_check("crates/iroha_config/tests/fixtures/streaming_bundled.toml");
     assert!(
         summary["bundle_required"]

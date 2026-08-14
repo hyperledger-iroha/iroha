@@ -1,9 +1,7 @@
 use iroha_data_model::isi::InstructionBox;
 use ivm::{self, IVM, IVMHost, Memory};
 use ivm_abi::codec::encode_canonical_norito;
-
 // Exercise canonical NoritoBytes(InstructionBox) decoding in WsvHost for typed ZK ISIs.
-
 fn sample_account() -> ivm::mock_wsv::AccountId {
     let _domain: ivm::mock_wsv::DomainId =
         iroha_data_model::DomainId::try_new("domain", "universal").expect("domain id");
@@ -13,23 +11,18 @@ fn sample_account() -> ivm::mock_wsv::AccountId {
             .expect("public key"),
     )
 }
-
 #[test]
 fn boxed_submit_ballot_yields_permission_denied_without_verify() {
     use std::collections::HashMap;
-
     // Seed WSV with a simple election
     let mut wsv = ivm::MockWorldStateView::new();
     assert!(wsv.create_election("e1".to_string(), 2, [0u8; 32], 0, u64::MAX));
-
     // Caller/account (matches other tests' format)
     let caller: ivm::mock_wsv::AccountId = sample_account();
-
     // Host + VM
     let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(0);
     vm.set_host(host);
-
     // Build and canonically encode a boxed SubmitBallot.
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "e1".to_string(),
@@ -43,7 +36,6 @@ fn boxed_submit_ballot_yields_permission_denied_without_verify() {
     };
     let body = encode_canonical_norito(&InstructionBox::from(sb))
         .expect("encode canonical InstructionBox");
-
     // Wrap into a NoritoBytes TLV (type=0x0009, ver=1)
     let mut tlv = Vec::with_capacity(7 + body.len() + 32);
     tlv.extend_from_slice(&(ivm::PointerType::NoritoBytes as u16).to_be_bytes());
@@ -58,7 +50,6 @@ fn boxed_submit_ballot_yields_permission_denied_without_verify() {
         11,
         ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
     );
-
     // Without a prior verify the host should decode the boxed payload and reject the mutation.
     let res = unsafe {
         let host_ptr = vm
@@ -73,20 +64,16 @@ fn boxed_submit_ballot_yields_permission_denied_without_verify() {
     };
     assert!(matches!(res, Err(ivm::VMError::PermissionDenied)));
 }
-
 #[test]
 fn boxed_finalize_is_rejected_for_submit_ballot_tag() {
     use std::collections::HashMap;
-
     // Seed WSV with an election
     let mut wsv = ivm::MockWorldStateView::new();
     assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
-
     let caller: ivm::mock_wsv::AccountId = sample_account();
     let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(0);
     vm.set_host(host);
-
     // Build and canonically encode a boxed FinalizeElection.
     let fin = iroha_data_model::isi::zk::FinalizeElection {
         election_id: "e2".to_string(),
@@ -99,7 +86,6 @@ fn boxed_finalize_is_rejected_for_submit_ballot_tag() {
     };
     let body = encode_canonical_norito(&InstructionBox::from(fin))
         .expect("encode canonical InstructionBox");
-
     // NoritoBytes TLV
     let mut tlv = Vec::with_capacity(7 + body.len() + 32);
     tlv.extend_from_slice(&(ivm::PointerType::NoritoBytes as u16).to_be_bytes());
@@ -114,7 +100,6 @@ fn boxed_finalize_is_rejected_for_submit_ballot_tag() {
         11,
         ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
     );
-
     // FinalizeElection is outside the V1 0xA0 allowlist and cannot be authorized by another tag.
     let res = unsafe {
         let host_ptr = vm

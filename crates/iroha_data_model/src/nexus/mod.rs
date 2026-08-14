@@ -4,28 +4,24 @@
 //! in `nexus.md` and `nexus_transition_notes`. The default catalog remains a
 //! single primary lane for compatibility, while deployments may add lane and
 //! dataspace entries for independent routing, storage, and consensus policy.
-
+use crate::{
+    da::commitment::DaProofScheme,
+    id::IdBox,
+    parameter::{CustomParameter, CustomParameterId},
+};
+use derive_more::Display;
+use iroha_crypto::Hash;
+#[cfg(feature = "json")]
+use iroha_primitives::json::Json;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::NonZeroU32,
     str::FromStr,
 };
-
-use derive_more::Display;
-use iroha_crypto::Hash;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
-use crate::{
-    da::commitment::DaProofScheme,
-    id::IdBox,
-    parameter::{CustomParameter, CustomParameterId},
-};
-#[cfg(feature = "json")]
-use iroha_primitives::json::Json;
-
 mod axt;
 mod compliance;
 mod endorsement;
@@ -33,7 +29,6 @@ mod fee_sponsor_program;
 mod manifest;
 mod privacy;
 mod relay;
-
 pub use axt::*;
 pub use compliance::*;
 pub use endorsement::*;
@@ -45,14 +40,12 @@ pub use portfolio::*;
 pub mod staking;
 pub use relay::*;
 pub use staking::*;
-
 /// Consensus-wide maximum number of simultaneously active execution lanes.
 ///
 /// This is a protocol admission bound shared by lifecycle catalogs, merge
 /// execution, Native AMX manifests, and diagnostics. Sparse lane identifiers
 /// may exceed this number; only the number of active catalog entries is bounded.
 pub const MAX_ACTIVE_EXECUTION_LANES: usize = 1_024;
-
 /// Declarative lane lifecycle changes (additions and retirements).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneLifecyclePlan {
@@ -61,7 +54,6 @@ pub struct LaneLifecyclePlan {
     /// Lane identifiers to retire.
     pub retire: Vec<LaneId>,
 }
-
 /// Versioned, optimistic-concurrency envelope for a consensus-replayed lane lifecycle update.
 ///
 /// The envelope is carried in a [`crate::isi::SetParameter`] instruction. The
@@ -80,7 +72,6 @@ pub struct LaneLifecycleParameterV1 {
     /// Declarative lane additions, replacements, and retirements.
     pub plan: LaneLifecyclePlan,
 }
-
 /// Canonical active lane-incarnation commitment advertised to lifecycle clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 pub struct LaneLifecycleIncarnationEntry {
@@ -89,7 +80,6 @@ pub struct LaneLifecycleIncarnationEntry {
     /// Non-zero commitment identifying this exact lane incarnation.
     pub incarnation: Hash,
 }
-
 /// Read-only snapshot used to construct an optimistic lane lifecycle transaction.
 ///
 /// The status carries the exact canonical lane catalog and its domain-separated
@@ -113,11 +103,9 @@ pub struct LaneLifecycleStatusV1 {
     /// Domain-separated commitment to `incarnations`.
     pub incarnation_root: Hash,
 }
-
 impl LaneLifecycleStatusV1 {
     /// Supported status layout version.
     pub const VERSION: u8 = 1;
-
     /// Construct a status snapshot from the exact current catalog.
     ///
     /// # Errors
@@ -140,7 +128,6 @@ impl LaneLifecycleStatusV1 {
             incarnations,
         })
     }
-
     /// Validate the version, catalog structure, canonical order, and commitment.
     ///
     /// # Errors
@@ -177,7 +164,6 @@ impl LaneLifecycleStatusV1 {
         Ok(catalog)
     }
 }
-
 /// Validation failures for a read-only lane lifecycle status snapshot.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum LaneLifecycleStatusError {
@@ -237,13 +223,11 @@ pub enum LaneLifecycleStatusError {
     #[error(transparent)]
     InvalidCatalog(#[from] LaneCatalogError),
 }
-
 impl LaneLifecycleParameterV1 {
     /// Supported payload layout version.
     pub const VERSION: u8 = 1;
     /// Reserved custom-parameter identifier for consensus lane lifecycle changes.
     pub const PARAMETER_ID_STR: &'static str = "nexus_lane_lifecycle_v1";
-
     /// Construct a lifecycle parameter bound to the exact catalog and incarnations.
     ///
     /// # Errors
@@ -263,7 +247,6 @@ impl LaneLifecycleParameterV1 {
             plan,
         })
     }
-
     /// Compute the canonical, domain-separated commitment for a lane catalog.
     #[must_use]
     pub fn catalog_hash(catalog: &LaneCatalog) -> Hash {
@@ -271,7 +254,6 @@ impl LaneLifecycleParameterV1 {
         let encoded = (catalog.lane_count().get(), catalog.lanes().to_vec()).encode();
         Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()])
     }
-
     /// Convert the active incarnation map to its canonical exact catalog order.
     ///
     /// # Errors
@@ -293,7 +275,6 @@ impl LaneLifecycleParameterV1 {
         Self::validate_incarnations(catalog, &entries)?;
         Ok(entries)
     }
-
     /// Validate exact coverage, canonical ordering, non-zero values, and uniqueness.
     ///
     /// # Errors
@@ -333,7 +314,6 @@ impl LaneLifecycleParameterV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated commitment to canonical incarnation entries.
     #[must_use]
     pub fn incarnation_root(incarnations: &[LaneLifecycleIncarnationEntry]) -> Hash {
@@ -341,7 +321,6 @@ impl LaneLifecycleParameterV1 {
         let encoded = incarnations.to_vec().encode();
         Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()])
     }
-
     /// Identifier used by the on-chain custom parameter.
     #[must_use]
     pub fn parameter_id() -> CustomParameterId {
@@ -349,14 +328,12 @@ impl LaneLifecycleParameterV1 {
             .parse()
             .expect("valid Nexus lane lifecycle custom parameter identifier")
     }
-
     /// Convert this envelope into the custom parameter accepted by `SetParameter`.
     #[cfg(feature = "json")]
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(Self::parameter_id(), Json::new(self))
     }
-
     /// Decode a matching lifecycle custom parameter.
     ///
     /// Non-matching parameter identifiers return `Ok(None)`. Matching identifiers
@@ -384,7 +361,6 @@ impl LaneLifecycleParameterV1 {
         Ok(Some(payload))
     }
 }
-
 /// Identifier for a logical execution lane.
 #[derive(
     Debug,
@@ -432,11 +408,9 @@ pub struct LaneId(u32);
     ffi_type(unsafe {robust})
 )]
 pub struct ShardId(u32);
-
 impl LaneId {
     /// Canonical primary lane identifier used by the default single-lane catalog.
     pub const SINGLE: Self = Self(0);
-
     /// Construct a [`LaneId`] from a zero-based lane index constrained by the provided lane count.
     ///
     /// # Errors
@@ -452,98 +426,81 @@ impl LaneId {
             })
         }
     }
-
     /// Create a `LaneId` from its raw numeric representation.
     #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
-
     /// Expose the inner numeric representation.
     #[must_use]
     pub const fn as_u32(self) -> u32 {
         self.0
     }
 }
-
 impl From<u32> for LaneId {
     fn from(value: u32) -> Self {
         Self(value)
     }
 }
-
 impl From<LaneId> for u64 {
     fn from(value: LaneId) -> Self {
         u64::from(value.0)
     }
 }
-
 impl crate::Identifiable for LaneId {
     type Id = LaneId;
-
     fn id(&self) -> &Self::Id {
         self
     }
 }
-
 impl ShardId {
     /// Construct a `ShardId` from its raw numeric representation.
     #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
-
     /// Expose the inner numeric representation.
     #[must_use]
     pub const fn as_u32(self) -> u32 {
         self.0
     }
 }
-
 impl From<u32> for ShardId {
     fn from(value: u32) -> Self {
         Self(value)
     }
 }
-
 impl From<ShardId> for u32 {
     fn from(value: ShardId) -> Self {
         value.0
     }
 }
-
 impl From<ShardId> for u64 {
     fn from(value: ShardId) -> Self {
         u64::from(value.0)
     }
 }
-
 impl From<LaneId> for ShardId {
     fn from(value: LaneId) -> Self {
         Self(value.as_u32())
     }
 }
-
 impl From<ShardId> for LaneId {
     fn from(value: ShardId) -> Self {
         Self::new(value.as_u32())
     }
 }
-
 impl From<ShardId> for IdBox {
     fn from(value: ShardId) -> Self {
         IdBox::LaneId(value.into())
     }
 }
-
 impl crate::Identifiable for ShardId {
     type Id = ShardId;
-
     fn id(&self) -> &Self::Id {
         self
     }
 }
-
 /// Errors returned when deriving a lane identifier from configuration.
 #[derive(Debug, Copy, Clone, Error, PartialEq, Eq)]
 pub enum LaneIdError {
@@ -556,14 +513,18 @@ pub enum LaneIdError {
         lane_count: u32,
     },
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneId {
     fn json_deserialize(
@@ -575,14 +536,18 @@ impl norito::json::JsonDeserialize for LaneId {
         Ok(Self(value))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ShardId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ShardId {
     fn json_deserialize(
@@ -594,7 +559,6 @@ impl norito::json::JsonDeserialize for ShardId {
         Ok(Self(value))
     }
 }
-
 /// Identifier for a physical execution, storage, and validator boundary.
 #[derive(
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
@@ -610,11 +574,9 @@ impl norito::json::JsonDeserialize for ShardId {
     ffi_type(unsafe {robust})
 )]
 pub struct DataSpaceId(u64);
-
 impl DataSpaceId {
     /// Identifier for the reserved `universal` data space.
     pub const UNIVERSAL: Self = Self(0);
-
     /// Derive a [`DataSpaceId`] from a stable 32-byte hash.
     #[must_use]
     pub const fn from_hash(hash: &[u8; 32]) -> Self {
@@ -626,46 +588,38 @@ impl DataSpaceId {
         }
         Self(u64::from_le_bytes(buf))
     }
-
     /// Create a `DataSpaceId` from its raw numeric representation.
     #[must_use]
     pub const fn new(raw: u64) -> Self {
         Self(raw)
     }
-
     /// Expose the inner numeric representation.
     #[must_use]
     pub const fn as_u64(self) -> u64 {
         self.0
     }
 }
-
 impl Default for DataSpaceId {
     fn default() -> Self {
         Self::UNIVERSAL
     }
 }
-
 impl From<u64> for DataSpaceId {
     fn from(value: u64) -> Self {
         Self(value)
     }
 }
-
 impl From<DataSpaceId> for u64 {
     fn from(value: DataSpaceId) -> Self {
         value.0
     }
 }
-
 impl FromStr for DataSpaceId {
     type Err = std::num::ParseIntError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         value.parse::<u64>().map(Self)
     }
 }
-
 /// Metadata key marking a lane as created and owned by the deterministic autoscaler.
 pub const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 /// Metadata key recording the block height where the autoscaler created the lane.
@@ -674,7 +628,6 @@ pub const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 pub const AUTOSCALE_META_DRAIN_STATE: &str = "autoscale.drain_state";
 /// Metadata key pinning the authoritative committee for one elastic-lane incarnation.
 pub const AUTOSCALE_META_COMMITTEE: &str = "autoscale.committee_v1";
-
 /// Metadata describing an execution lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneConfig {
@@ -701,7 +654,6 @@ pub struct LaneConfig {
     /// Arbitrary metadata key-value pairs.
     pub metadata: BTreeMap<String, String>,
 }
-
 impl Default for LaneConfig {
     fn default() -> Self {
         Self {
@@ -719,14 +671,12 @@ impl Default for LaneConfig {
         }
     }
 }
-
 impl LaneConfig {
     /// Return `true` when this lane uses the reserved autoscale ownership metadata key.
     #[must_use]
     pub fn claims_autoscale_managed(&self) -> bool {
         self.metadata.contains_key(AUTOSCALE_META_MANAGED)
     }
-
     /// Parse the positive autoscale creation height marker, when present and valid.
     #[must_use]
     pub fn autoscale_created_height(&self) -> Option<u64> {
@@ -735,19 +685,16 @@ impl LaneConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|height| *height > 0)
     }
-
     /// Return `true` when a consensus autoscale drain state is attached.
     #[must_use]
     pub fn has_autoscale_drain_state(&self) -> bool {
         self.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
     }
-
     /// Return `true` when a consensus-pinned incarnation committee is attached.
     #[must_use]
     pub fn has_autoscale_committee(&self) -> bool {
         self.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
     }
-
     /// Return `true` when this lane is a valid deterministic autoscale elastic lane.
     #[must_use]
     pub fn is_autoscale_managed_elastic(&self) -> bool {
@@ -759,7 +706,6 @@ impl LaneConfig {
             && self.alias == format!("elastic-lane-{}", self.id.as_u32())
             && self.autoscale_created_height().is_some()
     }
-
     /// Return `true` when this lane inherits the functional autoscale profile of `base`.
     ///
     /// Elastic lanes have their own identifier, alias, description, and reserved autoscale
@@ -784,7 +730,6 @@ impl LaneConfig {
                     .filter(|(key, _)| !is_reserved_autoscale_metadata_key(key.as_str())))
     }
 }
-
 fn is_reserved_autoscale_metadata_key(key: &str) -> bool {
     matches!(
         key,
@@ -794,7 +739,6 @@ fn is_reserved_autoscale_metadata_key(key: &str) -> bool {
             | AUTOSCALE_META_COMMITTEE
     )
 }
-
 /// Declarative visibility profile for a lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Display)]
 pub enum LaneVisibility {
@@ -805,7 +749,6 @@ pub enum LaneVisibility {
     #[display("restricted")]
     Restricted,
 }
-
 impl LaneVisibility {
     /// Returns the canonical string representation.
     #[must_use]
@@ -816,10 +759,8 @@ impl LaneVisibility {
         }
     }
 }
-
 impl FromStr for LaneVisibility {
     type Err = LaneVisibilityParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "public" => Ok(Self::Public),
@@ -828,14 +769,12 @@ impl FromStr for LaneVisibility {
         }
     }
 }
-
 #[allow(clippy::derivable_impls)]
 impl Default for LaneVisibility {
     fn default() -> Self {
         Self::Public
     }
 }
-
 /// Storage profile describing how state/WAL data is persisted for a lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum LaneStorageProfile {
@@ -846,7 +785,6 @@ pub enum LaneStorageProfile {
     /// Encrypted payloads and commitments are stored separately.
     SplitReplica,
 }
-
 impl LaneStorageProfile {
     /// Returns the canonical string representation.
     #[must_use]
@@ -858,16 +796,13 @@ impl LaneStorageProfile {
         }
     }
 }
-
 impl fmt::Display for LaneStorageProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 impl FromStr for LaneStorageProfile {
     type Err = LaneStorageProfileParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "full_replica" => Ok(Self::FullReplica),
@@ -877,24 +812,20 @@ impl FromStr for LaneStorageProfile {
         }
     }
 }
-
 #[allow(clippy::derivable_impls)]
 impl Default for LaneStorageProfile {
     fn default() -> Self {
         Self::FullReplica
     }
 }
-
 /// Error surfaced when parsing [`LaneVisibility`] from a string.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid lane visibility `{0}`")]
 pub struct LaneVisibilityParseError(pub String);
-
 /// Error surfaced when parsing [`LaneStorageProfile`] from a string.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid lane storage profile `{0}`")]
 pub struct LaneStorageProfileParseError(pub String);
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneVisibility {
     fn write_json(&self, out: &mut String) {
@@ -902,8 +833,13 @@ impl norito::json::FastJsonWrite for LaneVisibility {
         out.push_str(self.as_str());
         out.push('"');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneVisibility {
     fn json_deserialize(
@@ -915,7 +851,6 @@ impl norito::json::JsonDeserialize for LaneVisibility {
             .map_err(|err: LaneVisibilityParseError| norito::json::Error::Message(err.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneStorageProfile {
     fn write_json(&self, out: &mut String) {
@@ -923,8 +858,13 @@ impl norito::json::FastJsonWrite for LaneStorageProfile {
         out.push_str(self.as_str());
         out.push('"');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneStorageProfile {
     fn json_deserialize(
@@ -936,7 +876,6 @@ impl norito::json::JsonDeserialize for LaneStorageProfile {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneConfig {
     fn write_json(&self, out: &mut String) {
@@ -986,20 +925,48 @@ impl norito::json::FastJsonWrite for LaneConfig {
         norito::json::JsonSerialize::json_serialize(&self.metadata, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push_str(",\"dataspace_id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.dataspace_id, out)?;
+        out.push_str(",\"alias\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.alias, out)?;
+        out.push_str(",\"description\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.description, out)?;
+        out.push_str(",\"visibility\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.visibility, out)?;
+        out.push_str(",\"lane_type\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_type, out)?;
+        out.push_str(",\"governance\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.governance, out)?;
+        out.push_str(",\"settlement\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.settlement, out)?;
+        out.push_str(",\"storage\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.storage, out)?;
+        out.push_str(",\"proof_scheme\":")?;
+        norito::json::write_json_string_to(&self.proof_scheme.to_string(), out)?;
+        out.push_str(",\"metadata\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.metadata, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneConfig {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut lane = LaneConfig::default();
         let mut saw_id = false;
         let mut saw_alias = false;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "id" => {
@@ -1050,7 +1017,6 @@ impl norito::json::JsonDeserialize for LaneConfig {
             }
         }
         visitor.finish()?;
-
         if !saw_id {
             return Err(norito::json::Error::Message(
                 "missing required lane metadata field `id`".into(),
@@ -1064,7 +1030,6 @@ impl norito::json::JsonDeserialize for LaneConfig {
         Ok(lane)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneLifecyclePlan {
     fn write_json(&self, out: &mut String) {
@@ -1078,19 +1043,29 @@ impl norito::json::FastJsonWrite for LaneLifecyclePlan {
         norito::json::JsonSerialize::json_serialize(&self.retire, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"additions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.additions, out)?;
+        out.push_str(",\"retire\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.retire, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneLifecyclePlan {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut additions: Option<Vec<LaneConfig>> = None;
         let mut retire: Option<Vec<LaneId>> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "additions" => {
@@ -1117,14 +1092,12 @@ impl norito::json::JsonDeserialize for LaneLifecyclePlan {
             }
         }
         visitor.finish()?;
-
         Ok(Self {
             additions: additions.unwrap_or_default(),
             retire: retire.unwrap_or_default(),
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
     fn write_json(&self, out: &mut String) {
@@ -1146,21 +1119,35 @@ impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
         norito::json::JsonSerialize::json_serialize(&self.plan, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"version\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+        out.push_str(",\"expected_catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.expected_catalog_hash, out)?;
+        out.push_str(",\"expected_incarnation_root\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.expected_incarnation_root, out)?;
+        out.push_str(",\"plan\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.plan, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut version = None;
         let mut expected_catalog_hash = None;
         let mut expected_incarnation_root = None;
         let mut plan = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "version" => {
@@ -1205,7 +1192,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
             }
         }
         visitor.finish()?;
-
         Ok(Self {
             version: version.ok_or_else(|| {
                 norito::json::Error::Message(
@@ -1231,7 +1217,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
     fn write_json(&self, out: &mut String) {
@@ -1245,15 +1230,26 @@ impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
         norito::json::JsonSerialize::json_serialize(&self.incarnation, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"lane_id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_id, out)?;
+        out.push_str(",\"incarnation\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnation, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut lane_id = None;
         let mut incarnation = None;
@@ -1297,7 +1293,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
     fn write_json(&self, out: &mut String) {
@@ -1331,15 +1326,36 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         norito::json::JsonSerialize::json_serialize(&self.incarnation_root, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"version\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+        out.push_str(",\"nexus_enabled\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.nexus_enabled, out)?;
+        out.push_str(",\"lane_count\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_count, out)?;
+        out.push_str(",\"lanes\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lanes, out)?;
+        out.push_str(",\"catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.catalog_hash, out)?;
+        out.push_str(",\"incarnations\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnations, out)?;
+        out.push_str(",\"incarnation_root\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnation_root, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut version = None;
         let mut nexus_enabled = None;
@@ -1348,7 +1364,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
         let mut catalog_hash = None;
         let mut incarnations = None;
         let mut incarnation_root = None;
-
         while let Some(key) = visitor.next_key()? {
             let duplicate = |field: &str| {
                 norito::json::Error::Message(format!(
@@ -1406,7 +1421,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
             }
         }
         visitor.finish()?;
-
         let missing = |field: &str| {
             norito::json::Error::Message(format!(
                 "missing required Nexus lane lifecycle status field `{field}`"
@@ -1423,7 +1437,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
         })
     }
 }
-
 /// Validated catalog of configured lanes.
 ///
 /// `lane_count` is the exclusive identifier bound for the current namespace, not the number of
@@ -1433,7 +1446,6 @@ pub struct LaneCatalog {
     lane_count: NonZeroU32,
     lanes: Vec<LaneConfig>,
 }
-
 impl LaneCatalog {
     /// Build a catalog ensuring identifiers and aliases are unique and in range.
     ///
@@ -1456,7 +1468,6 @@ impl LaneCatalog {
         }
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
-
         for lane in &lanes {
             if lane.alias.trim().is_empty() {
                 return Err(LaneCatalogError::EmptyAlias(lane.id));
@@ -1474,16 +1485,13 @@ impl LaneCatalog {
                 return Err(LaneCatalogError::DuplicateLaneAlias(lane.alias.clone()));
             }
         }
-
         // Catalog iteration feeds derived storage geometry, snapshot encoding,
         // and lifecycle commitments. Canonicalize it here so semantically
         // identical configuration files cannot disagree about the primary
         // lane or any other order-sensitive derived artifact.
         lanes.sort_unstable_by_key(|lane| lane.id);
-
         Ok(Self { lane_count, lanes })
     }
-
     /// Exclusive lane-id bound for the current catalog namespace.
     ///
     /// This can exceed [`Self::lanes`]'s length when the catalog is sparse.
@@ -1491,19 +1499,16 @@ impl LaneCatalog {
     pub const fn lane_count(&self) -> NonZeroU32 {
         self.lane_count
     }
-
     /// Metadata for all registered lanes.
     #[must_use]
     pub fn lanes(&self) -> &[LaneConfig] {
         &self.lanes
     }
-
     /// Find a lane by alias.
     #[must_use]
     pub fn by_alias(&self, alias: &str) -> Option<&LaneConfig> {
         self.lanes.iter().find(|lane| lane.alias == alias)
     }
-
     /// Apply a lifecycle plan, producing a new catalog with the requested additions and retirements.
     ///
     /// # Errors
@@ -1523,7 +1528,6 @@ impl LaneCatalog {
                 return Err(LaneCatalogError::MissingLane(*retire_id));
             }
         }
-
         let mut addition_ids = BTreeSet::new();
         let mut addition_aliases = BTreeSet::new();
         for addition in &plan.additions {
@@ -1537,7 +1541,6 @@ impl LaneCatalog {
                 return Err(LaneCatalogError::DuplicateLaneAlias(addition.alias.clone()));
             }
         }
-
         let mut merged: Vec<LaneConfig> = self
             .lanes
             .iter()
@@ -1545,7 +1548,6 @@ impl LaneCatalog {
             .cloned()
             .collect();
         merged.extend(plan.additions.iter().cloned());
-
         let Some(max_lane_id) = merged.iter().map(|lane| lane.id.as_u32()).max() else {
             return Err(LaneCatalogError::EmptyCatalog);
         };
@@ -1554,7 +1556,6 @@ impl LaneCatalog {
         LaneCatalog::new(lane_count, merged)
     }
 }
-
 impl Default for LaneCatalog {
     fn default() -> Self {
         Self {
@@ -1563,7 +1564,6 @@ impl Default for LaneCatalog {
         }
     }
 }
-
 /// Errors returned when constructing a [`LaneCatalog`].
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum LaneCatalogError {
@@ -1602,7 +1602,6 @@ pub enum LaneCatalogError {
         lane_count: u32,
     },
 }
-
 /// Metadata describing a configured physical data space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataSpaceMetadata {
@@ -1615,7 +1614,6 @@ pub struct DataSpaceMetadata {
     /// Fault tolerance value (f) used to size data-space consensus and relay committees (3f + 1).
     pub fault_tolerance: u32,
 }
-
 impl Default for DataSpaceMetadata {
     fn default() -> Self {
         Self {
@@ -1626,13 +1624,11 @@ impl Default for DataSpaceMetadata {
         }
     }
 }
-
 /// Validated catalog describing configured data spaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataSpaceCatalog {
     entries: Vec<DataSpaceMetadata>,
 }
-
 impl DataSpaceCatalog {
     /// Build a catalog ensuring identifiers and aliases remain unique.
     ///
@@ -1642,7 +1638,6 @@ impl DataSpaceCatalog {
     pub fn new(entries: Vec<DataSpaceMetadata>) -> Result<Self, DataSpaceCatalogError> {
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
-
         for entry in &entries {
             if entry.alias.trim().is_empty() {
                 return Err(DataSpaceCatalogError::EmptyAlias(entry.id));
@@ -1660,29 +1655,24 @@ impl DataSpaceCatalog {
                 return Err(DataSpaceCatalogError::DuplicateAlias(entry.alias.clone()));
             }
         }
-
         Ok(Self { entries })
     }
-
     /// Access the catalog entries.
     #[must_use]
     pub fn entries(&self) -> &[DataSpaceMetadata] {
         &self.entries
     }
-
     /// Find an entry by alias.
     #[must_use]
     pub fn by_alias(&self, alias: &str) -> Option<&DataSpaceMetadata> {
         self.entries.iter().find(|entry| entry.alias == alias)
     }
-
     /// Find an entry by identifier.
     #[must_use]
     pub fn by_id(&self, id: DataSpaceId) -> Option<&DataSpaceMetadata> {
         self.entries.iter().find(|entry| entry.id == id)
     }
 }
-
 impl Default for DataSpaceCatalog {
     fn default() -> Self {
         Self {
@@ -1690,7 +1680,6 @@ impl Default for DataSpaceCatalog {
         }
     }
 }
-
 /// Errors returned when constructing a [`DataSpaceCatalog`].
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum DataSpaceCatalogError {
@@ -1712,14 +1701,18 @@ pub enum DataSpaceCatalogError {
         fault_tolerance: u32,
     },
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for DataSpaceId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for DataSpaceId {
     fn json_deserialize(
@@ -1729,15 +1722,11 @@ impl norito::json::JsonDeserialize for DataSpaceId {
         Ok(Self(value))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use norito::codec::{DecodeAll, Encode};
-
     use super::*;
-
+    use norito::codec::{DecodeAll, Encode};
+    use std::num::NonZeroU32;
     fn incarnation_map(catalog: &LaneCatalog) -> BTreeMap<LaneId, Hash> {
         catalog
             .lanes()
@@ -1750,12 +1739,10 @@ mod tests {
             })
             .collect()
     }
-
     fn lifecycle_status(catalog: &LaneCatalog) -> LaneLifecycleStatusV1 {
         LaneLifecycleStatusV1::new(true, catalog, &incarnation_map(catalog))
             .expect("valid lifecycle status")
     }
-
     #[test]
     fn lane_id_roundtrip() {
         let original = LaneId::new(42);
@@ -1765,7 +1752,6 @@ mod tests {
         assert_eq!(decoded, original);
         assert_eq!(LaneId::SINGLE.as_u32(), 0);
     }
-
     #[test]
     fn shard_id_roundtrip() {
         let original = ShardId::new(24);
@@ -1775,7 +1761,6 @@ mod tests {
         assert_eq!(decoded, original);
         assert_eq!(ShardId::new(0).as_u32(), 0);
     }
-
     #[test]
     fn lane_id_from_lane_index_enforces_bounds() {
         let lane_count = NonZeroU32::new(2).expect("nonzero");
@@ -1790,7 +1775,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn dataspace_id_roundtrip() {
         let original = DataSpaceId::new(7);
@@ -1805,7 +1789,6 @@ mod tests {
         );
         assert!("-1".parse::<DataSpaceId>().is_err());
     }
-
     #[test]
     fn dataspace_id_parses_decimal_cli_form() {
         assert_eq!("0".parse(), Ok(DataSpaceId::UNIVERSAL));
@@ -1813,7 +1796,6 @@ mod tests {
         assert!("-1".parse::<DataSpaceId>().is_err());
         assert!("not-a-dataspace".parse::<DataSpaceId>().is_err());
     }
-
     #[test]
     fn dataspace_id_from_hash_uses_low_bytes() {
         let mut hash = [0u8; 32];
@@ -1822,7 +1804,6 @@ mod tests {
         let id = DataSpaceId::from_hash(&hash);
         assert_eq!(id.as_u64(), expected);
     }
-
     #[test]
     fn lane_catalog_validates_alias_and_range() {
         let lane_count = NonZeroU32::new(2).expect("nonzero");
@@ -1838,7 +1819,6 @@ mod tests {
         .expect("valid catalog");
         assert_eq!(catalog.lane_count(), lane_count);
         assert!(catalog.by_alias("alpha").is_some());
-
         let dup = LaneCatalog::new(
             lane_count,
             vec![
@@ -1858,7 +1838,6 @@ mod tests {
         )
         .expect_err("duplicate lanes");
         assert!(matches!(dup, LaneCatalogError::DuplicateLaneId(_)));
-
         let out_of_range = LaneCatalog::new(
             lane_count,
             vec![LaneConfig {
@@ -1875,7 +1854,6 @@ mod tests {
                 if lane.as_u32() == 5
         ));
     }
-
     #[test]
     fn lane_catalog_rejects_active_entries_above_consensus_bound() {
         let lanes = (0..MAX_ACTIVE_EXECUTION_LANES)
@@ -1890,7 +1868,6 @@ mod tests {
                 .expect("active-lane bound is non-zero");
         let catalog = LaneCatalog::new(boundary_count, lanes.clone())
             .expect("the exact active-lane protocol bound is admissible");
-
         let overflow_id =
             LaneId::new(u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("bound fits u32"));
         let overflow = LaneConfig {
@@ -1911,7 +1888,6 @@ mod tests {
                 maximum: MAX_ACTIVE_EXECUTION_LANES,
             })
         );
-
         let lifecycle_error = catalog
             .apply_lifecycle(&LaneLifecyclePlan {
                 additions: vec![overflow],
@@ -1926,7 +1902,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn lane_catalog_canonicalizes_entry_order_and_lifecycle_commitment() {
         let lane_count = NonZeroU32::new(2).expect("nonzero lane count");
@@ -1940,7 +1915,6 @@ mod tests {
                 .expect("canonical catalog");
         let permuted = LaneCatalog::new(lane_count, vec![secondary, LaneConfig::default()])
             .expect("permuted catalog");
-
         assert_eq!(permuted, canonical);
         assert_eq!(
             permuted
@@ -1956,7 +1930,6 @@ mod tests {
             "semantic catalog permutations must share one optimistic-concurrency commitment"
         );
     }
-
     #[test]
     fn lane_config_roundtrip_encodes_storage_profile() {
         let mut metadata = BTreeMap::new();
@@ -1979,7 +1952,6 @@ mod tests {
         let decoded = LaneConfig::decode_all(&mut slice).expect("decode LaneConfig");
         assert_eq!(decoded, config);
     }
-
     #[test]
     fn dataspace_catalog_validates_entries() {
         let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
@@ -1990,7 +1962,6 @@ mod tests {
         }])
         .expect("valid dataspace");
         assert!(catalog.by_alias("telemetry").is_some());
-
         let invalid_fault_tolerance = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::new(9),
             alias: "invalid".into(),
@@ -2002,7 +1973,6 @@ mod tests {
             invalid_fault_tolerance,
             DataSpaceCatalogError::InvalidFaultTolerance { .. }
         ));
-
         let dup = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
                 id: DataSpaceId::new(2),
@@ -2019,7 +1989,6 @@ mod tests {
         ])
         .expect_err("duplicate dataspace");
         assert!(matches!(dup, DataSpaceCatalogError::DuplicateId(_)));
-
         let empty_alias = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::new(3),
             alias: "   ".into(),
@@ -2029,14 +1998,12 @@ mod tests {
         .expect_err("blank alias");
         assert!(matches!(empty_alias, DataSpaceCatalogError::EmptyAlias(_)));
     }
-
     #[test]
     fn dataspace_default_fault_tolerance_is_nonzero() {
         let entry = DataSpaceMetadata::default();
         assert_eq!(entry.fault_tolerance, 1);
         assert_eq!(entry.alias, "universal");
     }
-
     #[test]
     fn lane_config_identifies_only_valid_autoscale_managed_elastic_lanes() {
         let mut lane = LaneConfig {
@@ -2046,7 +2013,6 @@ mod tests {
         };
         assert!(!lane.claims_autoscale_managed());
         assert!(!lane.is_autoscale_managed_elastic());
-
         lane.metadata
             .insert(AUTOSCALE_META_MANAGED.into(), "true".into());
         lane.metadata
@@ -2067,30 +2033,25 @@ mod tests {
         );
         assert!(lane.has_autoscale_committee());
         assert!(lane.is_autoscale_managed_elastic());
-
         let mut spoofed_value = lane.clone();
         spoofed_value
             .metadata
             .insert(AUTOSCALE_META_MANAGED.into(), "TRUE".into());
         assert!(spoofed_value.claims_autoscale_managed());
         assert!(!spoofed_value.is_autoscale_managed_elastic());
-
         let mut spoofed_alias = lane.clone();
         spoofed_alias.alias = "renamed-elastic".into();
         assert!(!spoofed_alias.is_autoscale_managed_elastic());
-
         let mut zero_height = lane.clone();
         zero_height
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.into(), "0".into());
         assert_eq!(zero_height.autoscale_created_height(), None);
         assert!(!zero_height.is_autoscale_managed_elastic());
-
         let mut restricted = lane;
         restricted.visibility = LaneVisibility::Restricted;
         assert!(!restricted.is_autoscale_managed_elastic());
     }
-
     #[test]
     fn autoscale_profile_inheritance_ignores_identity_and_reserved_metadata_only() {
         let mut base = LaneConfig {
@@ -2110,7 +2071,6 @@ mod tests {
             .insert("security.profile".into(), "strict".into());
         base.metadata
             .insert("scheduler.teu_capacity".into(), "2400".into());
-
         let mut elastic = base.clone();
         elastic.id = LaneId::new(3);
         elastic.alias = "elastic-lane-3".into();
@@ -2132,7 +2092,6 @@ mod tests {
             "canonical-incarnation-committee".into(),
         );
         assert!(elastic.inherits_autoscale_profile_from(&base));
-
         let profile_drifts = [
             ("dataspace", {
                 let mut drift = elastic.clone();
@@ -2187,7 +2146,6 @@ mod tests {
                 drift
             }),
         ];
-
         for (field, drift) in profile_drifts {
             assert!(
                 !drift.inherits_autoscale_profile_from(&base),
@@ -2195,7 +2153,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn lane_lifecycle_plan_adds_and_retires() {
         let lane_count = NonZeroU32::new(2).expect("nonzero");
@@ -2208,7 +2165,6 @@ mod tests {
             }],
         )
         .expect("base catalog");
-
         let plan = LaneLifecyclePlan {
             additions: vec![LaneConfig {
                 id: LaneId::new(1),
@@ -2217,11 +2173,9 @@ mod tests {
             }],
             retire: Vec::new(),
         };
-
         let expanded = base.apply_lifecycle(&plan).expect("apply lifecycle");
         assert_eq!(expanded.lane_count().get(), 2);
         assert!(expanded.by_alias("beta").is_some());
-
         let retire_plan = LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![LaneId::new(1)],
@@ -2232,7 +2186,6 @@ mod tests {
         assert_eq!(trimmed.lanes().len(), 1);
         assert!(trimmed.by_alias("beta").is_none());
     }
-
     #[test]
     fn lane_lifecycle_parameter_roundtrips_and_binds_exact_catalog() {
         let catalog = LaneCatalog::default();
@@ -2258,7 +2211,6 @@ mod tests {
                 .expect("decode lifecycle custom parameter"),
             Some(parameter.clone())
         );
-
         let changed = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
@@ -2277,7 +2229,6 @@ mod tests {
             "catalog commitment must change with topology metadata"
         );
     }
-
     #[test]
     fn lane_lifecycle_parameter_rejects_unknown_version_and_fields() {
         let catalog = LaneCatalog::default();
@@ -2290,7 +2241,6 @@ mod tests {
             LaneLifecycleParameterV1::from_custom_parameter(&unsupported.into_custom_parameter())
                 .expect_err("unsupported lifecycle payload version must fail closed");
         assert!(err.to_string().contains("unsupported"));
-
         let valid = LaneLifecycleParameterV1::new(&catalog, &entries, LaneLifecyclePlan::default())
             .expect("valid lifecycle parameter");
         let mut encoded = norito::json::to_string(&valid).expect("serialize lifecycle payload");
@@ -2306,7 +2256,6 @@ mod tests {
             .expect_err("unknown lifecycle payload field must fail closed");
         assert!(err.to_string().contains("unexpected"));
     }
-
     #[test]
     fn lane_lifecycle_status_roundtrips_json_and_norito() {
         let catalog = LaneCatalog::new(
@@ -2323,18 +2272,15 @@ mod tests {
         .expect("valid lifecycle status catalog");
         let status = lifecycle_status(&catalog);
         assert_eq!(status.validate().expect("validate status"), catalog);
-
         let json = norito::json::to_string(&status).expect("serialize lifecycle status JSON");
         let from_json = norito::json::from_str::<LaneLifecycleStatusV1>(&json)
             .expect("decode lifecycle status JSON");
         assert_eq!(from_json, status);
-
         let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
         let from_norito = norito::decode_from_bytes::<LaneLifecycleStatusV1>(&bytes)
             .expect("decode lifecycle status Norito");
         assert_eq!(from_norito, status);
     }
-
     #[test]
     fn lane_lifecycle_status_rejects_forged_hash_version_and_order() {
         let mut status = lifecycle_status(&LaneCatalog::default());
@@ -2343,14 +2289,12 @@ mod tests {
             status.validate(),
             Err(LaneLifecycleStatusError::CatalogHashMismatch { .. })
         ));
-
         let mut status = lifecycle_status(&LaneCatalog::default());
         status.version = LaneLifecycleStatusV1::VERSION.saturating_add(1);
         assert!(matches!(
             status.validate(),
             Err(LaneLifecycleStatusError::UnsupportedVersion { .. })
         ));
-
         let canonical = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
@@ -2369,21 +2313,18 @@ mod tests {
             status.validate(),
             Err(LaneLifecycleStatusError::NonCanonicalLaneOrder)
         );
-
         let mut status = lifecycle_status(&canonical);
         status.incarnations.reverse();
         assert_eq!(
             status.validate(),
             Err(LaneLifecycleStatusError::NonCanonicalIncarnationOrder)
         );
-
         let mut status = lifecycle_status(&canonical);
         status.incarnations[1].incarnation = status.incarnations[0].incarnation;
         assert!(matches!(
             status.validate(),
             Err(LaneLifecycleStatusError::DuplicateIncarnation { .. })
         ));
-
         let mut status = lifecycle_status(&canonical);
         status.incarnation_root = Hash::new(b"forged-incarnation-root");
         assert!(matches!(
@@ -2391,7 +2332,6 @@ mod tests {
             Err(LaneLifecycleStatusError::IncarnationRootMismatch { .. })
         ));
     }
-
     #[test]
     fn lane_lifecycle_incarnation_root_changes_for_identical_catalog_replacement() {
         let catalog = LaneCatalog::default();
@@ -2413,7 +2353,6 @@ mod tests {
             "same metadata must not make a prior-incarnation request replayable"
         );
     }
-
     #[test]
     fn lane_lifecycle_status_json_rejects_duplicate_and_unknown_fields() {
         let status = lifecycle_status(&LaneCatalog::default());
@@ -2423,7 +2362,6 @@ mod tests {
         let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
             .expect_err("duplicate status fields must fail closed");
         assert!(err.to_string().contains("duplicate field `version`"));
-
         let mut encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
         assert_eq!(encoded.pop(), Some('}'));
         encoded.push_str(",\"unexpected\":true}");
@@ -2431,7 +2369,6 @@ mod tests {
             .expect_err("unknown status fields must fail closed");
         assert!(err.to_string().contains("unexpected"));
     }
-
     #[test]
     fn lane_lifecycle_plan_json_rejects_duplicate_fields() {
         let duplicate = r#"{"additions":[],"retire":[],"retire":[]}"#;
@@ -2439,11 +2376,9 @@ mod tests {
             .expect_err("duplicate lifecycle plan field must fail closed");
         assert!(err.to_string().contains("duplicate field `retire`"));
     }
-
     #[test]
     fn lane_lifecycle_rejects_unknown_retire_or_empty() {
         let base = LaneCatalog::default();
-
         let missing = LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![LaneId::new(9)],
@@ -2452,7 +2387,6 @@ mod tests {
             .apply_lifecycle(&missing)
             .expect_err("unknown retire must fail");
         assert!(matches!(err, LaneCatalogError::MissingLane(lane) if lane.as_u32() == 9));
-
         let duplicate_retire = LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![LaneId::SINGLE, LaneId::SINGLE],
@@ -2464,7 +2398,6 @@ mod tests {
             err,
             LaneCatalogError::DuplicateRetireLane(lane) if lane == LaneId::SINGLE
         ));
-
         let forged_present = LaneLifecyclePlan {
             additions: vec![LaneConfig {
                 id: LaneId::new(9),
@@ -2477,7 +2410,6 @@ mod tests {
             .apply_lifecycle(&forged_present)
             .expect_err("addition must not satisfy retire precondition");
         assert!(matches!(err, LaneCatalogError::MissingLane(lane) if lane.as_u32() == 9));
-
         let empty_plan = LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![LaneId::SINGLE],
@@ -2487,11 +2419,9 @@ mod tests {
             .expect_err("empty catalog must be rejected");
         assert!(matches!(err, LaneCatalogError::EmptyCatalog));
     }
-
     #[test]
     fn lane_lifecycle_rejects_duplicate_additions_before_merge() {
         let base = LaneCatalog::default();
-
         let duplicate_id = LaneLifecyclePlan {
             additions: vec![
                 LaneConfig {
@@ -2514,7 +2444,6 @@ mod tests {
             err,
             LaneCatalogError::DuplicateLaneId(lane) if lane == LaneId::new(1)
         ));
-
         let duplicate_alias = LaneLifecyclePlan {
             additions: vec![
                 LaneConfig {
@@ -2538,7 +2467,6 @@ mod tests {
             LaneCatalogError::DuplicateLaneAlias(alias) if alias == "beta"
         ));
     }
-
     #[test]
     fn lane_catalog_constructor_rejects_empty_catalog() {
         let error = LaneCatalog::new(NonZeroU32::new(1).expect("non-zero bound"), Vec::new())
@@ -2546,7 +2474,6 @@ mod tests {
         assert_eq!(error, LaneCatalogError::EmptyCatalog);
     }
 }
-
 /// Prelude re-export for the Nexus module.
 pub mod prelude {
     pub use super::{

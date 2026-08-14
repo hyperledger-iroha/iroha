@@ -34,7 +34,6 @@ fn validate_pop_payload_bytes_accepts_signed_publications() {
         bundle.revocation_list.list_version.to_string(),
     );
 }
-
 #[test]
 fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
     let outcome = pop_outcome(
@@ -79,7 +78,6 @@ fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
         proof.proof_bytes.len().to_string(),
     );
 }
-
 #[test]
 fn validate_pop_payload_bytes_rejects_malformed_norito() {
     let outcome = validate_pop_payload_bytes(
@@ -90,7 +88,6 @@ fn validate_pop_payload_bytes_rejects_malformed_norito() {
     );
     assert_failure(&outcome, "SFS-NORITO-001", CATEGORY_NORITO);
 }
-
 #[test]
 fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
     let oversized = vec![0u8; POP_REFERENCE_PAYLOAD_MAX_BYTES_V1 + 1];
@@ -118,7 +115,6 @@ fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
     assert_eq!(outcome.code, "SFS-NORITO-001", "{outcome:?}");
     assert!(outcome.message.contains("canonical Norito"), "{outcome:?}");
 }
-
 #[test]
 fn validate_pop_payload_bytes_rejects_signature_tampering() {
     let (mut credential, _, _) = signed_pop_material();

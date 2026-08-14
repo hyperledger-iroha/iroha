@@ -5,20 +5,17 @@ struct ProgressAncestorSyncFault {
     remaining_to_target: usize,
     failures_remaining: usize,
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy)]
 struct ProgressIntentDirectorySyncFault {
     calls_before_failure: usize,
     target_index: usize,
 }
-
 #[cfg(test)]
 struct NativeAmxPrunePreUnlinkHook {
     calls_before_run: usize,
     hook: Option<Box<dyn FnOnce(&Path)>>,
 }
-
 #[cfg(test)]
 std::thread_local! {
     static FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -45,7 +42,6 @@ std::thread_local! {
     static NATIVE_AMX_PRUNE_PRE_UNLINK_HOOK: std::cell::RefCell<Option<NativeAmxPrunePreUnlinkHook>> = const { std::cell::RefCell::new(None) };
     static NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = const { std::cell::RefCell::new(None) };
 }
-
 #[cfg(test)]
 fn run_latest_certified_frontier_post_validation_hook_for_tests() {
     let hook = LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| slot.borrow_mut().take());
@@ -53,7 +49,6 @@ fn run_latest_certified_frontier_post_validation_hook_for_tests() {
         hook();
     }
 }
-
 #[cfg(test)]
 fn run_native_amx_prune_pre_unlink_hook_for_tests(path: &Path) {
     NATIVE_AMX_PRUNE_PRE_UNLINK_HOOK.with(|slot| {
@@ -73,7 +68,6 @@ fn run_native_amx_prune_pre_unlink_hook_for_tests(path: &Path) {
         }
     });
 }
-
 #[cfg(test)]
 fn set_native_amx_prune_pre_unlink_hook_for_tests(
     calls_before_run: usize,
@@ -90,7 +84,6 @@ fn set_native_amx_prune_pre_unlink_hook_for_tests(
         );
     });
 }
-
 #[cfg(test)]
 fn run_native_amx_latest_index_pre_mutation_hook_for_tests(path: &Path) {
     let hook = NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK.with(|slot| slot.borrow_mut().take());
@@ -98,7 +91,6 @@ fn run_native_amx_latest_index_pre_mutation_hook_for_tests(path: &Path) {
         hook(path);
     }
 }
-
 #[cfg(test)]
 fn set_native_amx_latest_index_pre_mutation_hook_for_tests(hook: impl FnOnce(&Path) + 'static) {
     NATIVE_AMX_LATEST_INDEX_PRE_MUTATION_HOOK.with(|slot| {
@@ -109,7 +101,6 @@ fn set_native_amx_latest_index_pre_mutation_hook_for_tests(hook: impl FnOnce(&Pa
         );
     });
 }
-
 #[cfg(test)]
 fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnce() + 'static) {
     LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| {
@@ -117,24 +108,20 @@ fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnc
         assert!(previous.is_none(), "frontier test hook already installed");
     });
 }
-
 #[cfg(test)]
 fn fail_next_certified_lane_block_artifact_validation_for_tests() {
     FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.set(true));
 }
-
 #[cfg(test)]
 fn fail_after_next_certified_frontier_build_for_tests() {
     FAIL_AFTER_NEXT_CERTIFIED_FRONTIER_BUILD.with(|flag| flag.set(true));
 }
-
 #[cfg(test)]
 fn fail_after_bound_progress_append_build_for_tests(calls_before_failure: usize) {
     FAIL_AFTER_BOUND_PROGRESS_APPEND_BUILD_CALLS.with(|slot| {
         assert!(slot.replace(Some(calls_before_failure)).is_none());
     });
 }
-
 #[cfg(test)]
 fn should_fail_after_bound_progress_append_build_for_tests() -> bool {
     FAIL_AFTER_BOUND_PROGRESS_APPEND_BUILD_CALLS.with(|slot| match slot.get() {
@@ -149,22 +136,18 @@ fn should_fail_after_bound_progress_append_build_for_tests() -> bool {
         None => false,
     })
 }
-
 #[cfg(test)]
 fn fail_after_next_autonomous_certified_frontier_for_tests() {
     FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER.with(|flag| flag.set(true));
 }
-
 #[cfg(test)]
 fn fail_next_autonomous_merge_bundle_persistence_for_tests() {
     FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_PERSISTENCE.with(|flag| flag.set(true));
 }
-
 #[cfg(test)]
 fn fail_next_autonomous_merge_bundle_append_data_sync_for_tests() {
     FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC.with(|flag| flag.set(true));
 }
-
 #[cfg(test)]
 fn fail_after_next_autonomous_merge_bundle_pair_for_tests() {
     FAIL_AFTER_NEXT_AUTONOMOUS_MERGE_BUNDLE_PAIR.with(|flag| flag.set(true));

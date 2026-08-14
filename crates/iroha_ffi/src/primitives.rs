@@ -1,5 +1,4 @@
 //! Logic related to the conversion of primitives to and from FFI-compatible representation
-
 use crate::{
     FfiTuple2, ReprC, Result,
     ir::Ir,
@@ -8,11 +7,8 @@ use crate::{
         read_non_local, write_non_local,
     },
 };
-
 #[cfg(feature = "ivm")]
 mod ivm {
-    use std::{boxed::Box, vec::Vec};
-
     use crate::{
         FfiReturn, Result,
         ir::{Robust, Transparent, transmute::SpecializedTransmute},
@@ -21,13 +17,12 @@ mod ivm {
             write_non_local,
         },
     };
-
+    use std::{boxed::Box, vec::Vec};
     /// Marker for an integer primitive type that is not recognized by the IVM.
     /// This struct is meant only to be used internally, i.e. there are no constructors.
     // NOTE: There are no blanket impls because it's meant to be used only on a specific set of types
     #[derive(Debug, Clone, Copy)]
     pub enum NonIvmIntPrimitive {}
-
     impl crate::ir::IrTypeFamily for NonIvmIntPrimitive {
         type Ref<'itm> = Transparent;
         type RefMut<'itm> = Transparent;
@@ -38,34 +33,27 @@ mod ivm {
         type Vec = Vec<Robust>;
         type Arr<const N: usize> = Robust;
     }
-
     macro_rules! ivm_repr_impls {
         ( $($src:ty => $dst:ty),+ ) => {$(
             // SAFETY: Even if it is not used in IVM APIs it is still a `ReprC` type
             unsafe impl $crate::ReprC for $src {}
-
             impl $crate::option::Niche<'_> for $src {
                 const NICHE_VALUE: $dst = <$src>::MAX as $dst + 1;
             }
-
             // SAFETY: Idempotent transmute is always infallible
             unsafe impl $crate::ir::InfallibleTransmute for $src {}
-
             impl $crate::WrapperTypeOf<Self> for $src {
                 type Type = Self;
             }
-
             impl $crate::ir::Ir for $src {
                 type Type = NonIvmIntPrimitive;
             }
-
             impl CType<NonIvmIntPrimitive> for $src {
                 type ReprC = $dst;
             }
             impl CTypeConvert<'_, NonIvmIntPrimitive, $dst> for $src {
                 type RustStore = ();
                 type FfiStore = ();
-
                 fn into_repr_c(self, _: &mut ()) -> $dst {
                     self as $dst
                 }
@@ -73,7 +61,6 @@ mod ivm {
                     <$src>::try_from(source).or(Err(FfiReturn::ConversionFailed))
                 }
             }
-
             impl CWrapperType<NonIvmIntPrimitive> for $src {
                 type InputType = Self;
                 type ReturnType = Self;
@@ -93,27 +80,22 @@ mod ivm {
             }
             unsafe impl SpecializedTransmute<NonIvmIntPrimitive> for &$src {
                 type Target = *const $src;
-
                 unsafe fn is_valid(target: &Self::Target) -> bool {
                     !target.is_null()
                 }
             }
             unsafe impl SpecializedTransmute<NonIvmIntPrimitive> for &mut $src {
                 type Target = *mut $src;
-
                 unsafe fn is_valid(target: &Self::Target) -> bool {
                     !target.is_null()
                 }
             }
-
             // SAFETY: Conversion of non IVM primitive doesn't use store
             unsafe impl $crate::repr_c::NonLocal<NonIvmIntPrimitive> for $src {})+
         };
     }
-
     ivm_repr_impls! {u8 => u32, i8 => i32, u16 => u32, i16 => i32}
 }
-
 /// # Safety
 ///
 /// * the type must be transmutable into an integer
@@ -123,18 +105,15 @@ macro_rules! fieldless_enum_derive {
         $crate::ffi_type! {
             unsafe impl Transparent for $src {
                 type Target = $dst;
-
                 validation_fn=unsafe {$validity_fn},
                 niche_value=$niche_val
             }
         }
-
         impl $crate::WrapperTypeOf<$src> for $dst {
             type Type = $src;
         }
     };
 }
-
 /// # Safety
 ///
 /// Type must be a robust #[repr(C)]
@@ -144,7 +123,6 @@ macro_rules! primitive_derive {
         $crate::ffi_type! { impl Robust for $primitive {} } )*
     };
 }
-
 fieldless_enum_derive! {
     bool => u8: {2}:
     |i: &u8| *i == 0 || *i == 1
@@ -153,11 +131,9 @@ fieldless_enum_derive! {
     core::cmp::Ordering => i8: {2}:
     |i: &i8| *i == -1 || *i == 0 || *i == 1
 }
-
 primitive_derive! { u32, i32, u64, i64 }
 #[cfg(not(feature = "ivm"))]
 primitive_derive! { u8, i8, u16, i16 }
-
 macro_rules! int128_derive {
     ($($src:ty => $dst:ident),+$(,)?) => {$(
         /// Ffi-safe representation of [`u128`]
@@ -165,51 +141,40 @@ macro_rules! int128_derive {
         #[derive(Clone, Copy, Debug, Default)]
         #[repr(transparent)]
         pub struct $dst(FfiTuple2<u64, u64>);
-
         // SAFETY: Transparent to `FfiTuple<u64, u64>` which is `ReprC`
         unsafe impl ReprC for $dst where FfiTuple2<u64, u64>: ReprC {}
-
         impl Ir for $src {
             type Type = Self;
         }
-
         impl CType<Self> for $src {
             type ReprC = $dst;
         }
-
         impl CTypeConvert<'_, Self, $dst> for $src {
             type RustStore = ();
             type FfiStore = ();
-
             fn into_repr_c(self, _: &mut Self::RustStore) -> $dst {
                 self.into()
             }
-
             // SAFETY: calling this function is safe since no pointers involved in conversion
             unsafe fn try_from_repr_c(value: $dst, _: &mut Self::FfiStore) -> Result<Self> {
                 Ok(value.into())
             }
         }
         impl Cloned for $src {}
-
         // SAFETY: `u128/i128` doesn't use local store during conversion
         unsafe impl NonLocal<Self> for $src {}
-
         impl CWrapperType<Self> for $src {
             type InputType = Self;
             type ReturnType = Self;
         }
-
         impl COutPtr<Self> for $src {
             type OutPtr = Self::ReprC;
         }
-
         impl COutPtrWrite<Self> for $src {
             unsafe fn write_out(self, out_ptr: *mut Self::OutPtr) {
                 unsafe { write_non_local::<_, Self>(self, out_ptr) };
             }
         }
-
         impl COutPtrRead<Self> for $src {
             unsafe fn try_read_out(out_ptr: Self::OutPtr) -> Result<Self> {
                 unsafe { read_non_local::<Self, Self>(out_ptr) }
@@ -217,10 +182,8 @@ macro_rules! int128_derive {
         }
     )*};
 }
-
 // Ffi-safe u128/i128 conversions
 int128_derive! { u128 => FfiU128, i128 => FfiI128 }
-
 impl From<u128> for FfiU128 {
     // Truncation is done on purpose
     #[allow(clippy::cast_possible_truncation)]
@@ -230,7 +193,6 @@ impl From<u128> for FfiU128 {
         FfiU128(FfiTuple2(hi, lo))
     }
 }
-
 impl From<FfiU128> for u128 {
     // Truncation is done on purpose
     #[allow(clippy::cast_possible_truncation)]
@@ -238,25 +200,21 @@ impl From<FfiU128> for u128 {
         (u128::from(hi) << 64) | u128::from(lo)
     }
 }
-
 impl From<i128> for FfiI128 {
     #[allow(clippy::cast_sign_loss)] // Intended behavior
     fn from(value: i128) -> Self {
         FfiI128(FfiU128::from(value as u128).0)
     }
 }
-
 impl From<FfiI128> for i128 {
     #[allow(clippy::cast_possible_wrap)] // Intended behavior
     fn from(value: FfiI128) -> Self {
         u128::from(FfiU128(value.0)) as i128
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn conversion_u128() {
         let values = [
@@ -267,12 +225,10 @@ mod tests {
             u128::from(u8::MAX),
             0,
         ];
-
         for value in values {
             assert_eq!(value, FfiU128::from(value).into());
         }
     }
-
     #[test]
     fn conversion_i128() {
         let values = [
@@ -288,7 +244,6 @@ mod tests {
             i128::from(i64::MIN),
             i128::MIN,
         ];
-
         for value in values {
             assert_eq!(value, FfiI128::from(value).into());
         }

@@ -1,9 +1,7 @@
 // Governance ballot-proof canonical-shape regressions.
-
 #[tokio::test]
 async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
@@ -61,11 +59,9 @@ async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() 
         Some("owner must use canonical I105 account id form")
     );
 }
-
 #[tokio::test]
 async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let ballot = BallotProof {

@@ -1,5 +1,4 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
-
 use iroha_core::{
     queue::Queue,
     soracloud_runtime::{
@@ -15,14 +14,12 @@ use iroha_data_model::prelude::AccountId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use parking_lot::RwLock;
 use tokio::task;
-
 #[derive(Clone)]
 pub struct SoracloudRuntimeManagerConfig {
     pub production_mode: bool,
     pub state_dir: PathBuf,
     pub local_peer_id: Option<String>,
 }
-
 impl SoracloudRuntimeManagerConfig {
     #[must_use]
     pub fn from_runtime_config(
@@ -38,7 +35,6 @@ impl SoracloudRuntimeManagerConfig {
             local_peer_id: None,
         }
     }
-
     #[must_use]
     pub fn with_local_host_identity(
         mut self,
@@ -49,10 +45,8 @@ impl SoracloudRuntimeManagerConfig {
         self
     }
 }
-
 #[derive(Clone)]
 pub struct QueuedSoracloudRuntimeMutationSink;
-
 impl QueuedSoracloudRuntimeMutationSink {
     /// Construct the inert non-production sink used by builds without the
     /// embedded Soracloud runtime.
@@ -71,11 +65,9 @@ impl QueuedSoracloudRuntimeMutationSink {
         Ok(Self)
     }
 }
-
 pub struct SoracloudRuntimeManager {
     config: SoracloudRuntimeManagerConfig,
 }
-
 impl SoracloudRuntimeManager {
     #[must_use]
     pub fn new(config: SoracloudRuntimeManagerConfig, _state: Arc<State>) -> Self {
@@ -85,7 +77,6 @@ impl SoracloudRuntimeManager {
         );
         Self { config }
     }
-
     #[must_use]
     pub(crate) fn with_mutation_sink(
         self,
@@ -93,7 +84,6 @@ impl SoracloudRuntimeManager {
     ) -> Self {
         self
     }
-
     /// Attach the inert runtime-only HF credential boundary.
     #[must_use]
     pub(crate) fn with_hf_inference_credential_provider(
@@ -104,12 +94,18 @@ impl SoracloudRuntimeManager {
     ) -> Self {
         self
     }
-
+    /// Attach the inert remote stream-token operator boundary.
+    #[must_use]
+    pub(crate) fn with_remote_stream_token_operator_from_config(
+        self,
+        _config: &iroha_config::parameters::actual::Root,
+    ) -> Self {
+        self
+    }
     #[must_use]
     pub fn with_sorafs_node(self, _sorafs_node: sorafs_node::NodeHandle) -> Self {
         self
     }
-
     #[must_use]
     pub fn with_sorafs_provider_cache(
         self,
@@ -117,7 +113,6 @@ impl SoracloudRuntimeManager {
     ) -> Self {
         self
     }
-
     /// Start the disabled-runtime shutdown waiter.
     ///
     /// # Errors
@@ -143,51 +138,42 @@ impl SoracloudRuntimeManager {
         ))
     }
 }
-
 #[derive(Clone)]
 pub struct SoracloudRuntimeManagerHandle {
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
     state_dir: Arc<PathBuf>,
     local_peer_id: Option<String>,
 }
-
 impl SoracloudRuntimeManagerHandle {
     #[must_use]
     pub fn snapshot(&self) -> SoracloudRuntimeSnapshot {
         self.snapshot.read().clone()
     }
-
     #[must_use]
     pub fn state_dir(&self) -> PathBuf {
         self.state_dir.as_ref().clone()
     }
 }
-
 fn unavailable(message: &str) -> SoracloudRuntimeExecutionError {
     SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
         message.to_owned(),
     )
 }
-
 impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
     fn materialization_available(&self) -> bool {
         false
     }
-
     fn snapshot(&self) -> SoracloudRuntimeSnapshot {
         Self::snapshot(self)
     }
-
     fn state_dir(&self) -> PathBuf {
         Self::state_dir(self)
     }
-
     fn local_peer_id(&self) -> Option<String> {
         self.local_peer_id.clone()
     }
 }
-
 impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
     fn execute_local_read(
         &self,
@@ -197,7 +183,6 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             "embedded Soracloud runtime is disabled for this build",
         ))
     }
-
     fn execute_ordered_mailbox(
         &self,
         _request: SoracloudOrderedMailboxExecutionRequest,
@@ -206,7 +191,6 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             "embedded Soracloud runtime is disabled for this build",
         ))
     }
-
     fn execute_apartment(
         &self,
         _request: SoracloudApartmentExecutionRequest,
@@ -216,18 +200,15 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn production_runtime_config() -> iroha_config::parameters::actual::SoracloudRuntime {
         iroha_config::parameters::actual::SoracloudRuntime {
             production_mode: true,
             ..Default::default()
         }
     }
-
     #[test]
     fn stub_runtime_config_rejects_production_mode() {
         let runtime = production_runtime_config();
@@ -236,7 +217,6 @@ mod tests {
         });
         assert!(result.is_err());
     }
-
     #[test]
     fn stub_runtime_manager_rejects_production_mode() {
         let config = SoracloudRuntimeManagerConfig {

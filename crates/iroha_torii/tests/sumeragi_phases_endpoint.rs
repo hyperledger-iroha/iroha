@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![doc = "Router-level test for GET /v1/sumeragi/phases (compact per-phase latencies)"]
 #![cfg(feature = "telemetry")]
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sumeragi_phases_endpoint_shape() {
@@ -14,7 +13,6 @@ async fn sumeragi_phases_endpoint_shape() {
         routing::get,
     };
     use tower::ServiceExt;
-
     // Seed snapshot values
     iroha_core::sumeragi::status::set_phase_propose_ms(11);
     iroha_core::sumeragi::status::set_phase_collect_da_ms(22);
@@ -33,7 +31,6 @@ async fn sumeragi_phases_endpoint_shape() {
     iroha_core::sumeragi::status::inc_block_created_dropped_by_lock();
     iroha_core::sumeragi::status::inc_block_created_hint_mismatch();
     iroha_core::sumeragi::status::inc_block_created_proposal_mismatch();
-
     // Build a tiny router with the phases endpoint handler
     let app = Router::new().route(
         "/v1/sumeragi/phases",
@@ -41,7 +38,6 @@ async fn sumeragi_phases_endpoint_shape() {
             iroha_torii::handle_v1_sumeragi_phases(headers.get(ACCEPT).cloned()).await
         }),
     );
-
     let resp = app
         .oneshot(
             axum::http::Request::builder()
@@ -57,13 +53,11 @@ async fn sumeragi_phases_endpoint_shape() {
         resp.headers().get(CONTENT_TYPE),
         Some(&axum::http::HeaderValue::from_static("application/json"))
     );
-
     let body = http_body_util::BodyExt::collect(resp.into_body())
         .await
         .unwrap()
         .to_bytes();
     let s = String::from_utf8(body.to_vec()).unwrap();
-
     // Parse JSON and check expected keys exist
     let v: norito::json::Value = norito::json::from_str(&s).unwrap();
     for k in [

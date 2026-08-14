@@ -1,6 +1,5 @@
 // Reply-route and exact-output worker regression tests.
 // Included lexically by v2_worker::tests to preserve canonical test names.
-
 #[test]
 fn responder_control_retry_coalesces_alternate_return_route() {
     let (service, _) = fixture();
@@ -43,7 +42,6 @@ fn responder_control_retry_coalesces_alternate_return_route() {
         let second_route = second_route.clone();
         let mut pending = PendingExactOutput::new(4, 1, 2, std::slice::from_ref(&peer))
             .expect("two independent control sources fit the bounded corridor");
-
         assert_eq!(
             pending.enqueue_owned_reply_transfer(first),
             Ok(ExactFanoutOwnership::Owned)
@@ -73,7 +71,6 @@ fn responder_control_retry_coalesces_alternate_return_route() {
         );
         assert_eq!(pending.ownership_units, 1);
         assert_eq!(pending.shared_ownership_units, 0);
-
         let mut admitted_routes = Vec::new();
         assert_eq!(
             pending.drive_with_budget(1, |_post, ticket, route| {
@@ -125,7 +122,6 @@ fn responder_control_retry_coalesces_alternate_return_route() {
         );
     }
 }
-
 #[test]
 fn responder_control_uses_ordinary_reply_flush_ownership() {
     let (service, _) = fixture();
@@ -218,7 +214,6 @@ fn responder_control_uses_ordinary_reply_flush_ownership() {
         .expect("consume the ordinary CloseAck writer flush");
     assert!(pending.fanouts.is_empty());
     assert!(pending.admitted_sidecar_chunks.is_empty());
-
     let alternate = certified_sidecar_reply_control_fanout(
         service.exact_output_scope(),
         &peer,
@@ -229,7 +224,6 @@ fn responder_control_uses_ordinary_reply_flush_ownership() {
     assert_eq!(pending.can_enqueue(&alternate), Ok(true));
     assert_eq!(pending.enqueue(alternate), Ok(ExactFanoutOwnership::Owned));
 }
-
 #[test]
 fn generation_hint_uses_ordinary_reply_flush_ownership() {
     let (service, _) = fixture();
@@ -249,7 +243,6 @@ fn generation_hint_uses_ordinary_reply_flush_ownership() {
         pending.enqueue_owned_reply_transfer(fanout),
         Ok(ExactFanoutOwnership::Owned)
     );
-
     let mut flush_control = None;
     let _ = pending
         .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
@@ -294,7 +287,6 @@ fn generation_hint_uses_ordinary_reply_flush_ownership() {
     assert!(pending.fanouts.is_empty());
     assert!(pending.admitted_sidecar_chunks.is_empty());
 }
-
 #[test]
 fn writable_responder_control_source_retains_one_distinct_pending_control() {
     let (service, _) = fixture();
@@ -324,7 +316,6 @@ fn writable_responder_control_source_retains_one_distinct_pending_control() {
     );
     let mut pending = PendingExactOutput::new(controls.len(), 1, 1, &[])
         .expect("the unconstrained test corridor could retain every control");
-
     for (index, message) in controls.into_iter().enumerate() {
         match &message {
             CertifiedMergeSidecarMessage::GenerationHint(hint) => {
@@ -369,7 +360,6 @@ fn writable_responder_control_source_retains_one_distinct_pending_control() {
             "a writable incumbent is never displaced by a distinct control"
         );
     }
-
     let mut drained = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
@@ -385,7 +375,6 @@ fn writable_responder_control_source_retains_one_distinct_pending_control() {
     );
     assert_eq!(drained, vec![first_control_hash]);
     assert!(pending.fanouts.is_empty());
-
     let retried_hash = HashOf::new(&retry_after_drain);
     let retried = certified_sidecar_control_fanout(scope, &peer, retry_after_drain);
     assert_eq!(pending.can_enqueue(&retried), Ok(true));
@@ -405,7 +394,6 @@ fn writable_responder_control_source_retains_one_distinct_pending_control() {
         CertifiedMergeSidecarMessage::CloseAck(_)
     ));
 }
-
 #[test]
 fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership() {
     let (service, _) = fixture();
@@ -421,7 +409,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
         ),
         Ok(ExactFanoutOwnership::Owned)
     );
-
     let control = certified_sidecar_control_fanout(
         scope,
         &peer,
@@ -440,7 +427,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
     );
     assert_eq!(pending.fanouts[0].message_hashes, vec![progress_hash]);
     assert!(pending.fanouts[1].is_retryable_certified_sidecar_responder_control_fanout());
-
     let (request_message, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
     let CertifiedMergeSidecarMessage::Request(request) = &request_message else {
         unreachable!("worker sidecar fixture returns one request")
@@ -464,7 +450,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
     )
     .expect("valid exact sidecar request claim")
     .expect("one exact sidecar request fanout");
-
     let mut close = crate::merge_sidecar::CertifiedMergeSidecarCloseV1 {
         version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
         service_generation: request_service_generation,
@@ -477,7 +462,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
     close.close_id = close.canonical_close_id();
     let close_message = CertifiedMergeSidecarMessage::Close(close);
     let close_fanout = certified_sidecar_control_fanout(scope, &peer, close_message);
-
     let CertifiedMergeSidecarMessage::Chunk(chunk) = &chunk_message else {
         unreachable!("worker sidecar fixture returns one response chunk")
     };
@@ -501,7 +485,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
     )
     .expect("valid exact sidecar chunk claim")
     .expect("one exact sidecar chunk fanout");
-
     for fanout in [request_fanout, close_fanout, chunk_fanout] {
         assert!(
             !fanout.is_retryable_certified_sidecar_responder_control_fanout(),
@@ -515,7 +498,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
         5,
         "request, close, and chunk fanouts still enter behind existing progress"
     );
-
     let later_progress = PendingExactFanout::new(
         vec![merge_share_message(
             b"non-control progress after retryable sidecar control",
@@ -534,7 +516,6 @@ fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership()
         "the bounded-control exception must not change non-control admission"
     );
 }
-
 #[test]
 fn unrelated_parked_reply_does_not_suppress_responsive_target_control() {
     let (service, _) = fixture();
@@ -569,7 +550,6 @@ fn unrelated_parked_reply_does_not_suppress_responsive_target_control() {
     );
     assert_eq!(pending.fanouts.len(), 1);
     assert!(pending.fanouts[0].targets[0].parked);
-
     let control_b = certified_sidecar_control_fanout(
         service.exact_output_scope(),
         &peer_b,
@@ -586,7 +566,6 @@ fn unrelated_parked_reply_does_not_suppress_responsive_target_control() {
         2,
         "peer A's parked reply cannot impersonate peer B's control owner"
     );
-
     let mut admitted = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
@@ -605,7 +584,6 @@ fn unrelated_parked_reply_does_not_suppress_responsive_target_control() {
     );
     assert!(pending.fanouts[0].targets[0].parked);
 }
-
 #[test]
 fn generation_hint_uses_exact_reply_ownership_without_topology_fallback() {
     let (service, _) = fixture();
@@ -631,7 +609,6 @@ fn generation_hint_uses_exact_reply_ownership_without_topology_fallback() {
         "GenerationHint must retain an exact reply route"
     );
     assert!(control.is_retryable_certified_sidecar_responder_control_fanout());
-
     let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
         .expect("one exact generation Hint fits its responder-control reservation");
     assert_eq!(pending.can_enqueue(&control), Ok(true));
@@ -657,7 +634,6 @@ fn generation_hint_uses_exact_reply_ownership_without_topology_fallback() {
                 kind: ExactTargetReservationKind::SidecarTopologyProgress,
             })
     );
-
     let blocker = PeerId::new(KeyPair::random().public_key().clone());
     let hub = PeerId::new(KeyPair::random().public_key().clone());
     let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
@@ -721,7 +697,6 @@ fn generation_hint_uses_exact_reply_ownership_without_topology_fallback() {
         Some(&1)
     );
 }
-
 #[test]
 fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() {
     let (service, _) = fixture();
@@ -734,7 +709,6 @@ fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() 
     let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 4);
     let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
         .expect("one frozen responder-control slot plus one shared unit");
-
     let unwritable_route = routes.mint_via(target.clone(), hub_a);
     let unwritable = certified_sidecar_reply_control_fanout(
         scope,
@@ -778,7 +752,6 @@ fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() 
         "the old source enters its monotonic draining interval"
     );
     assert!(!pending.fanouts[0].targets[0].parked);
-
     let writable = certified_sidecar_reply_control_fanout(
         scope,
         &target,
@@ -845,7 +818,6 @@ fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() 
         ])),
         "later rebasing must preserve the tail-rejoined replacement's age"
     );
-
     let mut admitted_hashes = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
@@ -866,7 +838,6 @@ fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() 
         vec![older_message_hash, replacement_message_hash],
         "fresh replacement work must not inherit the retired occurrence's queue age"
     );
-
     let retired_route = routes.mint_via(target.clone(), hub_c);
     let retired = certified_sidecar_reply_control_fanout(
         scope,
@@ -884,7 +855,6 @@ fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() 
         Ok(None)
     );
     assert!(pending.fanouts[0].targets[0].parked);
-
     let live_after_park = routes.mint_via(target.clone(), hub_d);
     let replacement = certified_sidecar_reply_control_fanout(
         scope,
@@ -909,7 +879,6 @@ fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() 
     assert_eq!(pending.ownership_units, 1);
     assert_eq!(pending.shared_ownership_units, 0);
 }
-
 #[test]
 fn responder_control_replacement_cancels_ticket_after_index_commit() {
     let (service, _) = fixture();
@@ -928,7 +897,6 @@ fn responder_control_replacement_cancels_ticket_after_index_commit() {
     let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
         .expect("one dedicated responder-control slot");
     assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
-
     let old_post = Post {
         data: pending.fanouts[0].messages[0].clone(),
         peer_id: target.clone(),
@@ -942,7 +910,6 @@ fn responder_control_replacement_cancels_ticket_after_index_commit() {
     pending.fanouts[0].targets[0].current = Some(old_post);
     pending.fanouts[0].targets[0].ticket = Some(ticket);
     assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
-
     let replacement_route = routes.mint_via(target.clone(), hub_b);
     let replacement = certified_sidecar_reply_control_fanout(
         service.exact_output_scope(),
@@ -958,7 +925,6 @@ fn responder_control_replacement_cancels_ticket_after_index_commit() {
         .commit_stranded_responder_control_replacement(replacement)
         .expect("replacement planning must remain valid")
         .expect("the unwritable responder control must be replaced");
-
     assert_eq!(pending.fanouts.len(), 1);
     assert_eq!(pending.next_fanout_index, 0);
     assert_eq!(pending.fanouts[0].message_hashes, vec![replacement_hash]);
@@ -1004,7 +970,6 @@ fn responder_control_replacement_cancels_ticket_after_index_commit() {
         0,
         "the commit phase cannot trigger actor cancellation"
     );
-
     drop(retired);
     assert_eq!(ticket_fixture.waiter_count(), 0);
     assert_eq!(
@@ -1019,7 +984,6 @@ fn responder_control_replacement_cancels_ticket_after_index_commit() {
         "the replacement owns no alias of the retired actor ticket"
     );
 }
-
 #[test]
 fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
     let (service, _) = fixture();
@@ -1062,7 +1026,6 @@ fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
         routes.mark_reply_unwritable_while_delivery_active(&old_route),
         "the actor-returned old source becomes unwritable"
     );
-
     let route_b = routes.mint_via(target.clone(), hub_b);
     let route_c = routes.mint_via(target.clone(), hub_c);
     let mut candidate_routes = NetworkReplyRoutes::try_from_route(route_b)
@@ -1079,7 +1042,6 @@ fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
         certified_sidecar_generation_hint(&service.local_peer, &target, 286),
         candidate_routes,
     );
-
     assert_eq!(
         pending.can_enqueue(&candidate),
         Ok(true),
@@ -1109,7 +1071,6 @@ fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
         "only the unrelated non-frozen blocker consumes shared capacity"
     );
 }
-
 #[test]
 fn stranded_responder_control_fifo_collision_is_fail_atomic() {
     let (service, _) = fixture();
@@ -1148,7 +1109,6 @@ fn stranded_responder_control_fifo_collision_is_fail_atomic() {
     };
     pending.fanouts[0].targets[0].current = Some(old_post);
     assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
-
     let replacement_route = routes.mint_via(target.clone(), hub_b);
     let candidate = certified_sidecar_reply_control_fanout(
         service.exact_output_scope(),
@@ -1171,7 +1131,6 @@ fn stranded_responder_control_fifo_collision_is_fail_atomic() {
     let ownership_units_before = pending.ownership_units;
     let shared_units_before = pending.shared_ownership_units;
     let retained_hash_before = pending.fanouts[0].message_hashes.clone();
-
     assert_eq!(pending.can_enqueue(&candidate), Ok(true));
     assert_eq!(
         pending.enqueue(candidate),
@@ -1198,7 +1157,6 @@ fn stranded_responder_control_fifo_collision_is_fail_atomic() {
         "failed planning preserves the actor-returned old attempt"
     );
 }
-
 #[test]
 fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close() {
     let (service, _) = fixture();
@@ -1224,7 +1182,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
             ),
         ),
     ];
-
     for (kind, progress, later_progress) in cases {
         assert_eq!(
             progress.certified_sidecar_topology_progress_target(),
@@ -1234,7 +1191,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
             !progress.is_retryable_certified_sidecar_responder_control_fanout(),
             "{kind} must remain non-droppable"
         );
-
         let blocker = PeerId::new(KeyPair::random().public_key().clone());
         let hub = PeerId::new(KeyPair::random().public_key().clone());
         let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
@@ -1262,7 +1218,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
             Ok(None)
         );
         assert!(pending.fanouts[0].targets[0].parked);
-
         assert_eq!(
             pending.enqueue(
                 PendingExactFanout::new(
@@ -1276,7 +1231,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
             Ok(ExactFanoutOwnership::Owned)
         );
         assert_eq!(pending.shared_ownership_units, 1);
-
         assert_eq!(
             pending.can_enqueue(&progress),
             Ok(true),
@@ -1294,7 +1248,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
             pending.reservation_owner_counts.get(&progress_reservation),
             Some(&1)
         );
-
         assert_eq!(
             pending.can_enqueue(&later_progress),
             Ok(false),
@@ -1310,7 +1263,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
             pending.reservation_owner_counts.get(&progress_reservation),
             Some(&1)
         );
-
         let mut progress_admitted = false;
         assert_eq!(
             pending.drive_with(|post, ticket, route| {
@@ -1347,7 +1299,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
                 .reservation_owner_counts
                 .contains_key(&progress_reservation)
         );
-
         let retried_progress = match kind {
             "request" => certified_sidecar_request_fanout(scope, &service.local_peer, &target),
             "close" => certified_sidecar_control_fanout(
@@ -1374,7 +1325,6 @@ fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close()
         );
     }
 }
-
 #[test]
 fn non_frozen_responder_controls_remain_strictly_shared_bounded() {
     let (service, _) = fixture();
@@ -1382,7 +1332,6 @@ fn non_frozen_responder_controls_remain_strictly_shared_bounded() {
     let second = PeerId::new(KeyPair::random().public_key().clone());
     let scope = service.exact_output_scope();
     let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one shared ownership unit");
-
     let first_control = certified_sidecar_control_fanout(
         scope,
         &first,
@@ -1394,7 +1343,6 @@ fn non_frozen_responder_controls_remain_strictly_shared_bounded() {
     );
     assert_eq!(pending.ownership_units, 1);
     assert_eq!(pending.shared_ownership_units, 1);
-
     let second_control = certified_sidecar_control_fanout(
         scope,
         &second,
@@ -1410,7 +1358,6 @@ fn non_frozen_responder_controls_remain_strictly_shared_bounded() {
     assert_eq!(pending.ownership_units, 1);
     assert_eq!(pending.shared_ownership_units, 1);
 }
-
 #[test]
 fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
     let (service, _) = fixture();
@@ -1420,7 +1367,6 @@ fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
     let frozen = vec![peer_a.clone(), peer_b.clone()];
     let mut pending = PendingExactOutput::new(3, 1, 1, &frozen)
         .expect("reliable and responder-control reservations for each frozen target");
-
     for (peer, message) in [
         (
             peer_a.clone(),
@@ -1441,7 +1387,6 @@ fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
         pending.shared_ownership_units, 0,
         "one control for each frozen target consumes only its reply-control reservation"
     );
-
     for ordinal in 302..334 {
         for (peer, message) in [
             (
@@ -1482,7 +1427,6 @@ fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
         retained_targets,
         BTreeSet::from([peer_a.clone(), peer_b.clone()])
     );
-
     let mut peer_b_admitted = false;
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
@@ -1509,7 +1453,6 @@ fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
         pending.fanouts[0].retryable_certified_sidecar_responder_control_target(),
         Some(&peer_a)
     );
-
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
             assert!(ticket.is_none());
@@ -1523,7 +1466,6 @@ fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
     assert_eq!(pending.ownership_units, 0);
     assert_eq!(pending.shared_ownership_units, 0);
 }
-
 #[test]
 fn reliable_flush_projection_preserves_exact_stream_epoch() {
     let (service, _) = fixture();
@@ -1543,7 +1485,6 @@ fn reliable_flush_projection_preserves_exact_stream_epoch() {
     chunk.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
         NonZeroU64::new(11).expect("adversarial semantic sequence is non-zero"),
     );
-
     let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
     let route = routes.mint(requester);
     let (_control, _ack, admission) = certified_sidecar_flush_fixture(&chunk, &route);
@@ -1557,7 +1498,6 @@ fn reliable_flush_projection_preserves_exact_stream_epoch() {
         2,
     )
     .expect("project an exact successful sidecar flush");
-
     assert_eq!(projection.service_generation, service_generation.get());
     assert_eq!(projection.stream_epoch, stream_epoch.get());
     assert_eq!(projection.semantic_sequence, 11);
@@ -1603,7 +1543,6 @@ fn reliable_flush_projection_preserves_exact_stream_epoch() {
         "the refinement kernel must reject an erased semantic occurrence"
     );
 }
-
 #[test]
 fn certified_sidecar_transfer_identity_binds_stream_epoch() {
     let (service, _) = fixture();
@@ -1630,7 +1569,6 @@ fn certified_sidecar_transfer_identity_binds_stream_epoch() {
     successor_request.stream_epoch = successor_epoch;
     let mut successor_chunk = chunk.clone();
     successor_chunk.stream_epoch = successor_epoch;
-
     assert_ne!(
         CertifiedSidecarTransferIdentity::from_request(&request),
         CertifiedSidecarTransferIdentity::from_request(&successor_request)
@@ -1662,7 +1600,6 @@ fn certified_sidecar_transfer_identity_binds_stream_epoch() {
         CertifiedSidecarTransferIdentity::from_chunk(&successor_generation_chunk)
     );
 }
-
 #[test]
 fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
     let (service, _) = fixture();
@@ -1682,7 +1619,6 @@ fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
         )
         .expect("successor stream epoch is non-zero"),
     );
-
     let sidecar_fanout = |chunk: &CertifiedMergeSidecarChunkV1| {
         let rollover_claim = ExactOutputRolloverClaim::CertifiedSidecarChunk {
             scope: service.exact_output_scope(),
@@ -1702,7 +1638,6 @@ fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
         .expect("valid epoch-bound sidecar rollover claim")
         .expect("one exact epoch-bound sidecar fanout")
     };
-
     let mut pending =
         PendingExactOutput::new(4, 1, 1, &[]).expect("two fanouts and admissions fit");
     for chunk in [&old_chunk, &successor_chunk] {
@@ -1711,7 +1646,6 @@ fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
             Ok(ExactFanoutOwnership::Owned)
         );
     }
-
     let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
     let route = routes.mint(requester.clone());
     for chunk in [&old_chunk, &successor_chunk] {
@@ -1720,7 +1654,6 @@ fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
     }
     assert_eq!(pending.fanouts.len(), 2);
     assert_eq!(pending.admitted_sidecar_chunks.len(), 2);
-
     assert_eq!(
         pending
             .close_certified_sidecar_prefix(&CertifiedMergeSidecarClosedPrefix {
@@ -1756,7 +1689,6 @@ fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
         successor_chunk.stream_epoch
     );
 }
-
 #[test]
 fn generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences() {
     let (service, _) = fixture();
@@ -1816,7 +1748,6 @@ fn generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences() 
         .expect("valid generation-bound sidecar rollover claim")
         .expect("one exact generation-bound sidecar fanout")
     };
-
     let mut pending =
         PendingExactOutput::new(occurrences.len(), 1, 1, &[]).expect("bounded occurrences fit");
     let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
@@ -1831,7 +1762,6 @@ fn generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences() 
     }
     assert_eq!(pending.fanouts.len(), occurrences.len());
     assert_eq!(pending.admitted_sidecar_chunks.len(), occurrences.len());
-
     assert_eq!(
         pending
             .close_certified_sidecar_prefix(&CertifiedMergeSidecarClosedPrefix {
@@ -1856,7 +1786,6 @@ fn generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences() 
     assert_eq!(retained.stream_epoch, epoch(3));
     assert_eq!(retained.semantic_sequence.get(), 5);
 }
-
 #[test]
 fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
     let (service, _) = fixture();
@@ -1873,7 +1802,6 @@ fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
         .expect("retain final QC fanout");
     assert_eq!(pending.source_fifo_owners.len(), 1);
     assert_eq!(pending.fanouts[0].current_source_targets.len(), 1);
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             assert!(ticket.is_none());
@@ -1899,7 +1827,6 @@ fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
         panic!("retained Sumeragi output must be a lane CommitQC");
     };
     assert_eq!(qc.body.phase, CertPhase::Commit);
-
     let mut admitted = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
@@ -1913,7 +1840,6 @@ fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
     assert!(!pending.is_pending());
     assert!(pending.source_fifo_owners.is_empty());
 }
-
 #[test]
 fn actor_backpressure_retains_complete_merge_share_fanout() {
     let (service, _) = fixture();
@@ -1927,7 +1853,6 @@ fn actor_backpressure_retains_complete_merge_share_fanout() {
             PendingExactFanout::new(vec![message], peers.clone()).expect("non-empty merge fanout"),
         )
         .expect("retain merge fanout");
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             assert!(ticket.is_none());
@@ -1949,7 +1874,6 @@ fn actor_backpressure_retains_complete_merge_share_fanout() {
         panic!("retained output must be the merge share");
     };
     assert_eq!(signature.message_digest, digest);
-
     let mut admitted = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
@@ -1966,7 +1890,6 @@ fn actor_backpressure_retains_complete_merge_share_fanout() {
     assert_eq!(admitted, peers);
     assert!(!pending.is_pending());
 }
-
 #[test]
 fn same_tenure_updates_and_reconnect_preserve_current_item() {
     let (service, _) = fixture();
@@ -2005,7 +1928,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
     predecessor
         .rebuild_current_source_targets()
         .expect("manual predecessor cursor has a valid local FIFO index");
-
     let mut pending = PendingExactOutput::new(1, 2, 1, &[]).expect("one-response corridor");
     assert_eq!(
         pending.enqueue(predecessor).expect("predecessor fits"),
@@ -2047,7 +1969,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
             .map(|post| HashOf::new(&post.data)),
         Some(HashOf::new(&returned_second))
     );
-
     let later_delivery = routes
         .redeliver(&prior_route)
         .expect("same-tenure later delivery");
@@ -2101,7 +2022,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
         &retained.route,
         ExactTargetRoute::Reply(route) if route.same_delivery(&later_delivery)
     ));
-
     assert!(routes.retire(&prior_route));
     assert_eq!(
         pending.drive_with(|_post, _ticket, _route| {
@@ -2163,7 +2083,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
         Some(&predecessor_fifo_id),
         "reconnect must retain the authenticated source's FIFO age"
     );
-
     let mut admitted = Vec::new();
     let mut admit = |post: Post<NetworkMessage>,
                      ticket: Option<NetworkActorAdmissionTicket>,
@@ -2181,7 +2100,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
     assert_eq!(pending.ownership_units, 0);
     assert_eq!(pending.shared_ownership_units, 0);
     assert!(pending.source_fifo_owners.is_empty());
-
     let replay_bulk = ProductionV2Services::preencode_v2_network_message(
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
             manifest_hash(b"source reconnect bulk"),
@@ -2215,7 +2133,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
     replay_predecessor
         .rebuild_current_source_targets()
         .expect("mixed-class predecessor cursor has a valid local FIFO index");
-
     let mut replay_pending = PendingExactOutput::new(1, 2, 1, std::slice::from_ref(&peer))
         .expect("one shared replay unit plus frozen target units");
     assert_eq!(
@@ -2278,7 +2195,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
         &replay_target.route,
         ExactTargetRoute::Reply(route) if route.same_tenure(&replay_reconnected_route)
     ));
-
     assert!(replay_routes.retire(&blocker_route));
     let blocker_index = replay_pending
         .fanouts
@@ -2324,7 +2240,6 @@ fn same_tenure_updates_and_reconnect_preserve_current_item() {
     ));
     assert_eq!(replay_pending.shared_ownership_units, 1);
 }
-
 #[test]
 fn delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route() {
     let (service, _) = fixture();
@@ -2341,7 +2256,6 @@ fn delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route() {
         delayed_old_route.source_update_from(&current_route),
         Err(NetworkReplyRouteError::Stale)
     );
-
     let fanout = |route: &NetworkReplyRoute| {
         PendingExactFanout::new_with_reply_routes(
             vec![message.clone()],
@@ -2357,7 +2271,6 @@ fn delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route() {
     );
     let ownership_before = pending.reservation_owner_counts.clone();
     let source_fifo_before = pending.source_fifo_owners.clone();
-
     let error = pending
         .enqueue_owned_reply_transfer(fanout(&delayed_old_route))
         .expect_err("superseded tenure cannot rebind the worker target");

@@ -5,7 +5,6 @@ struct HistoricalAutonomousRecoveryInventory {
     by_recovery_id: BTreeMap<Hash, usize>,
     by_group: BTreeMap<LaneQueueReservationGroupIdentityV1, usize>,
 }
-
 impl HistoricalAutonomousRecoveryInventory {
     fn read(kura: &Kura) -> Result<Self, V2ReservationLifecycleError> {
         let records = kura.historical_autonomous_lane_recovery_records_bounded(
@@ -31,7 +30,6 @@ impl HistoricalAutonomousRecoveryInventory {
             by_group,
         })
     }
-
     fn record_for_group(
         &self,
         group: &LaneQueueReservationReconciliationGroupV1,
@@ -52,7 +50,6 @@ impl HistoricalAutonomousRecoveryInventory {
         }
         Ok(Some(record))
     }
-
     fn record_for_install(
         &self,
         install: &HistoricalAutonomousReservationInstallV1,
@@ -73,7 +70,6 @@ impl HistoricalAutonomousRecoveryInventory {
         }
         Ok(Some(record))
     }
-
     fn exact_record(
         &self,
         expected: &HistoricalAutonomousLaneRecoveryRecordV1,
@@ -95,7 +91,6 @@ impl HistoricalAutonomousRecoveryInventory {
         Ok(Some(record))
     }
 }
-
 fn historical_autonomous_install_is_durable(
     kura: &Kura,
     inventory: &HistoricalAutonomousRecoveryInventory,
@@ -107,7 +102,6 @@ fn historical_autonomous_install_is_durable(
     kura.validate_historical_autonomous_lane_recovery_record_dependencies(record)?;
     Ok(true)
 }
-
 /// Rebuild the complete State-aligned authority of one historical autonomous
 /// installation. The carrier body is required only at the one-time installer
 /// boundary; immutable record validation and hydration deliberately use the
@@ -151,7 +145,6 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             "installation identity, protocol context, or signed wire commitment is invalid",
         ));
     }
-
     let state_height = u64::try_from(state.committed_height())?;
     if state_height < height
         || state.committed_block_hash_at_height(height) != Some(input.canonical_body.block_hash)
@@ -197,7 +190,6 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             "retained header, parent, finality, State context, or durable wire length conflicts",
         ));
     }
-
     let network_id = input.historical_context.network_id;
     let expected_epoch = input.historical_context.epoch;
     if retained_record.is_none() {
@@ -249,7 +241,6 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             "payload, route/incarnation, carrier hint, or predecessor authority conflicts",
         ));
     }
-
     let mut expected_validators = if retained_record.is_some() {
         descriptor.validator_set.clone()
     } else {
@@ -317,7 +308,6 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             "historical committee, quorum, QC domain, or deterministic author conflicts",
         ));
     }
-
     if input.reservation_group.ordered_keys.is_empty()
         || input.reservation_group.ordered_keys.len()
             > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
@@ -366,7 +356,6 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             "historical FIFO reservation order does not cover every executable entrypoint",
         ));
     }
-
     let validator_pops = if let Some(record) = retained_record {
         record.validator_pops.clone()
     } else {
@@ -411,7 +400,6 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             "historical validator PoPs are missing, misordered, oversized, or invalid",
         ));
     }
-
     if require_canonical_carrier_body {
         let canonical = canonical_autonomous_carrier_disposition(
             state,
@@ -438,13 +426,11 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             }
         }
     }
-
     Ok(HistoricalAutonomousLaneRecoveryRecordV1::from_install(
         input,
         validator_pops,
     ))
 }
-
 /// Read-only all-authority preflight used before the first batch mutation.
 pub(crate) fn preflight_historical_autonomous_lane_recovery(
     state: &State,
@@ -453,7 +439,6 @@ pub(crate) fn preflight_historical_autonomous_lane_recovery(
 ) -> Result<HistoricalAutonomousLaneRecoveryRecordV1, V2ReservationLifecycleError> {
     preflight_historical_autonomous_lane_recovery_inner(state, kura, input, true, None)
 }
-
 /// Validate a durable record for startup planning and bounded hydration without
 /// consulting the prunable canonical block body or mutable current catalog.
 /// The retained finality context authenticates the shared roster; independent
@@ -480,7 +465,6 @@ pub(crate) fn validate_historical_autonomous_lane_recovery_record(
     }
     Ok(())
 }
-
 /// Persist one State-preflighted runner batch through Kura's single bounded
 /// inventory/preflight pass and scan-free per-record durable writes.
 pub(crate) fn persist_preflighted_historical_autonomous_lane_recoveries(
@@ -500,7 +484,6 @@ pub(crate) fn persist_preflighted_historical_autonomous_lane_recoveries(
         })
         .collect())
 }
-
 /// Revalidate one complete installed runner batch with exactly one bounded
 /// inventory scan, one recovery-ID index, and direct immutable dependency
 /// checks for every requested record.

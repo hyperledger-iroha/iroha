@@ -1,9 +1,6 @@
 //! Process-stream adapter for the Cargo-style Musubi V1 command shell.
-
-use std::io;
-
 use crate::{command, output::ErrorCode};
-
+use std::io;
 /// Parse process arguments, execute one command, and write its routed output.
 ///
 /// The returned value is the stable process exit status. The library never

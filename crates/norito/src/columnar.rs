@@ -27,36 +27,30 @@
 //!   honor the active decode/layout flags. Lengths follow `COMPACT_LEN` (varint
 //!   when enabled, fixed u64 otherwise).
 //! - Tag values are an internal detail: `0x00` = AoS, `0x01` = columnar.
-
 // Shared AoS helpers for ad-hoc small-row layouts
 use crate::{
     aos,
     core::{ByteSink, Error},
 };
-
 #[inline]
 fn add_offset(base: usize, inc: usize) -> Result<usize, Error> {
     base.checked_add(inc).ok_or(Error::LengthMismatch)
 }
-
 #[inline]
 fn mul_checked(a: usize, b: usize) -> Result<usize, Error> {
     a.checked_mul(b).ok_or(Error::LengthMismatch)
 }
-
 #[inline]
 fn slice_range(bytes: &[u8], off: usize, len: usize) -> Result<&[u8], Error> {
     let end = add_offset(off, len)?;
     bytes.get(off..end).ok_or(Error::LengthMismatch)
 }
-
 #[inline]
 fn take_bytes<'a>(bytes: &'a [u8], off: &mut usize, len: usize) -> Result<&'a [u8], Error> {
     let slice = slice_range(bytes, *off, len)?;
     *off = add_offset(*off, len)?;
     Ok(slice)
 }
-
 #[inline]
 fn read_row_count_prefix(bytes: &[u8]) -> Result<usize, Error> {
     let raw = bytes.get(..4).ok_or(Error::LengthMismatch)?;
@@ -73,7 +67,6 @@ fn read_row_count_prefix(bytes: &[u8]) -> Result<usize, Error> {
     crate::core::enforce_decode_sequence_length(u64::from(count))?;
     Ok(count as usize)
 }
-
 #[inline]
 fn read_aos_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> {
     let tail = bytes.get(*off..).ok_or(Error::LengthMismatch)?;
@@ -81,7 +74,6 @@ fn read_aos_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> {
     *off = add_offset(*off, used)?;
     Ok(len)
 }
-
 #[inline]
 fn read_aos_sequence_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> {
     let tail = bytes.get(*off..).ok_or(Error::LengthMismatch)?;
@@ -89,7 +81,6 @@ fn read_aos_sequence_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> 
     *off = add_offset(*off, used)?;
     Ok(len)
 }
-
 #[inline]
 fn align_offset_checked(bytes: &[u8], off: &mut usize, align: usize) -> Result<(), Error> {
     debug_assert!(align.is_power_of_two());
@@ -106,7 +97,6 @@ fn align_offset_checked(bytes: &[u8], off: &mut usize, align: usize) -> Result<(
     }
     Ok(())
 }
-
 #[inline]
 fn validate_bitset_padding(bits: &[u8], n: usize) -> Result<(), Error> {
     let rem = n & 7;
@@ -120,7 +110,6 @@ fn validate_bitset_padding(bits: &[u8], n: usize) -> Result<(), Error> {
     }
     Ok(())
 }
-
 #[inline]
 fn ensure_no_trailing(bytes: &[u8], off: usize) -> Result<(), Error> {
     if off == bytes.len() {
@@ -129,7 +118,6 @@ fn ensure_no_trailing(bytes: &[u8], off: usize) -> Result<(), Error> {
         Err(Error::LengthMismatch)
     }
 }
-
 #[inline]
 fn validate_u32_offsets(offs_bytes: &[u8], count: usize) -> Result<usize, Error> {
     let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
@@ -153,7 +141,6 @@ fn validate_u32_offsets(offs_bytes: &[u8], count: usize) -> Result<usize, Error>
     )?;
     Ok(prev)
 }
-
 fn decode_ids_column<'a>(
     bytes: &'a [u8],
     off: &mut usize,
@@ -202,14 +189,12 @@ fn decode_ids_column<'a>(
         }
     }
 }
-
 /// Descriptor for `(u64, str, bool)` columns.
 const DESC_U64_STR_BOOL: u8 = 0x13;
 /// Descriptor for `(u64, dict(str), bool)` columns (dictionary-coded strings).
 const DESC_U64_DICT_STR_BOOL: u8 = 0x93; // high bit marks dictionary
 /// Descriptor for `(u64 delta+zigzag, str, bool)` columns.
 const DESC_U64_DELTA_STR_BOOL: u8 = 0x53;
-
 /// Descriptor for `(u64, Option<str>, bool)` columns.
 const DESC_U64_OPTSTR_BOOL: u8 = 0x1B;
 /// Descriptor for `(u64 delta+zigzag, Option<str>, bool)` columns.
@@ -218,7 +203,6 @@ const DESC_U64_DELTA_OPTSTR_BOOL: u8 = 0x5B;
 const DESC_U64_OPTU32_BOOL: u8 = 0x1C;
 /// Descriptor for `(u64 delta+zigzag, Option<u32>, bool)` columns.
 const DESC_U64_DELTA_OPTU32_BOOL: u8 = 0x5C;
-
 /// Descriptor for `(u64, enum(Name(String)|Code(u32)), bool)` columns (offsets-based names, no code delta).
 const DESC_U64_ENUM_BOOL: u8 = 0x61; // base 0x60 + 0x01
 /// Variant tag values for the enum payload.
@@ -238,13 +222,11 @@ const DESC_U64_DELTA_ENUM_BOOL_DICT: u8 = 0xE3;
 const DESC_U64_ENUM_BOOL_DICT_CODEDELTA: u8 = 0xE5;
 /// Descriptor for `(u64 delta+zigzag, enum(Name|Code), bool)` with dictionary-coded names and delta-coded Code(u32).
 const DESC_U64_DELTA_ENUM_BOOL_DICT_CODEDELTA: u8 = 0xE7;
-
 // ===== Additional shapes =====
 /// Descriptor for `(u64, bytes, bool)` columns (offsets+blob; no dict).
 const DESC_U64_BYTES_BOOL: u8 = 0x14;
 /// Descriptor for `(u64 delta+zigzag, bytes, bool)` columns.
 const DESC_U64_DELTA_BYTES_BOOL: u8 = 0x54;
-
 /// Descriptor for `(u64, u32, bool)` columns (fixed slices).
 const DESC_U64_U32_BOOL: u8 = 0x21;
 /// Descriptor for `(u64 delta+zigzag, u32, bool)` columns.
@@ -253,7 +235,6 @@ const DESC_U64_DELTA_U32_BOOL: u8 = 0x23;
 const DESC_U64_U32DELTA_BOOL: u8 = 0x25;
 /// Descriptor for `(u64 delta+zigzag, u32 delta+zigzag, bool)` columns.
 const DESC_U64_DELTA_U32DELTA_BOOL: u8 = 0x27;
-
 // ===== New combo shapes: (u64, str, u32, bool) and (u64, bytes, u32, bool) =====
 // Encoding bits policy for these shapes:
 // - Base descriptors: 0x33 = (u64, str, u32, bool), 0x34 = (u64, bytes, u32, bool)
@@ -269,12 +250,10 @@ const DESC_U64_DICT_STR_U32_BOOL: u8 = 0xB3; // +0x80
 const DESC_U64_DELTA_DICT_STR_U32_BOOL: u8 = 0xF3; // +0x80 +0x40
 const DESC_U64_DICT_STR_U32DELTA_BOOL: u8 = 0xB7; // +0x80 +0x04
 const DESC_U64_DELTA_DICT_STR_U32DELTA_BOOL: u8 = 0xF7; // +0x80 +0x40 +0x04
-
 const DESC_U64_BYTES_U32_BOOL: u8 = 0x34;
 const DESC_U64_DELTA_BYTES_U32_BOOL: u8 = 0x74; // +0x40
 const DESC_U64_BYTES_U32DELTA_BOOL: u8 = 0x38; // +0x04
 const DESC_U64_DELTA_BYTES_U32DELTA_BOOL: u8 = 0x78; // +0x40 +0x04
-
 fn pad_to(buf: &mut Vec<u8>, align: usize) {
     debug_assert!(align.is_power_of_two());
     let mis = buf.len() & (align - 1);
@@ -283,7 +262,6 @@ fn pad_to(buf: &mut Vec<u8>, align: usize) {
         buf.extend(std::iter::repeat_n(0u8, pad));
     }
 }
-
 /// Policy overrides for combo encoders (`(u64, &str, u32, bool)` rows).
 ///
 /// By default the combo helpers rely on heuristics to decide whether to use dictionaries
@@ -299,7 +277,6 @@ pub struct ComboPolicy {
     /// Force u32-delta encoding (`Some(true)`), disable (`Some(false)`) or defer (`None`).
     pub force_u32_delta: Option<bool>,
 }
-
 impl ComboPolicy {
     /// Create a new policy with the given dictionary override.
     #[must_use]
@@ -307,14 +284,12 @@ impl ComboPolicy {
         self.force_dictionary = Some(enabled);
         self
     }
-
     /// Create a new policy with the given ID-delta override.
     #[must_use]
     pub fn with_id_delta(mut self, enabled: bool) -> Self {
         self.force_id_delta = Some(enabled);
         self
     }
-
     /// Create a new policy with the given u32-delta override.
     #[must_use]
     pub fn with_u32_delta(mut self, enabled: bool) -> Self {
@@ -322,7 +297,6 @@ impl ComboPolicy {
         self
     }
 }
-
 /// Encode a Norito Column Block for rows shaped as `(u64, &str, bool)`.
 ///
 /// - Rows are borrowed so callers can pass `&String` cheaply.
@@ -375,7 +349,6 @@ pub fn encode_ncb_u64_str_bool(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 /// Borrowed view over an NCB `(u64, str, bool)` block.
 enum NamesRep<'a> {
     Offsets {
@@ -391,19 +364,16 @@ enum NamesRep<'a> {
         codes_bytes: &'a [u8],
     },
 }
-
 enum IdsRep<'a> {
     Slice(&'a [u64]),
     Rebuilt(Vec<u64>),
 }
-
 pub struct NcbU64StrBoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
     names: NamesRep<'a>,
     bits: &'a [u8],
 }
-
 impl<'a> NcbU64StrBoolView<'a> {
     /// Number of rows.
     pub fn len(&self) -> usize {
@@ -471,7 +441,6 @@ impl<'a> NcbU64StrBoolView<'a> {
         }
     }
 }
-
 /// Parse a byte slice into an NCB `(u64, str, bool)` view.
 pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Error> {
     if bytes.len() < 5 {
@@ -549,14 +518,12 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
     } else {
         return Err(Error::Message("invalid NCB descriptor".into()));
     };
-
     // Column 3: bitset ceil(n/8)
     let bit_bytes = n.div_ceil(8);
     let bits = slice_range(bytes, off, bit_bytes)?;
     validate_bitset_padding(bits, n)?;
     off = add_offset(off, bit_bytes)?;
     ensure_no_trailing(bytes, off)?;
-
     Ok(NcbU64StrBoolView {
         n,
         ids,
@@ -564,7 +531,6 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
         bits,
     })
 }
-
 /// Convenience to materialize rows from the view.
 pub fn materialize_ncb(view: NcbU64StrBoolView<'_>) -> Result<Vec<(u64, String, bool)>, Error> {
     let mut out = Vec::with_capacity(view.len());
@@ -576,7 +542,6 @@ pub fn materialize_ncb(view: NcbU64StrBoolView<'_>) -> Result<Vec<(u64, String, 
     }
     Ok(out)
 }
-
 /// Simple heuristic to pick columnar layout over AoS based on row count.
 pub fn should_use_columnar(n: usize) -> bool {
     if n == 0 {
@@ -589,7 +554,6 @@ pub fn should_use_columnar(n: usize) -> bool {
     }
     true
 }
-
 /// Encode rows using either AoS (Vec) or NCB based on a threshold.
 ///
 /// Returns a bare payload suitable for hashing or embedding into a Norito
@@ -602,29 +566,23 @@ pub fn encode_rows_u64_str_bool_auto(rows: &[(u64, &str, bool)]) -> (u8, Vec<u8>
         (0u8, aos::encode_rows_u64_str_bool(rows))
     }
 }
-
 // Bring Norito traits into scope for callers (may be unused in AoS ad-hoc paths).
 #[allow(unused_imports)]
 use crate::NoritoSerialize as _;
-
 /// Tag used to mark AoS encoding inside adaptive payloads.
 pub const ADAPTIVE_TAG_AOS: u8 = 0u8;
 /// Tag used to mark Columnar (NCB) encoding inside adaptive payloads.
 pub const ADAPTIVE_TAG_NCB: u8 = 1u8;
-
 /// Tag used to mark AoS encoding for the enum-shaped adaptive payloads.
 pub const ADAPTIVE_ENUM_TAG_AOS: u8 = 0u8;
 /// Tag used to mark Columnar (NCB) encoding for the enum-shaped adaptive payloads.
 pub const ADAPTIVE_ENUM_TAG_NCB: u8 = 1u8;
-
 // Re-exported AoS header helpers are used throughout this file
 use crate::aos::read_len_and_ver as aos_read_len_and_ver;
-
 // Lightweight, in-crate telemetry for adaptive AoS vs NCB selection.
 // Counts selections and accumulated bytes saved by the two-pass probe.
 mod telemetry {
     use std::sync::atomic::{AtomicU64, Ordering};
-
     static AOS_SELECTED: AtomicU64 = AtomicU64::new(0);
     static NCB_SELECTED: AtomicU64 = AtomicU64::new(0);
     static PROBES: AtomicU64 = AtomicU64::new(0);
@@ -637,7 +595,6 @@ mod telemetry {
     static AOS_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
     #[cfg(feature = "adaptive-telemetry")]
     static NCB_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
-
     #[derive(Clone, Copy, Debug)]
     pub struct AdaptiveMetricsSnapshot {
         pub aos_selected: u64,
@@ -653,7 +610,6 @@ mod telemetry {
         #[cfg(feature = "adaptive-telemetry")]
         pub ncb_time_ns_total: u64,
     }
-
     #[inline]
     pub fn record_two_pass(tag: u8, aos_len: usize, ncb_len: usize) {
         PROBES.fetch_add(1, Ordering::Relaxed);
@@ -674,14 +630,12 @@ mod telemetry {
         let saved = max.saturating_sub(min) as u64;
         BYTES_SAVED_TOTAL.fetch_add(saved, Ordering::Relaxed);
     }
-
     #[inline]
     #[cfg(feature = "adaptive-telemetry")]
     pub fn record_two_pass_times(aos_ns: u64, ncb_ns: u64) {
         AOS_TIME_NS_TOTAL.fetch_add(aos_ns, Ordering::Relaxed);
         NCB_TIME_NS_TOTAL.fetch_add(ncb_ns, Ordering::Relaxed);
     }
-
     #[inline]
     pub fn record_selection_only(tag: u8) {
         match tag {
@@ -694,19 +648,16 @@ mod telemetry {
             _ => {}
         }
     }
-
     #[inline]
     pub fn record_cache_build(rows: usize) {
         CACHE_BUILDS.fetch_add(1, Ordering::Relaxed);
         CACHE_ROWS_TOTAL.fetch_add(rows as u64, Ordering::Relaxed);
     }
-
     #[inline]
     pub fn record_cache_reject(rows: usize) {
         CACHE_REJECTS.fetch_add(1, Ordering::Relaxed);
         CACHE_REJECT_ROWS_TOTAL.fetch_add(rows as u64, Ordering::Relaxed);
     }
-
     pub fn snapshot() -> AdaptiveMetricsSnapshot {
         AdaptiveMetricsSnapshot {
             aos_selected: AOS_SELECTED.load(Ordering::Relaxed),
@@ -723,7 +674,6 @@ mod telemetry {
             ncb_time_ns_total: NCB_TIME_NS_TOTAL.load(Ordering::Relaxed),
         }
     }
-
     #[allow(dead_code)]
     pub fn reset() {
         AOS_SELECTED.store(0, Ordering::Relaxed);
@@ -740,11 +690,9 @@ mod telemetry {
             NCB_TIME_NS_TOTAL.store(0, Ordering::Relaxed);
         }
     }
-
     // Re-export snapshot type at module root for callers
     pub(crate) use AdaptiveMetricsSnapshot as Snapshot;
 }
-
 // Simple helper to log two-pass decisions when requested.
 #[cfg(all(feature = "adaptive-telemetry-log", feature = "adaptive-telemetry"))]
 #[inline]
@@ -761,7 +709,6 @@ fn log_two_pass(kind: &str, tag: u8, aos_len: usize, ncb_len: usize, aos_ns: u64
         );
     }
 }
-
 #[cfg(all(
     feature = "adaptive-telemetry-log",
     not(feature = "adaptive-telemetry")
@@ -780,18 +727,15 @@ fn log_two_pass(kind: &str, tag: u8, aos_len: usize, ncb_len: usize, _aos_ns: u6
         );
     }
 }
-
 /// Return a snapshot of adaptive AoS/NCB selection counters.
 pub fn adaptive_metrics_snapshot() -> telemetry::Snapshot {
     telemetry::snapshot()
 }
-
 /// Reset adaptive selection counters (intended for tests/benches).
 #[allow(dead_code)]
 pub fn adaptive_metrics_reset() {
     telemetry::reset()
 }
-
 /// JSON: export adaptive selection counters as a compact JSON value.
 #[cfg(feature = "json")]
 pub fn adaptive_metrics_json_value() -> crate::json::Value {
@@ -839,14 +783,12 @@ pub fn adaptive_metrics_json_value() -> crate::json::Value {
     }
     crate::json::Value::Object(map)
 }
-
 /// JSON: export adaptive selection counters as a compact JSON string.
 #[cfg(feature = "json")]
 pub fn adaptive_metrics_json_string() -> String {
     let v = adaptive_metrics_json_value();
     crate::json::to_string(&v).unwrap_or_else(|_| String::from("{}"))
 }
-
 /// JSON: compute fieldwise delta between two columnar telemetry JSON maps.
 #[cfg(feature = "json")]
 pub fn adaptive_metrics_delta_json(
@@ -881,7 +823,6 @@ pub fn adaptive_metrics_delta_json(
     }
     Value::Object(out)
 }
-
 /// Encode rows using an adaptive payload that embeds a 1-byte tag followed by
 /// the chosen layout bytes. Tag values are internal and may change; callers
 /// should treat this as an opaque Norito payload.
@@ -894,7 +835,6 @@ pub fn encode_rows_u64_str_bool_adaptive(rows: &[(u64, &str, bool)]) -> Vec<u8> 
         let aos = aos::encode_rows_u64_str_bool(rows);
         #[cfg(feature = "adaptive-telemetry")]
         let __aos_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t1 = std::time::Instant::now();
         let ncb = encode_ncb_u64_str_bool(rows);
@@ -929,7 +869,6 @@ pub fn encode_rows_u64_str_bool_adaptive(rows: &[(u64, &str, bool)]) -> Vec<u8> 
     out.append(&mut payload);
     out
 }
-
 /// Decode an adaptive payload produced by
 /// `encode_rows_u64_str_bool_adaptive(rows)` back into owned rows.
 pub fn decode_rows_u64_str_bool_adaptive(bytes: &[u8]) -> Result<Vec<(u64, String, bool)>, Error> {
@@ -950,13 +889,9 @@ pub fn decode_rows_u64_str_bool_adaptive(bytes: &[u8]) -> Result<Vec<(u64, Strin
         )),
     }
 }
-
 // encode_aos_u64_str_bool/decode moved to `crate::aos`
-
 // Removed unused helper to satisfy clippy's dead_code lint.
-
 // decode_aos_u64_bytes_bool moved to `crate::aos`
-
 /// Encode `(u64, Option<&str>, bool)` rows into an NCB payload (auto delta).
 pub fn encode_ncb_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8> {
     let n = rows.len();
@@ -972,7 +907,6 @@ pub fn encode_ncb_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8>
     } else {
         DESC_U64_OPTSTR_BOOL
     });
-
     sink.align_to(8);
     if use_delta && n > 0 {
         sink.write_u64_le(rows[0].0);
@@ -992,7 +926,6 @@ pub fn encode_ncb_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8>
             sink.write_u64_le(*id);
         }
     }
-
     sink.write_bytes(&col_bytes);
     let mut bits = vec![0u8; bit_bytes];
     for (i, &(_, _, b)) in rows.iter().enumerate() {
@@ -1003,7 +936,6 @@ pub fn encode_ncb_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8>
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 fn should_use_id_delta_opt(rows: &[(u64, Option<&str>, bool)]) -> bool {
     if rows.len() < 2 {
         return false;
@@ -1024,14 +956,12 @@ fn should_use_id_delta_opt(rows: &[(u64, Option<&str>, bool)]) -> bool {
     }
     true
 }
-
 pub struct NcbU64OptStrBoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
     opt: OptStrColView<'a>,
     bits: &'a [u8],
 }
-
 impl<'a> NcbU64OptStrBoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -1054,7 +984,6 @@ impl<'a> NcbU64OptStrBoolView<'a> {
         (self.bits[byte] >> bit) & 1 == 1
     }
 }
-
 pub fn view_ncb_u64_optstr_bool(bytes: &[u8]) -> Result<NcbU64OptStrBoolView<'_>, Error> {
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
@@ -1116,7 +1045,6 @@ pub fn view_ncb_u64_optstr_bool(bytes: &[u8]) -> Result<NcbU64OptStrBoolView<'_>
     ensure_no_trailing(bytes, off)?;
     Ok(NcbU64OptStrBoolView { n, ids, opt, bits })
 }
-
 /// Encode `(u64, Option<u32>, bool)` rows into an NCB payload (auto delta).
 pub fn encode_ncb_u64_optu32_bool(rows: &[(u64, Option<u32>, bool)]) -> Vec<u8> {
     let n = rows.len();
@@ -1161,7 +1089,6 @@ pub fn encode_ncb_u64_optu32_bool(rows: &[(u64, Option<u32>, bool)]) -> Vec<u8> 
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 fn should_use_id_delta_optu32(rows: &[(u64, Option<u32>, bool)]) -> bool {
     if rows.len() < 2 {
         return false;
@@ -1182,14 +1109,12 @@ fn should_use_id_delta_optu32(rows: &[(u64, Option<u32>, bool)]) -> bool {
     }
     true
 }
-
 pub struct NcbU64OptU32BoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
     opt: OptU32ColView<'a>,
     bits: &'a [u8],
 }
-
 impl<'a> NcbU64OptU32BoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -1212,7 +1137,6 @@ impl<'a> NcbU64OptU32BoolView<'a> {
         (self.bits[byte] >> bit) & 1 == 1
     }
 }
-
 pub fn view_ncb_u64_optu32_bool(bytes: &[u8]) -> Result<NcbU64OptU32BoolView<'_>, Error> {
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
@@ -1268,7 +1192,6 @@ pub fn view_ncb_u64_optu32_bool(bytes: &[u8]) -> Result<NcbU64OptU32BoolView<'_>
     ensure_no_trailing(bytes, off)?;
     Ok(NcbU64OptU32BoolView { n, ids, opt, bits })
 }
-
 /// Adaptive AoS/NCB for `(u64, Option<&str>, bool)`
 pub fn encode_rows_u64_optstr_bool_adaptive(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8> {
     let small_n = small_smart_n();
@@ -1278,7 +1201,6 @@ pub fn encode_rows_u64_optstr_bool_adaptive(rows: &[(u64, Option<&str>, bool)]) 
         let mut ncb = encode_ncb_u64_optstr_bool(rows);
         #[cfg(feature = "adaptive-telemetry")]
         let __ncb_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t1 = std::time::Instant::now();
         let aos = aos::encode_rows_u64_optstr_bool(rows);
@@ -1322,7 +1244,6 @@ pub fn encode_rows_u64_optstr_bool_adaptive(rows: &[(u64, Option<&str>, bool)]) 
         out
     }
 }
-
 pub fn decode_rows_u64_optstr_bool_adaptive(
     bytes: &[u8],
 ) -> Result<Vec<(u64, Option<String>, bool)>, Error> {
@@ -1350,7 +1271,6 @@ pub fn decode_rows_u64_optstr_bool_adaptive(
         )),
     }
 }
-
 /// Adaptive AoS/NCB for `(u64, Option<u32>, bool)`
 pub fn encode_rows_u64_optu32_bool_adaptive(rows: &[(u64, Option<u32>, bool)]) -> Vec<u8> {
     let small_n = small_smart_n();
@@ -1360,7 +1280,6 @@ pub fn encode_rows_u64_optu32_bool_adaptive(rows: &[(u64, Option<u32>, bool)]) -
         let mut ncb = encode_ncb_u64_optu32_bool(rows);
         #[cfg(feature = "adaptive-telemetry")]
         let __ncb_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t1 = std::time::Instant::now();
         let aos = aos::encode_rows_u64_optu32_bool(rows);
@@ -1404,7 +1323,6 @@ pub fn encode_rows_u64_optu32_bool_adaptive(rows: &[(u64, Option<u32>, bool)]) -
         out
     }
 }
-
 pub fn decode_rows_u64_optu32_bool_adaptive(
     bytes: &[u8],
 ) -> Result<Vec<(u64, Option<u32>, bool)>, Error> {
@@ -1432,9 +1350,7 @@ pub fn decode_rows_u64_optu32_bool_adaptive(
         )),
     }
 }
-
 // ===== (u64, bytes, bool) =====
-
 pub struct NcbU64BytesBoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
@@ -1442,7 +1358,6 @@ pub struct NcbU64BytesBoolView<'a> {
     blob: &'a [u8],
     bits: &'a [u8],
 }
-
 impl<'a> NcbU64BytesBoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -1467,7 +1382,6 @@ impl<'a> NcbU64BytesBoolView<'a> {
         (self.bits[byte] >> bit) & 1 == 1
     }
 }
-
 pub fn encode_ncb_u64_bytes_bool(rows: &[(u64, &[u8], bool)]) -> Vec<u8> {
     let n = rows.len();
     let use_delta = should_use_id_delta_bytes(rows);
@@ -1528,7 +1442,6 @@ pub fn encode_ncb_u64_bytes_bool(rows: &[(u64, &[u8], bool)]) -> Vec<u8> {
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 fn should_use_id_delta_bytes(rows: &[(u64, &[u8], bool)]) -> bool {
     let h = crate::core::heuristics::get();
     if !h.combo_enable_id_delta || rows.len() < h.combo_id_delta_min_rows {
@@ -1554,7 +1467,6 @@ fn should_use_id_delta_bytes(rows: &[(u64, &[u8], bool)]) -> bool {
     }
     true
 }
-
 pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, Error> {
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
@@ -1646,7 +1558,6 @@ pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, 
         bits,
     })
 }
-
 pub fn encode_rows_u64_bytes_bool_adaptive(rows: &[(u64, &[u8], bool)]) -> Vec<u8> {
     let small_n = small_smart_n();
     if rows.len() <= small_n {
@@ -1655,7 +1566,6 @@ pub fn encode_rows_u64_bytes_bool_adaptive(rows: &[(u64, &[u8], bool)]) -> Vec<u
         let mut ncb = encode_ncb_u64_bytes_bool(rows);
         #[cfg(feature = "adaptive-telemetry")]
         let __ncb_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t1 = std::time::Instant::now();
         let aos = aos::encode_rows_u64_bytes_bool(rows);
@@ -1700,7 +1610,6 @@ pub fn encode_rows_u64_bytes_bool_adaptive(rows: &[(u64, &[u8], bool)]) -> Vec<u
         out
     }
 }
-
 pub fn decode_rows_u64_bytes_bool_adaptive(
     bytes: &[u8],
 ) -> Result<Vec<(u64, Vec<u8>, bool)>, Error> {
@@ -1725,22 +1634,18 @@ pub fn decode_rows_u64_bytes_bool_adaptive(
         )),
     }
 }
-
 // ===== AoS borrowed views for (u64, &str, bool) and (u64, &[u8], bool) =====
-
 pub struct AosU64StrBoolView<'a> {
     n: usize,
     body: &'a [u8],
     rows: Vec<AosStrBoolIdx>,
 }
-
 struct AosStrBoolIdx {
     id: u64,
     name_off: usize,
     name_len: usize,
     flag: bool,
 }
-
 impl<'a> AosU64StrBoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -1769,7 +1674,6 @@ impl<'a> AosU64StrBoolView<'a> {
         self.rows[i].flag
     }
 }
-
 pub fn view_aos_u64_str_bool(body: &[u8]) -> Result<AosU64StrBoolView<'_>, Error> {
     let (n, mut off) = aos_read_len_and_ver(body)?;
     let mut rows = Vec::with_capacity(n);
@@ -1781,7 +1685,6 @@ pub fn view_aos_u64_str_bool(body: &[u8]) -> Result<AosU64StrBoolView<'_>, Error
         idb.copy_from_slice(&body[off..off + 8]);
         let id = u64::from_le_bytes(idb);
         off += 8;
-
         let slen = read_aos_len(body, &mut off)?;
         let s = off;
         let e = s.checked_add(slen).ok_or(Error::LengthMismatch)?;
@@ -1803,20 +1706,17 @@ pub fn view_aos_u64_str_bool(body: &[u8]) -> Result<AosU64StrBoolView<'_>, Error
     }
     Ok(AosU64StrBoolView { n, body, rows })
 }
-
 pub struct AosU64BytesBoolView<'a> {
     n: usize,
     body: &'a [u8],
     rows: Vec<AosBytesBoolIdx>,
 }
-
 struct AosBytesBoolIdx {
     id: u64,
     data_off: usize,
     data_len: usize,
     flag: bool,
 }
-
 impl<'a> AosU64BytesBoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -1835,7 +1735,6 @@ impl<'a> AosU64BytesBoolView<'a> {
         self.rows[i].flag
     }
 }
-
 pub fn view_aos_u64_bytes_bool(body: &[u8]) -> Result<AosU64BytesBoolView<'_>, Error> {
     let (n, mut off) = aos_read_len_and_ver(body)?;
     let mut rows = Vec::with_capacity(n);
@@ -1847,7 +1746,6 @@ pub fn view_aos_u64_bytes_bool(body: &[u8]) -> Result<AosU64BytesBoolView<'_>, E
         idb.copy_from_slice(&body[off..off + 8]);
         let id = u64::from_le_bytes(idb);
         off += 8;
-
         let blen = read_aos_len(body, &mut off)?;
         let s = off;
         let e = s.checked_add(blen).ok_or(Error::LengthMismatch)?;
@@ -1869,9 +1767,7 @@ pub fn view_aos_u64_bytes_bool(body: &[u8]) -> Result<AosU64BytesBoolView<'_>, E
     }
     Ok(AosU64BytesBoolView { n, body, rows })
 }
-
 // ===== (u64, u32, bool) =====
-
 pub struct NcbU64U32BoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
@@ -1905,7 +1801,6 @@ impl<'a> NcbU64U32BoolView<'a> {
         (self.bits[byte] >> bit) & 1 == 1
     }
 }
-
 pub fn encode_ncb_u64_u32_bool(
     rows: &[(u64, u32, bool)],
     use_id_delta: bool,
@@ -1984,7 +1879,6 @@ pub fn encode_ncb_u64_u32_bool(
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 fn should_use_u32_delta(rows: &[(u64, u32, bool)]) -> bool {
     if rows.len() < 2 {
         return false;
@@ -2005,7 +1899,6 @@ fn should_use_u32_delta(rows: &[(u64, u32, bool)]) -> bool {
     }
     true
 }
-
 pub fn view_ncb_u64_u32_bool(bytes: &[u8]) -> Result<NcbU64U32BoolView<'_>, Error> {
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
@@ -2121,7 +2014,6 @@ pub fn view_ncb_u64_u32_bool(bytes: &[u8]) -> Result<NcbU64U32BoolView<'_>, Erro
         bits,
     })
 }
-
 pub fn encode_rows_u64_u32_bool_adaptive(rows: &[(u64, u32, bool)]) -> Vec<u8> {
     let small_n = small_smart_n();
     if rows.len() <= small_n {
@@ -2183,7 +2075,6 @@ pub fn encode_rows_u64_u32_bool_adaptive(rows: &[(u64, u32, bool)]) -> Vec<u8> {
         out
     }
 }
-
 fn should_use_id_delta_u64_only(rows: &[(u64, u32, bool)]) -> bool {
     if rows.len() < 2 {
         return false;
@@ -2204,7 +2095,6 @@ fn should_use_id_delta_u64_only(rows: &[(u64, u32, bool)]) -> bool {
     }
     true
 }
-
 pub fn decode_rows_u64_u32_bool_adaptive(bytes: &[u8]) -> Result<Vec<(u64, u32, bool)>, Error> {
     if bytes.is_empty() {
         return Err(Error::LengthMismatch);
@@ -2227,9 +2117,7 @@ pub fn decode_rows_u64_u32_bool_adaptive(bytes: &[u8]) -> Result<Vec<(u64, u32, 
         )),
     }
 }
-
 // ===== New combo shapes: (u64, &str, u32, bool) and (u64, &[u8], u32, bool) =====
-
 // Heuristics for 4-column combos
 fn should_use_id_delta_str_u32(rows: &[(u64, &str, u32, bool)]) -> bool {
     let h = crate::core::heuristics::get();
@@ -2261,11 +2149,9 @@ fn should_use_id_delta_str_u32(rows: &[(u64, &str, u32, bool)]) -> bool {
     }
     true
 }
-
 fn should_use_u32_delta_str_u32(rows: &[(u64, &str, u32, bool)]) -> bool {
     should_use_u32_delta_str_u32_with(rows, crate::core::heuristics::get())
 }
-
 fn should_use_u32_delta_str_u32_with(
     rows: &[(u64, &str, u32, bool)],
     h: crate::core::heuristics::Heuristics,
@@ -2297,7 +2183,6 @@ fn should_use_u32_delta_str_u32_with(
     }
     true
 }
-
 fn should_use_id_delta_bytes_u32(rows: &[(u64, &[u8], u32, bool)]) -> bool {
     let h = crate::core::heuristics::get();
     if !h.combo_enable_id_delta || rows.len() < h.combo_id_delta_min_rows {
@@ -2327,11 +2212,9 @@ fn should_use_id_delta_bytes_u32(rows: &[(u64, &[u8], u32, bool)]) -> bool {
     }
     true
 }
-
 fn should_use_u32_delta_bytes_u32(rows: &[(u64, &[u8], u32, bool)]) -> bool {
     should_use_u32_delta_bytes_u32_with(rows, crate::core::heuristics::get())
 }
-
 fn should_use_u32_delta_bytes_u32_with(
     rows: &[(u64, &[u8], u32, bool)],
     h: crate::core::heuristics::Heuristics,
@@ -2363,7 +2246,6 @@ fn should_use_u32_delta_bytes_u32_with(
     }
     true
 }
-
 #[allow(clippy::type_complexity)]
 fn build_dict_str_u32<'a>(
     rows: &'a [(u64, &str, u32, bool)],
@@ -2408,12 +2290,10 @@ fn build_dict_str_u32<'a>(
         (false, None, None)
     }
 }
-
 #[allow(clippy::type_complexity)]
 pub fn encode_ncb_u64_str_u32_bool(rows: &[(u64, &str, u32, bool)]) -> Vec<u8> {
     encode_ncb_u64_str_u32_bool_with_policy(rows, ComboPolicy::default())
 }
-
 /// Encode `(u64, &str, u32, bool)` rows with an explicit policy override.
 #[allow(clippy::too_many_lines)]
 pub fn encode_ncb_u64_str_u32_bool_with_policy(
@@ -2448,7 +2328,6 @@ pub fn encode_ncb_u64_str_u32_bool_with_policy(
         Some(value) => value,
         None => heur_u32_delta,
     };
-
     let desc = match (use_dict, use_id_delta, use_u32_delta) {
         (false, false, false) => DESC_U64_STR_U32_BOOL,
         (true, false, false) => DESC_U64_DICT_STR_U32_BOOL,
@@ -2580,12 +2459,10 @@ pub fn encode_ncb_u64_str_u32_bool_with_policy(
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 enum U32Rep<'a> {
     Slice(&'a [u32]),
     Rebuilt(Vec<u32>),
 }
-
 pub struct NcbU64StrU32BoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
@@ -2593,7 +2470,6 @@ pub struct NcbU64StrU32BoolView<'a> {
     vals: U32Rep<'a>,
     bits: &'a [u8],
 }
-
 impl<'a> NcbU64StrU32BoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -2653,7 +2529,6 @@ impl<'a> NcbU64StrU32BoolView<'a> {
         (self.bits[byte] >> bit) & 1 == 1
     }
 }
-
 pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_>, Error> {
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
@@ -2852,7 +2727,6 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
         bits,
     })
 }
-
 pub fn encode_rows_u64_str_u32_bool_adaptive(rows: &[(u64, &str, u32, bool)]) -> Vec<u8> {
     let small_n = small_smart_n();
     if rows.len() <= small_n {
@@ -2861,7 +2735,6 @@ pub fn encode_rows_u64_str_u32_bool_adaptive(rows: &[(u64, &str, u32, bool)]) ->
         let mut ncb = encode_ncb_u64_str_u32_bool(rows);
         #[cfg(feature = "adaptive-telemetry")]
         let __ncb_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t1 = std::time::Instant::now();
         let aos = aos::encode_rows_u64_str_u32_bool(rows);
@@ -2913,7 +2786,6 @@ pub fn encode_rows_u64_str_u32_bool_adaptive(rows: &[(u64, &str, u32, bool)]) ->
         out
     }
 }
-
 pub fn decode_rows_u64_str_u32_bool_adaptive(
     bytes: &[u8],
 ) -> Result<Vec<(u64, String, u32, bool)>, Error> {
@@ -2943,9 +2815,7 @@ pub fn decode_rows_u64_str_u32_bool_adaptive(
         )),
     }
 }
-
 // encode/decode AoS for (u64, str, u32, bool) moved to `crate::aos`
-
 pub struct NcbU64BytesU32BoolView<'a> {
     n: usize,
     ids: IdsRep<'a>,
@@ -2954,7 +2824,6 @@ pub struct NcbU64BytesU32BoolView<'a> {
     vals: U32Rep<'a>,
     bits: &'a [u8],
 }
-
 impl<'a> NcbU64BytesU32BoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -2985,7 +2854,6 @@ impl<'a> NcbU64BytesU32BoolView<'a> {
         (self.bits[byte] >> bit) & 1 == 1
     }
 }
-
 #[allow(clippy::type_complexity)]
 pub fn encode_ncb_u64_bytes_u32_bool(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u8> {
     let n = rows.len();
@@ -3072,7 +2940,6 @@ pub fn encode_ncb_u64_bytes_u32_bool(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u8
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolView<'_>, Error> {
     if bytes.len() < 5 {
         return Err(Error::LengthMismatch);
@@ -3222,7 +3089,6 @@ pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolVie
         bits,
     })
 }
-
 pub fn encode_rows_u64_bytes_u32_bool_adaptive(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u8> {
     let small_n = small_smart_n();
     if rows.len() <= small_n {
@@ -3283,7 +3149,6 @@ pub fn encode_rows_u64_bytes_u32_bool_adaptive(rows: &[(u64, &[u8], u32, bool)])
         out
     }
 }
-
 #[allow(clippy::type_complexity)]
 pub fn decode_rows_u64_bytes_u32_bool_adaptive(
     bytes: &[u8],
@@ -3309,9 +3174,7 @@ pub fn decode_rows_u64_bytes_u32_bool_adaptive(
         )),
     }
 }
-
 // ===== AoS borrowed views for (u64, str/bytes, u32, bool) =====
-
 /// Borrowed view over an AoS ad-hoc body for rows shaped as `(u64, &str, u32, bool)`.
 ///
 /// The view indexes the variable-length string field and returns borrowed `&str`
@@ -3323,7 +3186,6 @@ pub struct AosU64StrU32BoolView<'a> {
     body: &'a [u8],
     rows: Vec<AosStrU32Idx>,
 }
-
 struct AosStrU32Idx {
     id: u64,
     name_off: usize,
@@ -3331,7 +3193,6 @@ struct AosStrU32Idx {
     val: u32,
     flag: bool,
 }
-
 impl<'a> AosU64StrU32BoolView<'a> {
     /// Number of rows.
     pub fn len(&self) -> usize {
@@ -3369,7 +3230,6 @@ impl<'a> AosU64StrU32BoolView<'a> {
         self.rows[i].flag
     }
 }
-
 /// Parse an AoS ad-hoc body `[n]{ id:u64, len, name_bytes, val:u32, flag:u8 }*n`
 /// produced by the adaptive `(u64, &str, u32, bool)` encoder.
 pub fn view_aos_u64_str_u32_bool(body: &[u8]) -> Result<AosU64StrU32BoolView<'_>, Error> {
@@ -3383,7 +3243,6 @@ pub fn view_aos_u64_str_u32_bool(body: &[u8]) -> Result<AosU64StrU32BoolView<'_>
         idb.copy_from_slice(&body[off..off + 8]);
         let id = u64::from_le_bytes(idb);
         off += 8;
-
         let slen = read_aos_len(body, &mut off)?;
         let s = off;
         let e = s.checked_add(slen).ok_or(Error::LengthMismatch)?;
@@ -3412,14 +3271,12 @@ pub fn view_aos_u64_str_u32_bool(body: &[u8]) -> Result<AosU64StrU32BoolView<'_>
     }
     Ok(AosU64StrU32BoolView { n, body, rows })
 }
-
 /// Borrowed view over an AoS ad-hoc body for rows shaped as `(u64, &[u8], u32, bool)`.
 pub struct AosU64BytesU32BoolView<'a> {
     n: usize,
     body: &'a [u8],
     rows: Vec<AosBytesU32Idx>,
 }
-
 struct AosBytesU32Idx {
     id: u64,
     data_off: usize,
@@ -3427,7 +3284,6 @@ struct AosBytesU32Idx {
     val: u32,
     flag: bool,
 }
-
 impl<'a> AosU64BytesU32BoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -3451,7 +3307,6 @@ impl<'a> AosU64BytesU32BoolView<'a> {
         self.rows[i].flag
     }
 }
-
 /// Parse an AoS ad-hoc body `[n]{ id:u64, len, bytes, val:u32, flag:u8 }*n`
 /// produced by the adaptive `(u64, &[u8], u32, bool)` encoder.
 pub fn view_aos_u64_bytes_u32_bool(body: &[u8]) -> Result<AosU64BytesU32BoolView<'_>, Error> {
@@ -3465,7 +3320,6 @@ pub fn view_aos_u64_bytes_u32_bool(body: &[u8]) -> Result<AosU64BytesU32BoolView
         idb.copy_from_slice(&body[off..off + 8]);
         let id = u64::from_le_bytes(idb);
         off += 8;
-
         let blen = read_aos_len(body, &mut off)?;
         let s = off;
         let e = s.checked_add(blen).ok_or(Error::LengthMismatch)?;
@@ -3494,15 +3348,12 @@ pub fn view_aos_u64_bytes_u32_bool(body: &[u8]) -> Result<AosU64BytesU32BoolView
     }
     Ok(AosU64BytesU32BoolView { n, body, rows })
 }
-
 // ===== AoS borrowed views for (u64, Option<&str>, bool) and (u64, Option<u32>, bool) =====
-
 pub struct AosU64OptStrBoolView<'a> {
     n: usize,
     body: &'a [u8],
     rows: Vec<AosOptStrIdx>,
 }
-
 struct AosOptStrIdx {
     id: u64,
     present: bool,
@@ -3510,7 +3361,6 @@ struct AosOptStrIdx {
     name_len: usize,
     flag: bool,
 }
-
 impl<'a> AosU64OptStrBoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -3546,7 +3396,6 @@ impl<'a> AosU64OptStrBoolView<'a> {
         self.rows[i].flag
     }
 }
-
 pub fn view_aos_u64_optstr_bool(body: &[u8]) -> Result<AosU64OptStrBoolView<'_>, Error> {
     let (n, mut off) = aos_read_len_and_ver(body)?;
     let mut rows = Vec::with_capacity(n);
@@ -3590,19 +3439,16 @@ pub fn view_aos_u64_optstr_bool(body: &[u8]) -> Result<AosU64OptStrBoolView<'_>,
     }
     Ok(AosU64OptStrBoolView { n, body, rows })
 }
-
 pub struct AosU64OptU32BoolView {
     n: usize,
     rows: Vec<AosOptU32Idx>,
 }
-
 struct AosOptU32Idx {
     id: u64,
     present: bool,
     val: u32,
     flag: bool,
 }
-
 impl AosU64OptU32BoolView {
     pub fn len(&self) -> usize {
         self.n
@@ -3621,7 +3467,6 @@ impl AosU64OptU32BoolView {
         self.rows[i].flag
     }
 }
-
 pub fn view_aos_u64_optu32_bool(body: &[u8]) -> Result<AosU64OptU32BoolView, Error> {
     let (n, mut off) = aos_read_len_and_ver(body)?;
     let mut rows = Vec::with_capacity(n);
@@ -3663,20 +3508,16 @@ pub fn view_aos_u64_optu32_bool(body: &[u8]) -> Result<AosU64OptU32BoolView, Err
     }
     Ok(AosU64OptU32BoolView { n, rows })
 }
-
 // ===== AoS borrowed view for (u64, enum{Name|Code}, bool) =====
-
 pub enum AosEnumRef<'a> {
     Name(&'a str),
     Code(u32),
 }
-
 pub struct AosU64EnumBoolView<'a> {
     n: usize,
     body: &'a [u8],
     rows: Vec<AosEnumIdx>,
 }
-
 enum AosEnumIdx {
     Name {
         id: u64,
@@ -3690,7 +3531,6 @@ enum AosEnumIdx {
         flag: bool,
     },
 }
-
 impl<'a> AosU64EnumBoolView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -3729,11 +3569,9 @@ impl<'a> AosU64EnumBoolView<'a> {
         }
     }
 }
-
 pub fn view_aos_u64_enum_bool(body: &[u8]) -> Result<AosU64EnumBoolView<'_>, Error> {
     // Enum AoS uses a minimal header without the version nibble.
     let mut off = 0usize;
-
     let n = read_aos_sequence_len(body, &mut off)?;
     let prefix_len = crate::core::len_prefix_len(0);
     let name_min = 8usize + 1 + prefix_len + 1;
@@ -3803,9 +3641,7 @@ pub fn view_aos_u64_enum_bool(body: &[u8]) -> Result<AosU64EnumBoolView<'_>, Err
     }
     Ok(AosU64EnumBoolView { n, body, rows })
 }
-
 // -- Test-only helpers -------------------------------------------------------
-
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn encode_ncb_u64_str_u32_bool_force_u32_delta(
@@ -3860,7 +3696,6 @@ pub(crate) fn encode_ncb_u64_str_u32_bool_force_u32_delta(
     }
     buf
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn encode_ncb_u64_bytes_u32_bool_force_u32_delta(
@@ -3920,7 +3755,6 @@ pub enum RowEnumOwned {
     Name(String),
     Code(u32),
 }
-
 /// Encode `(u64, enum{Name(String)|Code(u32)}, bool)` rows using an adaptive payload.
 /// Rows are provided with borrowed enum payloads.
 pub fn encode_rows_u64_enum_bool_adaptive(rows: &[(u64, EnumBorrow<'_>, bool)]) -> Vec<u8> {
@@ -3934,7 +3768,6 @@ pub fn encode_rows_u64_enum_bool_adaptive(rows: &[(u64, EnumBorrow<'_>, bool)]) 
         let mut ncb = encode_ncb_u64_enum_bool(rows, use_delta_ids, use_name_dict, use_code_delta);
         #[cfg(feature = "adaptive-telemetry")]
         let __ncb_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t1 = std::time::Instant::now();
         let aos = aos::encode_rows_u64_enum_bool(rows);
@@ -3980,13 +3813,11 @@ pub fn encode_rows_u64_enum_bool_adaptive(rows: &[(u64, EnumBorrow<'_>, bool)]) 
         out
     }
 }
-
 #[inline]
 fn small_smart_n() -> usize {
     // Pull from heuristics (default 64); callers use `<=` for the two-pass path
     crate::core::heuristics::get().aos_ncb_small_n
 }
-
 /// Decode an adaptive enum-shaped payload back into owned rows.
 pub fn decode_rows_u64_enum_bool_adaptive(
     bytes: &[u8],
@@ -4015,11 +3846,9 @@ pub fn decode_rows_u64_enum_bool_adaptive(
         _ => Err(Error::invalid_tag("decoding adaptive enum rows", tag)),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn ncb_row_count_prefix_rejects_truncated_inputs() {
         let prefix = [0x2a, 0, 0, 0];
@@ -4027,28 +3856,23 @@ mod tests {
             let err = read_row_count_prefix(&prefix[..len]).unwrap_err();
             assert!(matches!(err, Error::LengthMismatch));
         }
-
         assert!(matches!(
             read_row_count_prefix(&prefix),
             Err(Error::LengthMismatch)
         ));
-
         let mut structurally_bounded = prefix.to_vec();
         structurally_bounded.resize(4 + 42, 0);
         assert_eq!(read_row_count_prefix(&structurally_bounded).unwrap(), 42);
     }
-
     #[test]
     fn ncb_row_count_prefix_rejects_disproportionate_allocation_without_limit_scope() {
         let mut forged = u32::MAX.to_le_bytes().to_vec();
         forged.push(0);
-
         assert!(matches!(
             read_row_count_prefix(&forged),
             Err(Error::LengthMismatch)
         ));
     }
-
     #[test]
     fn ncb_row_count_views_reject_truncated_headers() {
         let prefix = [0, 0, 0, 0];
@@ -4088,7 +3912,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn should_use_columnar_respects_heuristics_threshold() {
         let h = crate::core::heuristics::get();
@@ -4108,13 +3931,11 @@ mod tests {
             "n = t+1 should enable columnar auto-selection"
         );
     }
-
     #[test]
     fn small_smart_n_matches_heuristics() {
         let t = crate::core::heuristics::get().aos_ncb_small_n;
         assert_eq!(small_smart_n(), t);
     }
-
     #[test]
     fn u32_delta_toggle_respects_name_flag() {
         let rows: Vec<(u64, &str, u32, bool)> = vec![
@@ -4134,7 +3955,6 @@ mod tests {
             "disabling the name-column delta flag must suppress u32 delta usage"
         );
     }
-
     #[test]
     fn u32_delta_toggle_respects_bytes_flag() {
         let payloads: Vec<Vec<u8>> = vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()];
@@ -4162,10 +3982,8 @@ mod tests {
             "disabling the byte-column delta flag must suppress u32 delta usage"
         );
     }
-
     include!("columnar_adaptive_test.rs");
 }
-
 #[inline]
 fn should_use_id_delta_enum(rows: &[(u64, EnumBorrow<'_>, bool)]) -> bool {
     if rows.len() < 2 {
@@ -4187,7 +4005,6 @@ fn should_use_id_delta_enum(rows: &[(u64, EnumBorrow<'_>, bool)]) -> bool {
     }
     true
 }
-
 fn should_use_name_dict_enum(rows: &[(u64, EnumBorrow<'_>, bool)]) -> bool {
     // Heuristic: when Name variants are sufficiently repetitive and average length is moderate/large,
     // dictionary coding reduces size vs offsets+blob.
@@ -4212,7 +4029,6 @@ fn should_use_name_dict_enum(rows: &[(u64, EnumBorrow<'_>, bool)]) -> bool {
     // Thresholds chosen to avoid regressions on short/unique strings
     ratio <= 0.40 && avg >= 8.0
 }
-
 fn should_use_code_delta_enum(rows: &[(u64, EnumBorrow<'_>, bool)]) -> bool {
     // With corrected zigzag encoding and offset checks, allow combined deltas.
     // Size-based heuristic over the subsequence of Code variants
@@ -4239,7 +4055,6 @@ fn should_use_code_delta_enum(rows: &[(u64, EnumBorrow<'_>, bool)]) -> bool {
     }
     count >= 2 && varint_bytes < 4usize.saturating_mul(count.saturating_sub(1))
 }
-
 #[inline]
 fn read_u32_at(bytes: &[u8], i: usize) -> u32 {
     let start = i * 4;
@@ -4248,7 +4063,6 @@ fn read_u32_at(bytes: &[u8], i: usize) -> u32 {
     lb.copy_from_slice(&bytes[start..end]);
     u32::from_le_bytes(lb)
 }
-
 #[inline]
 fn zigzag_encode(x: i64) -> u64 {
     // Standard zigzag: map signed to unsigned so small negative deltas
@@ -4259,7 +4073,6 @@ fn zigzag_encode(x: i64) -> u64 {
 fn zigzag_decode(u: u64) -> i64 {
     ((u >> 1) as i64) ^ (-((u & 1) as i64))
 }
-
 fn read_varint_u64(bytes: &[u8]) -> Result<(u64, usize), Error> {
     let mut shift = 0u32;
     let mut value: u64 = 0;
@@ -4285,13 +4098,11 @@ fn read_varint_u64(bytes: &[u8]) -> Result<(u64, usize), Error> {
     }
     Ok((value, i))
 }
-
 /// A lightweight row reference over the NCB view.
 pub struct RowRef<'a> {
     view: &'a NcbU64StrBoolView<'a>,
     idx: usize,
 }
-
 impl<'a> RowRef<'a> {
     pub fn id(&self) -> u64 {
         self.view.id(self.idx)
@@ -4303,13 +4114,11 @@ impl<'a> RowRef<'a> {
         self.view.flag(self.idx)
     }
 }
-
 /// A cursor over NCB rows yielding `RowRef`.
 pub struct RowCursor<'a> {
     view: &'a NcbU64StrBoolView<'a>,
     i: usize,
 }
-
 impl<'a> Iterator for RowCursor<'a> {
     type Item = RowRef<'a>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -4324,14 +4133,12 @@ impl<'a> Iterator for RowCursor<'a> {
         Some(r)
     }
 }
-
 impl<'a> NcbU64StrBoolView<'a> {
     /// Iterate over rows as lightweight references without allocations.
     pub fn rows(&'a self) -> RowCursor<'a> {
         RowCursor { view: self, i: 0 }
     }
 }
-
 impl<'a> NcbU64StrBoolView<'a> {
     /// Iterate ids column in column order.
     pub fn iter_ids(&self) -> IdsIterator<'_> {
@@ -4373,7 +4180,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             n: self.n,
         }
     }
-
     /// Iterate positions (row indices) where `flag == true`.
     pub fn iter_true_positions(&self) -> TruePosIter<'_> {
         TruePosIter {
@@ -4382,7 +4188,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             i: 0,
         }
     }
-
     /// Iterate ids for rows where `flag == true`.
     pub fn iter_ids_flag_true(&'a self) -> IdsFlagIter<'a> {
         IdsFlagIter {
@@ -4390,7 +4195,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             pos: self.iter_true_positions(),
         }
     }
-
     /// Iterate names for rows where `flag == true`.
     pub fn iter_names_flag_true(&'a self) -> NamesFlagIter<'a> {
         NamesFlagIter {
@@ -4398,7 +4202,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             pos: self.iter_true_positions(),
         }
     }
-
     /// Iterate positions (row indices) with flag==true using byte-level popcount and trailing_zeros.
     pub fn iter_true_positions_popcount(&self) -> TruePosPopIter<'_> {
         TruePosPopIter {
@@ -4416,7 +4219,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             pos: self.iter_true_positions_popcount(),
         }
     }
-
     /// Iterate positions (row indices) with flag==true using u64 word-level popcount and trailing_zeros.
     pub fn iter_true_positions_popcount64(&self) -> TruePosPop64Iter<'_> {
         TruePosPop64Iter {
@@ -4434,7 +4236,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             pos: self.iter_true_positions_popcount64(),
         }
     }
-
     /// Iterate positions (row indices) with flag==true using aligned u64 body with head/tail fallbacks.
     pub fn iter_true_positions_popcount64_aligned(&self) -> TruePosPop64AlignedIter<'_> {
         let (head, body, tail) = unsafe { self.bits.align_to::<u64>() };
@@ -4465,7 +4266,6 @@ impl<'a> NcbU64StrBoolView<'a> {
             pos: self.iter_true_positions_popcount64_aligned(),
         }
     }
-
     /// Iterate positions (row indices) with `flag==true` choosing a fast variant based on CPU/arch.
     pub fn iter_true_positions_fast(&self) -> TruePosFastIter<'_> {
         #[cfg(target_pointer_width = "64")]
@@ -4494,7 +4294,6 @@ impl<'a> NcbU64StrBoolView<'a> {
         }
     }
 }
-
 /// Iterator over ids column.
 pub enum IdsIterator<'a> {
     Slice(std::slice::Iter<'a, u64>),
@@ -4509,7 +4308,6 @@ impl<'a> Iterator for IdsIterator<'a> {
         }
     }
 }
-
 /// Iterator over names column (row-aligned strings).
 pub enum NamesIterator<'a> {
     Offsets {
@@ -4561,7 +4359,6 @@ impl<'a> Iterator for NamesIterator<'a> {
         }
     }
 }
-
 /// Iterator over packed boolean flags.
 pub struct FlagsIterator<'a> {
     bits: &'a [u8],
@@ -4581,13 +4378,11 @@ impl<'a> Iterator for FlagsIterator<'a> {
         Some(v)
     }
 }
-
 /// Precomputed flags bitset as u64 words for repeated scans.
 pub struct FlagsIndex {
     words: Vec<u64>,
     n: usize,
 }
-
 impl FlagsIndex {
     pub fn build(bits: &[u8], n: usize) -> Self {
         let mut words = Vec::with_capacity(bits.len().div_ceil(8));
@@ -4615,7 +4410,6 @@ impl FlagsIndex {
         }
         Self { words, n }
     }
-
     pub fn iter_positions(&self) -> FlagsIndexIter<'_> {
         FlagsIndexIter {
             words: &self.words,
@@ -4636,7 +4430,6 @@ impl FlagsIndex {
         }
     }
 }
-
 pub struct FlagsIndexIter<'a> {
     words: &'a [u64],
     n: usize,
@@ -4668,7 +4461,6 @@ impl<'a> Iterator for FlagsIndexIter<'a> {
         }
     }
 }
-
 pub struct FlagsIndexAndIter<'a> {
     a: &'a [u64],
     b: &'a [u64],
@@ -4701,7 +4493,6 @@ impl<'a> Iterator for FlagsIndexAndIter<'a> {
         }
     }
 }
-
 /// Iterator over positions with flag bit set.
 pub struct TruePosIter<'a> {
     bits: &'a [u8],
@@ -4723,7 +4514,6 @@ impl<'a> Iterator for TruePosIter<'a> {
         None
     }
 }
-
 /// Iterator over ids where flag is true.
 pub struct IdsFlagIter<'a> {
     view: &'a NcbU64StrBoolView<'a>,
@@ -4736,7 +4526,6 @@ impl<'a> Iterator for IdsFlagIter<'a> {
         Some(self.view.id(i))
     }
 }
-
 /// Iterator over names where flag is true.
 pub struct NamesFlagIter<'a> {
     view: &'a NcbU64StrBoolView<'a>,
@@ -4754,7 +4543,6 @@ impl<'a> Iterator for NamesFlagIter<'a> {
         }
     }
 }
-
 /// Popcount-accelerated byte scanner over flag bitset.
 pub struct TruePosPopIter<'a> {
     bits: &'a [u8],
@@ -4804,7 +4592,6 @@ impl<'a> Iterator for TruePosPopIter<'a> {
         }
     }
 }
-
 /// Iterator over names where flag is true using popcount scanner.
 pub struct NamesFlagPopIter<'a> {
     view: &'a NcbU64StrBoolView<'a>,
@@ -4821,7 +4608,6 @@ impl<'a> Iterator for NamesFlagPopIter<'a> {
         }
     }
 }
-
 /// Word-level (u64) popcount scanner over flag bitset working on 8-byte chunks.
 pub struct TruePosPop64Iter<'a> {
     bits: &'a [u8],
@@ -4877,7 +4663,6 @@ impl<'a> Iterator for TruePosPop64Iter<'a> {
         }
     }
 }
-
 /// Iterator over names where flag is true using u64 popcount scanner.
 pub struct NamesFlagPop64Iter<'a> {
     view: &'a NcbU64StrBoolView<'a>,
@@ -4894,7 +4679,6 @@ impl<'a> Iterator for NamesFlagPop64Iter<'a> {
         }
     }
 }
-
 /// Aligned u64 scanner (uses head/body/tail from `align_to::<u64>()`).
 pub struct TruePosPop64AlignedIter<'a> {
     head: &'a [u8],
@@ -4916,7 +4700,6 @@ pub struct TruePosPop64AlignedIter<'a> {
     // 0=head,1=body,2=tail,3=done
     stage: u8,
 }
-
 impl<'a> TruePosPop64AlignedIter<'a> {
     #[inline]
     fn load_head(&mut self) -> bool {
@@ -4992,7 +4775,6 @@ impl<'a> TruePosPop64AlignedIter<'a> {
         false
     }
 }
-
 impl<'a> Iterator for TruePosPop64AlignedIter<'a> {
     type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
@@ -5048,7 +4830,6 @@ impl<'a> Iterator for TruePosPop64AlignedIter<'a> {
         }
     }
 }
-
 pub struct NamesFlagPop64AlignedIter<'a> {
     view: &'a NcbU64StrBoolView<'a>,
     pos: TruePosPop64AlignedIter<'a>,
@@ -5064,9 +4845,7 @@ impl<'a> Iterator for NamesFlagPop64AlignedIter<'a> {
         }
     }
 }
-
 // Wrapper that selects best available positions iterator at runtime/compile-time is defined above.
-
 /// Names iterator using fast positions wrapper.
 pub struct NamesFlagFastIter<'a> {
     view: &'a NcbU64StrBoolView<'a>,
@@ -5083,7 +4862,6 @@ impl<'a> Iterator for NamesFlagFastIter<'a> {
         }
     }
 }
-
 /// Force dictionary encoding for benchmarking or when the caller knows it helps.
 pub fn encode_ncb_u64_str_bool_force_dict(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     use std::collections::HashMap;
@@ -5098,7 +4876,6 @@ pub fn encode_ncb_u64_str_bool_force_dict(rows: &[(u64, &str, bool)]) -> Vec<u8>
     }
     encode_ncb_u64_dict_str_bool(rows, dict, dict_vec)
 }
-
 /// Force offsets-based encoding (no dictionary) for benchmarking.
 pub fn encode_ncb_u64_str_bool_no_dict(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     let n = rows.len() as u32;
@@ -5135,7 +4912,6 @@ pub fn encode_ncb_u64_str_bool_no_dict(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     }
     buf
 }
-
 #[allow(clippy::type_complexity)]
 fn build_dict<'a>(
     rows: &'a [(u64, &str, bool)],
@@ -5174,7 +4950,6 @@ fn build_dict<'a>(
         (false, None, None)
     }
 }
-
 fn encode_ncb_u64_dict_str_bool(
     rows: &[(u64, &str, bool)],
     dict: std::collections::HashMap<&str, u32>,
@@ -5224,7 +4999,6 @@ fn encode_ncb_u64_dict_str_bool(
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 /// Encode using delta+zigzag for the id column when beneficial.
 pub fn encode_ncb_u64_str_bool_delta(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     if rows.is_empty() {
@@ -5295,7 +5069,6 @@ pub fn encode_ncb_u64_str_bool_delta(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 fn varint_len(mut v: u64) -> usize {
     let mut n = 1;
     while v >= 0x80 {
@@ -5304,7 +5077,6 @@ fn varint_len(mut v: u64) -> usize {
     }
     n
 }
-
 #[inline]
 #[cfg(test)]
 fn write_var_u64(buf: &mut Vec<u8>, v: u64) {
@@ -5317,7 +5089,6 @@ fn write_var_u64(buf: &mut Vec<u8>, v: u64) {
         buf.push(vv as u8);
     }
 }
-
 #[inline]
 fn should_use_id_delta(rows: &[(u64, &str, bool)]) -> bool {
     let h = crate::core::heuristics::get();
@@ -5344,16 +5115,13 @@ fn should_use_id_delta(rows: &[(u64, &str, bool)]) -> bool {
     }
     true
 }
-
 // ===== Option column support (presence bitset + dense values) =====
-
 /// Maximum number of rows allowed when constructing presence/tag caches.
 ///
 /// Caches materialize cumulative counts to ensure O(1) lookups. Extremely large
 /// row counts can lead to unbounded allocations when decoding malicious
 /// payloads, so we reject inputs that exceed this threshold.
 pub const MAX_CACHE_ROWS: usize = 1 << 20; // 1,048,576 rows (~256 MiB worst-case blobs)
-
 /// Rank cache over a packed bitset with 256-row chunks.
 /// Stores the number of set bits before each chunk start to allow O(1) row→dense index.
 #[derive(Debug, Clone)]
@@ -5361,7 +5129,6 @@ struct Rank256Cache {
     /// Cumulative counts, one per 256-bit chunk.
     chunks: Vec<u32>,
 }
-
 impl Rank256Cache {
     fn build(bits: &[u8], n_rows: usize) -> Result<Self, Error> {
         if n_rows > MAX_CACHE_ROWS {
@@ -5414,7 +5181,6 @@ impl Rank256Cache {
         Some(base + count)
     }
 }
-
 /// Borrowed view over an optional `&str` column encoded as presence bitset + dense offsets/data.
 pub struct OptStrColView<'a> {
     n: usize,
@@ -5426,7 +5192,6 @@ pub struct OptStrColView<'a> {
     offs_bytes: &'a [u8],
     blob: &'a str,
 }
-
 impl<'a> OptStrColView<'a> {
     /// Number of logical rows (including None entries).
     pub fn len(&self) -> usize {
@@ -5445,7 +5210,6 @@ impl<'a> OptStrColView<'a> {
         Ok(None)
     }
 }
-
 /// Encode an optional string column into presence bitset + dense offsets/blob.
 /// Returns the encoded bytes and the count of present rows.
 pub fn encode_opt_str_column(values: &[Option<&str>]) -> (Vec<u8>, usize) {
@@ -5481,7 +5245,6 @@ pub fn encode_opt_str_column(values: &[Option<&str>]) -> (Vec<u8>, usize) {
     }
     (buf, present)
 }
-
 /// Construct a borrowed optional string column view from `bytes`.
 /// Layout: [bitset ceil(n/8)] [pad→4] [u32 offs; present+1] [utf8 blob]
 pub fn view_opt_str_column(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<'_>, Error> {
@@ -5490,7 +5253,6 @@ pub fn view_opt_str_column(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<
     )?;
     view_opt_str_column_inner(bytes, n_rows)
 }
-
 fn view_opt_str_column_inner(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<'_>, Error> {
     let bit_bytes = n_rows.div_ceil(8);
     if bytes.len() < bit_bytes {
@@ -5546,7 +5308,6 @@ fn view_opt_str_column_inner(bytes: &[u8], n_rows: usize) -> Result<OptStrColVie
         blob: blob_str,
     })
 }
-
 /// Borrowed view over an optional `u32` column encoded as presence bitset + dense u32 values.
 pub struct OptU32ColView<'a> {
     n: usize,
@@ -5554,7 +5315,6 @@ pub struct OptU32ColView<'a> {
     rank: Rank256Cache,
     vals_bytes: &'a [u8],
 }
-
 impl<'a> OptU32ColView<'a> {
     pub fn len(&self) -> usize {
         self.n
@@ -5573,7 +5333,6 @@ impl<'a> OptU32ColView<'a> {
         Some(u32::from_le_bytes(lb))
     }
 }
-
 /// Encode an optional u32 column: [bitset ceil(n/8)] [pad→4] [u32; present]
 pub fn encode_opt_u32_column(values: &[Option<u32>]) -> (Vec<u8>, usize) {
     let n = values.len();
@@ -5594,7 +5353,6 @@ pub fn encode_opt_u32_column(values: &[Option<u32>]) -> (Vec<u8>, usize) {
     }
     (buf, present)
 }
-
 /// View an optional u32 column from bytes and logical row count.
 pub fn view_opt_u32_column(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<'_>, Error> {
     crate::core::enforce_decode_sequence_length(
@@ -5602,7 +5360,6 @@ pub fn view_opt_u32_column(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<
     )?;
     view_opt_u32_column_inner(bytes, n_rows)
 }
-
 fn view_opt_u32_column_inner(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<'_>, Error> {
     let bit_bytes = n_rows.div_ceil(8);
     if bytes.len() < bit_bytes {
@@ -5641,15 +5398,12 @@ fn view_opt_u32_column_inner(bytes: &[u8], n_rows: usize) -> Result<OptU32ColVie
         vals_bytes,
     })
 }
-
 // ===== Enum column support: BenchEnum(Name(String)|Code(u32)) rows =====
-
 /// Borrowed enum reference produced from the enum column.
 pub enum ColEnumRef<'a> {
     Name(&'a str),
     Code(u32),
 }
-
 /// Borrowed variant tags view with rank caches per variant for O(1) indexing.
 struct TagsView<'a> {
     tags: &'a [u8],
@@ -5657,7 +5411,6 @@ struct TagsView<'a> {
     name_chunks: Vec<u32>,
     code_chunks: Vec<u32>,
 }
-
 impl<'a> TagsView<'a> {
     fn build(tags: &'a [u8], n: usize) -> Result<Self, Error> {
         if n > MAX_CACHE_ROWS {
@@ -5712,7 +5465,6 @@ impl<'a> TagsView<'a> {
         base + count
     }
 }
-
 /// View over an NCB `(u64, enum(Name(String)|Code(u32)), bool)` block.
 pub struct NcbU64EnumBoolView<'a> {
     n: usize,
@@ -5729,7 +5481,6 @@ pub struct NcbU64EnumBoolView<'a> {
     name_tag_index: FlagsIndex,
     code_tag_index: FlagsIndex,
 }
-
 enum EnumNamesRep<'a> {
     Offsets {
         offs_bytes: &'a [u8],
@@ -5741,12 +5492,10 @@ enum EnumNamesRep<'a> {
         codes_bytes: &'a [u8],
     },
 }
-
 enum CodeRep<'a> {
     Slice(&'a [u32]),
     Rebuilt(Vec<u32>),
 }
-
 impl<'a> NcbU64EnumBoolView<'a> {
     /// Number of rows.
     pub fn len(&self) -> usize {
@@ -6002,7 +5751,6 @@ impl<'a> NcbU64EnumBoolView<'a> {
         }
     }
 }
-
 pub enum NamesDenseIter<'a> {
     Offsets {
         offs_bytes: &'a [u8],
@@ -6016,7 +5764,6 @@ pub enum NamesDenseIter<'a> {
         i: usize,
     },
 }
-
 impl<'a> Iterator for NamesDenseIter<'a> {
     type Item = &'a str;
     fn next(&mut self) -> Option<Self::Item> {
@@ -6054,12 +5801,10 @@ impl<'a> Iterator for NamesDenseIter<'a> {
         }
     }
 }
-
 pub enum CodesDenseIter<'a> {
     Slice { slice: &'a [u32], i: usize },
     Vec { vec: &'a Vec<u32>, i: usize },
 }
-
 impl<'a> Iterator for CodesDenseIter<'a> {
     type Item = u32;
     fn next(&mut self) -> Option<Self::Item> {
@@ -6085,13 +5830,11 @@ impl<'a> Iterator for CodesDenseIter<'a> {
         }
     }
 }
-
 /// Convenient row ref for the enum view.
 pub struct EnumRowRef<'a> {
     view: &'a NcbU64EnumBoolView<'a>,
     idx: usize,
 }
-
 /// Wrapper that selects best available positions iterator at runtime/compile-time.
 pub enum TruePosFastIter<'a> {
     Byte(TruePosPopIter<'a>),
@@ -6106,7 +5849,6 @@ impl<'a> Iterator for TruePosFastIter<'a> {
         }
     }
 }
-
 /// Fast names iterator for enum view using positions wrapper and tag check.
 pub struct EnumNamesFlagFastIter<'a> {
     view: &'a NcbU64EnumBoolView<'a>,
@@ -6141,7 +5883,6 @@ impl<'a> Iterator for EnumNamesFlagFastIter<'a> {
         }
     }
 }
-
 /// Fast names iterator using prebuilt intersection of flags and Name-tag bitsets.
 pub struct EnumNamesFlagIndexedIter<'a> {
     view: &'a NcbU64EnumBoolView<'a>,
@@ -6171,7 +5912,6 @@ impl<'a> Iterator for EnumNamesFlagIndexedIter<'a> {
         }
     }
 }
-
 /// Fast codes iterator for enum view using positions wrapper and tag check.
 pub struct EnumCodesFlagFastIter<'a> {
     view: &'a NcbU64EnumBoolView<'a>,
@@ -6194,7 +5934,6 @@ impl<'a> Iterator for EnumCodesFlagFastIter<'a> {
         }
     }
 }
-
 /// Codes iterator using prebuilt intersection of flags and Code-tag bitsets.
 pub struct EnumCodesFlagIndexedIter<'a> {
     view: &'a NcbU64EnumBoolView<'a>,
@@ -6211,13 +5950,11 @@ impl<'a> Iterator for EnumCodesFlagIndexedIter<'a> {
         }
     }
 }
-
 /// Fast ids iterator for enum view using positions wrapper.
 pub struct EnumIdsFlagFastIter<'a> {
     view: &'a NcbU64EnumBoolView<'a>,
     pos: TruePosFastIter<'a>,
 }
-
 /// Owned reverse iterator for names at flag==true.
 pub struct EnumNamesFlagRevIter {
     inner: Vec<String>,
@@ -6235,7 +5972,6 @@ impl Iterator for EnumNamesFlagRevIter {
         }
     }
 }
-
 /// Owned reverse iterator for codes at flag==true.
 pub struct EnumCodesFlagRevIter {
     inner: Vec<u32>,
@@ -6253,7 +5989,6 @@ impl Iterator for EnumCodesFlagRevIter {
         }
     }
 }
-
 /// Owned reverse iterator for ids at flag==true.
 pub struct EnumIdsFlagRevIter {
     inner: Vec<u64>,
@@ -6319,7 +6054,6 @@ impl<'a> NcbU64EnumBoolView<'a> {
         self.n == 0
     }
 }
-
 /// Encode an enum-heavy dataset into NCB.
 /// Layout:
 /// - u32 n
@@ -6361,7 +6095,6 @@ pub fn encode_ncb_u64_enum_bool(
         (true, true, true) => DESC_U64_DELTA_ENUM_BOOL_DICT_CODEDELTA,
     };
     sink.write_u8(desc);
-
     // ids
     sink.align_to(8);
     if use_delta_ids && n >= 2 {
@@ -6376,7 +6109,6 @@ pub fn encode_ncb_u64_enum_bool(
                 d as i64
             };
             let zz = zigzag_encode(d64);
-
             {
                 let mut vv = zz;
                 while vv >= 0x80 {
@@ -6391,7 +6123,6 @@ pub fn encode_ncb_u64_enum_bool(
             sink.write_u64_le(*id);
         }
     }
-
     // tags and gather variant-specific payloads
     let mut tags = vec![0u8; n];
     let mut names: Vec<&str> = Vec::new();
@@ -6409,7 +6140,6 @@ pub fn encode_ncb_u64_enum_bool(
         }
     }
     sink.write_bytes(&tags);
-
     // names subcolumn
     sink.align_to(4);
     if use_name_dict {
@@ -6462,7 +6192,6 @@ pub fn encode_ncb_u64_enum_bool(
         }
         sink.write_bytes(&blob);
     }
-
     // codes subcolumn
     sink.align_to(4);
     if use_code_delta && !codes.is_empty() {
@@ -6474,7 +6203,6 @@ pub fn encode_ncb_u64_enum_bool(
             let d = (c as i64) - prev;
             prev = c as i64;
             let zz = zigzag_encode(d);
-
             {
                 let mut vv = zz;
                 while vv >= 0x80 {
@@ -6489,7 +6217,6 @@ pub fn encode_ncb_u64_enum_bool(
             sink.write_u32_le(*v);
         }
     }
-
     // flags
     let bit_bytes = n.div_ceil(8);
     let mut bits = vec![0u8; bit_bytes];
@@ -6501,7 +6228,6 @@ pub fn encode_ncb_u64_enum_bool(
     sink.write_bytes(&bits);
     sink.into_inner()
 }
-
 /// Parse a byte slice into an enum NCB view.
 pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Error> {
     if bytes.len() < 5 {
@@ -6520,7 +6246,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         DESC_U64_DELTA_ENUM_BOOL_DICT_CODEDELTA => (true, true, true),
         _ => return Err(Error::Message("invalid enum NCB descriptor".into())),
     };
-
     // ids (aligned 8)
     let mut off = 5usize;
     align_offset_checked(bytes, &mut off, 8)?;
@@ -6565,7 +6290,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         }
     };
     off = add_offset(off, used_ids)?;
-
     // tags: [u8; n]
     let tags = slice_range(bytes, off, n)?;
     // Validate tag values strictly: only TAG_NAME (0) and TAG_CODE (1) allowed
@@ -6604,7 +6328,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         }
         debug_assert_eq!(seen_name + seen_code, n, "enum tags total mismatch");
     }
-
     // names subcolumn
     let off_after_tags = off;
     let mut off_names = off_after_tags;
@@ -6614,7 +6337,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
     let _n_code_expected = n - n_name;
     #[cfg(test)]
     debug_assert_eq!(n_name + _n_code_expected, n, "tags count mismatch");
-
     let names = if use_dict {
         // dict_len, dict_offs, dict_blob, then per-Name codes
         let dict_len_bytes = slice_range(bytes, off_names, 4)?;
@@ -6679,7 +6401,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
             blob: blob_str,
         }
     };
-
     // Recompute expected names end offset from tags and section layout to catch drift
     let mut expected_off = off_after_tags;
     let mis4_expected = expected_off & 3;
@@ -6729,7 +6450,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
     );
     // Force-correct any drift conservatively
     off = expected_off;
-
     // codes subcolumn (aligned 4)
     align_offset_checked(bytes, &mut off, 4)?;
     let n_code = tags.iter().filter(|&&t| t == TAG_CODE).count();
@@ -6778,7 +6498,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
             CodeRep::Rebuilt(v)
         }
     };
-
     // flags bitset
     let bit_bytes = n.div_ceil(8);
     let bits = slice_range(bytes, off, bit_bytes)?;
@@ -6798,7 +6517,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
     }
     let name_tag_index = FlagsIndex::build(&name_bits, n);
     let code_tag_index = FlagsIndex::build(&code_bits, n);
-
     Ok(NcbU64EnumBoolView {
         n,
         ids,
@@ -6811,7 +6529,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         code_tag_index,
     })
 }
-
 /// Borrowing enum reference for encoder API convenience.
 pub enum EnumBorrow<'a> {
     Name(&'a str),

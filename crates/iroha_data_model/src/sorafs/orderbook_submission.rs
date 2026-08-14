@@ -1,11 +1,4 @@
 //! Strict, route-aware validation for SoraFS orderbook transaction submission.
-
-use std::str::FromStr;
-
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
-use iroha_version::codec::DecodeVersioned as _;
-use thiserror::Error;
-
 use crate::{
     NetworkId,
     account::AccountAddress,
@@ -17,6 +10,8 @@ use crate::{
         Executable, SignedTransaction, TransactionEntrypoint, TransactionSubmissionReceipt,
     },
 };
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
+use iroha_version::codec::DecodeVersioned as _;
 use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1,
     OrderSideV1, OrderTierV1, OrderbookSignatureV1, OrderbookValidationPayloadKindV1,
@@ -24,20 +19,22 @@ use sorafs_manifest::{
     decode_settlement_receipt_v1, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
-
+use std::str::FromStr;
+use thiserror::Error;
 /// Hard ceiling for one exact canonical versioned signed orderbook transaction.
 pub const ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one canonical transaction-submission receipt.
 pub const ORDERBOOK_SUBMISSION_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 1024 * 1024;
 /// The native instruction admitted by one orderbook submission route.
-#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SorafsOrderbookSubmissionRouteV1 {
+    /// Admit a signed order request.
     SubmitOrder,
+    /// Admit a signed order cancellation.
     CancelOrder,
+    /// Admit a signed settlement receipt.
     RecordReceipt,
 }
-
 impl SorafsOrderbookSubmissionRouteV1 {
     /// Parse the stable SDK route label.
     #[rustfmt::skip]
@@ -45,21 +42,20 @@ impl SorafsOrderbookSubmissionRouteV1 {
         match label { "order" => Ok(Self::SubmitOrder), "cancel" => Ok(Self::CancelOrder), "receipt" => Ok(Self::RecordReceipt), _ => Err(SorafsOrderbookSubmissionValidationError::UnsupportedRoute) }
     }
 }
-
 /// Identities Torii places in the signed receipt and response headers.
-#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SorafsOrderbookSubmissionIdentityV1 {
+    /// Transaction identity exposed by the submission endpoint.
     pub tx_hash: HashOf<SignedTransaction>,
+    /// Hash of the canonical transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Hash of the complete signed transaction.
     pub signed_transaction_hash: HashOf<SignedTransaction>,
 }
-
 fn parse_exact<T: FromStr + ToString>(literal: &str) -> Option<T> {
     let parsed = literal.parse::<T>().ok()?;
     (parsed.to_string() == literal).then_some(parsed)
 }
-
 /// Parse the three exact checksummed identity literals accepted from SDK boundaries.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_submission_identity_v1(
@@ -69,12 +65,10 @@ pub fn parse_sorafs_orderbook_submission_identity_v1(
 ) -> Option<SorafsOrderbookSubmissionIdentityV1> {
     Some(SorafsOrderbookSubmissionIdentityV1 { tx_hash: parse_exact(tx_hash)?, entrypoint_hash: parse_exact(entrypoint_hash)?, signed_transaction_hash: parse_exact(signed_transaction_hash)? })
 }
-
 /// Parse one exact checksummed receipt signer literal accepted from SDK boundaries.
 pub fn parse_sorafs_orderbook_receipt_signer_v1(literal: &str) -> Option<PublicKey> {
     parse_exact(literal)
 }
-
 /// Parse one exact reference-SDK payload label.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_payload_kind_v1(
@@ -87,19 +81,16 @@ pub fn parse_sorafs_orderbook_payload_kind_v1(
         _ => return None,
     })
 }
-
 /// Parse one exact order side label.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_side_v1(label: &str) -> Option<OrderSideV1> {
     match label { "bid" => Some(OrderSideV1::Bid), "ask" => Some(OrderSideV1::Ask), _ => None }
 }
-
 /// Parse one exact storage tier label.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_tier_v1(label: &str) -> Option<OrderTierV1> {
     match label { "hot" => Some(OrderTierV1::Hot), "warm" => Some(OrderTierV1::Warm), "archive" => Some(OrderTierV1::Archive), _ => None }
 }
-
 /// Parse a cancellation label with the binding's pinned owner-requested spelling.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_cancel_reason_v1(
@@ -111,7 +102,6 @@ pub fn parse_sorafs_orderbook_cancel_reason_v1(
     }
     match label { "expired" => Some(OrderCancelReasonV1::Expired), "governance" => Some(OrderCancelReasonV1::Governance), "replaced" => Some(OrderCancelReasonV1::Replaced), _ => None }
 }
-
 /// Parse bounded unsigned decimal text for native SDK bindings.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_decimal_u64_v1(value: &str, context: &str) -> Result<u64, String> {
@@ -120,7 +110,6 @@ pub fn parse_sorafs_orderbook_decimal_u64_v1(value: &str, context: &str) -> Resu
     }
     value.parse().map_err(|error| format!("{context} must be an unsigned 64-bit decimal integer: {error}"))
 }
-
 /// Parse exact bounded XOR quantity text for native SDK bindings.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_xor_quantity_v1(
@@ -136,13 +125,11 @@ pub fn parse_sorafs_orderbook_xor_quantity_v1(
     }
     Ok(quantity)
 }
-
 /// Narrow one SDK integer to canonical fee basis points.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_fee_bps_v1(value: u32, context: &str) -> Result<u16, String> {
     value.try_into().map_err(|_| format!("{context} must fit in u16 basis points"))
 }
-
 /// Enforce the shared SDK owner byte bound before derivation or signing.
 pub fn validate_sorafs_orderbook_owner_account_v1(owner_account: &[u8]) -> Result<(), String> {
     if owner_account.is_empty() {
@@ -155,52 +142,86 @@ pub fn validate_sorafs_orderbook_owner_account_v1(owner_account: &[u8]) -> Resul
     }
     Ok(())
 }
-
 /// Authenticated route command retained for finalized-state checks.
-#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[rustfmt::skip]
 pub enum ValidatedSorafsOrderbookSubmissionCommandV1 {
-    SubmitOrder { policy_digest: [u8; 32], order: OrderRequestV1 },
-    CancelOrder { policy_digest: [u8; 32], cancellation: OrderCancelV1 },
-    RecordReceipt { policy_digest: [u8; 32], receipt: SettlementReceiptV1 },
+    /// A validated order request and the policy digest it targets.
+    SubmitOrder {
+        /// Digest of the finalized orderbook policy targeted by the request.
+        policy_digest: [u8; 32],
+        /// Decoded and signature-verified order request.
+        order: OrderRequestV1,
+    },
+    /// A validated cancellation and the policy digest it targets.
+    CancelOrder {
+        /// Digest of the finalized orderbook policy targeted by the cancellation.
+        policy_digest: [u8; 32],
+        /// Decoded and signature-verified cancellation.
+        cancellation: OrderCancelV1,
+    },
+    /// A validated receipt and the policy digest it targets.
+    RecordReceipt {
+        /// Digest of the finalized orderbook policy targeted by the receipt.
+        policy_digest: [u8; 32],
+        /// Decoded and signature-verified settlement receipt.
+        receipt: SettlementReceiptV1,
+    },
 }
-
 /// Stateless validation output shared by Torii and strict SDK bindings.
-#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedSorafsOrderbookSubmissionV1 {
+    /// Canonical identities derived from the submitted transaction.
     pub identity: SorafsOrderbookSubmissionIdentityV1,
+    /// Validated route command and decoded embedded payload.
     pub command: ValidatedSorafsOrderbookSubmissionCommandV1,
 }
 /// Strict orderbook submission or receipt validation failure.
-#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum SorafsOrderbookSubmissionValidationError {
+    /// The caller supplied no transaction bytes.
     #[error("signed orderbook transaction must not be empty")] EmptyTransaction,
+    /// The transaction exceeds the V1 ingress ceiling.
     #[error("signed orderbook transaction exceeds the canonical V1 byte bound")] TransactionTooLarge,
+    /// The bytes do not contain a current versioned signed transaction.
     #[error("signed orderbook transaction is not a valid current versioned wire")] InvalidTransactionEncoding,
+    /// The transaction bytes are not the exact canonical wire encoding.
     #[error("signed orderbook transaction is not the exact canonical versioned wire")] NonCanonicalTransaction,
+    /// The transaction authority signature is invalid.
     #[error("signed orderbook transaction has an invalid authority signature")] InvalidTransactionSignature,
+    /// The transaction targets a different network.
     #[error("signed orderbook transaction network does not match the expected network")] NetworkMismatch,
+    /// The transaction executable is not a native instruction list.
     #[error("signed orderbook transaction must contain one native instruction")] NonInstructionExecutable,
+    /// The transaction contains other than one instruction.
     #[error("signed orderbook transaction must contain exactly one native instruction")] NonSingletonInstruction,
+    /// The instruction does not match the selected submission route.
     #[error("signed orderbook transaction instruction does not match the selected route")] RouteMismatch,
+    /// The embedded orderbook payload is malformed or non-canonical.
     #[error("signed orderbook transaction contains an invalid embedded payload")] InvalidEmbeddedPayload,
+    /// The embedded owner or signer differs from the transaction authority.
     #[error("signed orderbook payload owner or signer does not match transaction authority")] EmbeddedPayloadAuthorityMismatch,
+    /// The SDK route label is not part of the V1 route inventory.
     #[error("unsupported SoraFS orderbook submission route")] UnsupportedRoute,
+    /// The caller supplied no receipt bytes.
     #[error("transaction submission receipt must not be empty")] EmptyReceipt,
+    /// The receipt exceeds the V1 response ceiling.
     #[error("transaction submission receipt exceeds the canonical V1 byte bound")] ReceiptTooLarge,
+    /// The bytes do not contain a transaction-submission receipt.
     #[error("invalid transaction submission receipt encoding")] InvalidReceiptEncoding,
+    /// The receipt bytes are not the exact canonical encoding.
     #[error("transaction submission receipt is not the exact canonical wire")] NonCanonicalReceipt,
+    /// The receipt signature is invalid.
     #[error("transaction submission receipt signature is invalid")] InvalidReceiptSignature,
+    /// The receipt signer differs from the expected trust anchor.
     #[error("transaction submission receipt signer does not match the expected signer")] ReceiptSignerMismatch,
+    /// The receipt's transaction hash differs from the submitted transaction.
     #[error("transaction submission receipt tx_hash does not match the submitted transaction")] ReceiptTransactionHashMismatch,
+    /// The receipt's entrypoint hash differs from the submitted transaction.
     #[error("transaction submission receipt entrypoint_hash does not match the submitted transaction")] ReceiptEntrypointHashMismatch,
+    /// The receipt's signed-transaction hash differs from the submitted transaction.
     #[error("transaction submission receipt signed_transaction_hash does not match the submitted transaction")] ReceiptSignedTransactionHashMismatch,
 }
-
 /// Decode and validate one exact caller-signed orderbook transaction before HTTP.
 #[deprecated(note = "use inspect_sorafs_orderbook_submission_for_discriminant_v1")]
 #[rustfmt::skip]
@@ -209,7 +230,6 @@ pub fn inspect_sorafs_orderbook_submission_v1(
 ) -> Result<SorafsOrderbookSubmissionIdentityV1, SorafsOrderbookSubmissionValidationError> {
     Ok(inspect_sorafs_orderbook_submission_for_discriminant_v1(bytes, route, expected_network, crate::account::address::chain_discriminant())?.identity)
 }
-
 /// Decode and validate using the deployment's explicit I105 discriminant.
 pub fn inspect_sorafs_orderbook_submission_for_discriminant_v1(
     bytes: &[u8],
@@ -239,7 +259,6 @@ pub fn inspect_sorafs_orderbook_submission_for_discriminant_v1(
         expected_chain_discriminant,
     )
 }
-
 /// Validate one decoded transaction without narrowing Torii's JSON ingress.
 pub fn validate_sorafs_orderbook_submission_transaction_v1(
     transaction: &SignedTransaction,
@@ -322,7 +341,6 @@ pub fn validate_sorafs_orderbook_submission_transaction_v1(
             }
         }
     };
-
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
@@ -336,7 +354,6 @@ pub fn validate_sorafs_orderbook_submission_transaction_v1(
         command,
     })
 }
-
 fn require_owner_authority(
     transaction: &SignedTransaction,
     owner_account: &[u8],
@@ -373,7 +390,6 @@ fn require_owner_authority(
     }
     Ok(())
 }
-
 /// Decode, authenticate, trust-anchor, and identity-bind one exact receipt body.
 pub fn decode_and_verify_sorafs_orderbook_submission_receipt_v1(
     bytes: &[u8],
@@ -413,7 +429,6 @@ pub fn decode_and_verify_sorafs_orderbook_submission_receipt_v1(
     }
     Ok(receipt)
 }
-
 #[cfg(test)]
 #[path = "orderbook_submission_tests.rs"]
 mod tests;

@@ -3,7 +3,6 @@ use ivm::{
     Memory,
     halo2::{AllocCircuit, GetGasCircuit},
 };
-
 #[test]
 fn test_alloc_circuit_ok() {
     let c = AllocCircuit {
@@ -15,7 +14,6 @@ fn test_alloc_circuit_ok() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_alloc_circuit_oob() {
     let c = AllocCircuit {
@@ -27,7 +25,6 @@ fn test_alloc_circuit_oob() {
     };
     assert!(c.verify().is_err());
 }
-
 #[test]
 fn test_getgas_circuit() {
     let c = GetGasCircuit {
@@ -37,7 +34,6 @@ fn test_getgas_circuit() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_getgas_circuit_mismatch() {
     let c = GetGasCircuit {

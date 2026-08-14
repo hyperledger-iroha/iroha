@@ -6,7 +6,6 @@ impl Kura {
     ) -> Result<()> {
         self.write_certified_lane_block_artifact_with_authority(artifact, None, None)
     }
-
     // The inflight source contract audits this authority-bearing publication boundary directly.
     #[allow(dead_code)]
     fn write_certified_lane_block_artifact_with_authority(
@@ -22,7 +21,6 @@ impl Kura {
             lane_commit_authorization,
         )
     }
-
     /// Read a certified standalone lane block by lane and lane-local block height.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a different
@@ -53,7 +51,6 @@ impl Kura {
             true,
         )
     }
-
     fn publish_certified_frontier_and_consume_capacity_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -106,7 +103,6 @@ impl Kura {
         }
         Ok(frontier_changed)
     }
-
     fn decode_latest_certified_lane_block_frontier(
         path: &Path,
         bytes: &[u8],
@@ -137,7 +133,6 @@ impl Kura {
         }
         Ok(frontier)
     }
-
     fn read_latest_certified_lane_block_frontier_structural_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -212,7 +207,6 @@ impl Kura {
             snapshot,
         }))
     }
-
     fn recover_latest_certified_lane_block_frontier_build_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -317,7 +311,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn persist_committed_lane_block_session_inner(
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
@@ -434,7 +427,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn certified_bundle_pair_remaining_capacity_locked(
         &self,
         data_path: &Path,
@@ -547,7 +539,6 @@ impl Kura {
                 true,
             ));
         }
-
         let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
         let namespace_components = namespace
             .stable_relative_components(data_path, index_path)
@@ -834,7 +825,6 @@ impl Kura {
         }
         Ok((stable, transient, 0, false))
     }
-
     fn certified_bundle_capacity_pair_read_unchanged(
         &self,
         pair: &BoundProgressPair,
@@ -850,7 +840,6 @@ impl Kura {
                 && self.bound_progress_namespace_unchanged(namespace)),
         }
     }
-
     fn certified_bundle_capacity_plan(
         &self,
         entry: &LaneConfigEntry,
@@ -974,7 +963,6 @@ impl Kura {
             )?,
         })
     }
-
     /// Read-only recognition of an exact append crash journal. Other rewrite
     /// temporaries are deliberately fail-closed: they do not authenticate the
     /// payload whose composite envelope is being reconstructed.
@@ -1152,7 +1140,6 @@ impl Kura {
             physical_temp_bytes,
         }))
     }
-
     /// Read the immutable preimage named by an authenticated append intent
     /// without rolling either main file backward or forward. This lets startup
     /// validate older stable history before the exact target append consumes
@@ -1214,7 +1201,6 @@ impl Kura {
                 )
             })?;
         old_window.copy_from_slice(&intent.old_index_bytes);
-
         let layout = if index.len() < PIPELINE_INDEX_ENTRY_SIZE {
             SidecarIndexLayout::legacy(u64::try_from(index.len())?)
         } else {
@@ -1357,7 +1343,6 @@ impl Kura {
         }
         Ok(payloads)
     }
-
     fn certified_bundle_pair_has_any_recovery_locked(
         &self,
         data_path: &Path,
@@ -1380,7 +1365,6 @@ impl Kura {
         }
         Ok(false)
     }
-
     /// Validate all clean certified/bundle slots before startup repair mutates
     /// either pair. Exact target append journals are accounted by the composite
     /// plan and deferred to the existing journal recovery path; every other
@@ -1517,7 +1501,6 @@ impl Kura {
                 }
             }
         }
-
         let mut bundles = BTreeMap::new();
         if let Some(recovery) = bundle_recovery.as_ref() {
             for (height, bytes) in self.certified_bundle_append_preimage_payloads_locked(
@@ -1611,7 +1594,6 @@ impl Kura {
                 }
             }
         }
-
         let Some(frontier) = frontier else {
             if !certified.is_empty() || !bundles.is_empty() {
                 return Err(Self::invalid_lane_artifact_error(
@@ -1675,7 +1657,6 @@ impl Kura {
         }
         Ok(persisted)
     }
-
     fn certified_bundle_capacity_consumed_components_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -1685,7 +1666,6 @@ impl Kura {
     ) -> Result<BTreeSet<CertifiedBundleCapacityComponent>> {
         let descriptor = &artifact.proposal.descriptor;
         let mut consumed = BTreeSet::new();
-
         let frontier_read =
             self.read_latest_certified_lane_block_frontier_structural_locked(entry, false)?;
         if let Some(frontier_read) = frontier_read {
@@ -1723,7 +1703,6 @@ impl Kura {
                 }
             }
         }
-
         let certified_bytes = artifact.encode_framed()?;
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
@@ -1775,7 +1754,6 @@ impl Kura {
                 }
             }
         }
-
         let (bundle_data_path, bundle_index_path) =
             Self::autonomous_lane_merge_bundle_paths_for_entry(entry, &self.store_root);
         let bundle_has_recovery = self.certified_bundle_pair_has_exact_append_recovery_locked(
@@ -1826,7 +1804,6 @@ impl Kura {
         }
         Ok(consumed)
     }
-
     fn ensure_certified_bundle_capacity_plan_locked(
         &self,
         plan: CertifiedBundleCapacityPlan,
@@ -1889,7 +1866,6 @@ impl Kura {
                 )
             });
         }
-
         let outstanding_components = plan
             .component_bytes
             .keys()
@@ -1954,7 +1930,6 @@ impl Kura {
         reservations.insert(identity, reservation);
         Ok(new_reserved)
     }
-
     fn ensure_certified_bundle_capacity_reservation_under_prune_guard(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
@@ -2005,7 +1980,6 @@ impl Kura {
             post_wsv_reserved_bytes,
         )
     }
-
     fn certified_bundle_capacity_reserved_bytes(&self) -> Result<u64> {
         self.certified_bundle_capacity_reservations
             .lock()
@@ -2025,7 +1999,6 @@ impl Kura {
                 })
             })
     }
-
     fn ensure_lane_has_no_certified_bundle_capacity_reservation(
         &self,
         entry: &LaneConfigEntry,
@@ -2045,7 +2018,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn consume_certified_bundle_capacity_component(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
@@ -2110,7 +2082,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn consume_certified_bundle_frontier_capacity(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
@@ -2129,7 +2100,6 @@ impl Kura {
             Hash::new(&bytes),
         )
     }
-
     fn consume_certified_bundle_pair_capacity(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
@@ -2141,7 +2111,6 @@ impl Kura {
             Hash::new(&bytes),
         )
     }
-
     fn consume_autonomous_bundle_pair_capacity(
         &self,
         source: &DurableAutonomousLaneMergeSource,
@@ -2152,7 +2121,6 @@ impl Kura {
             Hash::new(&source.source_bundle),
         )
     }
-
     /// Reconstruct every active READY-bearing publication obligation from its
     /// authenticated durable frontier before either certified-pair or bundle
     /// repair may mutate storage.

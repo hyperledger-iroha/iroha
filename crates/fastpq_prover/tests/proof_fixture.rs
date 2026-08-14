@@ -1,7 +1,5 @@
 //! Golden V1 proof fixture parity; regeneration gated by `FASTPQ_UPDATE_FIXTURES`.
-
-use std::{fs, path::PathBuf};
-
+use crate::common::fixture_update_requested;
 use fastpq_prover::{
     ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses,
@@ -16,15 +14,12 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-
-use crate::common::fixture_update_requested;
-
+use std::{fs, path::PathBuf};
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
 }
-
 /// Construct the regression batch used for V1 fixtures.
 fn v1_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
@@ -77,7 +72,6 @@ fn v1_fixture_batch(rows: usize) -> TransitionBatch {
     batch.public_inputs.tx_set_hash = [0u8; 32];
     batch
 }
-
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
     let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
@@ -85,7 +79,6 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let _ = domain;
     AccountId::new(keypair.public_key().clone())
 }
-
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
     let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fixture", "universal").unwrap(),
@@ -138,7 +131,6 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
     );
     (transcript, sender, receiver)
 }
-
 #[test]
 fn golden_v1_proof_matches_fixture() {
     let path = fixture_path("v1_balanced_1k.bin");
@@ -152,7 +144,6 @@ fn golden_v1_proof_matches_fixture() {
         fs::write(&path, &reencoded).expect("write regenerated fixture");
         return;
     }
-
     let bytes = fs::read(&path).expect("read proof fixture");
     let prover =
         Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu).unwrap();

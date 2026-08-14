@@ -1,11 +1,5 @@
 //! Implementations for transaction queries.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    ops::ControlFlow,
-};
-
+use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 use eyre::Result;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
@@ -22,17 +16,17 @@ use iroha_data_model::{
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 use norito::json::Value;
-
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
-
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    ops::ControlFlow,
+};
 fn block_hash_from_value(value: &Value) -> Option<HashOf<BlockHeader>> {
     norito::json::from_value(value.clone()).ok()
 }
-
 fn entrypoint_hash_from_value(value: &Value) -> Option<HashOf<TransactionEntrypoint>> {
     norito::json::from_value(value.clone()).ok()
 }
-
 fn account_id_from_value(value: &Value) -> Option<AccountId> {
     norito::json::from_value(value.clone()).ok().or_else(|| {
         AccountId::parse_encoded(value.as_str()?)
@@ -40,35 +34,27 @@ fn account_id_from_value(value: &Value) -> Option<AccountId> {
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
     })
 }
-
 fn timestamp_ms_from_value(value: &Value) -> Option<u64> {
     norito::json::from_value(value.clone()).ok()
 }
-
 fn result_status_from_value(value: &Value) -> Option<bool> {
     norito::json::from_value(value.clone()).ok()
 }
-
 fn transaction_block_hash_field(field: &str) -> bool {
     matches!(field, "block_hash" | "block" | "block.hash")
 }
-
 fn transaction_entrypoint_hash_field(field: &str) -> bool {
     matches!(field, "entrypoint_hash" | "entrypoint.hash")
 }
-
 fn transaction_authority_field(field: &str) -> bool {
     matches!(field, "authority" | "authority_id")
 }
-
 fn transaction_timestamp_field(field: &str) -> bool {
     matches!(field, "timestamp_ms" | "creation_time_ms")
 }
-
 fn transaction_result_status_field(field: &str) -> bool {
     matches!(field, "result_ok" | "result.is_ok")
 }
-
 fn intersect_block_candidate_heights(
     selected: &mut Option<BTreeSet<NonZeroUsize>>,
     candidates: BTreeSet<NonZeroUsize>,
@@ -79,7 +65,6 @@ fn intersect_block_candidate_heights(
         *selected = Some(candidates);
     }
 }
-
 fn entrypoint_hash_candidate_heights(
     hash: Option<HashOf<TransactionEntrypoint>>,
     state_ro: &impl StateReadOnly,
@@ -89,7 +74,6 @@ fn entrypoint_hash_candidate_heights(
     };
     state_ro.kura().get_block_heights_by_entrypoint_hash(hash)
 }
-
 fn entrypoint_hash_candidate_heights_from_values(
     values: &[Value],
     state_ro: &impl StateReadOnly,
@@ -101,7 +85,6 @@ fn entrypoint_hash_candidate_heights_from_values(
     }
     Some(candidates)
 }
-
 fn authority_candidate_heights(
     authority: Option<AccountId>,
     state_ro: &impl StateReadOnly,
@@ -113,7 +96,6 @@ fn authority_candidate_heights(
         .kura()
         .get_block_heights_by_transaction_authority(&authority)
 }
-
 fn authority_candidate_heights_from_values(
     values: &[Value],
     state_ro: &impl StateReadOnly,
@@ -127,7 +109,6 @@ fn authority_candidate_heights_from_values(
     }
     Some(candidates)
 }
-
 fn timestamp_candidate_heights(
     timestamp_ms: Option<u64>,
     state_ro: &impl StateReadOnly,
@@ -139,7 +120,6 @@ fn timestamp_candidate_heights(
         .kura()
         .get_block_heights_by_transaction_timestamp_ms(timestamp_ms)
 }
-
 fn timestamp_candidate_heights_from_values(
     values: &[Value],
     state_ro: &impl StateReadOnly,
@@ -153,7 +133,6 @@ fn timestamp_candidate_heights_from_values(
     }
     Some(candidates)
 }
-
 fn result_status_candidate_heights(
     result_status: Option<bool>,
     state_ro: &impl StateReadOnly,
@@ -165,7 +144,6 @@ fn result_status_candidate_heights(
         .kura()
         .get_block_heights_by_transaction_result_status(result_status)
 }
-
 fn result_status_candidate_heights_from_values(
     values: &[Value],
     state_ro: &impl StateReadOnly,
@@ -179,13 +157,11 @@ fn result_status_candidate_heights_from_values(
     }
     Some(candidates)
 }
-
 fn transaction_candidate_block_heights(
     predicate: &PredicateJson,
     state_ro: &impl StateReadOnly,
 ) -> Option<BTreeSet<NonZeroUsize>> {
     let mut best = None;
-
     for cond in &predicate.equals {
         if transaction_block_hash_field(&cond.field) {
             intersect_block_candidate_heights(
@@ -221,7 +197,6 @@ fn transaction_candidate_block_heights(
             intersect_block_candidate_heights(&mut best, candidates);
         }
     }
-
     for cond in &predicate.r#in {
         if transaction_block_hash_field(&cond.field) {
             intersect_block_candidate_heights(
@@ -258,16 +233,13 @@ fn transaction_candidate_block_heights(
             intersect_block_candidate_heights(&mut best, candidates);
         }
     }
-
     best
 }
-
 fn transaction_filter_candidate_block_heights(
     filters: &CommittedTxFilters,
     state_ro: &impl StateReadOnly,
 ) -> Option<BTreeSet<NonZeroUsize>> {
     let mut best = None;
-
     if let Some(block_hash) = filters.block_eq.as_ref() {
         intersect_block_candidate_heights(
             &mut best,
@@ -278,7 +250,6 @@ fn transaction_filter_candidate_block_heights(
                 .collect(),
         );
     }
-
     if !filters.block_in.is_empty() {
         intersect_block_candidate_heights(
             &mut best,
@@ -289,7 +260,6 @@ fn transaction_filter_candidate_block_heights(
                 .collect(),
         );
     }
-
     if let Some(entrypoint_hash) = filters.entry_eq.as_ref()
         && let Some(candidates) = state_ro
             .kura()
@@ -297,7 +267,6 @@ fn transaction_filter_candidate_block_heights(
     {
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     if !filters.entry_in.is_empty() {
         let mut candidates = BTreeSet::new();
         for entrypoint_hash in &filters.entry_in {
@@ -308,7 +277,6 @@ fn transaction_filter_candidate_block_heights(
         }
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     if let Some(authority) = filters.authority_eq.as_ref()
         && let Some(candidates) = state_ro
             .kura()
@@ -316,7 +284,6 @@ fn transaction_filter_candidate_block_heights(
     {
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     if !filters.authority_in.is_empty() {
         let mut candidates = BTreeSet::new();
         for authority in &filters.authority_in {
@@ -327,14 +294,12 @@ fn transaction_filter_candidate_block_heights(
         }
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     if filters.ts_ge.is_some() || filters.ts_le.is_some() {
         let candidates = state_ro
             .kura()
             .get_block_heights_by_transaction_timestamp_range(filters.ts_ge, filters.ts_le)?;
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     if let Some(result_ok) = filters.result_ok
         && let Some(candidates) = state_ro
             .kura()
@@ -342,7 +307,6 @@ fn transaction_filter_candidate_block_heights(
     {
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     if !filters.result_ok_in.is_empty() {
         let mut candidates = BTreeSet::new();
         for result_ok in filters.result_ok_in.iter().copied() {
@@ -353,10 +317,8 @@ fn transaction_filter_candidate_block_heights(
         }
         intersect_block_candidate_heights(&mut best, candidates);
     }
-
     best
 }
-
 fn transaction_query_plan(
     filter: &CompoundPredicate<CommittedTransaction>,
     state_ro: &impl StateReadOnly,
@@ -364,7 +326,6 @@ fn transaction_query_plan(
     let predicate_json = filter
         .json_payload()
         .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
-
     let mut candidate_heights = None;
     if let Some(filters) = filter.committed_tx_filters()
         && let Some(candidates) = transaction_filter_candidate_block_heights(&filters, state_ro)
@@ -377,10 +338,8 @@ fn transaction_query_plan(
     {
         intersect_block_candidate_heights(&mut candidate_heights, candidates);
     }
-
     (predicate_json, candidate_heights)
 }
-
 fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -397,7 +356,6 @@ fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value
     }
     Some(current)
 }
-
 fn transaction_field_equals(
     tx: &CommittedTransaction,
     field: &str,
@@ -424,7 +382,6 @@ fn transaction_field_equals(
     }
     tx_value.and_then(|value| predicate_value_at_path(value, field)) == Some(expected)
 }
-
 fn transaction_field_in(
     tx: &CommittedTransaction,
     field: &str,
@@ -435,7 +392,6 @@ fn transaction_field_in(
         .iter()
         .any(|expected| transaction_field_equals(tx, field, expected, tx_value))
 }
-
 fn transaction_field_exists(
     tx: &CommittedTransaction,
     field: &str,
@@ -457,14 +413,12 @@ fn transaction_field_exists(
         .and_then(|value| predicate_value_at_path(value, field))
         .is_some_and(|actual| !actual.is_null())
 }
-
 fn transaction_predicate_json_applies(
     predicate: &PredicateJson,
     tx: &CommittedTransaction,
 ) -> bool {
     let tx_value = norito::json::to_value(tx).ok();
     let tx_value = tx_value.as_ref();
-
     for cond in &predicate.equals {
         if !transaction_field_equals(tx, &cond.field, &cond.value, tx_value) {
             return false;
@@ -482,7 +436,6 @@ fn transaction_predicate_json_applies(
     }
     true
 }
-
 fn transaction_filter_applies(
     filter: &CompoundPredicate<CommittedTransaction>,
     predicate_json: Option<&PredicateJson>,
@@ -493,17 +446,14 @@ fn transaction_filter_applies(
         |predicate| transaction_predicate_json_applies(predicate, tx),
     )
 }
-
 fn block_committed_transactions(block: &SignedBlock) -> Vec<CommittedTransaction> {
     let block_hash = block.hash();
-
     let entrypoint_hashes = block.entrypoint_hashes().rev();
     let entrypoint_proofs = block.entrypoint_proofs().rev();
     let entrypoints = block.entrypoints_cloned().rev();
     let result_hashes = block.result_hashes().rev();
     let result_proofs = block.result_proofs().rev();
     let results = block.results().cloned().rev();
-
     entrypoint_hashes
         .zip(entrypoint_proofs)
         .zip(entrypoints)
@@ -529,32 +479,27 @@ fn block_committed_transactions(block: &SignedBlock) -> Vec<CommittedTransaction
         )
         .collect()
 }
-
 fn merge_query_corruption(message: impl std::fmt::Display) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(format!(
         "certified merge transaction history is inconsistent: {message}"
     ))
 }
-
 #[cfg(test)]
 std::thread_local! {
     static CERTIFIED_MERGE_PROJECTION_CALLS: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 /// Reset the thread-local eager merge projection counter used by query gas tests.
 pub(crate) fn reset_certified_merge_projection_calls_for_test() {
     CERTIFIED_MERGE_PROJECTION_CALLS.set(0);
 }
-
 #[cfg(test)]
 /// Return eager merge projection calls observed on the current test thread.
 pub(crate) fn certified_merge_projection_calls_for_test() -> usize {
     CERTIFIED_MERGE_PROJECTION_CALLS.get()
 }
-
 /// Project the authenticated transaction/result pairs carried by a certified merge entry.
 ///
 /// The compact carrier reference, execution-batch commitments, transcript hashes, and Merkle
@@ -588,7 +533,6 @@ pub fn certified_merge_committed_transactions(
             "entrypoint count is outside the supported Merkle proof range",
         ));
     }
-
     let mut entrypoints = Vec::with_capacity(entrypoint_count);
     let mut results = Vec::with_capacity(entrypoint_count);
     for execution in &batch.lanes {
@@ -625,7 +569,6 @@ pub fn certified_merge_committed_transactions(
             "flattened lane transcript differs from the certified entrypoint count",
         ));
     }
-
     let entrypoint_hashes = entrypoints
         .iter()
         .map(TransactionEntrypoint::hash)
@@ -649,7 +592,6 @@ pub fn certified_merge_committed_transactions(
             "reconstructed transaction proof roots differ from the certified batch",
         ));
     }
-
     let inclusion = CertifiedMergeTransactionInclusion {
         version: 1,
         merge_entry_hash: entry.canonical_hash(),
@@ -682,7 +624,6 @@ pub fn certified_merge_committed_transactions(
     }
     Ok(committed)
 }
-
 fn certified_merge_projection_work(entry: &MergeLedgerEntry) -> usize {
     let Some(batch) = entry.execution_batch.as_ref() else {
         return 0;
@@ -700,7 +641,6 @@ fn certified_merge_projection_work(entry: &MergeLedgerEntry) -> usize {
     });
     declared.max(observed)
 }
-
 fn committed_merge_transactions_by_height(
     state_ro: &impl StateReadOnly,
     candidate_heights: Option<&BTreeSet<NonZeroUsize>>,
@@ -747,7 +687,6 @@ fn committed_merge_transactions_by_height(
         }
         return Ok(by_height);
     }
-
     let carried_entries = state_ro
         .kura()
         .committed_merge_execution_entries()
@@ -790,7 +729,6 @@ fn committed_merge_transactions_by_height(
     }
     Ok(by_height)
 }
-
 fn block_committed_transactions_with_merge(
     block: &SignedBlock,
     merge_by_height: &BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>,
@@ -807,7 +745,6 @@ fn block_committed_transactions_with_merge(
     }
     committed
 }
-
 /// Immutable upper bound for a replayed transaction-history scan.
 ///
 /// Exact stored queries retain this compact chain anchor instead of retaining
@@ -818,7 +755,6 @@ pub(crate) struct TransactionHistoryAnchor {
     height: usize,
     tip_hash: Option<HashOf<BlockHeader>>,
 }
-
 impl TransactionHistoryAnchor {
     /// Capture the canonical prefix visible to a query view.
     pub(crate) fn capture(state_ro: &impl StateReadOnly) -> Self {
@@ -827,7 +763,6 @@ impl TransactionHistoryAnchor {
             tip_hash: state_ro.latest_block_hash(),
         }
     }
-
     fn validate(self, state_ro: &impl StateReadOnly) -> Result<(), QueryExecutionFail> {
         let observed_tip = self
             .height
@@ -840,7 +775,6 @@ impl TransactionHistoryAnchor {
         Ok(())
     }
 }
-
 /// Compact resume position within an anchored transaction-history scan.
 ///
 /// The cursor points just after a projected transaction in one carrier block.
@@ -850,7 +784,6 @@ pub(crate) struct TransactionHistoryCursor {
     height: usize,
     transaction_offset: usize,
 }
-
 /// Visit committed transactions in canonical newest-first query order.
 ///
 /// Unlike [`ValidQuery`] execution, this path is fallible while walking Kura.
@@ -897,7 +830,6 @@ pub(crate) fn visit_committed_transactions(
         ),
         None => Box::new((1..=maximum_height).rev().filter_map(NonZeroUsize::new)),
     };
-
     for height in heights {
         let expected_hash = height
             .get()
@@ -913,7 +845,6 @@ pub(crate) fn visit_committed_transactions(
         let carrier_height = u64::try_from(height.get()).map_err(|_| {
             merge_query_corruption("carrier height does not fit the canonical range")
         })?;
-
         // Read only the canonical block and its compact reference first. The
         // full sidecar may be large, so its authenticated declared work must be
         // charged before Kura resolves or decodes it.
@@ -932,7 +863,6 @@ pub(crate) fn visit_committed_transactions(
                 height.get()
             )));
         }
-
         let reference = block
             .execution_context()
             .and_then(|context| context.merge_entry.as_ref());
@@ -953,7 +883,6 @@ pub(crate) fn visit_committed_transactions(
         };
         let ordinary_work = u64::try_from(block.entrypoint_hashes().count()).unwrap_or(u64::MAX);
         before_project(ordinary_work.saturating_add(declared_merge_work))?;
-
         // Resolve only after the compact declaration has passed budget
         // admission. This preserves fail-closed sidecar validation without
         // allowing a false predicate to force uncharged sidecar I/O.
@@ -977,7 +906,6 @@ pub(crate) fn visit_committed_transactions(
                 )));
             }
         };
-
         let observed_merge_work =
             merge_projection.map_or(0, |(_, entry)| certified_merge_projection_work(entry));
         let declared_merge_work = usize::try_from(declared_merge_work).unwrap_or(usize::MAX);
@@ -999,7 +927,6 @@ pub(crate) fn visit_committed_transactions(
                 certified_merge_committed_transactions(block.hash(), reference, entry)
             })
             .transpose()?;
-
         // Merge execution precedes ordinary execution in the same global block,
         // so newest-first query order emits ordinary transactions first.
         let transaction_offset = resume
@@ -1032,10 +959,99 @@ pub(crate) fn visit_committed_transactions(
             }
         }
     }
-
     Ok(true)
 }
-
+/// Visit committed transactions without materializing the complete ledger history.
+///
+/// `max_carrier_projection_work` is checked independently for each compact carrier before its
+/// full merge sidecar is resolved. The visitor can stop as soon as its bounded page or heap is
+/// complete; sparse and non-matching history therefore does not consume a global retention
+/// budget merely because the chain is old.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving a carrier whose declared
+/// projection exceeds `max_carrier_projection_work`, or propagates durable carrier/sidecar
+/// validation failures.
+pub fn visit_committed_transactions_bounded(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    max_carrier_projection_work: u64,
+    mut visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
+) -> Result<bool, QueryExecutionFail> {
+    if max_carrier_projection_work == 0
+        || max_carrier_projection_work > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get()
+    {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    visit_committed_transactions(
+        state_ro,
+        &filter,
+        TransactionHistoryAnchor::capture(state_ro),
+        None,
+        |work| {
+            if work > max_carrier_projection_work {
+                return Err(QueryExecutionFail::GasBudgetExceeded);
+            }
+            Ok(())
+        },
+        |transaction, matches, _| visitor(transaction, matches),
+    )
+}
+/// Collect a small committed-transaction snapshot within explicit retention bounds.
+///
+/// Carrier work is bounded independently before sidecar resolution. Transactions are visited
+/// newest first and only predicate matches are retained. The function rejects a result set that
+/// exceeds `max_projected_transactions` instead of returning a silently truncated snapshot, and
+/// charges canonical retained bytes before every push.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving an oversized carrier or
+/// retaining bytes beyond `max_retained_bytes`, [`QueryExecutionFail::FetchSizeTooBig`] when the
+/// matched result set exceeds the canonical fetch ceiling, or propagates durable validation
+/// failures.
+pub fn committed_transactions_bounded_snapshot(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    max_projected_transactions: u64,
+    max_retained_bytes: u64,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    if max_projected_transactions == 0 || max_retained_bytes == 0 {
+        return Err(QueryExecutionFail::GasBudgetExceeded);
+    }
+    if max_projected_transactions > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get() {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    let capacity = usize::try_from(max_projected_transactions).unwrap_or(usize::MAX);
+    let mut retained_bytes = 0_u64;
+    let mut transactions = Vec::new();
+    transactions
+        .try_reserve_exact(capacity)
+        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+    visit_committed_transactions_bounded(
+        state_ro,
+        filter,
+        max_projected_transactions,
+        |transaction, matches| {
+            if matches {
+                if transactions.len() == capacity {
+                    return Err(QueryExecutionFail::FetchSizeTooBig);
+                }
+                let transaction_bytes =
+                    u64::try_from(norito::codec::Encode::encoded_len(&transaction))
+                        .unwrap_or(u64::MAX);
+                retained_bytes = retained_bytes
+                    .checked_add(transaction_bytes)
+                    .filter(|bytes| *bytes <= max_retained_bytes)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                transactions.push(transaction);
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
+    Ok(transactions)
+}
 /// Materialize complete canonical transaction history in newest-first order.
 ///
 /// This includes transactions executed by globally ordered certified merge
@@ -1057,7 +1073,6 @@ pub fn committed_transactions_snapshot(
         .flat_map(|block| block_committed_transactions_with_merge(&block, &merge_by_height))
         .collect())
 }
-
 /// Materialize an index-bounded committed-transaction snapshot.
 ///
 /// The filter must resolve through Kura's positive transaction indexes. This
@@ -1082,7 +1097,6 @@ pub fn committed_transactions_indexed_snapshot(
     ValidQuery::execute(FindTransactions, filter, state_ro)
         .map(|transactions| transactions.collect())
 }
-
 impl ValidQuery for FindTransactions {
     #[metrics(+"find_transactions")]
     fn execute(
@@ -1091,7 +1105,6 @@ impl ValidQuery for FindTransactions {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
         let (predicate_json, candidate_heights) = transaction_query_plan(&filter, state_ro);
-
         // Indexed predicates resolve only the selected sparse carrier entries.
         // Kura's live store and lazy-load paths publish ordinary and merge-sidecar
         // fields under one index lock; startup reconciliation finishes before the
@@ -1099,7 +1112,6 @@ impl ValidQuery for FindTransactions {
         // both unnecessary and an unbounded pre-pagination amplification vector.
         let merge_by_height =
             committed_merge_transactions_by_height(state_ro, candidate_heights.as_ref())?;
-
         let iter: Box<dyn Iterator<Item = CommittedTransaction> + '_> =
             if let Some(candidate_heights) = candidate_heights {
                 Box::new(
@@ -1122,20 +1134,17 @@ impl ValidQuery for FindTransactions {
                         }),
                 )
             };
-
         Ok(iter.filter(move |tx| transaction_filter_applies(&filter, predicate_json.as_ref(), tx)))
     }
 }
-
 #[cfg(test)]
 /// Transaction-history regression fixtures and tests.
 pub(crate) mod tests {
-    use std::{
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-        time::Duration,
+    use super::*;
+    use crate::{
+        block::BlockBuilder,
+        tx::{AcceptedTransaction, tests::*},
     };
-
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ValidationFail,
@@ -1156,13 +1165,11 @@ pub(crate) mod tests {
         },
         transaction::error::TransactionRejectionReason,
     };
-
-    use super::*;
-    use crate::{
-        block::BlockBuilder,
-        tx::{AcceptedTransaction, tests::*},
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
     };
-
     fn sample_certified_merge_execution_entry(epoch: u64, result_ok: bool) -> MergeLedgerEntry {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"merge-query-network")),
@@ -1358,13 +1365,11 @@ pub(crate) mod tests {
             queue_plan_admissions: Vec::new(),
         }
     }
-
     #[test]
     fn certified_merge_projection_is_reverse_ordered_and_rejects_tampering() {
         let entry = sample_certified_merge_execution_entry(1, true);
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-carrier-block"));
-
         let committed = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
             .expect("canonical merge projection");
         assert_eq!(committed.len(), 2);
@@ -1374,13 +1379,11 @@ pub(crate) mod tests {
             committed.iter().all(|tx| tx.block_hash == carrier_hash
                 && tx.verify_certified_merge_inclusion(&reference))
         );
-
         let mut wrong_reference = reference.clone();
         wrong_reference.encoded_len = wrong_reference.encoded_len.saturating_add(1);
         assert!(
             certified_merge_committed_transactions(carrier_hash, &wrong_reference, &entry).is_err()
         );
-
         let mut tampered = entry;
         tampered
             .execution_batch
@@ -1394,7 +1397,6 @@ pub(crate) mod tests {
                 .is_err()
         );
     }
-
     /// Build an empty canonical block for transaction-query fixtures.
     pub(crate) fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
         let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
@@ -1407,7 +1409,6 @@ pub(crate) mod tests {
             .expect("empty query carrier has an exact empty result set");
         block
     }
-
     /// Build a two-entry certified merge carrier above `previous`.
     pub(crate) fn certified_query_carrier(
         previous: &SignedBlock,
@@ -1419,7 +1420,6 @@ pub(crate) mod tests {
             sample_certified_merge_execution_entry(epoch, result_ok),
         )
     }
-
     fn certified_query_carrier_with_entry(
         previous: &SignedBlock,
         mut entry: MergeLedgerEntry,
@@ -1439,7 +1439,6 @@ pub(crate) mod tests {
         block.set_execution_context(Some(context));
         (Arc::new(block), entry)
     }
-
     /// Canonical merge-carrier history shared by transaction query tests.
     pub(crate) struct MergeQueryFixture {
         /// State sandbox containing the seeded canonical history.
@@ -1457,7 +1456,6 @@ pub(crate) mod tests {
         /// Durable sidecar hash for an older, unselected carrier.
         pub(crate) unrelated_entry_hash: HashOf<MergeLedgerEntry>,
     }
-
     /// Seed sixteen two-entry merge carriers above an empty genesis block.
     pub(crate) fn merge_query_fixture() -> MergeQueryFixture {
         let mut sandbox = Sandbox::default();
@@ -1468,7 +1466,6 @@ pub(crate) mod tests {
             .store_block(Arc::clone(&genesis))
             .expect("store merge query genesis");
         sandbox.state.push_block_hash_for_testing(genesis.hash());
-
         let target_epoch = 9;
         let mut previous = genesis;
         let mut target = None;
@@ -1524,7 +1521,6 @@ pub(crate) mod tests {
                 .expect("unrelated merge query carrier was seeded"),
         }
     }
-
     fn execute_single_carrier_query(
         state_ro: &impl StateReadOnly,
         filter: CompoundPredicate<CommittedTransaction>,
@@ -1540,12 +1536,10 @@ pub(crate) mod tests {
         );
         transactions
     }
-
     #[test]
     fn indexed_merge_queries_resolve_only_selected_carrier_sidecars() {
         let fixture = merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
-
         let by_block = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
@@ -1558,7 +1552,6 @@ pub(crate) mod tests {
                 .iter()
                 .all(|transaction| transaction.block_hash == fixture.target_block_hash)
         );
-
         let by_hash = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
@@ -1570,7 +1563,6 @@ pub(crate) mod tests {
         );
         assert_eq!(by_hash.len(), 1);
         assert_eq!(by_hash[0].entrypoint_hash, fixture.target_entrypoint_hash);
-
         let by_authority = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
@@ -1582,7 +1574,6 @@ pub(crate) mod tests {
             by_authority[0].entrypoint.authority_opt(),
             Some(&fixture.target_authority)
         );
-
         let by_timestamp = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
@@ -1594,7 +1585,6 @@ pub(crate) mod tests {
             by_timestamp[0].entrypoint.creation_time_ms(),
             Some(fixture.target_timestamp_ms)
         );
-
         let by_timestamp_range = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
@@ -1604,7 +1594,6 @@ pub(crate) mod tests {
             }),
         );
         assert_eq!(by_timestamp_range.len(), 1);
-
         let by_result = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| p.equals("result_ok", false)),
@@ -1616,12 +1605,10 @@ pub(crate) mod tests {
                 .all(|transaction| transaction.result.as_ref().is_err())
         );
     }
-
     #[test]
     fn indexed_snapshot_uses_entrypoint_index_and_rejects_unbounded_filters() {
         let fixture = merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
-
         state_view.kura().reset_merge_query_read_counters_for_test();
         let selected = committed_transactions_indexed_snapshot(
             &state_view,
@@ -1638,7 +1625,6 @@ pub(crate) mod tests {
             (0, 0, 1),
             "indexed materialization must resolve only the selected carrier"
         );
-
         state_view.kura().reset_merge_query_read_counters_for_test();
         let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-query-entrypoint"));
         let missing = committed_transactions_indexed_snapshot(
@@ -1655,7 +1641,6 @@ pub(crate) mod tests {
             (0, 0, 0),
             "a complete sparse-index miss must not read a carrier or merge sidecar"
         );
-
         let error = committed_transactions_indexed_snapshot(&state_view, CompoundPredicate::PASS)
             .expect_err("unbounded transaction history must be rejected");
         assert!(
@@ -1664,7 +1649,6 @@ pub(crate) mod tests {
                 .contains("require a positive indexed filter")
         );
     }
-
     #[test]
     fn indexed_merge_query_ignores_unselected_corruption_and_fails_on_selected_corruption() {
         let unrelated = merge_query_fixture();
@@ -1699,7 +1683,6 @@ pub(crate) mod tests {
         let (_, complete_execution_scans, _) =
             unrelated_view.kura().merge_query_read_counters_for_test();
         assert_eq!(complete_execution_scans, 1);
-
         let selected = merge_query_fixture();
         selected
             .sandbox
@@ -1729,13 +1712,11 @@ pub(crate) mod tests {
             (0, 0, 1)
         );
     }
-
     #[test]
     fn fallible_transaction_visitor_reads_only_carriers_needed_by_bounded_page() {
         let fixture = merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         state_view.kura().reset_merge_query_read_counters_for_test();
-
         let mut visited = Vec::new();
         let exhausted = visit_committed_transactions(
             &state_view,
@@ -1754,7 +1735,6 @@ pub(crate) mod tests {
             },
         )
         .expect("bounded fallible transaction scan");
-
         assert!(!exhausted);
         assert_eq!(visited.len(), 3);
         assert_eq!(
@@ -1769,11 +1749,52 @@ pub(crate) mod tests {
                 .is_some_and(|inclusion| inclusion.version == 1)
         }));
     }
-
+    #[test]
+    fn bounded_transaction_snapshot_rejects_count_and_byte_amplification() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        assert_eq!(
+            committed_transactions_bounded_snapshot(
+                &state_view,
+                CompoundPredicate::PASS,
+                1,
+                u64::MAX,
+            )
+            .expect_err("declared carrier work must be charged before projection"),
+            QueryExecutionFail::GasBudgetExceeded
+        );
+        assert_eq!(
+            committed_transactions_bounded_snapshot(
+                &state_view,
+                CompoundPredicate::PASS,
+                iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
+                1,
+            )
+            .expect_err("retained canonical bytes must be bounded"),
+            QueryExecutionFail::GasBudgetExceeded
+        );
+    }
+    #[test]
+    fn bounded_transaction_visitor_does_not_charge_chain_age_as_retained_memory() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        let mut visited = 0_usize;
+        let exhausted =
+            visit_committed_transactions_bounded(&state_view, false_filter, 2, |_, matches| {
+                assert!(!matches);
+                visited = visited.saturating_add(1);
+                Ok(ControlFlow::Continue(()))
+            })
+            .expect("each carrier fits independently within the projection bound");
+        assert!(exhausted);
+        assert!(visited > 2, "the scan crossed multiple bounded carriers");
+    }
     #[test]
     fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {
         const LARGE_SOURCE_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
-
         let mut sandbox = Sandbox::default();
         let genesis = Arc::new(empty_query_block(None));
         sandbox
@@ -1782,7 +1803,6 @@ pub(crate) mod tests {
             .store_block(Arc::clone(&genesis))
             .expect("store large-sidecar query genesis");
         sandbox.state.push_block_hash_for_testing(genesis.hash());
-
         let mut entry = sample_certified_merge_execution_entry(1, true);
         let batch = entry
             .execution_batch
@@ -1796,7 +1816,6 @@ pub(crate) mod tests {
         batch.lanes[0].source_bundle = source_bundle;
         batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
         batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-
         let (carrier, entry) = certified_query_carrier_with_entry(&genesis, entry);
         let carrier_hash = carrier.hash();
         sandbox
@@ -1808,7 +1827,6 @@ pub(crate) mod tests {
         let state_view = sandbox.state.view();
         state_view.kura().reset_merge_query_read_counters_for_test();
         reset_certified_merge_projection_calls_for_test();
-
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
         });
@@ -1829,7 +1847,6 @@ pub(crate) mod tests {
             |_, _, _| panic!("underfunded query must not project a transaction"),
         )
         .expect_err("declared sidecar work exceeds the one-item budget");
-
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(charged, 2, "compact reference declares both entrypoints");
         assert_eq!(
@@ -1843,14 +1860,12 @@ pub(crate) mod tests {
             "budget rejection must happen before proof reconstruction"
         );
     }
-
     #[test]
     fn fallible_transaction_visitor_exact_scan_is_point_indexed_and_ordered() {
         let fixture = merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let expected = committed_transactions_snapshot(&state_view).expect("eager exact baseline");
         state_view.kura().reset_merge_query_read_counters_for_test();
-
         let mut visited = Vec::new();
         let exhausted = visit_committed_transactions(
             &state_view,
@@ -1865,7 +1880,6 @@ pub(crate) mod tests {
             },
         )
         .expect("fallible exact transaction scan");
-
         assert!(exhausted);
         assert_eq!(visited, expected);
         assert_eq!(
@@ -1874,7 +1888,6 @@ pub(crate) mod tests {
             "exact scan should point-resolve each carrier without a complete carrier snapshot"
         );
     }
-
     #[test]
     fn fallible_transaction_visitor_defers_unreached_corruption_but_exact_fails() {
         let fixture = merge_query_fixture();
@@ -1884,7 +1897,6 @@ pub(crate) mod tests {
             .kura()
             .remove_merge_entry_payload_for_test(fixture.unrelated_entry_hash);
         let state_view = fixture.sandbox.state.view();
-
         let mut visited = 0_usize;
         let exhausted = visit_committed_transactions(
             &state_view,
@@ -1905,7 +1917,6 @@ pub(crate) mod tests {
         .expect("newest bounded page should not touch the corrupt oldest carrier");
         assert!(!exhausted);
         assert_eq!(visited, 2);
-
         let err = visit_committed_transactions(
             &state_view,
             &CompoundPredicate::PASS,
@@ -1917,7 +1928,6 @@ pub(crate) mod tests {
         .expect_err("exact scan must fail on selected historical corruption");
         assert!(matches!(err, QueryExecutionFail::Conversion(_)));
     }
-
     /// Verifies that all per-field iterators over a committed block are consistent.
     #[tokio::test]
     async fn block_iterators_are_consistent() {
@@ -1951,7 +1961,6 @@ pub(crate) mod tests {
             ("eve", 30),
         ]);
         let block = committed_block.as_ref();
-
         let ordinary = block_committed_transactions(block);
         let mut merge_by_height = BTreeMap::new();
         merge_by_height.insert(
@@ -1964,7 +1973,6 @@ pub(crate) mod tests {
         let combined = block_committed_transactions_with_merge(block, &merge_by_height);
         assert_eq!(combined.len(), ordinary.len() + 1);
         assert_eq!(combined.last(), ordinary.first());
-
         // All entrypoint-related iterators yield the same number of elements.
         assert_eq!(10, block.entrypoint_hashes().len());
         assert_eq!(10, block.entrypoint_proofs().len());
@@ -1974,7 +1982,6 @@ pub(crate) mod tests {
         assert_eq!(10, block.results().len());
         assert_eq!(6, block.external_transactions().len());
         assert_eq!(4, block.time_triggers().len());
-
         // Hashes of entrypoints and results match their respective contents.
         assert_eq!(
             block.entrypoint_hashes().collect::<Vec<_>>(),
@@ -1990,7 +1997,6 @@ pub(crate) mod tests {
                 .map(TransactionResult::hash)
                 .collect::<Vec<_>>()
         );
-
         // External and time-triggered entrypoints are merged correctly into a unified view.
         assert_eq!(
             block.entrypoints_cloned().collect::<Vec<_>>(),
@@ -2006,7 +2012,6 @@ pub(crate) mod tests {
                 )
                 .collect::<Vec<_>>()
         );
-
         // The order and content of the first and last transactions are as expected.
         // Ensure the first merged entrypoint matches the first external transaction and
         // the last entrypoint matches the last time-triggered entry.
@@ -2026,7 +2031,6 @@ pub(crate) mod tests {
                 .map(TransactionEntrypoint::from)
                 .next_back()
         );
-
         // Results remain aligned with entrypoints across the merged view.
         assert_eq!(
             block.results().next().map(TransactionResult::hash),

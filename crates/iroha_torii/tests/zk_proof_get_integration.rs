@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for GET /v1/zk/proof/{backend}/{hash} (`app_api`).
 #![allow(clippy::similar_names)]
-
-use std::sync::Arc;
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::defaults;
@@ -13,14 +10,13 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId};
+use std::sync::Arc;
 use tower::ServiceExt as _;
-
 fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String, String) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
-
     let id = ProofId {
         backend: backend.into(),
         proof_hash,
@@ -34,7 +30,6 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
         bridge: None,
     };
     iroha_core::query::insert_proof_record_for_test(&mut state, id.clone(), record);
-
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::default();
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
@@ -56,7 +51,6 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
     let uri = format!("/v1/zk/proof/{backend_enc}/{hash_hex}");
     (app, uri, hash_hex)
 }
-
 #[tokio::test]
 async fn zk_proof_get_returns_record() {
     let backend = "halo2/ipa";
@@ -114,7 +108,6 @@ async fn zk_proof_get_returns_record() {
     );
     let etag_header = parts.headers.get(http::header::ETAG).cloned();
     assert!(etag_header.is_some(), "proof responses include ETag");
-
     let conditional_req = http::Request::builder()
         .method("GET")
         .uri(uri.as_str())
@@ -135,7 +128,6 @@ async fn zk_proof_get_returns_record() {
         .to_bytes();
     assert!(conditional_body.is_empty(), "304 responses have empty body");
 }
-
 #[tokio::test]
 async fn zk_proof_get_not_found() {
     let kura = Kura::blank_kura_for_testing();

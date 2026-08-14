@@ -5,9 +5,7 @@
 //! - Iterate ids+bytes+u32+flags for (u64, bytes, u32, bool)
 //!
 //! Uses Criterion harness declared in workspace.
-
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-
 fn bench_str_bool_view(c: &mut Criterion) {
     // Build dataset: 10_000 rows with short names alternating flags
     let n = 10_000usize;
@@ -35,7 +33,6 @@ fn bench_str_bool_view(c: &mut Criterion) {
         )
     });
 }
-
 fn bench_bytes_u32_bool_view(c: &mut Criterion) {
     let n = 10_000usize;
     let bytes_pool: Vec<Vec<u8>> = (0..100)
@@ -68,6 +65,5 @@ fn bench_bytes_u32_bool_view(c: &mut Criterion) {
         )
     });
 }
-
 criterion_group!(benches, bench_str_bool_view, bench_bytes_u32_bool_view);
 criterion_main!(benches);

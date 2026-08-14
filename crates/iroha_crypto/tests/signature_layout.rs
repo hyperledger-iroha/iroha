@@ -4,27 +4,22 @@
     clippy::useless_let_if_seq,
     clippy::cast_lossless
 )]
-
 //! Signature/SignatureOf Norito bare-codec layout sanity checks.
-
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
 use norito::{
     codec::Encode as _,
     core,
     core::{DecodeFromSlice, Header},
 };
-
 fn checked_ed25519_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked signature-layout Ed25519 keypair")
 }
-
 #[test]
 fn signature_layout_fixture_uses_checked_ed25519_keypair() {
     let key_pair = checked_ed25519_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
-
 fn read_varint(bytes: &[u8]) -> (usize, usize) {
     let mut i = 0usize;
     let mut val: u64 = 0;
@@ -40,12 +35,9 @@ fn read_varint(bytes: &[u8]) -> (usize, usize) {
     }
     (usize::try_from(val).unwrap_or(usize::MAX), i)
 }
-
 fn dump_header(label: &str, bytes: &[u8]) {
-    use std::fmt::Write as _;
-
     use norito::core::{Header, header_flags};
-
+    use std::fmt::Write as _;
     if bytes.len() < Header::SIZE {
         eprintln!("{label}: buffer shorter than header (len={})", bytes.len());
         return;
@@ -60,7 +52,6 @@ fn dump_header(label: &str, bytes: &[u8]) {
     let mut checksum_bytes = [0u8; 8];
     checksum_bytes.copy_from_slice(&header[31..39]);
     let checksum = u64::from_le_bytes(checksum_bytes);
-
     let mut flag_desc = String::new();
     let mut push_flag = |name| {
         if !flag_desc.is_empty() {
@@ -83,7 +74,6 @@ fn dump_header(label: &str, bytes: &[u8]) {
     if flag_desc.is_empty() {
         flag_desc.push_str("<none>");
     }
-
     eprintln!(
         "{label}: len={} payload_len={} checksum=0x{checksum:016x} version={major}.{minor} flags=0x{flags:02x} ({flag_desc})",
         bytes.len(),
@@ -92,13 +82,11 @@ fn dump_header(label: &str, bytes: &[u8]) {
     let body_prefix = &bytes[Header::SIZE..bytes.len().min(Header::SIZE + 16)];
     eprintln!("{label} body prefix={body_prefix:02x?}");
 }
-
 #[test]
 fn signature_bare_hybrid_is_bitset_plus_constvec() {
     // Build a tiny signature payload and encode via bare codec (hybrid packed-struct enabled by default)
     let sig = Signature::from_bytes(&[0xAA, 0xBB, 0xCC, 0xDD]);
     let bytes = sig.encode();
-
     assert!(!bytes.is_empty());
     let bitset = bytes[0];
     assert_eq!(
@@ -106,13 +94,11 @@ fn signature_bare_hybrid_is_bitset_plus_constvec() {
         0x04,
         "packed-struct bitset should flag payload"
     );
-
     let (decoded, used) =
         Signature::decode_from_slice(&bytes).expect("decode bare signature payload");
     assert_eq!(used, bytes.len());
     assert_eq!(decoded, sig);
 }
-
 #[test]
 fn signature_bare_compat_is_len_prefixed_then_payload() {
     // Force non-hybrid path by clearing flags and using core::NoritoSerialize
@@ -120,20 +106,16 @@ fn signature_bare_compat_is_len_prefixed_then_payload() {
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut out = Vec::new();
     norito::core::serialize_to_buffer(&sig, &mut out).expect("serialize");
-
     assert!(out.len() > sig.payload().len());
-
     // The compat bare format still prefixes the payload length as a little-endian u64.
     let mut len_bytes = [0u8; 8];
     len_bytes.copy_from_slice(&out[..8]);
     assert_eq!(u64::from_le_bytes(len_bytes), sig.payload().len() as u64);
-
     let (decoded, consumed) =
         Signature::decode_from_slice(out.as_slice()).expect("decode compat body");
     assert_eq!(consumed, out.len());
     assert_eq!(decoded, sig);
 }
-
 #[test]
 fn signature_of_delegates_to_signature_layout() {
     // SignatureOf<T> should encode exactly like Signature (transparent newtype)
@@ -150,7 +132,6 @@ fn signature_of_delegates_to_signature_layout() {
         wrapped.encode(),
         "SignatureOf must delegate to Signature encoding"
     );
-
     // Compat path also the same shape
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut s1 = Vec::new();
@@ -159,7 +140,6 @@ fn signature_of_delegates_to_signature_layout() {
     norito::core::serialize_to_buffer(&wrapped, &mut s2).expect("serialize sigof");
     assert_eq!(s1, s2);
 }
-
 #[test]
 fn signature_large_payload_layout_debug() {
     let payload: Vec<u8> = (0..1235u16).map(|i| (i % 251) as u8).collect();
@@ -172,7 +152,6 @@ fn signature_large_payload_layout_debug() {
         &bytes[norito::core::Header::SIZE..norito::core::Header::SIZE + 32]
     );
 }
-
 #[test]
 #[ignore = "diagnostic output"]
 fn signature_of_norito_payload_diagnostics() {
@@ -180,7 +159,6 @@ fn signature_of_norito_payload_diagnostics() {
     let sig_of = SignatureOf::try_new(key_pair.private_key(), &())
         .expect("diagnostic fixture Ed25519 typed signature");
     let bytes = norito::to_bytes(&sig_of).expect("encode SignatureOf");
-
     dump_header("SignatureOf", &bytes);
     let mut offset = Header::SIZE;
     if bytes.len() > offset {
@@ -195,7 +173,6 @@ fn signature_of_norito_payload_diagnostics() {
             );
         }
     }
-
     if bytes.len() > offset {
         let inner = &bytes[offset..];
         eprintln!("SignatureOf inner payload len={}", inner.len());

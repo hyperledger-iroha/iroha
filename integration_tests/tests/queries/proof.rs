@@ -1,7 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for proof queries.
-use std::{thread::sleep, time::Duration};
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -17,7 +15,7 @@ use iroha::data_model::{
 use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-
+use std::{thread::sleep, time::Duration};
 fn active_vk_record(
     circuit_id: &str,
     backend: BackendTag,
@@ -44,7 +42,6 @@ fn active_vk_record(
     record.status = ConfidentialStatus::Active;
     record
 }
-
 fn halo2_attachment_and_registration(
     circuit_id: &str,
     vk_name: &str,
@@ -74,7 +71,6 @@ fn halo2_attachment_and_registration(
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-
 fn rejected_halo2_attachment_and_registration()
 -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
     let circuit_id = "halo2/ipa:query-rejected";
@@ -109,7 +105,6 @@ fn rejected_halo2_attachment_and_registration()
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-
 fn rejected_stark_attachment_and_registration(
     label: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
@@ -159,7 +154,6 @@ fn rejected_stark_attachment_and_registration(
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-
 fn proof_query_network_builder(
     registrations: impl IntoIterator<Item = verifying_keys::RegisterVerifyingKey>,
 ) -> NetworkBuilder {
@@ -178,7 +172,6 @@ fn proof_query_network_builder(
     }
     builder
 }
-
 fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
     halo2_attachment_and_registration(
         circuit_id,
@@ -186,7 +179,6 @@ fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
     )
     .0
 }
-
 #[test]
 fn proof_query_scenarios() -> Result<()> {
     let (find_attachment, find_vk) =
@@ -198,7 +190,6 @@ fn proof_query_scenarios() -> Result<()> {
     let (rejected_attachment, rejected_vk) = rejected_halo2_attachment_and_registration();
     let (stark_backend_attachment, stark_backend_vk) =
         rejected_stark_attachment_and_registration("query_stark_vk");
-
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         proof_query_network_builder([
             find_vk,
@@ -213,7 +204,6 @@ fn proof_query_scenarios() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // find_proof_records_lists_after_verify
     {
         client.submit_blocking(
@@ -221,14 +211,12 @@ fn proof_query_scenarios() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
-
         let recs = retry_all_proof_records(&client)?;
         assert!(
             !recs.is_empty(),
             "expected at least one proof record after VerifyProof"
         );
     }
-
     // find_proof_records_by_backend_filters
     {
         client.submit_all_blocking(
@@ -244,7 +232,6 @@ fn proof_query_scenarios() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
-
         let halo2 = retry_records_by_backend(&client, "halo2/ipa")?;
         let stark = retry_records_by_backend(&client, "stark/fri/sha256-goldilocks")?;
         let halo2_backends = proof_record_backends(&halo2);
@@ -269,7 +256,6 @@ fn proof_query_scenarios() -> Result<()> {
                 .all(|record| record.id.backend.as_str() == "stark/fri/sha256-goldilocks"),
             "backend query should only return stark/fri/sha256-goldilocks proof records, got {stark_backends:?}"
         );
-
         let nonexistent = client
             .query(FindProofRecordsByBackend::new("nonexistent".into()))
             .execute_all()?;
@@ -278,7 +264,6 @@ fn proof_query_scenarios() -> Result<()> {
             "nonexistent backend should be empty"
         );
     }
-
     // find_proof_records_by_status_filters
     {
         client.submit_all_blocking(
@@ -294,12 +279,10 @@ fn proof_query_scenarios() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
-
         let verified =
             retry_records_by_status(&client, iroha::data_model::proof::ProofStatus::Verified)?;
         let rejected =
             retry_records_by_status(&client, iroha::data_model::proof::ProofStatus::Rejected)?;
-
         assert!(
             !verified.is_empty(),
             "expected at least one verified proof record"
@@ -309,10 +292,8 @@ fn proof_query_scenarios() -> Result<()> {
             "expected at least one rejected proof record"
         );
     }
-
     Ok(())
 }
-
 fn retry_records_by_status(
     client: &iroha::client::Client,
     status: iroha::data_model::proof::ProofStatus,
@@ -323,13 +304,11 @@ fn retry_records_by_status(
             .execute_all()?)
     })
 }
-
 fn retry_all_proof_records(
     client: &iroha::client::Client,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     retry_proof_records(|| Ok(client.query(FindProofRecords).execute_all()?))
 }
-
 fn retry_records_by_backend(
     client: &iroha::client::Client,
     backend: &str,
@@ -340,13 +319,11 @@ fn retry_records_by_backend(
             .execute_all()?)
     })
 }
-
 fn retry_proof_records(
     mut query: impl FnMut() -> Result<Vec<iroha::data_model::proof::ProofRecord>>,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     const RETRIES: usize = 5;
     const DELAY: Duration = Duration::from_millis(200);
-
     for attempt in 0..RETRIES {
         match query() {
             Ok(records) if !records.is_empty() => return Ok(records),
@@ -365,14 +342,12 @@ fn retry_proof_records(
     }
     unreachable!()
 }
-
 fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> Vec<String> {
     records
         .iter()
         .map(|record| record.id.backend.to_string())
         .collect()
 }
-
 #[test]
 fn halo2_attachment_circuit_changes_proof_hash() {
     let a = halo2_attachment("halo2/ipa:tiny-add");

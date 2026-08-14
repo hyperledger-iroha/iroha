@@ -231,6 +231,27 @@ public final class HttpClientTransportExactReadTests {
         executor.lastRequest, VERIFYING_KEY_NETWORK_ID, "privacy-exact-1");
     assert !canonicalSignatureVerifies(
         executor.lastRequest, OTHER_NETWORK_ID, "privacy-exact-1");
+    assert !canonicalSignatureVerifies(
+        executor.lastRequest,
+        VERIFYING_KEY_NETWORK_ID,
+        "privacy-exact-1",
+        "POST",
+        executor.lastRequest.uri(),
+        executor.lastRequest.body());
+    assert !canonicalSignatureVerifies(
+        executor.lastRequest,
+        VERIFYING_KEY_NETWORK_ID,
+        "privacy-exact-1",
+        "GET",
+        URI.create("https://torii.example/v1/privacy/other"),
+        executor.lastRequest.body());
+    assert !canonicalSignatureVerifies(
+        executor.lastRequest,
+        VERIFYING_KEY_NETWORK_ID,
+        "privacy-exact-1",
+        "GET",
+        executor.lastRequest.uri(),
+        new byte[] {0});
 
     assertPrivacyCapabilitiesResponseRejected(
         new TransportResponse(
@@ -373,6 +394,64 @@ public final class HttpClientTransportExactReadTests {
             new byte[256 * 1024 + 1],
             "",
             Map.of("Content-Type", List.of("application/json"))));
+
+    final OneResponseExecutor missingContextExecutor =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200, body, "", Map.of("Content-Type", List.of("application/x-norito"))));
+    boolean missingContextRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              missingContextExecutor,
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getPrivacyCapabilities(privacyAuth("privacy-missing-context"));
+    } catch (final IllegalStateException expected) {
+      missingContextRejected = true;
+    }
+    assert missingContextRejected : "privacy authentication requires exact network context";
+    assert missingContextExecutor.requestCount == 0 : "missing context must not dispatch";
+
+    final OneResponseExecutor forgedHeaderExecutor =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200, body, "", Map.of("Content-Type", List.of("application/x-norito"))));
+    boolean forgedHeaderRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              forgedHeaderExecutor,
+              signedClientConfig("https://torii.example")
+                  .toBuilder()
+                  .putDefaultHeader("x-IROHA-signature", "forged")
+                  .build())
+          .getPrivacyCapabilities(privacyAuth("privacy-forged-header"));
+    } catch (final IllegalArgumentException expected) {
+      forgedHeaderRejected = true;
+    }
+    assert forgedHeaderRejected : "caller-supplied canonical headers must be rejected";
+    assert forgedHeaderExecutor.requestCount == 0 : "forged header must not dispatch";
+
+    final OneResponseExecutor admissionExecutor =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200, body, "", Map.of("Content-Type", List.of("application/x-norito"))));
+    boolean admissionRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              admissionExecutor, signedClientConfig("https://torii.example"))
+          .requirePrivacyExact12CapabilityAdmission(
+              org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1
+                  .ANONYMOUS_PGC_K_OUT_OF_N_V1,
+              privacyAuth("privacy-admission"))
+          .join();
+    } catch (final CompletionException expected) {
+      admissionRejected = true;
+    }
+    assert admissionRejected : "legacy capability body must not authorize admission";
+    assert admissionExecutor.requestCount == 1 : "admission must dispatch exactly once";
+    assert admissionExecutor.lastRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "admission capability request must be one-shot";
   }
 
   private static void assertPrivacyCapabilitiesResponseRejected(
@@ -449,6 +528,22 @@ public final class HttpClientTransportExactReadTests {
       final TransportRequest request,
       final NetworkId networkId,
       final String nonce) {
+    return canonicalSignatureVerifies(
+        request,
+        networkId,
+        nonce,
+        request.method(),
+        request.uri(),
+        request.body());
+  }
+
+  private static boolean canonicalSignatureVerifies(
+      final TransportRequest request,
+      final NetworkId networkId,
+      final String nonce,
+      final String method,
+      final URI uri,
+      final byte[] body) {
     try {
       final byte[] signature =
           Base64.getDecoder()
@@ -458,9 +553,9 @@ public final class HttpClientTransportExactReadTests {
       verifier.update(
           CanonicalRequestSigner.canonicalRequestSignatureMessage(
               networkId,
-              request.method(),
-              request.uri(),
-              request.body(),
+              method,
+              uri,
+              body,
               1_700_000_000_000L,
               nonce));
       return verifier.verify(signature);

@@ -30,8 +30,8 @@ Every in-scope row records three independent states:
   test-only, disabled, internally inconsistent, or still being changed.
 - **Implementation: Implemented** means the cited production symbols implement
   the row's primitive. It does not imply that the wider milestone is complete.
-- **Closure: Open** means at least one implementation, integration, or
-  compatibility obligation in the row remains.
+- **Closure: Open** means at least one implementation, integration, or release
+  obligation in the row remains.
 - **Closure: Implemented** may be used only when the complete production path
   described by the row is reachable without a test, feature, or environment
   switch.
@@ -83,17 +83,21 @@ execution or release receipts.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
   the development tree. The SoraFS orderbook JavaScript declaration,
-  implementation, and standalone Python module are tracked. Both live resolver
-  checks pass and enumerate exactly 1,353 grouped records and 1,352 diagnostics
-  records. Diagnostics suite counts are Rust 14, Python 121, JavaScript 88,
-  Swift 33, Kotlin 42, and Java 41. Rust's source-separated client controls
-  reject both complete endpoint-payload swaps without changing its 14-test
-  count; the Swift/Kotlin/Java wire suites are diagnostics-runner/receipt-bound.
-  Those are mutable-source inventory results, not SDK execution. The five
-  checked-in OpenAPI artifacts are dirty and unsigned. Exact-five replay is
-  source- and receipt-bound to the protected schema-v3 OpenAPI Node closure,
-  but immutable-candidate execution evidence remains Open, so SDK and wire
-  closure is not claimed.
+  implementation, and standalone Python module are tracked. The recursive
+  resolver currently enumerates exactly 1,386 grouped and 1,386 diagnostics
+  records. Their suite-source SHA-256 values are
+  `57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+  and
+  `aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`.
+  Diagnostics suite counts are Rust 14, Python 121, JavaScript 88, Swift 33,
+  Kotlin 42, and Java 41. Rust's source-separated client controls reject both
+  complete endpoint-payload swaps without changing its 14-test count; the
+  Swift/Kotlin/Java wire suites are diagnostics-runner/receipt-bound. Those are
+  source-inventory facts, not SDK execution. The five checked-in OpenAPI
+  artifacts are dirty and unsigned. Exact-five replay is source- and
+  receipt-bound to the protected schema-v3 OpenAPI Node closure, but
+  immutable-candidate execution evidence remains Open, so SDK and wire closure
+  is not claimed.
 
 Every Evidence field and every `G-*` execution or release gate therefore
 remains Open. These source-consistency documentation updates do not promote the
@@ -357,9 +361,8 @@ closed.
 ID, typed transaction-entrypoint hash, plan digest, round context, authority
 height, coordinator route/incarnation/planned height/view/proposal, and every
 participant route/incarnation. Grouped slot claims remain a separate
-anti-equivocation dimension. Unsupported journal versions fail closed unless
-an authenticated canonical source rebuilds the exact stronger claim; no
-best-effort legacy projection is allowed.
+anti-equivocation dimension. Unsupported journal versions fail closed before
+state restoration; no migration or best-effort projection is allowed.
 
 **Focused and adversarial tests.** Cover source, entrypoint, plan, epoch,
 context, authority-height, coordinator route/incarnation/height/view/proposal,
@@ -1627,14 +1630,17 @@ name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies. Both live tracked resolver checks
-pass with the exact 1,353-record grouped and 1,352-record diagnostics closures;
-their suite-source digests are recorded under `ML-API-04`. The two specialized
-static Python modules are canonically runner-bound and the browser distribution
-matches its source. The release corridor and receipt bind the Rust wire
-consumer directly; the Swift, Kotlin, and Java wire suites are included in the
-diagnostics runner and its receipt counts. These are mutable-source consistency
-observations only;
+and Kotlin/Java Native model dependencies. The staged inventory is exactly
+1,386 grouped and 1,386 diagnostics records, with suite-source SHA-256 values
+`57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+and
+`aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`.
+The release receipt must reproduce those values from its immutable candidate;
+the staged values alone are not evidence. The two specialized static Python modules are canonically
+runner-bound and the browser distribution matches its source. The release
+corridor and receipt bind the Rust wire consumer directly; the Swift, Kotlin,
+and Java wire suites are included in the diagnostics runner and its receipt
+counts. These are source-inventory constraints only;
 OpenAPI artifacts still awaiting immutable-candidate regeneration and
 missing immutable-candidate source-seal and execution evidence keep the suite
 digest and `G-SDK` release claim ineligible.
@@ -1716,19 +1722,17 @@ corpus includes
 `coherent_over_quorum_requirement` controls; `bounds.validators_max` is 128.
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
-4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,353 grouped and 1,352 diagnostics records. The checked-in grouped fixture has
-SHA-256
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
-the grouped and diagnostics suite-source SHA-256 values are
-`14ad494409a2d93515037200a8e6bf1c8b60ec621ca88b450eca081dff9c148c`
+4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
+1,386 grouped and 1,386 diagnostics records. Its grouped and diagnostics
+suite-source SHA-256 values are
+`57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
 and
-`849735aa813d495fa02b6f083d101a94e0b2d8958c8269bea23fc54d142f8cec`.
+`aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`.
+The checked-in grouped fixture has SHA-256
+`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
-Both live tracked resolver checks pass with 1,353 grouped and 1,352 diagnostics
-records.
 The source-bound corridor now requires two disjoint Rust fixture generations,
 and both JavaScript SDK harnesses require two byte-identical complete
 distribution builds. Exact-five OpenAPI replay is source- and receipt-bound to
@@ -1767,12 +1771,13 @@ for a grouped case; parity CI must fail.
 **Evidence:** Open.
 
 **Production map.** The signing guard V4, Native manifest V1, Native receipt
-and latest-index layouts, queue reservation journal/key, executable payload
-V2/envelope, lane QCs/NewView, merge entries, application receipts, and
-diagnostics models all carry explicit versions or exact typed Norito layouts
-in their owning modules. Unknown and retired layouts fail closed; the source
-tree contains no implicit legacy consensus decoder or production
-feature/environment compatibility switch for autonomous execution.
+and latest-index layouts, serviced-candidate V4 store, queue reservation
+journal/key, executable payload V2/envelope, lane QCs/NewView, merge entries,
+application receipts, and diagnostics models all carry explicit versions or
+exact typed Norito layouts in their owning modules. The serviced-candidate
+store accepts V4 only. Unknown and retired layouts fail closed; the source tree
+contains no implicit legacy consensus decoder or production feature/environment
+compatibility switch for autonomous execution.
 `crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` now generates
 the positive `quorum_certificate_merge_carrier` row and negative
 `execution_commitment_merge_carrier_wrong_version` and
@@ -1811,15 +1816,15 @@ runtime consumer is implemented, while wire/OpenAPI generation, cross-SDK
 parity, and execution evidence remain Open.
 
 **Closure condition.** Version every new persistence and wire layout. Reject
-unknown and legacy versions unless an explicitly authenticated migration
-rebuilds the exact new identity. Do not add heuristic decode, mixed old/new
-consensus, a feature/environment compatibility toggle, a new crate, direct
-Serde dependency, Cargo.lock change, or ABI-version change.
+every non-current version before payload decoding or state mutation. Do not add
+format migration, heuristic decode, mixed-layout consensus, a
+feature/environment compatibility toggle, a new crate, direct Serde dependency,
+Cargo.lock change, or ABI-version change.
 Source every new runtime count/byte/time bound from `iroha_config`, give it a
 sensible deterministic default, and reuse the existing sidecar/request budgets
 where they already express the same resource.
 
-**Focused and adversarial tests.** Round-trip each supported version; reject
+**Focused and adversarial tests.** Round-trip the current version; reject
 zero, old, future, truncated, oversized, unknown-field, noncanonical, and
 wrong-Norito-flag payloads. Exercise a mixed-version committee and require it to
 fail closed before signing. Run the legacy-codec guard and assert no implicit
@@ -2012,18 +2017,18 @@ source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
-grouped JSON, and wire TSV; the mutable closure enumerates 1,353 grouped and
-1,352 diagnostics records. The current grouped JSON and wire TSV SHA-256
-values are
+grouped JSON, and wire TSV. Its record totals and suite-source digests must be
+derived and receipt-bound from the exact immutable candidate. The staged
+closure contains exactly 1,386 records for each suite, with grouped and
+diagnostics suite-source SHA-256 values
+`57606383e10953fdbfe3368edf821bad9df8a3a1f34244039dc88c6bc379b7d4`
+and
+`aafc453caec4c704d48e0703bd8ed216ac8028f9e6f4c0c699768f7b074b1223`.
+The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
-The grouped and diagnostics suite-source SHA-256 values are
-`14ad494409a2d93515037200a8e6bf1c8b60ec621ca88b450eca081dff9c148c`
-and
-`849735aa813d495fa02b6f083d101a94e0b2d8958c8269bea23fc54d142f8cec`.
-
-Those are development-source inventories, not SDK results. The changed
+Those are development fixture inventories, not SDK results. The changed
 JavaScript production roots require fresh deterministic source/distribution
 regeneration from a clean exact candidate, as do the five OpenAPI artifacts.
 No complete immutable-candidate grouped or diagnostics harness execution,

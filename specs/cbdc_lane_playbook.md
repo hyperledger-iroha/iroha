@@ -247,39 +247,14 @@ directory so auditors and regulators can replay the exact bytes later.
 
 - Generate UAID + manifest skeleton via `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale`.
 - Publish capability manifest to Torii (Space Directory) using `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (or `--manifest-json cbdc_wholesale.manifest.json`); the submitting account must hold `CanPublishSpaceDirectoryManifest` for the CBDC dataspace.
-- Publish via HTTP if the ops desk is running remote automation:
-
-  ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
-       -H 'Content-Type: application/json' \
-       -d '{
-            "authority": "<i105-account-id>",
-            "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
-            "reason": "CBDC onboarding wave 4"
-          }'
-  ```
-
-  Torii returns a canonical unsigned transaction draft. Validate
-  `transaction_payload_b64` and `signing_message_b64`, sign locally, and submit
-  the resulting `SignedTransaction`; the same CIDR/API-token gates apply and the
-  on-chain permission requirement matches the CLI workflow.
-- Emergency revocation can be issued remotely by POSTing to Torii:
-
-  ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
-       -H 'Content-Type: application/json' \
-       -d '{
-            "authority": "<i105-account-id>",
-            "uaid": "uaid:0f4d…ab11",
-            "dataspace": 11,
-            "revoked_epoch": 9216,
-            "reason": "Fraud investigation #NX-16-R05"
-          }'
-  ```
-
-  Torii returns a canonical unsigned transaction draft for local validation,
-  signing, and submission; the same CIDR/API-token gates apply as other app
-  endpoints, and `CanPublishSpaceDirectoryManifest` is still required on-chain.
+- Remote publication and emergency revocation use the SDK's local signing
+  context for `POST /v1/space-directory/manifests` and
+  `/v1/space-directory/manifests/revoke`. Do not handcraft or persist canonical
+  auth headers: the SDK signs the exact NetworkId, method, path, query, and raw
+  body with a fresh nonce, and the signed account must equal the JSON
+  `authority`. Torii returns a canonical unsigned transaction draft for local
+  validation, signing, and submission; `CanPublishSpaceDirectoryManifest`
+  remains enforced on-chain.
 - Rotate whitelist membership: edit `cbdc.manifest.json`, bump `activation_epoch`, and redeploy via secure copy to all validators; `LaneManifestRegistry` hot-reloads on the configured poll interval.
 
 ## 3. Compliance Evidence Bundle

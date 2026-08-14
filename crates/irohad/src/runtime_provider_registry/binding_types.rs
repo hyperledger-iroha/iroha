@@ -1,5 +1,4 @@
 //! Exact public metadata carried by specialized runtime-provider bindings.
-
 /// Public WebAuthn inputs accepted by the evidence-viewer provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EvidenceViewerWebAuthnBindingV1 {
@@ -10,7 +9,6 @@ pub(crate) struct EvidenceViewerWebAuthnBindingV1 {
     /// Maximum lifetime admitted for one issued challenge.
     pub challenge_ttl_ms: u64,
 }
-
 /// Exact public inputs accepted by the deployment-owned PoP provider registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PopCredentialRuntimeBindingV1 {

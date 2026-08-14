@@ -1624,6 +1624,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 525/525 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -4969,4 +4970,4 @@ release_gate_boundary "child-result:after-publication" || {
   exit $?
 }
 verify_release_identity "after protected child-result publication"
-echo "Sumeragi v2 production build corridor passed, including exact 525/525 G-UNIT, with protected outer receipt validation pending" >&2
+echo "Sumeragi v2 production build corridor passed with protected outer receipt validation pending" >&2

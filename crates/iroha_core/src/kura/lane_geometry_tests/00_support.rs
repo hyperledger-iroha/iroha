@@ -1,13 +1,16 @@
-use std::{
-    borrow::Cow,
-    collections::BTreeMap,
-    fs,
-    num::NonZeroU32,
-    sync::{Arc, mpsc},
-    thread,
-    time::{Duration, Instant},
+use super::*;
+use crate::{
+    block::BlockBuilder,
+    kura::{
+        CertifiedLaneBlockArtifact, CommitManifest,
+        NativeAmxParticipantApplicationManifestArtifactV1,
+        NativeAmxParticipantApplicationReceiptArtifact,
+    },
+    lane_consensus::{
+        CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
+    },
+    tx::AcceptedTransaction,
 };
-
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -50,22 +53,25 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use nonzero_ext::nonzero;
-use tempfile::TempDir as RawTempDir;
-
-use super::*;
-use crate::{
-    block::BlockBuilder,
-    kura::{
-        CertifiedLaneBlockArtifact, CommitManifest,
-        NativeAmxParticipantApplicationManifestArtifactV1,
-        NativeAmxParticipantApplicationReceiptArtifact,
-    },
-    lane_consensus::{
-        CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
-    },
-    tx::AcceptedTransaction,
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    fs,
+    num::NonZeroU32,
+    sync::{Arc, mpsc},
+    thread,
+    time::{Duration, Instant},
 };
-
+use tempfile::TempDir as RawTempDir;
 // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
 // This makes the net disk-reclamation assertion independent of small encoding-size changes.
 const GC_PAYLOAD_LEN: usize = 16 * 1024;
+#[allow(
+    dead_code,
+    reason = "the shared lane-geometry support keeps the canonical network-id fixture for included test slices"
+)]
+fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::new(label),
+    ))
+}

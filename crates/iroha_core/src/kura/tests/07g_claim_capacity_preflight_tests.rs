@@ -70,7 +70,6 @@ fn autonomous_claim_initial_staging_preflights_the_whole_named_temp_set() {
             )
         })
         .collect::<Vec<_>>();
-
     let error = {
         let _prune_guard = kura.prune_lock.lock();
         let _canonical_chain_guard = kura.canonical_chain_lock.lock();
@@ -98,7 +97,6 @@ fn autonomous_claim_initial_staging_preflights_the_whole_named_temp_set() {
         "whole-set capacity rejection must precede the first shard or claim mutation",
     );
 }
-
 #[test]
 fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak() {
     let temp_dir = TempDir::new().expect("claim release capacity temp dir");
@@ -133,7 +131,6 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
         .iter()
         .map(|path| Kura::autonomous_lane_entrypoint_claim_temp_path(path))
         .collect::<Vec<_>>();
-
     // Exercise both recovery forms in the same bounded group: the first owner
     // exists only as a named temp and the second has a redundant exact temp.
     fs::rename(&claim_paths[0], &temp_paths[0]).expect("stage first exact owner");
@@ -148,7 +145,6 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
         .iter()
         .map(|path| fs::read(path).expect("read staged claim"))
         .collect::<Vec<_>>();
-
     let mut current_delta = 0_i128;
     let mut peak_delta = 0_i128;
     for (index, (_path, entrypoint_hash)) in claim_paths
@@ -213,7 +209,6 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
     Arc::get_mut(&mut kura)
         .expect("exclusive release Kura")
         .max_disk_usage_bytes = exact_peak - 1;
-
     let error = {
         let _prune_guard = kura.prune_lock.lock();
         let _canonical_chain_guard = kura.canonical_chain_lock.lock();

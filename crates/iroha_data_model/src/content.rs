@@ -3,13 +3,6 @@
 //! A content bundle is a hashed tar archive with a precomputed file index. The
 //! hash of the raw tar bytes serves as the bundle identifier and is used as the
 //! HTTP `ETag` when serving files through Torii.
-
-use std::collections::BTreeMap;
-
-use iroha_crypto::Hash;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     account::AccountId,
     da::{
@@ -19,10 +12,12 @@ use crate::{
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
     role::RoleId,
 };
-
+use iroha_crypto::Hash;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Identifier for a content bundle (`Hash` of the tar archive).
 pub type ContentBundleId = Hash;
-
 /// Entry in a content bundle file index.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -37,10 +32,9 @@ pub struct ContentFileEntry {
     /// Length of the file payload in bytes.
     pub length: u64,
     /// Blake2b-256 hash of the file payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub file_hash: [u8; 32],
 }
-
 impl ContentFileEntry {
     /// Returns `true` when the entry represents an empty file.
     #[must_use]
@@ -48,7 +42,6 @@ impl ContentFileEntry {
         self.length == 0
     }
 }
-
 /// Cache policy applied when serving publicly readable bundle files.
 ///
 /// Protected bundles always disable storage at the HTTP boundary so a shared
@@ -64,7 +57,6 @@ pub struct ContentCachePolicy {
     /// Whether a public bundle is immutable (adds the `immutable` directive).
     pub immutable: bool,
 }
-
 impl ContentCachePolicy {
     fn public_cache_control_value(self) -> String {
         if self.immutable {
@@ -74,7 +66,6 @@ impl ContentCachePolicy {
         }
     }
 }
-
 /// Authentication/authorisation guard for bundle reads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -90,7 +81,6 @@ pub enum ContentAuthMode {
     /// Readers must present the bound UAID.
     Sponsor(UniversalAccountId),
 }
-
 /// Bundle-level manifest describing cache/auth/placement metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -101,7 +91,7 @@ pub struct ContentBundleManifest {
     /// Stable identifier of the tar archive (BLAKE2b-256).
     pub bundle_id: ContentBundleId,
     /// Deterministic hash of the file index (Norito encoding of [`ContentFileEntry`] list).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub index_hash: [u8; 32],
     /// Dataspace the bundle is scoped to.
     pub dataspace: DataSpaceId,
@@ -121,7 +111,6 @@ pub struct ContentBundleManifest {
     /// Optional MIME overrides per file path.
     pub mime_overrides: BTreeMap<String, String>,
 }
-
 impl ContentBundleManifest {
     /// Build the HTTP `Cache-Control` value for this manifest's authorization mode.
     ///
@@ -138,7 +127,6 @@ impl ContentBundleManifest {
         }
     }
 }
-
 /// Metadata and chunk layout for a published content bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -157,12 +145,12 @@ pub struct ContentBundleRecord {
     /// Ordered list of chunk hashes (BLAKE3-256).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::vec")
+        norito(json = "crate::json_helpers::fixed_bytes::vec")
     )]
     pub chunk_hashes: Vec<[u8; 32]>,
     /// Merkle-style root derived from the ordered chunk hashes.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub chunk_root: [u8; 32],
     /// Erasure layout used when chunking the tarball.
     #[norito(default)]
@@ -171,7 +159,7 @@ pub struct ContentBundleRecord {
     #[norito(default)]
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     pub pdp_commitment: Option<Vec<u8>>,
     /// File index entries (offsets relative to the tar archive start).
@@ -183,7 +171,6 @@ pub struct ContentBundleRecord {
     /// Optional block height when the bundle expires.
     pub expires_at_height: Option<u64>,
 }
-
 /// Chunk payload stored in the content lane store with a reference counter.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -196,19 +183,16 @@ pub struct ContentChunk {
     /// Number of bundles referencing this chunk.
     pub refcount: u32,
 }
-
 impl ContentChunk {
     /// Create a new chunk with a refcount of 1.
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self { data, refcount: 1 }
     }
-
     /// Increment the refcount safely.
     pub fn inc(&mut self) {
         self.refcount = self.refcount.saturating_add(1);
     }
-
     /// Decrement the refcount and return `true` when the chunk should be removed.
     #[must_use]
     pub fn dec_and_should_prune(&mut self) -> bool {
@@ -219,7 +203,6 @@ impl ContentChunk {
         self.refcount == 0
     }
 }
-
 /// Range of bytes served for a content file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -232,7 +215,6 @@ pub struct ContentRange {
     /// Inclusive end offset (bytes) within the file.
     pub end: u64,
 }
-
 /// Receipt attached to content responses carrying DA evidence and served range metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -245,7 +227,7 @@ pub struct ContentDaReceipt {
     /// File path inside the bundle.
     pub path: String,
     /// Blake2b-256 hash of the served file payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub file_hash: [u8; 32],
     /// Bytes returned to the caller (range-aware).
     pub served_bytes: u64,
@@ -260,13 +242,12 @@ pub struct ContentDaReceipt {
     #[norito(default)]
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     pub pdp_commitment: Option<Vec<u8>>,
     /// Unix timestamp when the receipt was produced.
     pub served_at_unix: u64,
 }
-
 /// Re-export commonly used content types.
 pub mod prelude {
     pub use super::{
@@ -274,11 +255,9 @@ pub mod prelude {
         ContentCachePolicy, ContentChunk, ContentDaReceipt, ContentFileEntry, ContentRange,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn manifest_with_auth(auth: ContentAuthMode) -> ContentBundleManifest {
         ContentBundleManifest {
             bundle_id: Hash::new(b"content cache policy test bundle"),
@@ -296,7 +275,6 @@ mod tests {
             mime_overrides: BTreeMap::new(),
         }
     }
-
     #[test]
     fn cache_control_never_marks_protected_content_public() {
         let public = manifest_with_auth(ContentAuthMode::Public);
@@ -307,12 +285,10 @@ mod tests {
         let mut mutable_public = public;
         mutable_public.cache.immutable = false;
         assert_eq!(mutable_public.cache_control_value(), "public, max-age=600");
-
         let role_gated = manifest_with_auth(ContentAuthMode::RoleGate(RoleId::new(
             "content_reader".parse().expect("role name"),
         )));
         assert_eq!(role_gated.cache_control_value(), "private, no-store");
-
         let sponsor = manifest_with_auth(ContentAuthMode::Sponsor(UniversalAccountId::from_hash(
             Hash::new(b"content sponsor"),
         )));

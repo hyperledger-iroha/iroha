@@ -52,6 +52,17 @@ def copy_applied_phase_admission_mutation_fixture(
         destination = repo_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    for parent_relative, component_relatives in (
+        module._REVIEWED_RUST_INCLUDE_MANIFESTS.items()
+    ):
+        parent = repo_root / parent_relative
+        if not parent.is_file():
+            continue
+        for component_relative in component_relatives:
+            source = (ROOT_DIR / parent_relative).parent / component_relative
+            destination = parent.parent / component_relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
     return repo_root, formal_dir
 
 

@@ -5,11 +5,6 @@
 //! form. Before code generation, [`crate::ssa`] converts it to strict SSA MIR
 //! with explicit Phi nodes, verifies dominance and definition uniqueness, and
 //! deterministically lowers it back for register allocation.
-
-use std::collections::{BTreeSet, HashMap};
-
-use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
-
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
@@ -19,10 +14,10 @@ use super::{
         TypedStateDecl, TypedStatement,
     },
 };
-
+use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
+use std::collections::{BTreeSet, HashMap};
 pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_json";
 const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";
-
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     if let semantic::ExprKind::Ident(name) = expr.kind() {
         Some(name.clone())
@@ -30,13 +25,11 @@ fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
         None
     }
 }
-
 #[derive(Clone, Debug)]
 struct StateMapSpec {
     key: Type,
     value: Type,
 }
-
 fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
     fn append(ty: &Type, words: &mut Vec<Type>) {
         match semantic::resolve_struct_type(ty) {
@@ -59,7 +52,6 @@ fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
             leaf => words.push(leaf),
         }
     }
-
     if !matches!(
         semantic::resolve_struct_type(ty),
         Type::Struct { .. }
@@ -74,7 +66,6 @@ fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
     append(ty, &mut words);
     Some(words)
 }
-
 fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
     let mut words = Vec::new();
     fn append(ty: &Type, words: &mut Vec<Type>) {
@@ -98,7 +89,6 @@ fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
     append(ty, &mut words);
     words
 }
-
 fn runtime_word_is_pointer(ty: &Type) -> bool {
     matches!(
         semantic::resolve_struct_type(ty),
@@ -113,18 +103,15 @@ fn runtime_word_is_pointer(ty: &Type) -> bool {
             | Type::List(_, _)
     ) || semantic::is_pointer_type(ty)
 }
-
 fn function_param_word_name(param: &str, index: usize) -> String {
     // `$` is not a source identifier character, so this compiler-owned name
     // cannot collide with a user parameter.
     format!("$abi${param}#{index}")
 }
-
 fn collect_state_handle_specs(name: &str, ty: &Type, out: &mut Vec<(String, Type)>) {
     let resolved = semantic::resolve_struct_type(ty);
     out.push((name.to_string(), resolved.clone()));
 }
-
 fn lowered_function_params(params: &[TypedParam]) -> Vec<String> {
     let mut lowered = Vec::new();
     for param in params {
@@ -145,21 +132,17 @@ fn lowered_function_params(params: &[TypedParam]) -> Vec<String> {
     }
     lowered
 }
-
 /// A virtual register or temporary value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Temp(pub usize);
-
 /// Identifier for a basic block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(pub usize);
-
 /// An entire lowered program.
 #[derive(Debug, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
 }
-
 /// A lowered function consisting of basic blocks.
 #[derive(Debug, PartialEq)]
 pub struct Function {
@@ -169,7 +152,6 @@ pub struct Function {
     pub entry: Label,
     pub location: super::ast::SourceLocation,
 }
-
 /// A single basic block in a function.
 #[derive(Debug, PartialEq)]
 pub struct BasicBlock {
@@ -177,7 +159,6 @@ pub struct BasicBlock {
     pub instrs: Vec<Instr>,
     pub terminator: Terminator,
 }
-
 /// Nominal wide-numeric ABI family selected by semantic typing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WideNumericKind {
@@ -188,7 +169,6 @@ pub enum WideNumericKind {
     /// Nominal non-negative quantity.
     Quantity,
 }
-
 /// Rounded exact-decimal operation selected by the typed source method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericRoundOp {
@@ -199,7 +179,6 @@ pub enum NumericRoundOp {
     /// `quantity / quantity -> decimal`.
     QuantityRatio,
 }
-
 /// Exact-decimal to integer conversion policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecimalToIntOp {
@@ -208,7 +187,6 @@ pub enum DecimalToIntOp {
     /// Apply the explicit rounding mode operand.
     Round,
 }
-
 /// Non-control-flow instructions.
 #[derive(Debug, PartialEq)]
 pub enum Instr {
@@ -1271,7 +1249,6 @@ pub enum Instr {
         syscall: u32,
     },
 }
-
 /// Instruction kind authorized by the tagged smart-contract instruction bridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VendorInstructionKind {
@@ -1280,7 +1257,6 @@ pub enum VendorInstructionKind {
     /// Bridge `RecordSccpMessage`.
     RecordSccpMessage,
 }
-
 /// Kinds of typed data references supported by the pointer-ABI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataRefKind {
@@ -1307,13 +1283,11 @@ pub enum DataRefKind {
     /// Canonical non-negative quantity.
     Quantity,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KeyCodec {
     Int,
     Pointer,
 }
-
 fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
     match semantic::resolve_struct_type(ty) {
         Type::AccountId => Some(DataRefKind::Account),
@@ -1335,14 +1309,12 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
         _ => None,
     }
 }
-
 fn is_pointer_eq_type(ty: &Type) -> bool {
     matches!(
         semantic::resolve_struct_type(ty),
         Type::String | Type::Bytes | Type::Json
     ) || semantic::is_pointer_type(ty)
 }
-
 fn wide_numeric_kind_for_type(ty: &Type) -> Option<WideNumericKind> {
     match semantic::resolve_struct_type(ty) {
         Type::Int => Some(WideNumericKind::Int),
@@ -1351,7 +1323,6 @@ fn wide_numeric_kind_for_type(ty: &Type) -> Option<WideNumericKind> {
         _ => None,
     }
 }
-
 fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) -> Temp {
     if semantic::is_wide_numeric_type(key_ty) {
         let t = ctx.new_temp();
@@ -1383,7 +1354,6 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
         t
     }
 }
-
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
         Type::Bool => Some(KeyCodec::Int),
@@ -1393,7 +1363,6 @@ fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
         _ => None,
     }
 }
-
 fn emit_state_value_schema_ref(ctx: &mut LowerCtx, ty: &Type) -> Option<Temp> {
     let schema = state_value_schema(ty)?;
     let encoded = ivm_abi::codec::encode_canonical_norito(&schema).ok()?;
@@ -1408,7 +1377,6 @@ fn emit_state_value_schema_ref(ctx: &mut LowerCtx, ty: &Type) -> Option<Temp> {
     });
     Some(schema_ref)
 }
-
 fn collect_state_value_words(
     ctx: &mut LowerCtx,
     value: Temp,
@@ -1447,7 +1415,6 @@ fn collect_state_value_words(
         }
     }
 }
-
 fn collect_json_construction_words(
     ctx: &mut LowerCtx,
     expr: &TypedExpr,
@@ -1467,7 +1434,6 @@ fn collect_json_construction_words(
         }
     }
 }
-
 fn lower_json_construction(
     ctx: &mut LowerCtx,
     expr: &TypedExpr,
@@ -1482,14 +1448,12 @@ fn lower_json_construction(
     };
     let expected_words = construction.word_count;
     let encoded_schema = construction.encoded;
-
     let schema_ref = ctx.new_temp();
     ctx.current_instr(Instr::DataRef {
         dest: schema_ref,
         kind: DataRefKind::NoritoBytes,
         value: format!("0x{}", hex::encode(encoded_schema)),
     });
-
     let mut words = Vec::with_capacity(expected_words);
     if !collect_json_construction_words(ctx, expr, vars, &mut words)
         || words.len() != expected_words
@@ -1498,7 +1462,6 @@ fn lower_json_construction(
         ctx.record_error("internal error: native JSON value-word schema mismatch".into());
         return emit_i64_const(ctx, 0);
     }
-
     let table = if words.is_empty() {
         emit_i64_const(ctx, 0)
     } else {
@@ -1538,7 +1501,6 @@ fn lower_json_construction(
     });
     dest
 }
-
 fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, words: &mut Vec<Temp>) {
     match semantic::resolve_struct_type(ty) {
         Type::Struct { fields, .. } => {
@@ -1567,7 +1529,6 @@ fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, word
         _ => words.push(value),
     }
 }
-
 fn encode_aggregate_state_value(ctx: &mut LowerCtx, value: Temp, ty: &Type) -> Option<Temp> {
     let schema = emit_state_value_schema_ref(ctx, ty)?;
     let mut words = Vec::new();
@@ -1584,7 +1545,6 @@ fn encode_aggregate_state_value(ctx: &mut LowerCtx, value: Temp, ty: &Type) -> O
     });
     Some(dest)
 }
-
 fn load_state_value_word(ctx: &mut LowerCtx, table: Temp, index: &mut usize) -> Option<Temp> {
     let index_i16 = i16::try_from(*index).ok()?;
     let imm = ivm_abi::state_value::DECODED_STATE_VALUE_TABLE_OFFSET.checked_add(
@@ -1599,7 +1559,6 @@ fn load_state_value_word(ctx: &mut LowerCtx, table: Temp, index: &mut usize) -> 
     *index = index.saturating_add(1);
     Some(dest)
 }
-
 fn rebuild_state_value_from_table(
     ctx: &mut LowerCtx,
     table: Temp,
@@ -1634,7 +1593,6 @@ fn rebuild_state_value_from_table(
         }
     }
 }
-
 fn rebuild_function_value_from_words(
     ctx: &mut LowerCtx,
     ty: &Type,
@@ -1672,7 +1630,6 @@ fn rebuild_function_value_from_words(
         }
     }
 }
-
 fn sum_layout_for_type(ty: &Type) -> Option<ivm_abi::sum::SumLayoutV1> {
     let word_count = |payload: &Type| u64::try_from(runtime_value_word_types(payload).len()).ok();
     match semantic::resolve_struct_type(ty) {
@@ -1684,7 +1641,6 @@ fn sum_layout_for_type(ty: &Type) -> Option<ivm_abi::sum::SumLayoutV1> {
         _ => None,
     }
 }
-
 fn sum_active_payload_type(ty: &Type, tag: u64) -> Option<Option<Type>> {
     match (semantic::resolve_struct_type(ty), tag) {
         (Type::Option(_), 0) => Some(None),
@@ -1694,7 +1650,6 @@ fn sum_active_payload_type(ty: &Type, tag: u64) -> Option<Option<Type>> {
         _ => None,
     }
 }
-
 /// Allocate one canonical active-only sum value.
 ///
 /// The allocation reserves the larger branch once, writes the discriminant,
@@ -1719,7 +1674,6 @@ fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<T
         });
         return invalid;
     };
-
     let mut payload_words = Vec::new();
     match (payload, payload_ty.as_ref()) {
         (Some(value), Some(payload_ty)) => {
@@ -1732,7 +1686,6 @@ fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<T
     if layout.validate_active_width(tag, actual_words).is_err() {
         ctx.record_error("internal error: sum active payload width mismatch".into());
     }
-
     let bytes = layout
         .allocation_bytes()
         .ok()
@@ -1778,7 +1731,6 @@ fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<T
     }
     value
 }
-
 fn load_sum_tag(ctx: &mut LowerCtx, value: Temp) -> Temp {
     let tag = ctx.new_temp();
     ctx.current_instr(Instr::Load64Imm {
@@ -1788,7 +1740,6 @@ fn load_sum_tag(ctx: &mut LowerCtx, value: Temp) -> Temp {
     });
     tag
 }
-
 fn load_sum_payload(ctx: &mut LowerCtx, value: Temp, payload_ty: &Type) -> Temp {
     let word_types = runtime_value_word_types(payload_ty);
     let mut words = Vec::with_capacity(word_types.len());
@@ -1820,7 +1771,6 @@ fn load_sum_payload(ctx: &mut LowerCtx, value: Temp, payload_ty: &Type) -> Temp 
     }
     payload
 }
-
 fn list_layout_for_type(ty: &Type) -> Option<(Type, ivm_abi::list::ListLayoutV1)> {
     let Type::List(element, capacity) = semantic::resolve_struct_type(ty) else {
         return None;
@@ -1829,13 +1779,11 @@ fn list_layout_for_type(ty: &Type) -> Option<(Type, ivm_abi::list::ListLayoutV1)
     let layout = ivm_abi::list::ListLayoutV1::try_new(u64::from(capacity), element_words).ok()?;
     Some((*element, layout))
 }
-
 fn emit_i64_const(ctx: &mut LowerCtx, value: i64) -> Temp {
     let temp = ctx.new_temp();
     ctx.current_instr(Instr::Const { dest: temp, value });
     temp
 }
-
 /// Cross the internal scalar/source-value boundary explicitly.
 ///
 /// Some internal arithmetic protocols return signed 64-bit words. A Kotodama
@@ -1846,20 +1794,17 @@ fn emit_int_from_i64(ctx: &mut LowerCtx, value: Temp) -> Temp {
     ctx.current_instr(Instr::IntFromI64 { dest, value });
     dest
 }
-
 /// Materialize a non-negative machine word as a canonical source `int`.
 fn emit_int_from_u64(ctx: &mut LowerCtx, value: Temp) -> Temp {
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::IntFromU64 { dest, value });
     dest
 }
-
 fn emit_int_try_to_u64(ctx: &mut LowerCtx, value: Temp) -> Temp {
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::IntTryToU64 { dest, value });
     dest
 }
-
 fn emit_list_allocation(ctx: &mut LowerCtx, list_ty: &Type, initial_len: u64) -> Temp {
     let Some((_, layout)) = list_layout_for_type(list_ty) else {
         ctx.record_error("internal error: invalid List layout".into());
@@ -1893,7 +1838,6 @@ fn emit_list_allocation(ctx: &mut LowerCtx, list_ty: &Type, initial_len: u64) ->
     });
     list
 }
-
 fn emit_list_slot_base(ctx: &mut LowerCtx, list: Temp, index: Temp, element_words: usize) -> Temp {
     let stride = element_words
         .checked_mul(8)
@@ -1919,7 +1863,6 @@ fn emit_list_slot_base(ctx: &mut LowerCtx, list: Temp, index: Temp, element_word
     });
     slot
 }
-
 fn emit_list_word_address(ctx: &mut LowerCtx, slot: Temp, word_index: usize) -> Temp {
     let offset = word_index
         .checked_add(2)
@@ -1939,7 +1882,6 @@ fn emit_list_word_address(ctx: &mut LowerCtx, slot: Temp, word_index: usize) -> 
     });
     address
 }
-
 fn load_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &Type) -> Temp {
     let word_types = runtime_value_word_types(element_ty);
     let slot = emit_list_slot_base(ctx, list, index, word_types.len());
@@ -1964,7 +1906,6 @@ fn load_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &T
     }
     element
 }
-
 fn store_list_element(
     ctx: &mut LowerCtx,
     list: Temp,
@@ -1988,7 +1929,6 @@ fn store_list_element(
         });
     }
 }
-
 fn clear_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &Type) {
     let element_words = runtime_value_word_types(element_ty).len();
     let slot = emit_list_slot_base(ctx, list, index, element_words);
@@ -2001,7 +1941,6 @@ fn clear_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &
         });
     }
 }
-
 fn emit_list_index_is_present(ctx: &mut LowerCtx, index: Temp, len: Temp) -> Temp {
     let zero = ctx.new_temp();
     ctx.current_instr(Instr::DataRef {
@@ -2035,7 +1974,6 @@ fn emit_list_index_is_present(ctx: &mut LowerCtx, index: Temp, len: Temp) -> Tem
     });
     present
 }
-
 fn lower_list_literal(
     ctx: &mut LowerCtx,
     elements: &[TypedExpr],
@@ -2058,7 +1996,6 @@ fn lower_list_literal(
     }
     list
 }
-
 fn lower_list_comprehension(
     ctx: &mut LowerCtx,
     expression: &TypedExpr,
@@ -2092,7 +2029,6 @@ fn lower_list_comprehension(
     let step = ctx.new_label();
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(header);
     let keep_going = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -2106,7 +2042,6 @@ fn lower_list_comprehension(
         then_bb: body,
         else_bb: end,
     });
-
     ctx.start_block(body);
     let item_value = load_list_element(ctx, source_list, index, &source_element);
     let mut comprehension_vars = vars.clone();
@@ -2121,7 +2056,6 @@ fn lower_list_comprehension(
     } else {
         ctx.finish_current(Terminator::Jump(append));
     }
-
     ctx.start_block(append);
     let value = lower_expr(ctx, expression, &mut comprehension_vars);
     let result_len = ctx.new_temp();
@@ -2143,7 +2077,6 @@ fn lower_list_comprehension(
         value: result_len,
     });
     ctx.finish_current(Terminator::Jump(step));
-
     ctx.start_block(step);
     ctx.current_instr(Instr::Binary {
         dest: index,
@@ -2152,11 +2085,9 @@ fn lower_list_comprehension(
         right: one,
     });
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(end);
     result
 }
-
 fn emit_product_value_eq(
     ctx: &mut LowerCtx,
     left: Temp,
@@ -2189,7 +2120,6 @@ fn emit_product_value_eq(
     }
     result
 }
-
 /// Compare two compiler-owned sums without observing their inactive payloads.
 fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
     let left_tag = load_sum_tag(ctx, left);
@@ -2201,7 +2131,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
         left: left_tag,
         right: right_tag,
     });
-
     let matching_tags = ctx.new_label();
     let different_tags = ctx.new_label();
     let end = ctx.new_label();
@@ -2211,7 +2140,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
         then_bb: matching_tags,
         else_bb: different_tags,
     });
-
     ctx.start_block(different_tags);
     let false_value = emit_i64_const(ctx, 0);
     ctx.current_instr(Instr::Copy {
@@ -2219,7 +2147,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
         src: false_value,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(matching_tags);
     match semantic::resolve_struct_type(ty) {
         Type::Option(payload) => {
@@ -2230,7 +2157,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
                 then_bb: some,
                 else_bb: none,
             });
-
             ctx.start_block(none);
             let true_value = emit_i64_const(ctx, 1);
             ctx.current_instr(Instr::Copy {
@@ -2238,7 +2164,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
                 src: true_value,
             });
             ctx.finish_current(Terminator::Jump(end));
-
             ctx.start_block(some);
             let left_payload = load_sum_payload(ctx, left, &payload);
             let right_payload = load_sum_payload(ctx, right, &payload);
@@ -2257,7 +2182,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
                 then_bb: success,
                 else_bb: failure,
             });
-
             ctx.start_block(failure);
             let left_error = load_sum_payload(ctx, left, &err);
             let right_error = load_sum_payload(ctx, right, &err);
@@ -2267,7 +2191,6 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
                 src: equal,
             });
             ctx.finish_current(Terminator::Jump(end));
-
             ctx.start_block(success);
             let left_value = load_sum_payload(ctx, left, &ok);
             let right_value = load_sum_payload(ctx, right, &ok);
@@ -2288,11 +2211,9 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
             ctx.finish_current(Terminator::Jump(end));
         }
     }
-
     ctx.start_block(end);
     result
 }
-
 /// Compare two bounded Lists by length and recursively by their active elements.
 fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &Type) -> Temp {
     let left_len = ctx.new_temp();
@@ -2314,7 +2235,6 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         left: left_len,
         right: right_len,
     });
-
     let compare_elements = ctx.new_label();
     let header = ctx.new_label();
     let body = ctx.new_label();
@@ -2330,10 +2250,8 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         then_bb: compare_elements,
         else_bb: different,
     });
-
     ctx.start_block(compare_elements);
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(header);
     let keep_going = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -2347,7 +2265,6 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         then_bb: body,
         else_bb: equal,
     });
-
     ctx.start_block(body);
     let left_element = load_list_element(ctx, left, index, element_ty);
     let right_element = load_list_element(ctx, right, index, element_ty);
@@ -2357,7 +2274,6 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         then_bb: step,
         else_bb: different,
     });
-
     ctx.start_block(step);
     ctx.current_instr(Instr::Binary {
         dest: index,
@@ -2366,7 +2282,6 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         right: one,
     });
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(different);
     let false_value = emit_i64_const(ctx, 0);
     ctx.current_instr(Instr::Copy {
@@ -2374,7 +2289,6 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         src: false_value,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(equal);
     let true_value = emit_i64_const(ctx, 1);
     ctx.current_instr(Instr::Copy {
@@ -2382,11 +2296,9 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
         src: true_value,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(end);
     result
 }
-
 /// Emit canonical structural equality for one List element schema.
 fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
     match semantic::resolve_struct_type(ty) {
@@ -2436,7 +2348,6 @@ fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -
         }
     }
 }
-
 fn lower_list_get(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2461,7 +2372,6 @@ fn lower_list_get(
         then_bb: some,
         else_bb: none,
     });
-
     ctx.start_block(some);
     let Type::Option(element_ty) = semantic::resolve_struct_type(result_ty) else {
         ctx.record_error("internal error: List.get result is not Option<T>".into());
@@ -2478,7 +2388,6 @@ fn lower_list_get(
         src: value,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(none);
     let value = emit_sum_value(ctx, result_ty, 0, None);
     ctx.current_instr(Instr::Copy {
@@ -2489,7 +2398,6 @@ fn lower_list_get(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_try_set(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2518,7 +2426,6 @@ fn lower_list_try_set(
         then_bb: success,
         else_bb: failure,
     });
-
     ctx.start_block(success);
     // Conversion is reached only after the exact-int bounds proof above.
     let index = emit_int_try_to_u64(ctx, index);
@@ -2529,7 +2436,6 @@ fn lower_list_try_set(
         src: one,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(failure);
     let zero = emit_i64_const(ctx, 0);
     ctx.current_instr(Instr::Copy {
@@ -2540,7 +2446,6 @@ fn lower_list_try_set(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_try_push(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2575,7 +2480,6 @@ fn lower_list_try_push(
         then_bb: success,
         else_bb: failure,
     });
-
     ctx.start_block(success);
     store_list_element(ctx, list, len, value, &element_ty);
     let one = emit_i64_const(ctx, 1);
@@ -2596,7 +2500,6 @@ fn lower_list_try_push(
         src: one,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(failure);
     let zero = emit_i64_const(ctx, 0);
     ctx.current_instr(Instr::Copy {
@@ -2607,7 +2510,6 @@ fn lower_list_try_push(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_pop(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2642,7 +2544,6 @@ fn lower_list_pop(
         then_bb: some,
         else_bb: none,
     });
-
     ctx.start_block(some);
     let one = emit_i64_const(ctx, 1);
     let new_len = ctx.new_temp();
@@ -2665,7 +2566,6 @@ fn lower_list_pop(
         src: value,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(none);
     let value = emit_sum_value(ctx, result_ty, 0, None);
     ctx.current_instr(Instr::Copy {
@@ -2676,7 +2576,6 @@ fn lower_list_pop(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_contains(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2703,7 +2602,6 @@ fn lower_list_contains(
     let step = ctx.new_label();
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(header);
     let keep_going = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -2717,7 +2615,6 @@ fn lower_list_contains(
         then_bb: body,
         else_bb: end,
     });
-
     ctx.start_block(body);
     let candidate = load_list_element(ctx, list, index, &element_ty);
     let equal = emit_typed_value_eq(ctx, candidate, needle, &element_ty);
@@ -2726,14 +2623,12 @@ fn lower_list_contains(
         then_bb: found,
         else_bb: step,
     });
-
     ctx.start_block(found);
     ctx.current_instr(Instr::Copy {
         dest: result,
         src: one,
     });
     ctx.finish_current(Terminator::Jump(end));
-
     ctx.start_block(step);
     ctx.current_instr(Instr::Binary {
         dest: index,
@@ -2745,7 +2640,6 @@ fn lower_list_contains(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_take(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2775,7 +2669,6 @@ fn lower_list_take(
     let body = ctx.new_label();
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(header);
     let below_len = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -2803,7 +2696,6 @@ fn lower_list_take(
         then_bb: body,
         else_bb: end,
     });
-
     ctx.start_block(body);
     let value = load_list_element(ctx, source, index, &source_element);
     store_list_element(ctx, result, index, value, &result_element);
@@ -2827,7 +2719,6 @@ fn lower_list_take(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_enumerate(
     ctx: &mut LowerCtx,
     args: &[TypedExpr],
@@ -2856,7 +2747,6 @@ fn lower_list_enumerate(
     let body = ctx.new_label();
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
-
     ctx.start_block(header);
     let keep_going = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -2870,7 +2760,6 @@ fn lower_list_enumerate(
         then_bb: body,
         else_bb: end,
     });
-
     ctx.start_block(body);
     let value = load_list_element(ctx, source, index, &source_element);
     let source_index = emit_int_from_u64(ctx, index);
@@ -2900,7 +2789,6 @@ fn lower_list_enumerate(
     ctx.start_block(end);
     result
 }
-
 fn lower_list_intrinsic(
     ctx: &mut LowerCtx,
     name: &str,
@@ -2929,7 +2817,6 @@ fn lower_list_intrinsic(
         _ => return None,
     })
 }
-
 fn lower_numeric_round_intrinsic(
     ctx: &mut LowerCtx,
     name: &str,
@@ -2971,7 +2858,6 @@ fn lower_numeric_round_intrinsic(
     });
     Some(dest)
 }
-
 fn lower_decimal_to_int_intrinsic(
     ctx: &mut LowerCtx,
     name: &str,
@@ -2998,14 +2884,12 @@ fn lower_decimal_to_int_intrinsic(
     });
     Some(dest)
 }
-
 fn sum_pattern_tag(pattern: &semantic::TypedSumPattern) -> u64 {
     match pattern.pattern.variant {
         SumVariant::OptionNone | SumVariant::ResultErr => 0,
         SumVariant::OptionSome | SumVariant::ResultOk => 1,
     }
 }
-
 fn bind_sum_pattern(
     ctx: &mut LowerCtx,
     pattern: &semantic::TypedSumPattern,
@@ -3023,7 +2907,6 @@ fn bind_sum_pattern(
         vars.insert(name.clone(), payload);
     }
 }
-
 fn propagation_match_return<'a>(
     value_ty: &Type,
     return_ty: &Type,
@@ -3034,7 +2917,6 @@ fn propagation_match_return<'a>(
     }
     let success = arms.iter().find(|arm| sum_pattern_tag(&arm.pattern) == 1)?;
     let failure = arms.iter().find(|arm| sum_pattern_tag(&arm.pattern) == 0)?;
-
     let success_binding = match success.pattern.pattern.binding.as_ref()? {
         PatternBinding::Name(name) => name,
         PatternBinding::Wildcard => return None,
@@ -3050,7 +2932,6 @@ fn propagation_match_return<'a>(
     {
         return None;
     }
-
     let [TypedStatement::Return(Some(returned))] = failure.body.statements.as_slice() else {
         return None;
     };
@@ -3059,7 +2940,6 @@ fn propagation_match_return<'a>(
     {
         return None;
     }
-
     match (
         semantic::resolve_struct_type(value_ty),
         semantic::resolve_struct_type(return_ty),
@@ -3094,7 +2974,6 @@ fn propagation_match_return<'a>(
         _ => None,
     }
 }
-
 fn lower_propagation(
     ctx: &mut LowerCtx,
     value: &TypedExpr,
@@ -3109,7 +2988,6 @@ fn lower_propagation(
         then_bb: success_label,
         else_bb: failure_label,
     });
-
     ctx.start_block(failure_label);
     let return_ty = ctx.function_return_type.clone();
     let propagated = match (
@@ -3144,7 +3022,6 @@ fn lower_propagation(
         }
     };
     finish_value_return(ctx, propagated, &return_ty);
-
     ctx.start_block(success_label);
     let payload_ty = match semantic::resolve_struct_type(&value.ty) {
         Type::Option(payload) | Type::Result(payload, _) => *payload,
@@ -3155,7 +3032,6 @@ fn lower_propagation(
     };
     load_sum_payload(ctx, sum, &payload_ty)
 }
-
 fn copy_runtime_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, destinations: &[Temp]) {
     let mut words = Vec::with_capacity(destinations.len());
     collect_function_value_words(ctx, value, ty, &mut words);
@@ -3166,7 +3042,6 @@ fn copy_runtime_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, destinat
         ctx.current_instr(Instr::Copy { dest: *dest, src });
     }
 }
-
 fn rebuild_runtime_value(ctx: &mut LowerCtx, ty: &Type, words: &[Temp]) -> Temp {
     let mut index = 0;
     let value =
@@ -3186,7 +3061,6 @@ fn rebuild_runtime_value(ctx: &mut LowerCtx, ty: &Type, words: &[Temp]) -> Temp 
     }
     value
 }
-
 fn decode_aggregate_state_value(ctx: &mut LowerCtx, blob: Temp, ty: &Type) -> Option<Temp> {
     let schema = emit_state_value_schema_ref(ctx, ty)?;
     let table = ctx.new_temp();
@@ -3200,11 +3074,9 @@ fn decode_aggregate_state_value(ctx: &mut LowerCtx, blob: Temp, ty: &Type) -> Op
     let expected = state_value_schema(ty)?.word_kinds()?.len();
     (index == expected).then_some(value)
 }
-
 fn is_canonical_state_value_type(ty: &Type) -> bool {
     state_value_schema(ty).is_some()
 }
-
 fn lower_state_map_get_value(
     ctx: &mut LowerCtx,
     base_name: &str,
@@ -3218,7 +3090,6 @@ fn lower_state_map_get_value(
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     decode_state_map_value_blob(ctx, blob, value_ty)
 }
-
 fn decode_state_map_value_blob(ctx: &mut LowerCtx, blob: Temp, value_ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(value_ty);
     if !is_canonical_state_value_type(&resolved) {
@@ -3226,7 +3097,6 @@ fn decode_state_map_value_blob(ctx: &mut LowerCtx, blob: Temp, value_ty: &Type) 
     }
     decode_aggregate_state_value(ctx, blob, &resolved)
 }
-
 fn lower_state_map_set_value(
     ctx: &mut LowerCtx,
     base_name: &str,
@@ -3252,7 +3122,6 @@ fn lower_state_map_set_value(
     });
     true
 }
-
 /// Control-flow terminators for a block.
 #[derive(Debug, PartialEq)]
 pub enum Terminator {
@@ -3268,7 +3137,6 @@ pub enum Terminator {
         else_bb: Label,
     },
 }
-
 /// Lower a semantically checked program into IR.
 pub fn lower(program: &TypedProgram) -> Result<Program, String> {
     lower_with_cap(
@@ -3276,12 +3144,10 @@ pub fn lower(program: &TypedProgram) -> Result<Program, String> {
         crate::semantic::COLLECTION_ITERATION_LIMIT as usize,
     )
 }
-
 /// Lower with the first-release dynamic-iteration cap.
 pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
     lower_with_cap_and_test_mode(program, dyn_iter_cap, false)
 }
-
 /// Lower with a specific dynamic-iteration cap and optional local-test semantics.
 pub fn lower_with_cap_and_test_mode(
     program: &TypedProgram,
@@ -3296,13 +3162,11 @@ pub fn lower_with_cap_and_test_mode(
             .join("\n")
     })
 }
-
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LoweringFailure {
     pub(crate) message: String,
     pub(crate) location: super::ast::SourceLocation,
 }
-
 pub(crate) fn lower_with_cap_and_test_mode_diagnostics(
     program: &TypedProgram,
     dyn_iter_cap: usize,
@@ -3367,7 +3231,6 @@ pub(crate) fn lower_with_cap_and_test_mode_diagnostics(
         Err(failures)
     }
 }
-
 fn build_entrypoint_call_renames(program: &TypedProgram) -> HashMap<String, String> {
     let mut renames = HashMap::new();
     for item in &program.items {
@@ -3378,7 +3241,6 @@ fn build_entrypoint_call_renames(program: &TypedProgram) -> HashMap<String, Stri
     }
     renames
 }
-
 fn build_function_param_specs(program: &TypedProgram) -> HashMap<String, Vec<TypedParam>> {
     let mut specs = HashMap::new();
     for item in &program.items {
@@ -3387,18 +3249,15 @@ fn build_function_param_specs(program: &TypedProgram) -> HashMap<String, Vec<Typ
     }
     specs
 }
-
 fn entrypoint_impl_symbol(name: &str) -> String {
     format!("__entrypoint_impl__{name}")
 }
-
 // Zero-argument entrypoints can jump straight into the implementation body
 // because there is no payload-decoding work for a wrapper to perform.
 fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
     !matches!(func.modifiers.kind, super::ast::FunctionKind::Private)
         && !func.param_types.is_empty()
 }
-
 fn lower_function_named(
     func: &TypedFunction,
     symbol_name: &str,
@@ -3495,7 +3354,6 @@ fn lower_function_named(
             vars.insert(param.name.clone(), tmp);
         }
     }
-
     let tail = lower_block_tail_with_live_after(&mut ctx, &func.body, &mut vars, &BTreeSet::new());
     if semantic::typed_block_diverges(&func.body) {
         // Explicit returns already terminate every reachable path. Seal the
@@ -3514,7 +3372,6 @@ fn lower_function_named(
     } else {
         ctx.finish_current(Terminator::Return(None));
     }
-
     let function = Function {
         name: symbol_name.to_string(),
         params: lowered_params,
@@ -3528,7 +3385,6 @@ fn lower_function_named(
         Ok(function)
     }
 }
-
 fn lower_entrypoint_wrapper(
     func: &TypedFunction,
     impl_name: &str,
@@ -3545,13 +3401,11 @@ fn lower_entrypoint_wrapper(
     );
     let entry = ctx.new_label();
     ctx.start_block(entry);
-
     let payload = if func.param_types.is_empty() {
         None
     } else {
         Some(load_entrypoint_payload(&mut ctx, test_mode))
     };
-
     for param in &func.param_types {
         if param.is_state {
             return Err(format!(
@@ -3560,7 +3414,6 @@ fn lower_entrypoint_wrapper(
             ));
         }
     }
-
     let payload = payload.ok_or_else(|| {
         format!(
             "internal error: missing payload for parameterized entrypoint `{}`",
@@ -3630,7 +3483,6 @@ fn lower_entrypoint_wrapper(
         }
         args
     };
-
     let return_ty = func.ret_ty.as_ref().unwrap_or(&Type::Unit);
     let term = if *return_ty == Type::Unit {
         ctx.current_instr(Instr::Call {
@@ -3660,7 +3512,6 @@ fn lower_entrypoint_wrapper(
         Terminator::Return(Some(dest))
     };
     ctx.finish_current(term);
-
     let function = Function {
         name: func.name.clone(),
         params: Vec::new(),
@@ -3674,14 +3525,12 @@ fn lower_entrypoint_wrapper(
         Ok(function)
     }
 }
-
 fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
     if !test_mode {
         let payload = ctx.new_temp();
         ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
         return payload;
     }
-
     let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
     let override_payload = ctx.new_temp();
     ctx.current_instr(Instr::StateGet {
@@ -3700,18 +3549,15 @@ fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
         left: override_payload,
         right: zero,
     });
-
     let override_bb = ctx.new_label();
     let host_bb = ctx.new_label();
     let join_bb = ctx.new_label();
     let payload = ctx.new_temp();
-
     ctx.finish_current(Terminator::Branch {
         cond: has_override,
         then_bb: override_bb,
         else_bb: host_bb,
     });
-
     ctx.start_block(override_bb);
     let decoded_override = ctx.new_temp();
     ctx.current_instr(Instr::JsonDecode {
@@ -3723,7 +3569,6 @@ fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
         src: decoded_override,
     });
     ctx.finish_current(Terminator::Jump(join_bb));
-
     ctx.start_block(host_bb);
     let host_payload = ctx.new_temp();
     ctx.current_instr(Instr::GetTriggerEvent { dest: host_payload });
@@ -3732,11 +3577,9 @@ fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
         src: host_payload,
     });
     ctx.finish_current(Terminator::Jump(join_bb));
-
     ctx.start_block(join_bb);
     payload
 }
-
 fn lower_invoke_entrypoint_call(
     ctx: &mut LowerCtx,
     entrypoint: &str,
@@ -3750,7 +3593,6 @@ fn lower_invoke_entrypoint_call(
         dest: previous_payload,
         path: override_path,
     });
-
     let payload = lower_expr(ctx, payload_expr, vars);
     let encoded_payload = ctx.new_temp();
     ctx.current_instr(Instr::JsonEncode {
@@ -3761,7 +3603,6 @@ fn lower_invoke_entrypoint_call(
         path: override_path,
         value: encoded_payload,
     });
-
     let result = if *result_ty == semantic::Type::Unit {
         ctx.current_instr(Instr::Call {
             callee: entrypoint.to_string(),
@@ -3798,7 +3639,6 @@ fn lower_invoke_entrypoint_call(
         });
         dest
     };
-
     let zero = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: zero,
@@ -3811,7 +3651,6 @@ fn lower_invoke_entrypoint_call(
         left: previous_payload,
         right: zero,
     });
-
     let restore_bb = ctx.new_label();
     let clear_bb = ctx.new_label();
     let join_bb = ctx.new_label();
@@ -3820,24 +3659,20 @@ fn lower_invoke_entrypoint_call(
         then_bb: restore_bb,
         else_bb: clear_bb,
     });
-
     ctx.start_block(restore_bb);
     ctx.current_instr(Instr::StateSet {
         path: override_path,
         value: previous_payload,
     });
     ctx.finish_current(Terminator::Jump(join_bb));
-
     ctx.start_block(clear_bb);
     ctx.current_instr(Instr::StateDel {
         path: override_path,
     });
     ctx.finish_current(Terminator::Jump(join_bb));
-
     ctx.start_block(join_bb);
     result
 }
-
 fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::DataRef {
@@ -3847,13 +3682,11 @@ fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
     });
     dest
 }
-
 fn entrypoint_value_kind(
     value_name: &str,
     ty: &Type,
 ) -> Result<ivm_abi::entrypoint::EntrypointValueKindV1, String> {
     use ivm_abi::entrypoint::EntrypointValueKindV1 as Kind;
-
     let resolved = semantic::resolve_struct_type(ty);
     Ok(match resolved {
         Type::Int => Kind::Int,
@@ -3878,7 +3711,6 @@ fn entrypoint_value_kind(
         }
     })
 }
-
 fn append_entrypoint_value_type_nodes(
     value_name: &str,
     ty: &Type,
@@ -3888,7 +3720,6 @@ fn append_entrypoint_value_type_nodes(
         EntrypointListTypeNodeV1 as ListNode, EntrypointStructTypeNodeV1 as StructNode,
         EntrypointValueTypeNodeV1 as Node,
     };
-
     match semantic::resolve_struct_type(ty) {
         Type::Struct { name, fields } => {
             nodes.push(Node::Struct(StructNode {
@@ -3924,7 +3755,6 @@ fn append_entrypoint_value_type_nodes(
     }
     Ok(())
 }
-
 fn entrypoint_value_type(
     value_name: &str,
     ty: &Type,
@@ -3939,7 +3769,6 @@ fn entrypoint_value_type(
     }
     Ok(ty)
 }
-
 /// Build the exact recursive schema for a non-unit public return value.
 pub(crate) fn entrypoint_return_schema(
     entrypoint_name: &str,
@@ -3963,7 +3792,6 @@ pub(crate) fn entrypoint_return_schema(
     }
     Ok(Some(schema))
 }
-
 pub(crate) fn entrypoint_argument_schema(
     params: &[TypedParam],
 ) -> Result<Option<ivm_abi::entrypoint::EntrypointArgumentSchemaV1>, String> {
@@ -3989,7 +3817,6 @@ pub(crate) fn entrypoint_argument_schema(
     }
     Ok(Some(schema))
 }
-
 fn register_state_value_metadata(ctx: &mut LowerCtx, name: &str, ty: &Type, literal: &str) {
     ctx.state_name_literals
         .insert(name.to_string(), literal.to_string());
@@ -4010,14 +3837,12 @@ fn register_state_value_metadata(ctx: &mut LowerCtx, name: &str, ty: &Type, lite
         _ => {}
     }
 }
-
 fn push_copy(block: &mut BasicBlock, dest: Temp, src: Temp) {
     if dest == src {
         return;
     }
     block.instrs.push(Instr::Copy { dest, src });
 }
-
 fn merge_conditional_envs(
     ctx: &mut LowerCtx,
     entry_env: &HashMap<String, Temp>,
@@ -4052,7 +3877,6 @@ fn merge_conditional_envs(
         vars.insert(name, join_temp);
     }
 }
-
 fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
     match expr.kind() {
         semantic::ExprKind::Binary { left, right, .. } => {
@@ -4153,7 +3977,6 @@ fn collect_expr_reads(expr: &TypedExpr, reads: &mut BTreeSet<String>) {
         | semantic::ExprKind::OptionNone => {}
     }
 }
-
 fn collect_block_reads(block: &TypedBlock, reads: &mut BTreeSet<String>) {
     for statement in &block.statements {
         collect_statement_reads(statement, reads);
@@ -4162,7 +3985,6 @@ fn collect_block_reads(block: &TypedBlock, reads: &mut BTreeSet<String>) {
         collect_expr_reads(tail, reads);
     }
 }
-
 fn collect_statement_reads(statement: &TypedStatement, reads: &mut BTreeSet<String>) {
     match statement.kind() {
         TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
@@ -4226,13 +4048,11 @@ fn collect_statement_reads(statement: &TypedStatement, reads: &mut BTreeSet<Stri
         }
     }
 }
-
 fn collect_block_mutations(block: &TypedBlock, mutations: &mut BTreeSet<String>) {
     for statement in &block.statements {
         collect_statement_mutations(statement, mutations);
     }
 }
-
 fn collect_statement_mutations(statement: &TypedStatement, mutations: &mut BTreeSet<String>) {
     match statement.kind() {
         TypedStatement::Let { name, .. } => {
@@ -4286,7 +4106,6 @@ fn collect_statement_mutations(statement: &TypedStatement, mutations: &mut BTree
         | TypedStatement::MapSet { .. } => {}
     }
 }
-
 fn live_before_statement(
     statement: &TypedStatement,
     live_after: &BTreeSet<String>,
@@ -4303,7 +4122,6 @@ fn live_before_statement(
     collect_statement_reads(statement, &mut live);
     live
 }
-
 fn block_live_after_sets(
     block: &TypedBlock,
     outer_live_after: &BTreeSet<String>,
@@ -4329,7 +4147,6 @@ fn block_live_after_sets(
     }
     result
 }
-
 fn loop_phi_names(
     vars: &HashMap<String, Temp>,
     mutations: &BTreeSet<String>,
@@ -4344,7 +4161,6 @@ fn loop_phi_names(
         .cloned()
         .collect()
 }
-
 fn initialize_loop_phi(
     ctx: &mut LowerCtx,
     vars: &HashMap<String, Temp>,
@@ -4364,7 +4180,6 @@ fn initialize_loop_phi(
     }
     phi
 }
-
 fn env_with_loop_phi(
     base: &HashMap<String, Temp>,
     phi: &HashMap<String, Temp>,
@@ -4375,13 +4190,11 @@ fn env_with_loop_phi(
     }
     env
 }
-
 fn apply_loop_phi(env: &mut HashMap<String, Temp>, phi: &HashMap<String, Temp>) {
     for (name, temp) in phi {
         env.insert(name.clone(), *temp);
     }
 }
-
 fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
     if let Some(phi) = ctx.current_loop_phi() {
         let mut copies: Vec<(Temp, Temp)> = Vec::new();
@@ -4399,7 +4212,6 @@ fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
         }
     }
 }
-
 fn lower_block_with_live_after(
     ctx: &mut LowerCtx,
     block: &TypedBlock,
@@ -4408,7 +4220,6 @@ fn lower_block_with_live_after(
 ) {
     let _ = lower_block_tail_with_live_after(ctx, block, vars, outer_live_after);
 }
-
 fn lower_block_tail_with_live_after(
     ctx: &mut LowerCtx,
     block: &TypedBlock,
@@ -4421,7 +4232,6 @@ fn lower_block_tail_with_live_after(
     }
     block.tail.as_ref().map(|tail| lower_expr(ctx, tail, vars))
 }
-
 fn lower_expression_block(
     ctx: &mut LowerCtx,
     block: &TypedBlock,
@@ -4445,13 +4255,11 @@ fn lower_expression_block(
     }
     value
 }
-
 fn seal_unreachable_continuation(ctx: &mut LowerCtx) {
     if let Some(label) = ctx.current.as_ref().map(|block| block.label) {
         ctx.finish_current(Terminator::Jump(label));
     }
 }
-
 fn finish_value_return(ctx: &mut LowerCtx, value: Temp, ty: &Type) {
     if function_value_word_types(ty).is_some() {
         let mut outs = Vec::new();
@@ -4466,7 +4274,6 @@ fn finish_value_return(ctx: &mut LowerCtx, value: Temp, ty: &Type) {
         ctx.finish_current(Terminator::Return(Some(value)));
     }
 }
-
 fn lower_statement(
     ctx: &mut LowerCtx,
     stmt: &TypedStatement,
@@ -4499,13 +4306,11 @@ fn lower_statement(
                 then_bb: then_label,
                 else_bb: else_label,
             });
-
             ctx.start_block(then_label);
             let mut then_vars = entry_env.clone();
             lower_block_with_live_after(ctx, then_branch, &mut then_vars, live_after);
             ctx.finish_current(Terminator::Jump(end_label));
             let then_idx = ctx.blocks.len() - 1;
-
             ctx.start_block(else_label);
             let mut else_vars = entry_env.clone();
             if let Some(b) = else_branch {
@@ -4513,11 +4318,9 @@ fn lower_statement(
             }
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
-
             merge_conditional_envs(
                 ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, vars,
             );
-
             ctx.start_block(end_label);
         }
         TypedStatement::IfLet {
@@ -4542,14 +4345,12 @@ fn lower_statement(
                 then_bb: tag_one,
                 else_bb: tag_zero,
             });
-
             ctx.start_block(then_label);
             let mut then_vars = entry_env.clone();
             bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
             lower_block_with_live_after(ctx, then_branch, &mut then_vars, live_after);
             ctx.finish_current(Terminator::Jump(end_label));
             let then_idx = ctx.blocks.len() - 1;
-
             ctx.start_block(else_label);
             let mut else_vars = entry_env.clone();
             if let Some(else_branch) = else_branch {
@@ -4557,7 +4358,6 @@ fn lower_statement(
             }
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
-
             merge_conditional_envs(
                 ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, vars,
             );
@@ -4579,7 +4379,6 @@ fn lower_statement(
             ctx.push_loop(cond_label, end_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(cond_label));
-
             ctx.start_block(cond_label);
             let mut cond_vars = loop_env;
             let cond_t = lower_expr(ctx, cond, &mut cond_vars);
@@ -4588,7 +4387,6 @@ fn lower_statement(
                 then_bb: body_label,
                 else_bb: end_label,
             });
-
             ctx.start_block(body_label);
             let mut body_vars = cond_vars;
             let mut body_live_after = loop_reads;
@@ -4596,7 +4394,6 @@ fn lower_statement(
             lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
             copy_env_to_loop_phi(ctx, &body_vars);
             ctx.finish_current(Terminator::Jump(cond_label));
-
             ctx.pop_loop();
             ctx.start_block(end_label);
             *vars = entry_vars;
@@ -4636,7 +4433,6 @@ fn lower_statement(
             ctx.push_loop(step_label, end_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(cond_label));
-
             ctx.start_block(cond_label);
             let mut cond_vars = loop_env;
             let cond_t = if let Some(c) = cond {
@@ -4651,7 +4447,6 @@ fn lower_statement(
                 then_bb: body_label,
                 else_bb: end_label,
             });
-
             ctx.start_block(body_label);
             let mut body_vars = cond_vars;
             let mut body_live_after = loop_reads.clone();
@@ -4659,7 +4454,6 @@ fn lower_statement(
             lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
             copy_env_to_loop_phi(ctx, &body_vars);
             ctx.finish_current(Terminator::Jump(step_label));
-
             ctx.start_block(step_label);
             if let Some(s) = step {
                 let mut step_vars = env_with_loop_phi(&entry_vars, &loop_phi);
@@ -4667,7 +4461,6 @@ fn lower_statement(
                 copy_env_to_loop_phi(ctx, &step_vars);
             }
             ctx.finish_current(Terminator::Jump(cond_label));
-
             ctx.pop_loop();
             ctx.start_block(end_label);
             *vars = entry_vars;
@@ -4740,7 +4533,6 @@ fn lower_statement(
             debug_assert_eq!(*start, 0);
             let base_start_i64: i64 = 0;
             let limit_value = base_start_i64.saturating_add(max_iters_i64);
-
             let index = ctx.new_temp();
             ctx.current_instr(Instr::Const {
                 dest: index,
@@ -4761,7 +4553,6 @@ fn lower_statement(
                 dest: one,
                 value: 1,
             });
-
             let loop_label = ctx.new_label();
             let body_label = ctx.new_label();
             let step_label = ctx.new_label();
@@ -4777,7 +4568,6 @@ fn lower_statement(
             ctx.push_loop(step_label, exit_label);
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(loop_label));
-
             ctx.start_block(loop_label);
             let cond_t = ctx.new_temp();
             ctx.current_instr(Instr::Binary {
@@ -4791,7 +4581,6 @@ fn lower_statement(
                 then_bb: body_label,
                 else_bb: exit_label,
             });
-
             ctx.start_block(body_label);
             let mut body_vars = loop_env;
             let offset_bytes = ctx.new_temp();
@@ -4829,7 +4618,6 @@ fn lower_statement(
             lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
             copy_env_to_loop_phi(ctx, &body_vars);
             ctx.finish_current(Terminator::Jump(step_label));
-
             ctx.start_block(step_label);
             ctx.current_instr(Instr::Binary {
                 dest: index,
@@ -4838,7 +4626,6 @@ fn lower_statement(
                 right: one,
             });
             ctx.finish_current(Terminator::Jump(loop_label));
-
             ctx.pop_loop();
             ctx.start_block(exit_label);
             *vars = entry_vars;
@@ -4863,7 +4650,6 @@ fn lower_statement(
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn lower_state_foreach_map(
     ctx: &mut LowerCtx,
@@ -4919,7 +4705,6 @@ fn lower_state_foreach_map(
         live_after,
     );
 }
-
 fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Option<Temp> {
     match semantic::resolve_struct_type(key_ty) {
         Type::Bool => {
@@ -4962,7 +4747,6 @@ fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Op
         _ => None,
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn lower_state_foreach_page(
     ctx: &mut LowerCtx,
@@ -4988,7 +4772,6 @@ fn lower_state_foreach_page(
         limit,
         dynamic_access_hint: Some(dynamic_access_hint),
     });
-
     let index = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: index,
@@ -4999,7 +4782,6 @@ fn lower_state_foreach_page(
         dest: one,
         value: 1,
     });
-
     let loop_label = ctx.new_label();
     let body_label = ctx.new_label();
     let step_label = ctx.new_label();
@@ -5015,7 +4797,6 @@ fn lower_state_foreach_page(
     ctx.push_loop(step_label, exit_label);
     ctx.set_loop_phi(loop_phi.clone());
     ctx.finish_current(Terminator::Jump(loop_label));
-
     ctx.start_block(loop_label);
     let cond_t = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -5029,7 +4810,6 @@ fn lower_state_foreach_page(
         then_bb: body_label,
         else_bb: exit_label,
     });
-
     ctx.start_block(body_label);
     let key_blob = ctx.new_temp();
     ctx.current_instr(Instr::StateMapKeyAt {
@@ -5056,7 +4836,6 @@ fn lower_state_foreach_page(
         then_bb: present_bb,
         else_bb: exit_label,
     });
-
     ctx.start_block(present_bb);
     let key_temp = decode_state_map_key(ctx, key_blob, key_ty).unwrap_or_else(|| {
         ctx.record_error("durable StateMap iteration key type is not decodable".into());
@@ -5077,7 +4856,6 @@ fn lower_state_foreach_page(
     lower_block_with_live_after(ctx, body, &mut body_vars, &body_live_after);
     copy_env_to_loop_phi(ctx, &body_vars);
     ctx.finish_current(Terminator::Jump(step_label));
-
     ctx.start_block(step_label);
     ctx.current_instr(Instr::Binary {
         dest: index,
@@ -5086,13 +4864,11 @@ fn lower_state_foreach_page(
         right: one,
     });
     ctx.finish_current(Terminator::Jump(loop_label));
-
     ctx.pop_loop();
     ctx.start_block(exit_label);
     *vars = entry_vars;
     apply_loop_phi(vars, &loop_phi);
 }
-
 fn lower_expr_as_i64(
     ctx: &mut LowerCtx,
     expr: &TypedExpr,
@@ -5116,7 +4892,6 @@ fn lower_expr_as_i64(
         value
     }
 }
-
 fn lower_expr_as_u64(
     ctx: &mut LowerCtx,
     expr: &TypedExpr,
@@ -5140,7 +4915,6 @@ fn lower_expr_as_u64(
         value
     }
 }
-
 fn lower_expr_as_numeric(
     ctx: &mut LowerCtx,
     expr: &TypedExpr,
@@ -5155,7 +4929,6 @@ fn lower_expr_as_numeric(
     }
     value
 }
-
 /// Select a source builtin's direct host operation exclusively through its
 /// canonical registry record.
 ///
@@ -5177,7 +4950,6 @@ fn direct_builtin_syscall(builtin: Builtin) -> u32 {
         )
     })
 }
-
 fn numeric_binary_builtin_op(builtin: Builtin) -> Option<BinaryOp> {
     Some(match builtin {
         Builtin::NumericAdd => BinaryOp::Add,
@@ -5188,7 +4960,6 @@ fn numeric_binary_builtin_op(builtin: Builtin) -> Option<BinaryOp> {
         _ => return None,
     })
 }
-
 fn numeric_compare_builtin_op(builtin: Builtin) -> Option<BinaryOp> {
     Some(match builtin {
         Builtin::NumericEq => BinaryOp::Eq,
@@ -5200,7 +4971,6 @@ fn numeric_compare_builtin_op(builtin: Builtin) -> Option<BinaryOp> {
         _ => return None,
     })
 }
-
 fn lower_hash_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -5221,7 +4991,6 @@ fn lower_hash_builtin_call(
     ctx.current_instr(instr);
     dest
 }
-
 fn lower_signature_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -5257,7 +5026,6 @@ fn lower_signature_builtin_call(
     }
     dest
 }
-
 fn lower_sm4_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -5310,7 +5078,6 @@ fn lower_sm4_builtin_call(
     }
     dest
 }
-
 fn lower_direct_helper_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -5330,7 +5097,6 @@ fn lower_direct_helper_call(
     });
     dest
 }
-
 fn pointer_constructor_kind_and_type(constructor: PointerConstructor) -> (DataRefKind, Type) {
     match constructor {
         PointerConstructor::AccountId => (DataRefKind::Account, Type::AccountId),
@@ -5356,7 +5122,6 @@ fn pointer_constructor_kind_and_type(constructor: PointerConstructor) -> (DataRe
         }
     }
 }
-
 fn lower_pointer_constructor_call(
     ctx: &mut LowerCtx,
     constructor: PointerConstructor,
@@ -5436,7 +5201,6 @@ fn lower_pointer_constructor_call(
         _ => src,
     }
 }
-
 fn lower_transfer_batch_call(
     ctx: &mut LowerCtx,
     args: &[semantic::TypedExpr],
@@ -5482,7 +5246,6 @@ fn lower_transfer_batch_call(
     ctx.current_instr(Instr::Const { dest: t, value: 0 });
     t
 }
-
 fn lower_surface_builtin_call(
     ctx: &mut LowerCtx,
     builtin: Builtin,
@@ -5521,7 +5284,6 @@ fn lower_surface_builtin_call(
             let incoming = lower_expr(ctx, &args[3], vars);
             let outgoing = lower_expr(ctx, &args[4], vars);
             let reason = lower_expr(ctx, &args[5], vars);
-
             // ABI v1 exposes only r10..r14. Keep the source-level API explicit while
             // packing the two booleans into one physical flags word.
             let two = emit_i64_const(ctx, 2);
@@ -7383,7 +7145,6 @@ fn lower_surface_builtin_call(
         }
     }
 }
-
 /// Return whether a named argument must be captured at its source position.
 ///
 /// Literal leaves are total and independent of mutable compiler state, so a
@@ -7407,7 +7168,6 @@ fn named_argument_requires_capture(argument: &TypedExpr) -> bool {
             | semantic::ExprKind::Bytes(_)
     )
 }
-
 /// Lower a named call by capturing observable argument evaluations in source
 /// order and then reusing their temporary identities in declaration/ABI order.
 ///
@@ -7446,7 +7206,6 @@ fn lower_named_call(
             }
         }
     }
-
     // Re-enter the ordinary call lowering path with the validated ABI-ordered
     // expressions. The Vec allocation belongs to the compiler only; its
     // backing storage stays stable while the scoped pointer-to-temp cache is
@@ -7476,7 +7235,6 @@ fn lower_named_call(
         .expect("named argument cache scope must be balanced");
     value
 }
-
 fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, Temp>) -> Temp {
     if let Some(temp) = ctx.prelowered_argument(expr) {
         return temp;
@@ -7726,7 +7484,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 then_bb: success,
                 else_bb: failure,
             });
-
             ctx.start_block(success);
             let ok = emit_sum_value(ctx, &expr.ty, 1, Some(converted));
             ctx.current_instr(Instr::Copy {
@@ -7734,7 +7491,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 src: ok,
             });
             ctx.finish_current(Terminator::Jump(end));
-
             ctx.start_block(failure);
             let fault = ctx.new_temp();
             ctx.current_instr(Instr::IntFromU64 {
@@ -7848,17 +7604,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 then_bb: then_label,
                 else_bb: else_label,
             });
-
             ctx.start_block(then_label);
             let then_v = lower_expr(ctx, then_expr, &mut vars.clone());
             copy_runtime_value_words(ctx, then_v, &expr.ty, &result_words);
             ctx.finish_current(Terminator::Jump(end_label));
-
             ctx.start_block(else_label);
             let else_v = lower_expr(ctx, else_expr, &mut vars.clone());
             copy_runtime_value_words(ctx, else_v, &expr.ty, &result_words);
             ctx.finish_current(Terminator::Jump(end_label));
-
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
         }
@@ -7880,19 +7633,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 then_bb: then_label,
                 else_bb: else_label,
             });
-
             ctx.start_block(then_label);
             if let Some(then_value) = lower_expression_block(ctx, then_branch, &mut vars.clone()) {
                 copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
                 ctx.finish_current(Terminator::Jump(end_label));
             }
-
             ctx.start_block(else_label);
             if let Some(else_value) = lower_expression_block(ctx, else_branch, &mut vars.clone()) {
                 copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
                 ctx.finish_current(Terminator::Jump(end_label));
             }
-
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
         }
@@ -7921,7 +7671,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 then_bb: tag_one,
                 else_bb: tag_zero,
             });
-
             ctx.start_block(then_label);
             let mut then_vars = vars.clone();
             bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
@@ -7929,13 +7678,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
                 ctx.finish_current(Terminator::Jump(end_label));
             }
-
             ctx.start_block(else_label);
             if let Some(else_value) = lower_expression_block(ctx, else_branch, &mut vars.clone()) {
                 copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
                 ctx.finish_current(Terminator::Jump(end_label));
             }
-
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
         }
@@ -7970,7 +7717,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 then_bb: tag_one_label,
                 else_bb: tag_zero_label,
             });
-
             ctx.start_block(tag_one_label);
             let mut tag_one_vars = vars.clone();
             bind_sum_pattern(ctx, &tag_one_arm.pattern, sum, &mut tag_one_vars);
@@ -7980,7 +7726,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 copy_runtime_value_words(ctx, tag_one_value, &expr.ty, &result_words);
                 ctx.finish_current(Terminator::Jump(end_label));
             }
-
             ctx.start_block(tag_zero_label);
             let mut tag_zero_vars = vars.clone();
             bind_sum_pattern(ctx, &tag_zero_arm.pattern, sum, &mut tag_zero_vars);
@@ -7990,7 +7735,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 copy_runtime_value_words(ctx, tag_zero_value, &expr.ty, &result_words);
                 ctx.finish_current(Terminator::Jump(end_label));
             }
-
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
         }
@@ -8337,7 +8081,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         }
     }
 }
-
 fn lower_sum_type_call(
     ctx: &mut LowerCtx,
     name: &str,
@@ -8366,7 +8109,6 @@ fn lower_sum_type_call(
         _ => return None,
     })
 }
-
 fn lower_tagged_unwrap(
     ctx: &mut LowerCtx,
     tagged_expr: &semantic::TypedExpr,
@@ -8393,7 +8135,6 @@ fn lower_tagged_unwrap(
         then_bb,
         else_bb,
     });
-
     let payload_ty = semantic::resolve_struct_type(&fallback_expr.ty);
     let result_words = runtime_value_word_types(&payload_ty)
         .into_iter()
@@ -8403,14 +8144,12 @@ fn lower_tagged_unwrap(
     let payload = load_sum_payload(ctx, tagged, &payload_ty);
     copy_runtime_value_words(ctx, payload, &payload_ty, &result_words);
     ctx.finish_current(Terminator::Jump(end_block));
-
     ctx.start_block(fallback_block);
     copy_runtime_value_words(ctx, fallback, &payload_ty, &result_words);
     ctx.finish_current(Terminator::Jump(end_block));
     ctx.start_block(end_block);
     rebuild_runtime_value(ctx, &payload_ty, &result_words)
 }
-
 /// Decode a present durable value and materialize the selected `Option` arm.
 ///
 /// The absent branch allocates only a tag-bearing `Option::none`; it never
@@ -8434,7 +8173,6 @@ fn lower_present_or_inactive_state_value(
         then_bb: present_block,
         else_bb: absent_block,
     });
-
     ctx.start_block(present_block);
     let decoded = decode_aggregate_state_value(ctx, blob, &resolved)?;
     let some = emit_sum_value(ctx, &option_ty, 1, Some(decoded));
@@ -8446,7 +8184,6 @@ fn lower_present_or_inactive_state_value(
         ctx.current_instr(Instr::StateDel { path });
     }
     ctx.finish_current(Terminator::Jump(end_block));
-
     ctx.start_block(absent_block);
     let none = emit_sum_value(ctx, &option_ty, 0, None);
     ctx.current_instr(Instr::Copy {
@@ -8454,18 +8191,15 @@ fn lower_present_or_inactive_state_value(
         src: none,
     });
     ctx.finish_current(Terminator::Jump(end_block));
-
     ctx.start_block(end_block);
     Some(result)
 }
-
 fn state_map_value_type(map: &semantic::TypedExpr) -> Option<Type> {
     match semantic::resolve_struct_type(&map.ty) {
         Type::StateMap(_, value) => Some(*value),
         _ => None,
     }
 }
-
 fn lower_state_map_get_option(
     ctx: &mut LowerCtx,
     args: &[semantic::TypedExpr],
@@ -8501,7 +8235,6 @@ fn lower_state_map_get_option(
         left: blob,
         right: zero,
     });
-
     lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, None).unwrap_or_else(
         || {
             ctx.record_error("StateMap.get value type is not lowerable".into());
@@ -8509,7 +8242,6 @@ fn lower_state_map_get_option(
         },
     )
 }
-
 fn lower_state_map_remove_option(
     ctx: &mut LowerCtx,
     args: &[semantic::TypedExpr],
@@ -8545,14 +8277,12 @@ fn lower_state_map_remove_option(
         left: blob,
         right: zero,
     });
-
     lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, Some(path))
         .unwrap_or_else(|| {
             ctx.record_error("StateMap.remove value type is not lowerable".into());
             lower_absent_option(ctx, &spec.value)
         })
 }
-
 fn lower_absent_option(ctx: &mut LowerCtx, value_ty: &Type) -> Temp {
     emit_sum_value(
         ctx,
@@ -8561,18 +8291,15 @@ fn lower_absent_option(ctx: &mut LowerCtx, value_ty: &Type) -> Temp {
         None,
     )
 }
-
 fn account_id_literal_uses_alias_resolution(raw: &str) -> bool {
     if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok() {
         return false;
     }
-
     // Keep alias detection intentionally broad so alias-shaped literals continue into the
     // runtime host resolver, which validates the current catalog/binding instead of failing
     // during static AccountId encoding.
     raw.contains('@')
 }
-
 fn lower_state_binding_value(ctx: &mut LowerCtx, name: &str, ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(ty);
     let blob = state_get_blob_for_name(ctx, name);
@@ -8581,20 +8308,17 @@ fn lower_state_binding_value(ctx: &mut LowerCtx, name: &str, ty: &Type) -> Optio
     }
     decode_aggregate_state_value(ctx, blob, &resolved)
 }
-
 fn state_get_blob_for_name(ctx: &mut LowerCtx, name: &str) -> Temp {
     let path = build_state_root_path(ctx, name);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     blob
 }
-
 struct LoopContext {
     continue_label: Label,
     break_label: Label,
     phi: Option<HashMap<String, Temp>>,
 }
-
 struct LowerCtx {
     next_temp: usize,
     next_label: usize,
@@ -8620,7 +8344,6 @@ struct LowerCtx {
     prelowered_argument_scopes: Vec<Vec<(*const TypedExpr, Temp)>>,
     error: Option<String>,
 }
-
 impl LowerCtx {
     fn new(
         function_return_type: Type,
@@ -8645,7 +8368,6 @@ impl LowerCtx {
             error: None,
         }
     }
-
     fn prelowered_argument(&self, expression: &TypedExpr) -> Option<Temp> {
         let identity = std::ptr::from_ref(expression);
         self.prelowered_argument_scopes
@@ -8654,19 +8376,16 @@ impl LowerCtx {
             .flat_map(|scope| scope.iter())
             .find_map(|(candidate, temp)| std::ptr::eq(*candidate, identity).then_some(*temp))
     }
-
     fn new_temp(&mut self) -> Temp {
         let t = Temp(self.next_temp);
         self.next_temp += 1;
         t
     }
-
     fn new_label(&mut self) -> Label {
         let l = Label(self.next_label);
         self.next_label += 1;
         l
     }
-
     fn start_block(&mut self, label: Label) {
         if self.current.is_some() {
             self.record_error("internal error: current block not finished".to_string());
@@ -8678,13 +8397,11 @@ impl LowerCtx {
             terminator: Terminator::Jump(label),
         });
     }
-
     fn current_instr(&mut self, instr: Instr) {
         if let Some(ref mut bb) = self.current {
             bb.instrs.push(instr);
         }
     }
-
     fn finish_current(&mut self, term: Terminator) {
         let Some(mut bb) = self.current.take() else {
             self.record_error("internal error: no current block".to_string());
@@ -8693,7 +8410,6 @@ impl LowerCtx {
         bb.terminator = term;
         self.blocks.push(bb);
     }
-
     fn push_loop(&mut self, cont: Label, brk: Label) {
         self.loop_stack.push(LoopContext {
             continue_label: cont,
@@ -8701,41 +8417,34 @@ impl LowerCtx {
             phi: None,
         });
     }
-
     fn pop_loop(&mut self) {
         self.loop_stack.pop();
     }
-
     fn record_error(&mut self, message: String) {
         if self.error.is_none() {
             self.error = Some(message);
         }
     }
-
     fn call_target(&self, name: &str) -> String {
         self.call_renames
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
     }
-
     fn loop_targets(&self) -> Option<(Label, Label)> {
         self.loop_stack
             .last()
             .map(|ctx| (ctx.continue_label, ctx.break_label))
     }
-
     fn set_loop_phi(&mut self, phi: HashMap<String, Temp>) {
         if let Some(ctx) = self.loop_stack.last_mut() {
             ctx.phi = Some(phi);
         }
     }
-
     fn current_loop_phi(&self) -> Option<&HashMap<String, Temp>> {
         self.loop_stack.last().and_then(|ctx| ctx.phi.as_ref())
     }
 }
-
 fn build_state_name_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
     let t_base = ctx.new_temp();
     let literal = ctx
@@ -8750,7 +8459,6 @@ fn build_state_name_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
     });
     t_base
 }
-
 fn build_state_base_name(ctx: &mut LowerCtx, name: &str) -> Temp {
     if let Some(temp) = ctx.state_runtime_roots.get(name).copied() {
         temp
@@ -8758,7 +8466,6 @@ fn build_state_base_name(ctx: &mut LowerCtx, name: &str) -> Temp {
         build_state_name_literal(ctx, name)
     }
 }
-
 fn build_state_path_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
     let literal = ctx
         .state_name_literals
@@ -8786,7 +8493,6 @@ fn build_state_path_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
     });
     path
 }
-
 fn build_state_root_path(ctx: &mut LowerCtx, name: &str) -> Temp {
     if let Some(root) = ctx.state_runtime_roots.get(name).copied() {
         let path = ctx.new_temp();
@@ -8799,7 +8505,6 @@ fn build_state_root_path(ctx: &mut LowerCtx, name: &str) -> Temp {
         build_state_path_literal(ctx, name)
     }
 }
-
 fn build_state_map_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCodec) -> Temp {
     let t_base = build_state_base_name(ctx, name);
     match key_codec {
@@ -8833,7 +8538,6 @@ fn build_state_map_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &K
         }
     }
 }
-
 fn lowerable_state_handle_name(ctx: &LowerCtx, expr: &semantic::TypedExpr) -> Option<String> {
     match expr.kind() {
         semantic::ExprKind::Ident(name) => {
@@ -8848,7 +8552,6 @@ fn lowerable_state_handle_name(ctx: &LowerCtx, expr: &semantic::TypedExpr) -> Op
         _ => None,
     }
 }
-
 fn lower_short_circuit_bool(
     ctx: &mut LowerCtx,
     op: BinaryOp,
@@ -8857,7 +8560,6 @@ fn lower_short_circuit_bool(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     debug_assert!(matches!(op, BinaryOp::And | BinaryOp::Or));
-
     let left_value = lower_expr(ctx, left, vars);
     let rhs_label = ctx.new_label();
     let short_label = ctx.new_label();
@@ -8868,13 +8570,11 @@ fn lower_short_circuit_bool(
         BinaryOp::Or => (short_label, rhs_label, 1),
         _ => unreachable!("short-circuit lowering only accepts logical operators"),
     };
-
     ctx.finish_current(Terminator::Branch {
         cond: left_value,
         then_bb,
         else_bb,
     });
-
     // Materialize the short-circuit result without evaluating the right-hand side.
     // Both predecessors use `Copy` so compiler fact propagation treats `result` as
     // a genuine control-flow merge rather than a block-local constant.
@@ -8889,7 +8589,6 @@ fn lower_short_circuit_bool(
         src: short_result,
     });
     ctx.finish_current(Terminator::Jump(join_label));
-
     ctx.start_block(rhs_label);
     let right_value = lower_expr(ctx, right, &mut vars.clone());
     ctx.current_instr(Instr::Copy {
@@ -8897,11 +8596,9 @@ fn lower_short_circuit_bool(
         src: right_value,
     });
     ctx.finish_current(Terminator::Jump(join_label));
-
     ctx.start_block(join_label);
     result
 }
-
 fn lower_state_handle_arg(
     ctx: &mut LowerCtx,
     expr: &semantic::TypedExpr,
@@ -8918,7 +8615,6 @@ fn lower_state_handle_arg(
         t
     }
 }
-
 fn lower_state_handle_args(
     ctx: &mut LowerCtx,
     expr: &semantic::TypedExpr,
@@ -8935,7 +8631,6 @@ fn lower_state_handle_args(
         .map(|(name, _)| build_state_base_name(ctx, &name))
         .collect()
 }
-
 fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
     let resolved = semantic::resolve_struct_type(ty);
     let Some(encoded) = encode_aggregate_state_value(ctx, value, &resolved) else {
@@ -8948,12 +8643,10 @@ fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
         value: encoded,
     });
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{parser::parse_test_fragment as parse, semantic::analyze};
-
     #[test]
     fn malformed_typed_member_access_fails_closed_during_lowering() {
         let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
@@ -8969,15 +8662,12 @@ mod tests {
             },
             ty: Type::Int,
         };
-
         let _sentinel = lower_expr(&mut context, &malformed, &mut HashMap::new());
-
         assert_eq!(
             context.error.as_deref(),
             Some("typed member `missing` has no Kotodama V1 lowering for `bool`")
         );
     }
-
     #[test]
     fn source_int_and_internal_scalar_have_an_explicit_ir_boundary() {
         let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
@@ -8986,7 +8676,6 @@ mod tests {
         let scalar = emit_i64_const(&mut context, 17);
         let source_int = emit_int_from_i64(&mut context, scalar);
         context.finish_current(Terminator::Return(Some(source_int)));
-
         assert!(matches!(
             context.blocks[0].instrs.as_slice(),
             [
@@ -9000,7 +8689,6 @@ mod tests {
                 },
             ] if *actual_scalar == scalar && *actual_source == source_int && *value == scalar
         ));
-
         let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
         let entry = context.new_label();
         context.start_block(entry);
@@ -9013,7 +8701,6 @@ mod tests {
                 if *dest == source_int && *value == scalar
         ));
     }
-
     #[test]
     fn contextually_typed_integer_quantity_literal_lowers_as_quantity_data() {
         let program =
@@ -9041,13 +8728,11 @@ mod tests {
         );
         assert!(!data_refs.contains(&(DataRefKind::Int, "1")));
     }
-
     #[test]
     fn wide_numeric_state_keys_use_canonical_pointer_norito() {
         assert_eq!(key_codec_for_type(&Type::Bool), Some(KeyCodec::Int));
         for ty in [Type::Int, Type::Decimal, Type::Quantity] {
             assert_eq!(key_codec_for_type(&ty), Some(KeyCodec::Pointer));
-
             let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
             let entry = context.new_label();
             context.start_block(entry);
@@ -9056,7 +8741,6 @@ mod tests {
                 .expect("wide numeric state key must decode");
             context.finish_current(Terminator::Return(Some(decoded)));
             let expected_kind = pointer_kind_for_type(&ty).expect("numeric pointer kind");
-
             assert!(context.blocks[0].instrs.iter().any(|instruction| {
                 matches!(
                     instruction,
@@ -9075,7 +8759,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed() {
         for (builtin, spec) in Builtin::registry() {
@@ -9097,7 +8780,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn lower_simple_function() {
         let src = "fn add(int a, int b) { let c = a + b; }";
@@ -9108,7 +8790,6 @@ mod tests {
         let f = &ir.functions[0];
         assert_eq!(f.blocks.len(), 1); // only entry block
     }
-
     #[test]
     fn named_calls_evaluate_in_source_order_and_permute_only_temp_references() {
         let src = include_str!("ir/fixtures/v1/i001.ko");
@@ -9119,7 +8800,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "run")
             .expect("run function");
-
         let calls = run
             .blocks
             .iter()
@@ -9142,7 +8822,6 @@ mod tests {
         let first = calls[1].2.expect("first returns a value");
         assert_eq!(calls[2].1, [first, second]);
     }
-
     #[test]
     fn named_list_intrinsic_evaluates_source_order_before_abi_slots() {
         let source = include_str!("ir/fixtures/v1/i002.ko");
@@ -9167,7 +8846,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(calls, ["replacement", "index"]);
     }
-
     #[test]
     fn named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order() {
         let source = include_str!("ir/fixtures/v1/i003.ko");
@@ -9192,7 +8870,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(calls, ["scale", "divisor"]);
     }
-
     #[test]
     fn require_lowers_declared_error_code_into_abort_ir() {
         let src = include_str!("ir/fixtures/v1/i004.ko");
@@ -9216,7 +8893,6 @@ mod tests {
         let abort_code = abort_code.expect("require must lower to AbortIf");
         assert_eq!(constants.get(&abort_code), Some(&1001));
     }
-
     #[test]
     fn test_mode_entrypoint_wrapper_checks_override_state_first() {
         let src = include_str!("ir/fixtures/v1/i005.ko");
@@ -9228,7 +8904,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "run")
             .expect("wrapper function");
-
         let mut saw_override_key = false;
         let mut saw_state_get = false;
         let mut saw_get_trigger = false;
@@ -9255,7 +8930,6 @@ mod tests {
                 }
             }
         }
-
         assert!(
             saw_override_key,
             "wrapper should materialize the override key"
@@ -9266,7 +8940,6 @@ mod tests {
             "wrapper should still fall back to host trigger input"
         );
     }
-
     #[test]
     fn single_json_entrypoint_uses_the_same_one_shot_argument_record() {
         let src = include_str!("ir/fixtures/v1/i006.ko");
@@ -9279,7 +8952,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "run")
             .expect("wrapper function");
-
         let mut saw_get_trigger = false;
         let mut record_decodes = 0;
         let mut json_field_getters = 0;
@@ -9297,7 +8969,6 @@ mod tests {
                 }
             }
         }
-
         assert!(saw_get_trigger, "wrapper should load the trigger payload");
         assert_eq!(record_decodes, 1, "Json must use the canonical record ABI");
         assert_eq!(
@@ -9305,16 +8976,13 @@ mod tests {
             "the wrapper must not decode the transport JSON per parameter"
         );
     }
-
     include!("ir/tests/public_argument_record_abi.rs");
-
     #[test]
     fn nested_aggregate_returns_use_every_flattened_abi_word() {
         let src = include_str!("ir/fixtures/v1/i007.ko");
         let program = parse(src).expect("parse nested aggregate return");
         let typed = analyze(&program).expect("analyze nested aggregate return");
         let ir = lower(&typed).expect("lower nested aggregate return");
-
         for name in ["make", "__entrypoint_impl__inspect"] {
             let function = ir
                 .functions
@@ -9329,7 +8997,6 @@ mod tests {
                 "`{name}` must return one active-only sum handle"
             );
         }
-
         let wrapper = ir
             .functions
             .iter()
@@ -9338,7 +9005,6 @@ mod tests {
         assert!(wrapper.blocks.iter().any(|block| {
             matches!(&block.terminator, Terminator::ReturnN(words) if words.len() == 1)
         }));
-
         let implementation = ir
             .functions
             .iter()
@@ -9354,7 +9020,6 @@ mod tests {
             })
         }));
     }
-
     #[test]
     fn inactive_sum_has_no_payload_construction_or_store() {
         let source = include_str!("ir/fixtures/v1/i008.ko");
@@ -9388,7 +9053,6 @@ mod tests {
                 .any(|block| { matches!(&block.terminator, Terminator::Return(Some(_))) })
         );
     }
-
     #[test]
     fn tail_expression_lowers_identically_to_explicit_return() {
         let tail = lower(
@@ -9432,14 +9096,12 @@ mod tests {
                 .filter(|block| reachable.contains(&block.label.0))
                 .collect()
         }
-
         assert_eq!(
             reachable_blocks(&tail.functions[0]),
             reachable_blocks(&explicit.functions[0]),
             "tail-expression sugar must add no reachable runtime work"
         );
     }
-
     #[test]
     fn exhaustive_match_reads_only_the_selected_sum_payload() {
         let source = include_str!("ir/fixtures/v1/i009.ko");
@@ -9467,7 +9129,6 @@ mod tests {
             "only the payload-bearing arm reads offset 8"
         );
     }
-
     #[test]
     fn exhaustive_result_match_reads_only_the_selected_sum_payload() {
         let source = include_str!("ir/fixtures/v1/i010.ko");
@@ -9524,7 +9185,6 @@ mod tests {
             "the selected err arm reads only its pair payload"
         );
     }
-
     #[test]
     fn propagation_returns_original_error_handle_without_conversion() {
         let source = include_str!("ir/fixtures/v1/i011.ko");
@@ -9553,7 +9213,6 @@ mod tests {
             "the propagated error reuses its handle; only Result::ok allocates"
         );
     }
-
     #[test]
     fn propagation_reallocates_failure_when_the_success_layout_changes() {
         fn memory_profile(function: &Function) -> (usize, usize, usize) {
@@ -9568,7 +9227,6 @@ mod tests {
                 counts
             })
         }
-
         let propagated = include_str!("ir/fixtures/v1/i012.ko");
         let explicit = include_str!("ir/fixtures/v1/i013.ko");
         let propagated = lower(
@@ -9580,12 +9238,10 @@ mod tests {
                 .expect("analyze explicit match"),
         )
         .expect("lower explicit match");
-
         assert_eq!(
             propagated.functions[0], explicit.functions[0],
             "postfix Result propagation and its canonical exhaustive match must share exact IR"
         );
-
         assert_eq!(
             memory_profile(&propagated.functions[0]),
             memory_profile(&explicit.functions[0]),
@@ -9596,7 +9252,6 @@ mod tests {
             2,
             "the widened error and success paths each allocate the destination layout once"
         );
-
         let option = include_str!("ir/fixtures/v1/i014.ko");
         let explicit_option = include_str!("ir/fixtures/v1/i015.ko");
         let option = lower(
@@ -9619,7 +9274,6 @@ mod tests {
             "a widened Option::none must reserve the destination layout"
         );
     }
-
     #[test]
     fn typed_query_page_lowers_to_one_host_call_and_two_typed_handles() {
         let source = include_str!("ir/fixtures/v1/i016.ko");
@@ -9692,7 +9346,6 @@ mod tests {
                 .iter()
                 .any(|block| { matches!(block.terminator, Terminator::Return2(_, _)) })
         );
-
         let singular = lowered
             .functions
             .iter()
@@ -9723,7 +9376,6 @@ mod tests {
                 .any(|block| { matches!(block.terminator, Terminator::Return(Some(_))) })
         );
     }
-
     #[test]
     fn native_json_lowers_to_one_schema_bound_build_and_one_word_table() {
         let source = include_str!("ir/fixtures/v1/i017.ko");
@@ -9804,7 +9456,6 @@ mod tests {
                 .all(|instruction| !matches!(instruction, Instr::JsonObject { .. }))
         );
     }
-
     #[test]
     fn list_layout_flattens_nested_sum_handles_to_one_word() {
         let nested = Type::List(
@@ -9819,12 +9470,10 @@ mod tests {
         assert_eq!(layout.capacity(), 64);
         assert_eq!(layout.element_words(), 1);
         assert_eq!(layout.allocation_bytes(), Ok((2 + 64) * 8));
-
         let enumerated = Type::List(Box::new(Type::Tuple(vec![Type::Int, Type::Quantity])), 4);
         let (_, layout) = list_layout_for_type(&enumerated).expect("pair List layout");
         assert_eq!(layout.element_words(), 2);
     }
-
     #[test]
     fn list_len_and_enumerate_materialize_source_int_values() {
         let source = "fn indices() -> List<(int, int), 4> {\
@@ -9849,7 +9498,6 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-
         assert!(
             materialized.len() >= 2,
             "List.len and List.enumerate indices must each cross the scalar/int boundary"
@@ -9862,7 +9510,6 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn list_get_converts_an_arbitrary_width_index_only_after_bounds_proof() {
         let source =
@@ -9893,7 +9540,6 @@ mod tests {
                 )
             })
             .expect("bounds-check branch dominates scalar conversion");
-
         assert!(predecessor.instrs.iter().any(|instruction| {
             matches!(
                 instruction,
@@ -9922,7 +9568,6 @@ mod tests {
             "out-of-range indices must reach Option::none without a narrowing fault"
         );
     }
-
     #[test]
     fn scalar_protocol_arguments_use_checked_adaptive_int_conversion() {
         let source = include_str!("ir/fixtures/v1/i018.ko");
@@ -9943,7 +9588,6 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-
         assert_eq!(converted.len(), 3);
         for scalar in instructions
             .iter()
@@ -9963,7 +9607,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn scalar_protocol_literals_outside_u64_fail_lowering() {
         for value in ["-1", "18446744073709551616"] {
@@ -9980,7 +9623,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn state_map_int_keys_are_encoded_from_the_canonical_int_pointer() {
         let source = "state StateMap<int, int> balances; fn set(int key, int value) { balances[key] = value; }";
@@ -10001,7 +9643,6 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-
         assert_eq!(
             encoded_keys.len(),
             1,
@@ -10021,7 +9662,6 @@ mod tests {
             "source int keys must not use the retired scalar/ASCII key codec"
         );
     }
-
     #[test]
     fn scalar_state_paths_lower_to_framed_state_path_bytes() {
         let source = include_str!("ir/fixtures/v1/i019.ko");
@@ -10073,7 +9713,6 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn list_literal_and_comprehension_use_only_contiguous_ir_operations() {
         let source = include_str!("ir/fixtures/v1/i020.ko");
@@ -10109,7 +9748,6 @@ mod tests {
             !matches!(instruction, Instr::Call { callee, .. } if callee.contains("list"))
         }));
     }
-
     #[test]
     fn identity_comprehension_does_not_exceed_bounded_copy_baseline() {
         fn instruction_count(source: &str) -> usize {
@@ -10124,7 +9762,6 @@ mod tests {
                 .map(|block| block.instrs.len() + 1)
                 .sum()
         }
-
         let comprehension = instruction_count(
             "fn copy() -> List<int, 4> { let List<int, 4> source = [1, 2]; [value for value in source] }",
         );
@@ -10136,7 +9773,6 @@ mod tests {
             "identity List sugar emitted {comprehension} operations versus {bounded_baseline} for the bounded copy baseline"
         );
     }
-
     #[test]
     fn every_list_method_lowers_without_runtime_helper_calls() {
         let source = include_str!("ir/fixtures/v1/i021.ko");
@@ -10168,7 +9804,6 @@ mod tests {
                 .any(|instruction| matches!(instruction, Instr::Store64Imm { imm: 0, .. }))
         );
     }
-
     #[test]
     fn list_take_zero_lowers_to_a_bounded_empty_copy() {
         let source =
@@ -10192,7 +9827,6 @@ mod tests {
             })
         }));
     }
-
     #[test]
     fn recursive_list_contains_dereferences_aggregate_handles() {
         let source = include_str!("ir/fixtures/v1/i022.ko");
@@ -10207,7 +9841,6 @@ mod tests {
             .iter()
             .flat_map(|block| &block.instrs)
             .collect::<Vec<_>>();
-
         assert!(
             instructions
                 .iter()
@@ -10238,7 +9871,6 @@ mod tests {
             "sum tags and nested List bounds must guard active payload reads"
         );
     }
-
     #[test]
     fn multiword_failed_list_mutation_branches_have_no_stores_or_allocations() {
         let source = include_str!("ir/fixtures/v1/i023.ko");
@@ -10314,11 +9946,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn entrypoint_list_schema_is_recursive_and_capacity_bound() {
         use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
-
         let ty = Type::List(Box::new(Type::Option(Box::new(Type::Quantity))), 64);
         let schema = entrypoint_return_schema("items", Some(&ty))
             .expect("build List return schema")
@@ -10329,16 +9959,13 @@ mod tests {
         assert_eq!(list.capacity, 64);
         assert_eq!(schema.word_count(), Some(1));
     }
-
     #[test]
     fn query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views() {
         use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
-
         let source = include_str!("ir/fixtures/v1/i024.ko");
         let typed = analyze(&parse(source).expect("parse all typed query pages"))
             .expect("analyze all typed query pages");
         let mut encoded_schemas = BTreeSet::new();
-
         for (entrypoint_name, view_name) in [
             ("accounts", "AccountView"),
             ("assets", "AssetView"),
@@ -10382,7 +10009,6 @@ mod tests {
             ));
             assert!(schema.validate());
             assert_eq!(schema.word_count(), Some(2));
-
             let encoded = norito::to_bytes(&schema).expect("encode query-page schema");
             let decoded: ivm_abi::entrypoint::EntrypointValueTypeV1 =
                 norito::decode_from_bytes(&encoded).expect("decode query-page schema");
@@ -10394,7 +10020,6 @@ mod tests {
         }
         assert_eq!(encoded_schemas.len(), 5);
     }
-
     #[test]
     fn aggregate_argument_words_over_register_window_fail_during_lowering() {
         let src = include_str!("ir/fixtures/v1/i025.ko");
@@ -10408,7 +10033,6 @@ mod tests {
             "unexpected lowering failure: {failure}"
         );
     }
-
     #[test]
     fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
         let src = include_str!("ir/fixtures/v1/i026.ko");
@@ -10422,7 +10046,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "drive_run")
             .expect("test function");
-
         let mut saw_wrapper_call = false;
         let mut saw_impl_call = false;
         let mut saw_override_get = false;
@@ -10451,7 +10074,6 @@ mod tests {
                 }
             }
         }
-
         assert!(
             saw_wrapper_call,
             "invoke_entrypoint should call the public wrapper"
@@ -10477,7 +10099,6 @@ mod tests {
             "test::assert_eq must use canonical numeric equality"
         );
     }
-
     #[test]
     fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
         let src = include_str!("ir/fixtures/v1/i027.ko");
@@ -10492,7 +10113,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "drive_run")
             .expect("test function");
-
         let mut saw_wrapper_callmulti = false;
         let mut saw_tuple_pack = false;
         for block in &test_fn.blocks {
@@ -10506,7 +10126,6 @@ mod tests {
                 }
             }
         }
-
         assert!(
             saw_wrapper_callmulti,
             "tuple invoke_entrypoint should call the public wrapper via CallMulti"
@@ -10516,7 +10135,6 @@ mod tests {
             "tuple invoke_entrypoint should pack multi-return values"
         );
     }
-
     #[test]
     fn invoke_entrypoint_as_lowers_to_test_host_intrinsics() {
         let src = include_str!("ir/fixtures/v1/i028.ko");
@@ -10530,7 +10148,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "drive_run")
             .expect("test function");
-
         let mut saw_invoke = false;
         let mut saw_expect_reject = false;
         for block in &test_fn.blocks {
@@ -10552,11 +10169,9 @@ mod tests {
                 }
             }
         }
-
         assert!(saw_invoke, "expected InvokeEntrypointAs in lowered test");
         assert!(saw_expect_reject, "expected ExpectRejectAs in lowered test");
     }
-
     #[test]
     fn invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic() {
         let src = include_str!("ir/fixtures/v1/i029.ko");
@@ -10571,7 +10186,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "drive_run")
             .expect("test function");
-
         let mut saw_multi = false;
         let mut saw_tuple_pack = false;
         for block in &test_fn.blocks {
@@ -10586,7 +10200,6 @@ mod tests {
                 }
             }
         }
-
         assert!(
             saw_multi,
             "tuple invoke_entrypoint_as should use multi-return test intrinsic"
@@ -10596,7 +10209,6 @@ mod tests {
             "tuple invoke_entrypoint_as should pack returned values"
         );
     }
-
     #[test]
     fn actor_helpers_lower_to_test_host_intrinsics() {
         let src = include_str!("ir/fixtures/v1/i030.ko");
@@ -10610,7 +10222,6 @@ mod tests {
             .iter()
             .find(|function| function.name == "drive_helpers")
             .expect("test function");
-
         let mut saw_actor_account = false;
         let mut saw_actor_public_key = false;
         let mut saw_actor_sign = false;
@@ -10624,7 +10235,6 @@ mod tests {
                 }
             }
         }
-
         assert!(saw_actor_account, "expected ActorAccount in lowered test");
         assert!(
             saw_actor_public_key,
@@ -10632,19 +10242,16 @@ mod tests {
         );
         assert!(saw_actor_sign, "expected ActorSign in lowered test");
     }
-
     #[test]
     fn lower_if() {
         let src = "fn f(int a, int b) { if a == b { let c = a; } else { let c = b; } }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert_eq!(ir.functions[0].blocks.len(), 4); // entry, then, else, end
     }
-
     #[test]
     fn logical_operators_lower_to_short_circuit_cfg() {
         let src = include_str!("ir/fixtures/v1/i031.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower logical operators");
-
         for (name, short_value, rhs_on_then) in [("both", 0, true), ("either", 1, false)] {
             let function = ir
                 .functions
@@ -10664,7 +10271,6 @@ mod tests {
                     ))),
                 "{name} must not eagerly evaluate logical operands"
             );
-
             let rhs_block = function
                 .blocks
                 .iter()
@@ -10705,7 +10311,6 @@ mod tests {
                 assert_eq!(*then_bb, short_block.label);
                 assert_eq!(*else_bb, rhs_block.label);
             }
-
             let result = function
                 .blocks
                 .iter()
@@ -10725,14 +10330,12 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn lower_bounded_range_loop() {
         let src = "fn f() { for index in range(2) { let value = index; } }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert!(ir.functions[0].blocks.len() >= 4);
     }
-
     #[test]
     fn bounded_loop_only_materializes_live_mutated_phi_slots() {
         let src = include_str!("ir/fixtures/v1/i032.ko");
@@ -10763,7 +10366,6 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-
         assert_eq!(
             entry_copies.len(),
             2,
@@ -10774,7 +10376,6 @@ mod tests {
             "an immutable local must not be copied into loop-carried state"
         );
     }
-
     #[test]
     fn break_and_continue_update_only_selected_loop_phi_slots() {
         let src = include_str!("ir/fixtures/v1/i033.ko");
@@ -10793,7 +10394,6 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-
         assert_eq!(phi_destinations.len(), 2);
         assert!(phi_destinations.iter().all(|destination| {
             function
@@ -10807,7 +10407,6 @@ mod tests {
                 >= 2
         }));
     }
-
     #[test]
     fn state_map_foreach_carries_mutated_locals_through_break_and_continue() {
         let src = include_str!("ir/fixtures/v1/i034.ko");
@@ -10830,7 +10429,6 @@ mod tests {
             .iter()
             .find(|block| block.label == function.entry)
             .expect("entry block");
-
         assert!(
             entry.instrs.iter().any(
                 |instruction| matches!(instruction, Instr::Copy { dest, .. } if *dest == returned)
@@ -10850,7 +10448,6 @@ mod tests {
             "normal, break, and continue paths must update the loop accumulator"
         );
     }
-
     #[test]
     fn state_map_range_offsets_preserve_all_u64_bits() {
         for (start, end) in [(1_u64 << 63, (1_u64 << 63) + 1), (u64::MAX - 1, u64::MAX)] {
@@ -10899,7 +10496,6 @@ seiyaku RangeOffsetBits {{
                     _ => None,
                 })
                 .expect("range offset constant");
-
             assert_eq!(
                 encoded_offset,
                 i64::from_le_bytes(start.to_le_bytes()),
@@ -10909,7 +10505,6 @@ seiyaku RangeOffsetBits {{
             assert_eq!(hint.max_keys, 1);
         }
     }
-
     #[test]
     fn nested_loops_do_not_carry_outer_invariants() {
         let src = include_str!("ir/fixtures/v1/i035.ko");
@@ -10928,20 +10523,17 @@ seiyaku RangeOffsetBits {{
                 _ => None,
             })
             .expect("invariant constant");
-
         assert!(function.blocks.iter().all(|block| {
             block.instrs.iter().all(
                 |instruction| !matches!(instruction, Instr::Copy { src, .. } if *src == invariant),
             )
         }));
     }
-
     #[test]
     fn leaf_identity_ir_has_no_copy_or_stack_pseudo_traffic() {
         let src = "fn identity(int value) -> int { return value; }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let function = &ir.functions[0];
-
         assert_eq!(
             function.blocks.len(),
             2,
@@ -10964,7 +10556,6 @@ seiyaku RangeOffsetBits {{
                     .all(|instruction| matches!(instruction, Instr::LoadVar { .. }))
         }));
     }
-
     #[test]
     fn lower_return() {
         let src = "fn f() -> int { return 1; let x = 2; }";
@@ -10979,7 +10570,6 @@ seiyaku RangeOffsetBits {{
                 .any(|b| matches!(b.terminator, Terminator::Return(_)))
         );
     }
-
     #[test]
     fn mixed_value_and_divergent_function_tails_have_no_reachable_unit_return() {
         let source = include_str!("ir/fixtures/v1/i036.ko");
@@ -10988,7 +10578,6 @@ seiyaku RangeOffsetBits {{
                 .expect("analyze mixed flow tails"),
         )
         .expect("lower mixed flow tails");
-
         for name in ["via_if", "via_if_let", "via_match", "wholly_divergent"] {
             let function = lowered
                 .functions
@@ -11042,7 +10631,6 @@ seiyaku RangeOffsetBits {{
             );
         }
     }
-
     #[test]
     fn lower_pointer_constructors_to_datarefs() {
         let src = include_str!("ir/fixtures/v1/i037.ko");
@@ -11071,7 +10659,6 @@ seiyaku RangeOffsetBits {{
         }
         assert!(saw_name && saw_json && saw_domain);
     }
-
     #[test]
     fn lower_bytes_literal_to_dataref() {
         let src = r#"fn main() { let bytes _b = b"ab"; }"#;
@@ -11092,7 +10679,6 @@ seiyaku RangeOffsetBits {{
         }
         assert!(saw_blob, "expected blob dataref for bytes literal");
     }
-
     #[test]
     fn source_cannot_lower_setvl_builtin() {
         let src = "fn main() { runtime::set_vector_length(8); }";
@@ -11100,7 +10686,6 @@ seiyaku RangeOffsetBits {{
         let error = analyze(&prog).expect_err("vector length is compiler-owned");
         assert!(error.message.contains("unknown function or builtin"));
     }
-
     #[test]
     fn lower_trigger_event_builtin() {
         let src = "fn main() { let ev = context::trigger_event(); let _kind = ev.get_name(Name::parse(\"kind\")); }";
@@ -11121,7 +10706,6 @@ seiyaku RangeOffsetBits {{
             "expected GetTriggerEvent instruction in lowered IR"
         );
     }
-
     #[test]
     fn lower_resolve_account_alias_builtin() {
         let src =
@@ -11143,7 +10727,6 @@ seiyaku RangeOffsetBits {{
             "expected ResolveAccountAlias instruction in lowered IR"
         );
     }
-
     #[test]
     fn lower_resolve_account_alias_builtin_uses_string_literal() {
         let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@paynet"); }"#;
@@ -11181,7 +10764,6 @@ seiyaku RangeOffsetBits {{
             "resolve_account_alias builtin must not lower to a static AccountId dataref"
         );
     }
-
     #[test]
     fn lower_resolve_account_alias_invalid_literal_uses_string_literal() {
         let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@"); }"#;
@@ -11219,7 +10801,6 @@ seiyaku RangeOffsetBits {{
             "malformed builtin aliases must not lower to a static AccountId dataref"
         );
     }
-
     #[test]
     fn lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal() {
         let src =
@@ -11258,7 +10839,6 @@ seiyaku RangeOffsetBits {{
             "resolve_account_alias builtin must not lower to a static AccountId dataref"
         );
     }
-
     #[test]
     fn lower_resolve_account_alias_invalid_domain_qualified_literal_uses_string_literal() {
         let src = r#"fn main() { let _acct = ledger::account::resolve_alias("merchant@bank."); }"#;
@@ -11296,7 +10876,6 @@ seiyaku RangeOffsetBits {{
             "malformed domain-qualified builtin aliases must not lower to a static AccountId dataref"
         );
     }
-
     #[test]
     fn lower_account_id_alias_literal_to_resolve_account_alias() {
         let src = r#"fn main() { let _acct = AccountId::parse("merchant@paynet"); }"#;
@@ -11333,7 +10912,6 @@ seiyaku RangeOffsetBits {{
             "alias shorthand must not lower to a static AccountId dataref"
         );
     }
-
     #[test]
     fn lower_account_id_domain_qualified_alias_literal_to_resolve_account_alias() {
         let src = r#"fn main() { let _acct = AccountId::parse("merchant@bank.paynet"); }"#;
@@ -11373,7 +10951,6 @@ seiyaku RangeOffsetBits {{
             "domain-qualified alias shorthand must not lower to a static AccountId dataref"
         );
     }
-
     #[test]
     fn lower_account_id_invalid_non_alias_literal_keeps_static_account_dataref() {
         let src = r#"fn main() { let _acct = AccountId::parse("merchant"); }"#;
@@ -11405,7 +10982,6 @@ seiyaku RangeOffsetBits {{
             "non-alias account_id literals must not lower to runtime alias resolution"
         );
     }
-
     #[test]
     fn lower_account_id_canonical_literal_to_static_account_dataref() {
         let canonical = iroha_data_model::account::AccountId::new(
@@ -11443,7 +11019,6 @@ seiyaku RangeOffsetBits {{
             "canonical account literals must not call alias resolution"
         );
     }
-
     #[test]
     fn lower_account_id_invalid_alias_shaped_literal_to_resolve_account_alias() {
         let src = r#"fn main() { let _acct = AccountId::parse("merchant@"); }"#;
@@ -11473,7 +11048,6 @@ seiyaku RangeOffsetBits {{
             "invalid alias-shaped literals must not be encoded as static AccountIds"
         );
     }
-
     #[test]
     fn lower_account_id_invalid_domain_qualified_alias_literal_to_resolve_account_alias() {
         let src = r#"fn main() { let _acct = AccountId::parse("merchant@bank."); }"#;
@@ -11503,7 +11077,6 @@ seiyaku RangeOffsetBits {{
             "invalid domain-qualified alias-shaped literals must not be encoded as static AccountIds"
         );
     }
-
     #[test]
     fn lower_get_quantity_builtin() {
         let src = "fn main() { let ev = context::trigger_event(); let Option<quantity> value = ev.get_quantity(Name::parse(\"value\")); }";
@@ -11528,7 +11101,6 @@ seiyaku RangeOffsetBits {{
             "expected quantity JsonGetNumeric instruction in lowered IR"
         );
     }
-
     #[test]
     fn lower_quantity_typed_integer_literal_to_quantity_dataref() {
         let src = include_str!("ir/fixtures/v1/i038.ko");
@@ -11559,7 +11131,6 @@ seiyaku RangeOffsetBits {{
                 ))
         );
     }
-
     #[test]
     fn lower_get_asset_definition_id_builtin() {
         let src = "fn main() { let ev = context::trigger_event(); let _asset = ev.get_asset_definition_id(Name::parse(\"asset_definition_id\")); }";
@@ -11580,7 +11151,6 @@ seiyaku RangeOffsetBits {{
             "expected JsonGetAssetDefinitionId instruction in lowered IR"
         );
     }
-
     #[test]
     fn lower_state_map_sets_keep_declared_base_names() {
         let src = include_str!("ir/fixtures/v1/i039.ko");
@@ -11592,7 +11162,6 @@ seiyaku RangeOffsetBits {{
             .iter()
             .find(|func| func.name == "update_record")
             .expect("update_record function");
-
         let mut name_literals = HashMap::new();
         let mut bases = Vec::new();
         for block in &update_record.blocks {
@@ -11614,7 +11183,6 @@ seiyaku RangeOffsetBits {{
                 }
             }
         }
-
         assert_eq!(
             bases,
             vec![
@@ -11633,7 +11201,6 @@ seiyaku RangeOffsetBits {{
             ]
         );
     }
-
     #[test]
     fn lower_bytes_literal_to_blob_dataref() {
         let src = r#"fn main() { let _b = b"ab"; }"#;
@@ -11654,7 +11221,6 @@ seiyaku RangeOffsetBits {{
         }
         assert!(saw_blob, "expected Blob dataref for bytes literal");
     }
-
     #[test]
     fn lower_canonical_trigger_operations() {
         let src = include_str!("ir/fixtures/v1/i040.ko");
@@ -11673,7 +11239,6 @@ seiyaku RangeOffsetBits {{
         }
         assert!(saw_create && saw_remove);
     }
-
     #[test]
     fn lower_struct_fields_for_transfer_domain() {
         let src = include_str!("ir/fixtures/v1/i041.ko");
@@ -11691,7 +11256,6 @@ seiyaku RangeOffsetBits {{
         }
         assert!(saw_transfer, "expected TransferDomain in lowered IR");
     }
-
     #[test]
     fn lower_info_int_encodes_to_norito() {
         let src = "fn f() { debug::info(7); }";
@@ -11713,7 +11277,6 @@ seiyaku RangeOffsetBits {{
         assert!(saw_encode, "expected EncodeInt before Info");
         assert!(saw_info, "expected Info instruction");
     }
-
     #[test]
     fn source_cannot_lower_internal_encode_i64_builtin() {
         let src = "fn f() { let _b = codec::encode_i64(7); }";
@@ -11726,7 +11289,6 @@ seiyaku RangeOffsetBits {{
             error.message
         );
     }
-
     #[test]
     fn lower_bytes_equality_uses_pointer_eq() {
         let src = r#"fn f() { let a = b"hi"; let b = b"hi"; let _x = a == b; }"#;
@@ -11753,7 +11315,6 @@ seiyaku RangeOffsetBits {{
             "blob equality should not lower to integer compare"
         );
     }
-
     #[test]
     fn lower_get_or_on_state_map_reads_without_writing() {
         let src = "state StateMap<int, int> balances; fn f() -> int { return balances.get_or(key: 1, default: 7); }";
@@ -11778,7 +11339,6 @@ seiyaku RangeOffsetBits {{
         );
         assert_eq!(state_sets, 0, "get_or must not mutate durable state");
     }
-
     #[test]
     fn scalar_state_map_get_reuses_presence_blob() {
         let src = "state StateMap<int, int> balances; fn f() { let _value = balances.get(1); }";
@@ -11792,7 +11352,6 @@ seiyaku RangeOffsetBits {{
             .count();
         assert_eq!(state_gets, 1, "presence and scalar value share one read");
     }
-
     #[test]
     fn scalar_state_map_remove_reads_and_deletes_once() {
         let src = "state StateMap<int, int> balances; fn f() { let _value = balances.remove(1); }";
@@ -11818,7 +11377,6 @@ seiyaku RangeOffsetBits {{
             1
         );
     }
-
     #[test]
     fn lower_state_struct_ident_decodes_one_schema_bound_record() {
         let src = include_str!("ir/fixtures/v1/i042.ko");
@@ -11826,13 +11384,11 @@ seiyaku RangeOffsetBits {{
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
-
         let mut saw_tuple_pack = false;
         let mut root_paths = Vec::new();
         let mut saw_legacy_name_root = false;
         let mut saw_aggregate_decode = false;
         let mut state_get_paths = Vec::new();
-
         for bb in &main_fn.blocks {
             for instr in &bb.instrs {
                 match instr {
@@ -11868,7 +11424,6 @@ seiyaku RangeOffsetBits {{
                 }
             }
         }
-
         assert!(
             saw_tuple_pack,
             "expected TuplePack when reconstructing struct state"
@@ -11893,7 +11448,6 @@ seiyaku RangeOffsetBits {{
             "aggregate state must be read exactly once"
         );
     }
-
     #[test]
     fn named_struct_literal_lowers_in_declaration_order() {
         let program = parse(include_str!(
@@ -11932,7 +11486,6 @@ seiyaku RangeOffsetBits {{
         assert_eq!(constants.get(&items[0]), Some(&"1"));
         assert_eq!(constants.get(&items[1]), Some(&"2"));
     }
-
     #[test]
     fn named_struct_literal_evaluates_fields_in_source_order_before_layout() {
         let program = parse(
@@ -11970,7 +11523,6 @@ seiyaku RangeOffsetBits {{
             .expect("struct TuplePack");
         assert_eq!(packed, &[calls[1].1.unwrap(), calls[0].1.unwrap()]);
     }
-
     #[test]
     fn lower_state_struct_assignment_encodes_and_writes_once() {
         let src = include_str!("ir/fixtures/v1/i043.ko");
@@ -11978,13 +11530,11 @@ seiyaku RangeOffsetBits {{
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
-
         let mut root_paths = Vec::new();
         let mut saw_legacy_name_root = false;
         let mut state_set_paths = Vec::new();
         let mut tuple_gets = 0;
         let mut aggregate_encodes = 0;
-
         for bb in &main_fn.blocks {
             for instr in &bb.instrs {
                 match instr {
@@ -12016,7 +11566,6 @@ seiyaku RangeOffsetBits {{
                 }
             }
         }
-
         assert_eq!(
             root_paths.len(),
             1,
@@ -12041,7 +11590,6 @@ seiyaku RangeOffsetBits {{
             "expected tuple extraction for the canonical aggregate record"
         );
     }
-
     #[test]
     fn aggregate_state_map_entry_uses_one_read_and_one_write() {
         let src = include_str!("ir/fixtures/v1/i044.ko");
@@ -12049,13 +11597,11 @@ seiyaku RangeOffsetBits {{
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
-
         let mut state_gets = 0;
         let mut state_sets = 0;
         let mut aggregate_encodes = 0;
         let mut aggregate_decodes = 0;
         let mut child_paths = Vec::new();
-
         for bb in &main_fn.blocks {
             for instr in &bb.instrs {
                 match instr {
@@ -12078,7 +11624,6 @@ seiyaku RangeOffsetBits {{
                 }
             }
         }
-
         assert_eq!(state_sets, 1, "StateMap aggregate must use one host write");
         assert_eq!(state_gets, 1, "StateMap aggregate must use one host read");
         assert_eq!(aggregate_encodes, 1);
@@ -12088,7 +11633,6 @@ seiyaku RangeOffsetBits {{
             "unexpected child paths: {child_paths:?}"
         );
     }
-
     #[test]
     fn aggregate_unwrap_or_lowers_one_eager_fallback_call() {
         let source = include_str!("ir/fixtures/v1/i045.ko");
@@ -12116,7 +11660,6 @@ seiyaku RangeOffsetBits {{
             "eager unwrap_or must evaluate an effectful fallback exactly once"
         );
     }
-
     #[test]
     fn tuple_binding_projects_one_captured_call_result() {
         let source = include_str!("ir/fixtures/v1/i046.ko");
@@ -12144,7 +11687,6 @@ seiyaku RangeOffsetBits {{
             "tuple field bindings must project one captured call result"
         );
     }
-
     #[test]
     fn tuple_destructuring_projects_one_captured_call_result() {
         let source = include_str!("ir/fixtures/v1/i047.ko");
@@ -12172,7 +11714,6 @@ seiyaku RangeOffsetBits {{
             "tuple destructuring must project one captured call result"
         );
     }
-
     #[test]
     fn nested_struct_binding_projects_one_captured_call_result() {
         let source = include_str!("ir/fixtures/v1/i048.ko");
@@ -12200,7 +11741,6 @@ seiyaku RangeOffsetBits {{
             "nested struct fields must project one captured call result"
         );
     }
-
     #[test]
     fn scalar_state_read_after_write_reuses_the_live_value() {
         let src = include_str!("ir/fixtures/v1/i049.ko");
@@ -12208,7 +11748,6 @@ seiyaku RangeOffsetBits {{
         let typed = analyze(&prog).expect("analyze scalar state root");
         let ir = lower(&typed).expect("lower scalar state root");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
-
         let encodes = main_fn
             .blocks
             .iter()
@@ -12233,7 +11772,6 @@ seiyaku RangeOffsetBits {{
             "a scalar read immediately after its write must reuse the live value"
         );
     }
-
     #[test]
     fn missing_aggregate_map_entry_branches_before_typed_decode() {
         let src = include_str!("ir/fixtures/v1/i050.ko");
@@ -12241,7 +11779,6 @@ seiyaku RangeOffsetBits {{
         let typed = analyze(&prog).expect("analyze aggregate map read");
         let ir = lower(&typed).expect("lower aggregate map read");
         let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
-
         let decode_block = main_fn
             .blocks
             .iter()
@@ -12280,7 +11817,6 @@ seiyaku RangeOffsetBits {{
             "missing entries must never be passed to the typed decoder"
         );
     }
-
     #[test]
     fn bytes_state_map_uses_the_schema_bound_record_codec() {
         let source = include_str!("ir/fixtures/v1/i051.ko");
@@ -12292,7 +11828,6 @@ seiyaku RangeOffsetBits {{
             .iter()
             .find(|function| function.name == "main")
             .expect("main function");
-
         let encodes = main
             .blocks
             .iter()
@@ -12314,7 +11849,6 @@ seiyaku RangeOffsetBits {{
         assert_eq!(encodes, 1, "bytes map writes must use the typed codec");
         assert_eq!(decodes, 1, "bytes map reads must use the typed codec");
     }
-
     #[test]
     fn checked_integer_constants_fold_without_wrapping() {
         const MAXIMUM: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
@@ -12336,13 +11870,11 @@ seiyaku RangeOffsetBits {{
                 )
             })
         }));
-
         let overflow = parse(&format!("fn main() -> int {{ return {MAXIMUM} + 1; }}"))
             .expect("parse overflowing constant expression");
         let error = analyze(&overflow).expect_err("constant overflow must not wrap");
         assert!(error.code == "E_INT_OVERFLOW", "unexpected error: {error}");
     }
-
     #[test]
     fn exact_decimal_constants_fold_and_invalid_arithmetic_is_diagnosed() {
         let safe = parse("fn main() -> decimal { return 1.0 / 8.0; }")
@@ -12361,7 +11893,6 @@ seiyaku RangeOffsetBits {{
                 )
             })
         }));
-
         for (source, code) in [
             (
                 "fn main() -> quantity { return 1 - 2; }",
@@ -12378,6 +11909,5 @@ seiyaku RangeOffsetBits {{
             assert_eq!(error.code, code);
         }
     }
-
     include!("ir_tail_tests.rs");
 }

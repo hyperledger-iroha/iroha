@@ -3,20 +3,6 @@
 //! The ledger persists only restart-stable logical state. Readiness, leases,
 //! wait generations, physical carriers, and scheduler episodes are rebuilt
 //! from authenticated storage after restart and never appear in this format.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    path::{Path, PathBuf},
-};
-
-use iroha_config::parameters::actual::SumeragiV2Config;
-use iroha_crypto::{Hash, KeyPair};
-use iroha_data_model::block::consensus_v2 as wire;
-use norito::codec::{Decode, DecodeAll, Encode};
-use thiserror::Error;
-
 use super::projection::{AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError};
 use super::replay_authority::{
     AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
@@ -59,8 +45,7 @@ use super::{
 use crate::sumeragi::{
     v2::{
         ProductionLifecycleAdapterStartupV1, ProductionRecoveredLifecycleOwnerAssemblyPermitV1,
-        RecoveredLifecycleOwnerKuraBindingV1, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
-        VerifiedHeightContext,
+        RecoveredWalFrameIdentity, RecoveredWalVoteSign, VerifiedHeightContext,
     },
     v2_body_store::{BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore},
     v2_certified_serve_payload_store::{
@@ -71,14 +56,23 @@ use crate::sumeragi::{
     v2_core::EventTag,
     v2_runtime::{PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit},
 };
-
+use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_crypto::{Hash, KeyPair};
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::{Decode, DecodeAll, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 const LEDGER_FILE: &str = "lifecycle-ledger-v1.norito";
 const LEDGER_MAGIC: &[u8; 8] = b"SUMV2LC1";
 const LEDGER_VERSION: u16 = 1;
 const HASH_BYTES: usize = 32;
 const HEADER_BYTES: usize = LEDGER_MAGIC.len() + 2 + 8 + HASH_BYTES;
 const MAX_LEDGER_FRAME_BYTES: u64 = 64 * 1024 * 1024;
-
 const PAYLOAD_NONE: u16 = 0;
 const PAYLOAD_CERTIFIED_SERVE_PENDING: u16 = 1;
 const PAYLOAD_CERTIFIED_SERVE_COMPLETED: u16 = 2;
@@ -87,7 +81,6 @@ const PAYLOAD_BODY_FRAME: u16 = 4;
 const NEGATIVE_CANCELLED: u8 = 0;
 const NEGATIVE_REJECTED: u8 = 1;
 const NEGATIVE_FAILED: u8 = 2;
-
 /// Canonical small reference envelope for Certified-Serve state.
 ///
 /// The body itself remains in the body store. `lifecycle_subject` mirrors the
@@ -104,7 +97,6 @@ struct CertifiedServePayloadReferenceV1 {
     negative_kind: Option<u8>,
     negative_code: Option<u16>,
 }
-
 impl CertifiedServePayloadReferenceV1 {
     /// Construct a reference for an admitted response that is not terminal.
     const fn pending(
@@ -121,7 +113,6 @@ impl CertifiedServePayloadReferenceV1 {
             negative_code: None,
         }
     }
-
     /// Construct a reference for a completed certified response.
     const fn completed(
         lifecycle_subject: LifecycleDigest,
@@ -138,7 +129,6 @@ impl CertifiedServePayloadReferenceV1 {
             negative_code: None,
         }
     }
-
     /// Construct a reference for a terminal negative certified response.
     const fn negative(
         lifecycle_subject: LifecycleDigest,
@@ -160,7 +150,6 @@ impl CertifiedServePayloadReferenceV1 {
             negative_code,
         }
     }
-
     const fn matches_kind(self, kind: u16) -> bool {
         matches!(
             (
@@ -185,11 +174,9 @@ impl CertifiedServePayloadReferenceV1 {
                 )
         )
     }
-
     const fn lifecycle_subject(self) -> LifecycleDigest {
         LifecycleDigest::new(self.lifecycle_subject)
     }
-
     const fn negative_outcome(self) -> Option<DurableServeNegativeOutcome> {
         match (self.negative_kind, self.negative_code) {
             (Some(NEGATIVE_CANCELLED), None) => Some(DurableServeNegativeOutcome::Cancelled),
@@ -201,7 +188,6 @@ impl CertifiedServePayloadReferenceV1 {
         }
     }
 }
-
 /// Canonical reference to one fsynced body-store frame.
 ///
 /// This is deliberately not the complete replay authority. An ordinary body
@@ -218,7 +204,6 @@ struct BodyFramePayloadReferenceV1 {
     manifest_hash: [u8; 32],
     frame_hash: [u8; 32],
 }
-
 impl BodyFramePayloadReferenceV1 {
     const fn from_schema(reference: DurableBodyFrameReference) -> Self {
         Self {
@@ -230,7 +215,6 @@ impl BodyFramePayloadReferenceV1 {
             frame_hash: *reference.frame.as_bytes(),
         }
     }
-
     const fn to_schema(self) -> DurableBodyFrameReference {
         DurableBodyFrameReference::new(
             LifecycleDigest::new(self.context),
@@ -241,7 +225,6 @@ impl BodyFramePayloadReferenceV1 {
         )
     }
 }
-
 /// Durable payload reference associated with a lifecycle record.
 ///
 /// Certified-Serve references contain canonical Norito bytes for a small
@@ -253,7 +236,6 @@ pub(super) struct LifecyclePayloadReferenceV1 {
     digest: [u8; 32],
     canonical_reference: Vec<u8>,
 }
-
 impl LifecyclePayloadReferenceV1 {
     /// Construct the empty reference used by non-Serve records.
     pub(super) const fn none() -> Self {
@@ -263,7 +245,6 @@ impl LifecyclePayloadReferenceV1 {
             canonical_reference: Vec::new(),
         }
     }
-
     /// Construct a reference to one exact fsynced body-store frame.
     pub(super) fn body_frame(reference: DurableBodyFrameReference) -> Self {
         let canonical_reference = BodyFramePayloadReferenceV1::from_schema(reference).encode();
@@ -276,7 +257,6 @@ impl LifecyclePayloadReferenceV1 {
             canonical_reference,
         }
     }
-
     /// Construct a pending Certified-Serve payload reference.
     pub(super) fn certified_serve_pending(
         lifecycle_subject: LifecycleDigest,
@@ -292,7 +272,6 @@ impl LifecyclePayloadReferenceV1 {
             ),
         )
     }
-
     /// Construct a completed Certified-Serve response reference.
     pub(super) fn certified_serve_completed(
         lifecycle_subject: LifecycleDigest,
@@ -310,7 +289,6 @@ impl LifecyclePayloadReferenceV1 {
             ),
         )
     }
-
     /// Construct a terminal negative Certified-Serve reference.
     pub(super) fn certified_serve_negative(
         lifecycle_subject: LifecycleDigest,
@@ -328,7 +306,6 @@ impl LifecyclePayloadReferenceV1 {
             ),
         )
     }
-
     fn certified_serve(kind: u16, reference: CertifiedServePayloadReferenceV1) -> Self {
         debug_assert!(reference.matches_kind(kind));
         let canonical_reference = reference.encode();
@@ -341,7 +318,6 @@ impl LifecyclePayloadReferenceV1 {
             canonical_reference,
         }
     }
-
     fn from_schema(key: LifecycleKey, payload: DurablePayloadReference) -> Option<Self> {
         match payload {
             DurablePayloadReference::None => Some(Self::none()),
@@ -378,7 +354,6 @@ impl LifecyclePayloadReferenceV1 {
             )),
         }
     }
-
     fn validate(&self) -> bool {
         match self.kind {
             PAYLOAD_NONE => self.digest == [0; 32] && self.canonical_reference.is_empty(),
@@ -404,7 +379,6 @@ impl LifecyclePayloadReferenceV1 {
             _ => false,
         }
     }
-
     fn to_schema(&self, key: LifecycleKey) -> Option<DurablePayloadReference> {
         if self.kind == PAYLOAD_NONE {
             return self.validate().then_some(DurablePayloadReference::None);
@@ -453,7 +427,6 @@ impl LifecyclePayloadReferenceV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLifecycleKeyV1 {
@@ -466,7 +439,6 @@ struct PersistedLifecycleKeyV1 {
     phase_code: u16,
     execution_commitment: Option<[u8; 32]>,
 }
-
 impl PersistedLifecycleKeyV1 {
     fn from_schema(key: LifecycleKey) -> Self {
         let proposal_round = key.proposal_round();
@@ -481,7 +453,6 @@ impl PersistedLifecycleKeyV1 {
             execution_commitment: key.execution_commitment().map(|digest| *digest.as_bytes()),
         }
     }
-
     fn to_schema(self) -> Option<LifecycleKey> {
         let proposal_round = match (self.proposal_height, self.proposal_view) {
             (Some(height), Some(view)) => Some(LifecycleRound::new(height, view)),
@@ -498,7 +469,6 @@ impl PersistedLifecycleKeyV1 {
         ))
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedTerminalV1 {
@@ -506,7 +476,6 @@ struct PersistedTerminalV1 {
     completed_digest: Option<[u8; 32]>,
     detail_code: Option<u16>,
 }
-
 impl PersistedTerminalV1 {
     fn from_schema(outcome: TerminalOutcome) -> Self {
         match outcome {
@@ -537,7 +506,6 @@ impl PersistedTerminalV1 {
             },
         }
     }
-
     fn to_schema(self) -> Option<TerminalOutcome> {
         match (self.kind, self.completed_digest, self.detail_code) {
             (1, None, None) => Some(TerminalOutcome::Advanced),
@@ -549,7 +517,6 @@ impl PersistedTerminalV1 {
         }
     }
 }
-
 /// Canonical wire representation of one typed durable continuation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -557,7 +524,6 @@ struct PersistedDurableContinuationV1 {
     code: u8,
     successor_ordinal: Option<u128>,
 }
-
 impl PersistedDurableContinuationV1 {
     const NONE: u8 = 0;
     const ADVANCED_NO_SUCCESSOR: u8 = 1;
@@ -571,7 +537,6 @@ impl PersistedDurableContinuationV1 {
     const SIGN_PREPARE_TO_BROADCAST: u8 = 9;
     const SIGN_COMMIT_TO_BROADCAST: u8 = 10;
     const SIGN_TIMEOUT_TO_BROADCAST: u8 = 11;
-
     const fn from_schema(continuation: DurableContinuation) -> Self {
         match continuation {
             DurableContinuation::None => Self {
@@ -611,7 +576,6 @@ impl PersistedDurableContinuationV1 {
             },
         }
     }
-
     const fn to_schema(self) -> Option<DurableContinuation> {
         match (self.code, self.successor_ordinal) {
             (Self::NONE, None) => Some(DurableContinuation::None),
@@ -672,7 +636,6 @@ impl PersistedDurableContinuationV1 {
         }
     }
 }
-
 /// One restart-stable lifecycle record in `LifecycleLedgerV1`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -690,7 +653,6 @@ pub(super) struct LifecycleLedgerRecordV1 {
     replay_authority: LifecycleReplayAuthorityV1,
     continuation: PersistedDurableContinuationV1,
 }
-
 /// Move-only all-row finalization successor prepared from one exact frame.
 ///
 /// Its fields remain private to the ledger module, so siblings cannot combine
@@ -753,13 +715,10 @@ impl PublishedFinalizationRetirementV1 {
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedFetchLedgerJoinPermit {
     _linearity: DurableCertifiedFetchLedgerJoinLinearity,
 }
-
 struct DurableCertifiedFetchLedgerJoinLinearity;
-
 impl Drop for DurableCertifiedFetchLedgerJoinLinearity {
     fn drop(&mut self) {}
 }
-
 impl DurableCertifiedFetchLedgerJoinPermit {
     fn new() -> Self {
         Self {
@@ -767,20 +726,16 @@ impl DurableCertifiedFetchLedgerJoinPermit {
         }
     }
 }
-
 /// One-shot proof that the recovery projection contains every live durable
 /// Fetch row from one exact opened LedgerV1.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedFetchLedgerCensusPermit {
     _linearity: DurableCertifiedFetchLedgerCensusLinearity,
     ledger_frame_identity: LifecycleDigest,
 }
-
 struct DurableCertifiedFetchLedgerCensusLinearity;
-
 impl Drop for DurableCertifiedFetchLedgerCensusLinearity {
     fn drop(&mut self) {}
 }
-
 impl DurableCertifiedFetchLedgerCensusPermit {
     fn new(ledger: &LifecycleLedgerV1) -> Self {
         Self {
@@ -788,7 +743,6 @@ impl DurableCertifiedFetchLedgerCensusPermit {
             ledger_frame_identity: ledger.frame_identity(),
         }
     }
-
     /// Consume the census permit into its exact canonical ledger-frame identity.
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_frame_identity(
         self,
@@ -796,7 +750,6 @@ impl DurableCertifiedFetchLedgerCensusPermit {
         self.ledger_frame_identity
     }
 }
-
 /// Opaque LedgerV1 proof of the exact Validate parent named by a recovered WAL vote.
 ///
 /// The proof retains the complete WAL identity and the durable owner/address
@@ -815,7 +768,6 @@ pub(crate) struct AuthenticatedRecoveredWalValidateLedgerParent {
     tag: EventTag,
     vote: wire::Vote,
 }
-
 impl AuthenticatedRecoveredWalValidateLedgerParent {
     /// Revalidate the exact adapter-authenticated WAL identity retained here.
     pub(crate) fn exactly_matches_recovered_vote(&self, recovered: &RecoveredWalVoteSign) -> bool {
@@ -824,27 +776,22 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
             && self.tag == recovered.tag()
             && self.vote == *recovered.vote()
     }
-
     /// Return the restart-stable runtime causal key preserved by LedgerV1.
     pub(crate) fn runtime_causal_lifecycle_key(&self) -> Hash {
         Hash::prehashed(*self.owner.causal_root().digest().as_bytes())
     }
-
     /// Return whether the durable Validate inherited the exact Prepare authority.
     pub(crate) const fn inherited_prepare_authority(&self) -> bool {
         self.inherited_prepare_authority
     }
-
     /// Return the durable owner without exposing its runtime binding.
     pub(super) const fn owner(&self) -> OwnerId {
         self.owner
     }
-
     /// Return the durable parent ordinal for internal address reconstruction.
     pub(super) const fn ordinal(&self) -> u128 {
         self.ordinal
     }
-
     /// Match one semantically revalidated body receipt to the exact frame
     /// reference retained by this ledger parent.
     ///
@@ -861,7 +808,6 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
             .map(DurablePayloadReference::BodyFrame)
             == Some(self.payload)
     }
-
     /// Match the reconstructed parent candidate against the complete ledger seal.
     pub(super) fn matches_candidate(&self, candidate: &CandidateAdmission) -> bool {
         candidate.initial_state == InitialLifecycleState::Ready
@@ -878,7 +824,6 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
             && candidate.replay_authority == self.replay_authority
             && candidate.producer_turn.is_none()
     }
-
     /// Construct the exact recovered Validate candidate from this persisted seal.
     ///
     /// The persisted replay authority never leaves the ledger-parent wrapper;
@@ -923,7 +868,6 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
         self.matches_candidate(&candidate).then_some(candidate)
     }
 }
-
 impl LifecycleLedgerRecordV1 {
     /// Decode one live signed Broadcast only as an inert recovered-WAL child.
     ///
@@ -948,7 +892,6 @@ impl LifecycleLedgerRecordV1 {
             &self.replay_authority,
         )
     }
-
     /// Authenticate this row's source before opening its exact body-store frame.
     fn authenticate_durable_certified_fetch<F>(
         &self,
@@ -987,7 +930,6 @@ impl LifecycleLedgerRecordV1 {
             authenticate_body,
         )
     }
-
     /// Construct one durable logical lifecycle record.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -1023,7 +965,6 @@ impl LifecycleLedgerRecordV1 {
             continuation: PersistedDurableContinuationV1::from_schema(continuation),
         })
     }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new_exact_replay_fixture(
@@ -1050,12 +991,10 @@ impl LifecycleLedgerRecordV1 {
             continuation,
         )
     }
-
     /// Decode the stable semantic key.
     pub(super) fn key(&self) -> Option<LifecycleKey> {
         self.key.to_schema()
     }
-
     /// Decode the stable owner.
     pub(super) fn owner(&self) -> OwnerId {
         OwnerId::new(
@@ -1063,17 +1002,14 @@ impl LifecycleLedgerRecordV1 {
             self.owner_first_ordinal,
         )
     }
-
     /// Return the immutable admission ordinal.
     pub(super) const fn ordinal(&self) -> u128 {
         self.ordinal
     }
-
     /// Decode the exhaustive work class.
     pub(super) fn work_class(&self) -> Option<LifecycleWorkClass> {
         decode_work_class(self.work_class_code)
     }
-
     /// Decode the exact immutable execution stage.
     pub(super) fn stage(&self) -> Option<LifecycleStage> {
         Some(LifecycleStage::new(
@@ -1081,7 +1017,6 @@ impl LifecycleLedgerRecordV1 {
             decode_predecessor(self.predecessor_code)?,
         ))
     }
-
     /// Decode the optional terminal tombstone.
     pub(super) fn terminal(&self) -> Option<Option<TerminalOutcome>> {
         match self.terminal {
@@ -1089,22 +1024,18 @@ impl LifecycleLedgerRecordV1 {
             Some(terminal) => Some(Some(terminal.to_schema()?)),
         }
     }
-
     /// Return the authenticated reconstruction source.
     pub(super) const fn reconstruction_source(&self) -> LifecycleDigest {
         LifecycleDigest::new(self.reconstruction_source)
     }
-
     pub(super) fn durable_payload(&self) -> Option<DurablePayloadReference> {
         self.key()
             .and_then(|key| self.payload_reference.to_schema(key))
     }
-
     /// Decode the exact typed durable continuation.
     pub(super) const fn continuation(&self) -> Option<DurableContinuation> {
         self.continuation.to_schema()
     }
-
     /// Compare a reconstructed admission with this row's inert persisted
     /// authority without exposing the decoded envelope.
     pub(super) fn replay_matches_candidate(&self, candidate: &CandidateAdmission) -> bool {
@@ -1115,13 +1046,11 @@ impl LifecycleLedgerRecordV1 {
             self.replay_authority == candidate.replay_authority
         }
     }
-
     /// Compare the adjacent reconstructed ProducerTurn with this row's exact
     /// separately encoded replay authority.
     pub(super) fn replay_matches_producer(&self, producer: &super::ProducerTurnAdmission) -> bool {
         self.replay_authority == producer.replay_authority
     }
-
     /// Prove that this Pending Serve row and its adjacent ProducerTurn are the
     /// exact predecessor of one authenticated terminal payload-store frame.
     pub(super) fn replay_is_exact_pending_predecessor(
@@ -1170,7 +1099,6 @@ impl LifecycleLedgerRecordV1 {
                 &producer.replay_authority,
             )
     }
-
     fn validate(&self, context: LifecycleContext, high_water: u128) -> bool {
         let Some(key) = self.key() else {
             return false;
@@ -1210,7 +1138,6 @@ impl LifecycleLedgerRecordV1 {
             && successor_shape_is_valid
     }
 }
-
 /// Durable adjacent Serve-to-producer obligation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -1218,7 +1145,6 @@ pub(super) struct LifecycleProducerDebtV1 {
     serve_ordinal: u128,
     producer_ordinal: u128,
 }
-
 impl LifecycleProducerDebtV1 {
     /// Construct an adjacent producer-turn debt.
     pub(super) const fn new(serve_ordinal: u128, producer_ordinal: u128) -> Self {
@@ -1227,18 +1153,15 @@ impl LifecycleProducerDebtV1 {
             producer_ordinal,
         }
     }
-
     /// Return the Serve ordinal.
     pub(super) const fn serve_ordinal(self) -> u128 {
         self.serve_ordinal
     }
-
     /// Return the producer-turn ordinal.
     pub(super) const fn producer_ordinal(self) -> u128 {
         self.producer_ordinal
     }
 }
-
 /// Closed original-Sign lineage of one durable Broadcast-plus-next-Sign pair.
 ///
 /// The phase case retains the exact Validate ordinal which introduced the
@@ -1254,7 +1177,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignedBroadcastAndSignParentV1 {
         validate_ordinal: u128,
     },
 }
-
 /// Opaque LedgerV1 classification of one committed Broadcast-plus-next-Sign pair.
 ///
 /// This projection authenticates the exact durable row shape and retains the
@@ -1271,7 +1193,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastAndSignLedgerPro
     broadcast_ordinal: u128,
     next_sign_ordinal: u128,
 }
-
 /// One-pass indexes used by the durable Broadcast-plus-next-Sign classifier.
 ///
 /// Values in `successor_parents` retain the first parent record index and the
@@ -1281,7 +1202,6 @@ struct RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1 {
     successor_parents: BTreeMap<u128, (usize, usize)>,
     owner_record_counts: BTreeMap<OwnerId, usize>,
 }
-
 impl RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1 {
     fn new(records: &[LifecycleLedgerRecordV1]) -> Self {
         let mut successor_parents = BTreeMap::new();
@@ -1308,22 +1228,18 @@ impl RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1 {
             owner_record_counts,
         }
     }
-
     fn unique_parent_index(&self, successor_ordinal: u128) -> Option<usize> {
         self.successor_parents
             .get(&successor_ordinal)
             .and_then(|&(index, count)| (count == 1).then_some(index))
     }
-
     fn has_incoming_edge(&self, ordinal: u128) -> bool {
         self.successor_parents.contains_key(&ordinal)
     }
-
     fn owner_record_count(&self, owner: OwnerId) -> usize {
         self.owner_record_counts.get(&owner).copied().unwrap_or(0)
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
     /// Return the closed historical parent classification.
@@ -1332,22 +1248,18 @@ impl RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
     ) -> RecoveredLifecycleSignedBroadcastAndSignParentV1 {
         self.parent
     }
-
     /// Return the original Sign ordinal advanced by the recovered completion.
     pub(in crate::sumeragi) const fn parent_ordinal(&self) -> u128 {
         self.parent_ordinal
     }
-
     /// Return the signed Broadcast ordinal created by the recovered completion.
     pub(in crate::sumeragi) const fn broadcast_ordinal(&self) -> u128 {
         self.broadcast_ordinal
     }
-
     /// Return the independently WAL-owned next Sign ordinal.
     pub(in crate::sumeragi) const fn next_sign_ordinal(&self) -> u128 {
         self.next_sign_ordinal
     }
-
     /// Reauthenticate this projection against one unchanged complete ledger frame.
     pub(in crate::sumeragi) fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {
         ledger
@@ -1356,7 +1268,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
             == Some(self)
     }
 }
-
 /// Complete version-one durable lifecycle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -1368,7 +1279,6 @@ pub(in crate::sumeragi) struct LifecycleLedgerV1 {
     records: Vec<LifecycleLedgerRecordV1>,
     producer_debts: Vec<LifecycleProducerDebtV1>,
 }
-
 /// Move-only CompleteTip terminal-Apply join to the Kura-bound predecessor store.
 ///
 /// This cut owns the full Kura CompleteTip evidence, the exact opened LedgerV1
@@ -1387,7 +1297,6 @@ struct AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
     ledger: LifecycleLedgerV1,
     apply_ordinal: u128,
 }
-
 /// Opaque failure while authenticating all canonical CompleteTip predecessor stores.
 #[derive(Debug, Error)]
 #[error("failed to authenticate canonical CompleteTip predecessor lifecycle storage")]
@@ -1395,7 +1304,6 @@ pub(in crate::sumeragi) struct CompleteTipPredecessorStorageErrorV1 {
     #[source]
     kind: CompleteTipPredecessorStorageErrorKindV1,
 }
-
 #[derive(Debug, Error)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum CompleteTipPredecessorStorageErrorKindV1 {
@@ -1410,7 +1318,6 @@ enum CompleteTipPredecessorStorageErrorKindV1 {
     #[error(transparent)]
     TerminalPersistence(#[from] CertifiedServeTerminalPersistenceError),
 }
-
 macro_rules! complete_tip_predecessor_storage_error_from {
     ($source:ty, $variant:ident) => {
         impl From<$source> for CompleteTipPredecessorStorageErrorV1 {
@@ -1422,7 +1329,6 @@ macro_rules! complete_tip_predecessor_storage_error_from {
         }
     };
 }
-
 complete_tip_predecessor_storage_error_from!(LifecycleLedgerError, Ledger);
 complete_tip_predecessor_storage_error_from!(CertifiedServePayloadStoreError, PayloadStore);
 complete_tip_predecessor_storage_error_from!(CertifiedServePayloadRecoveryError, PayloadRecovery);
@@ -1431,7 +1337,6 @@ complete_tip_predecessor_storage_error_from!(
     CertifiedServeTerminalPersistenceError,
     TerminalPersistence
 );
-
 /// Complete authenticated disk owners needed by CompleteTip retirement.
 ///
 /// The cut retains the exact terminal predecessor ledger, the co-located Serve
@@ -1449,7 +1354,6 @@ pub(in crate::sumeragi) struct AuthenticatedCompleteTipPredecessorStorageV1 {
     retained_serve_payloads:
         BTreeSet<crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadId>,
 }
-
 /// Complete durable proof that one canonical CompleteTip predecessor retired.
 ///
 /// This token is minted only after the exact predecessor frame is fully
@@ -1468,7 +1372,6 @@ pub(in crate::sumeragi) struct RetiredRecoveredCompleteTipActivationAuthorityV1 
     successor_store: LifecycleLedgerStoreV1,
     successor_ledger: LifecycleLedgerV1,
 }
-
 impl std::fmt::Debug for RetiredRecoveredCompleteTipActivationAuthorityV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1483,7 +1386,6 @@ impl std::fmt::Debug for RetiredRecoveredCompleteTipActivationAuthorityV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     /// Return the exact durable predecessor named by this retirement.
     pub(in crate::sumeragi) const fn predecessor(
@@ -1491,19 +1393,16 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     ) -> crate::sumeragi::v2_recovery::DurableV2PredecessorIdentity {
         self.complete_tip.predecessor()
     }
-
     /// Return the frozen successor context authenticated by CompleteTip.
     #[cfg(test)]
     pub(in crate::sumeragi) const fn successor_context_id(&self) -> wire::HeightContextId {
         self.complete_tip.successor_context_id()
     }
-
     /// Return the ordinal floor inherited by the canonical successor ledger.
     #[cfg(test)]
     pub(in crate::sumeragi) const fn retained_high_water(&self) -> u128 {
         self.retained_high_water
     }
-
     fn successor_descends_from_retirement(&self) -> bool {
         self.successor_ledger.context() == self.successor_store.context
             && self.successor_ledger.frame_identity() == self.successor_frame_identity
@@ -1518,7 +1417,6 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                     })
             }
     }
-
     /// Reauthenticate the retained canonical H+1 ledger at its Kura-derived target.
     pub(in crate::sumeragi) fn authorizes_retained_successor(&self) -> bool {
         let Some(successor_root) = self.successor_store.path.parent() else {
@@ -1536,7 +1434,6 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
             )
             && self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)
     }
-
     /// Reauthenticate the retained canonical H+1 ledger and one prepared status.
     ///
     /// This is a comparison oracle rather than an extraction surface: the
@@ -1556,7 +1453,6 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
             && self.complete_tip.predecessor().height().checked_add(1) == Some(successor.height)
             && successor.last_committed_height == self.complete_tip.predecessor().height()
     }
-
     fn exactly_matches_successor_owner(&self, owner: &mut ProductionLifecycleOwnerV1) -> bool {
         let Some(successor_root) = self.successor_store.path.parent() else {
             return false;
@@ -1613,7 +1509,6 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         registry.exactly_covers_recovered_ready_work(&owner.coordinator)
             || registry.exactly_covers_recovered_ready_work_and_wal_authority(&owner.coordinator)
     }
-
     /// Consume retirement and the exact unlaunched H+1 owner into one seal.
     ///
     /// The join reopens the retained Kura-derived LedgerV1 target, compares the
@@ -1636,14 +1531,12 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         })
     }
 }
-
 /// Fail-stop rejection of a CompleteTip/H+1 lifecycle-owner join.
 #[derive(Debug, Error)]
 #[error("retired CompleteTip authority does not match the exact canonical H+1 lifecycle owner")]
 #[must_use = "a failed H+1 owner join requires process restart"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct CompleteTipSuccessorOwnerBindErrorV1;
-
 /// Opaque exact join of retired CompleteTip authority and the unlaunched H+1 owner.
 ///
 /// The sole launch method consumes this seal into the existing lifecycle
@@ -1658,7 +1551,6 @@ pub(in crate::sumeragi) struct BoundRecoveredCompleteTipSuccessorOwnerV1 {
     owner: ProductionLifecycleOwnerV1,
     retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
 }
-
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_BEGIN
 impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
     /// Consume the exact H+1 owner into the generic launch transaction while
@@ -1683,7 +1575,6 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
         })
     }
 }
-
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
 ///
 /// Its sole activation method consumes both halves, arms live clocks, activates
@@ -1753,7 +1644,6 @@ impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
     }
 }
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END
-
 #[cfg(test)]
 impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
     fn remains_exact_for_test(&mut self) -> bool {
@@ -1761,13 +1651,11 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
             .exactly_matches_successor_owner(&mut self.owner)
     }
 }
-
 /// Private Kura-derived target for the empty CompleteTip successor ledger.
 struct CanonicalCompleteTipSuccessorLedgerTargetV1 {
     root: PathBuf,
     context: LifecycleContext,
 }
-
 impl CanonicalCompleteTipSuccessorLedgerTargetV1 {
     /// Initialize the canonical successor or authenticate a later descendant.
     ///
@@ -1819,7 +1707,6 @@ impl CanonicalCompleteTipSuccessorLedgerTargetV1 {
         Ok((store, successor))
     }
 }
-
 impl AuthenticatedCompleteTipPredecessorStorageV1 {
     fn is_exact(&self) -> Result<bool, CompleteTipPredecessorStorageErrorV1> {
         if !self.terminal.is_exact()?
@@ -1838,7 +1725,6 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
         )?;
         Ok(retained == self.retained_serve_payloads)
     }
-
     /// Retire the canonical predecessor and authenticate its successor target.
     ///
     /// The write order is intentionally one-way and crash-idempotent: first
@@ -1867,7 +1753,6 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             serve_payloads,
             retained_serve_payloads,
         } = self;
-
         let refreshed_serve_payloads =
             payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?;
         let serve_reconciliation = super::open::reconcile_complete_tip_serve_retirement(
@@ -1900,7 +1785,6 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             )
             .into());
         }
-
         let (successor_store, successor_ledger) =
             successor.open_initialized_or_descendant(retired.high_water())?;
         let token = RetiredRecoveredCompleteTipActivationAuthorityV1 {
@@ -1916,7 +1800,6 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
         Ok(token)
     }
 }
-
 /// Consume CompleteTip while opening and authenticating every predecessor disk owner.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
@@ -1970,7 +1853,6 @@ pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
     }
     Ok(cut)
 }
-
 impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
     fn is_exact(&self) -> Result<bool, LifecycleLedgerError> {
         if self.ledger_store.context != self.ledger.context() {
@@ -1984,7 +1866,6 @@ impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
                 .is_ok_and(|ordinal| ordinal == self.apply_ordinal))
     }
 }
-
 /// Move-only storage recovery cut for every durable Ready-Fetch row.
 ///
 /// The exact opened LedgerV1 frame, height context, body-store instance, and
@@ -2002,7 +1883,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedDurableCer
     body_store: V2BodyStore,
     census: AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
 }
-
 /// Startup-fatal failure from the sole V1 lifecycle storage-owner transaction.
 ///
 /// Every input is consumed by the failed call. The diagnostic deliberately
@@ -2013,7 +1893,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedDurableCer
 pub(crate) struct ProductionLifecycleStartupErrorV1 {
     kind: ProductionLifecycleStartupErrorKindV1,
 }
-
 #[derive(Debug, Error)]
 #[allow(variant_size_differences)]
 enum ProductionLifecycleStartupErrorKindV1 {
@@ -2040,13 +1919,11 @@ enum ProductionLifecycleStartupErrorKindV1 {
     #[error("the opened coordinator and exact concrete registry differ")]
     RegistryCoordinatorMismatch,
 }
-
 impl ProductionLifecycleStartupErrorV1 {
     fn new(kind: ProductionLifecycleStartupErrorKindV1) -> Self {
         Self { kind }
     }
 }
-
 /// Startup-fatal failure from exact recovered control-Sign storage repair.
 ///
 /// The classification intentionally carries no projection, effect, pending
@@ -2055,18 +1932,15 @@ impl ProductionLifecycleStartupErrorV1 {
 pub(in crate::sumeragi) struct ProductionRecoveredWalControlStartupErrorV1 {
     reason: &'static str,
 }
-
 impl ProductionRecoveredWalControlStartupErrorV1 {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// Startup-fatal failure from exact recovered Decision-Fetch storage repair.
 ///
 /// Diagnostics expose no projection, effect, pending binding, row, carrier,
@@ -2075,18 +1949,15 @@ impl ProductionRecoveredWalControlStartupErrorV1 {
 pub(in crate::sumeragi) struct ProductionRecoveredWalDecisionFetchStartupErrorV1 {
     reason: &'static str,
 }
-
 impl ProductionRecoveredWalDecisionFetchStartupErrorV1 {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// Startup-fatal failure from exact recovered Decision-to-Apply publication.
 ///
 /// The diagnostic exposes no adapter, WAL, body, ledger, registry, effect,
@@ -2096,18 +1967,15 @@ impl ProductionRecoveredWalDecisionFetchStartupErrorV1 {
 pub(in crate::sumeragi) struct ProductionRecoveredDecisionApplyStartupErrorV1 {
     reason: &'static str,
 }
-
 impl ProductionRecoveredDecisionApplyStartupErrorV1 {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
     fn is_exact(&self) -> bool {
@@ -2135,7 +2003,6 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
                 .census
                 .exactly_matches_opened_ledger(&self.ledger, live_body_fetch_count)
     }
-
     /// Consume all durable storage authority into the sole production owner.
     ///
     /// Every context, frame, payload-store, census, and empty-registry check
@@ -2163,7 +2030,6 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
                 })?;
         self.open_owner_with_authority(authority, payload_store, serve_payloads, adapter_startup)
     }
-
     #[allow(clippy::result_large_err)]
     fn open_owner_with_authority(
         self,
@@ -2270,7 +2136,6 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
             adapter_startup: Some(adapter_startup),
         })
     }
-
     #[cfg(test)]
     fn open_owner_for_test(
         self,
@@ -2319,13 +2184,11 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
             ProductionLifecycleAdapterStartupV1::fixture_for_test(),
         )
     }
-
     #[cfg(test)]
     fn corrupt_fetch_census_for_test(&mut self) {
         self.census.corrupt_first_completion_for_test();
     }
 }
-
 impl ProductionLifecycleOwnerV1 {
     /// Prove the exact recovered Decision four-row chain and sole live Apply.
     #[cfg(test)]
@@ -2356,7 +2219,6 @@ impl ProductionLifecycleOwnerV1 {
             .count();
         (owner_records == 4).then_some((owner_records, apply.ordinal()))
     }
-
     /// Open the exact no-WAL-vote storage branch without exposing ledger or
     /// recovery parts to the adapter startup caller.
     #[allow(clippy::too_many_arguments)]
@@ -2392,7 +2254,6 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup,
         )
     }
-
     /// Repair/coalesce and open one exact Proposal/Timeout control Sign.
     ///
     /// Projection exactness is checked before this method opens LedgerV1.
@@ -2740,7 +2601,6 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: Some(adapter_startup),
         })
     }
-
     /// Repair/coalesce and open one exact Decision-owned certified Fetch.
     ///
     /// Projection and semantically revalidated-body checks precede LedgerV1
@@ -2878,7 +2738,6 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: Some(adapter_startup),
         })
     }
-
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     fn open_recovered_decision_store_startup(
         verified: VerifiedHeightContext,
@@ -2985,7 +2844,6 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: Some(adapter_startup),
         })
     }
-
     /// Publish or exactly coalesce one recovered Decision body fast-forward.
     ///
     /// The input is the sole closed result of the authenticated WAL Fetch,
@@ -3091,7 +2949,6 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: Some(adapter_startup),
         })
     }
-
     /// Bind one paired recovered-WAL open and adapter startup to exact owners.
     ///
     /// The consumed permit is constructible only by the private combined
@@ -3155,7 +3012,6 @@ impl ProductionLifecycleOwnerV1 {
         })
     }
 }
-
 #[cfg(test)]
 impl ProductionLifecycleOwnerV1 {
     pub(in crate::sumeragi) fn exact_recovered_fetch_join_for_test(&mut self) -> bool {
@@ -3179,7 +3035,6 @@ impl ProductionLifecycleOwnerV1 {
                         .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
             }
     }
-
     /// Return the exact durable high-water/ordinal pair for the sole control row.
     pub(in crate::sumeragi) fn recovered_control_row_summary_for_test(
         &mut self,
@@ -3203,7 +3058,6 @@ impl ProductionLifecycleOwnerV1 {
             .is_none()
             .then_some((self.coordinator.high_water, control.ordinal))
     }
-
     /// Return the durable high-water/ordinal pair for the sole WAL Decision Fetch.
     pub(in crate::sumeragi) fn recovered_decision_fetch_row_summary_for_test(
         &mut self,
@@ -3230,7 +3084,6 @@ impl ProductionLifecycleOwnerV1 {
             .is_none()
             .then_some((self.coordinator.high_water, fetch.ordinal))
     }
-
     fn live_fetch_count_for_test(&self) -> usize {
         self.coordinator
             .records
@@ -3241,13 +3094,11 @@ impl ProductionLifecycleOwnerV1 {
             })
             .count()
     }
-
     fn certified_serve_and_producer_carrier_counts_for_test(&mut self) -> (usize, usize) {
         self.registry
             .registry_mut()
             .certified_serve_and_producer_carrier_counts()
     }
-
     fn claim_certified_serve_for_test(&mut self) -> super::TurnLease {
         assert!(
             self.registry
@@ -3271,7 +3122,6 @@ impl ProductionLifecycleOwnerV1 {
         assert_eq!(lease.work_class(), LifecycleWorkClass::CertifiedServe);
         lease
     }
-
     fn terminal_validate_count_for_test(&self) -> usize {
         self.coordinator
             .records
@@ -3283,7 +3133,6 @@ impl ProductionLifecycleOwnerV1 {
             .count()
     }
 }
-
 /// Narrow comparison surface used by the terminal recovered-Decision ledger oracle.
 ///
 /// The production implementation delegates to the sealed WAL/body projection. Keeping the
@@ -3291,15 +3140,12 @@ impl ProductionLifecycleOwnerV1 {
 /// behavior without manufacturing the projection's move-only adapter and runtime authorities.
 trait TerminalRecoveredDecisionApplyProjectionV1 {
     fn belongs_to_context(&self, context: LifecycleContext) -> bool;
-
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
-
     fn exactly_matches_advanced_apply_parent(
         &self,
         fetch: &LifecycleLedgerRecordV1,
         store_ordinal: u128,
     ) -> bool;
-
     fn exactly_matches_terminal_successor_records(
         &self,
         owner: OwnerId,
@@ -3308,7 +3154,6 @@ trait TerminalRecoveredDecisionApplyProjectionV1 {
         apply: &LifecycleLedgerRecordV1,
     ) -> bool;
 }
-
 /// Narrow comparison surface for staging one live recovered-Decision chain.
 ///
 /// Production delegates to the sealed WAL/body projection. The private trait
@@ -3316,35 +3161,27 @@ trait TerminalRecoveredDecisionApplyProjectionV1 {
 /// without manufacturing runtime or adapter ownership tokens.
 trait RecoveredDecisionApplyStageProjectionV1 {
     fn belongs_to_context(&self, context: LifecycleContext) -> bool;
-
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
-
     fn exactly_matches_live_fetch(&self, fetch: &LifecycleLedgerRecordV1) -> bool;
-
     fn exactly_matches_advanced_fetch(
         &self,
         fetch: &LifecycleLedgerRecordV1,
         store_ordinal: u128,
     ) -> bool;
-
     fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1;
 }
-
 impl RecoveredDecisionApplyStageProjectionV1
     for crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1
 {
     fn belongs_to_context(&self, context: LifecycleContext) -> bool {
         self.fetch().belongs_to_context(context)
     }
-
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
         self.fetch().names_record(record)
     }
-
     fn exactly_matches_live_fetch(&self, fetch: &LifecycleLedgerRecordV1) -> bool {
         self.fetch().exactly_matches_record(fetch)
     }
-
     fn exactly_matches_advanced_fetch(
         &self,
         fetch: &LifecycleLedgerRecordV1,
@@ -3353,23 +3190,19 @@ impl RecoveredDecisionApplyStageProjectionV1
         self.fetch()
             .exactly_matches_advanced_apply_parent(fetch, store_ordinal)
     }
-
     fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
         self.lineage()
     }
 }
-
 impl TerminalRecoveredDecisionApplyProjectionV1
     for crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1
 {
     fn belongs_to_context(&self, context: LifecycleContext) -> bool {
         self.fetch().belongs_to_context(context)
     }
-
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
         self.fetch().names_record(record)
     }
-
     fn exactly_matches_advanced_apply_parent(
         &self,
         fetch: &LifecycleLedgerRecordV1,
@@ -3378,7 +3211,6 @@ impl TerminalRecoveredDecisionApplyProjectionV1
         self.fetch()
             .exactly_matches_advanced_apply_parent(fetch, store_ordinal)
     }
-
     fn exactly_matches_terminal_successor_records(
         &self,
         owner: OwnerId,
@@ -3390,7 +3222,6 @@ impl TerminalRecoveredDecisionApplyProjectionV1
             .exactly_matches_terminal_successor_records(owner, store, validate, apply)
     }
 }
-
 fn recovered_broadcast_and_next_sign_keys_are_exact(
     broadcast_key: LifecycleKey,
     broadcast_stage: LifecycleStage,
@@ -3429,9 +3260,7 @@ fn recovered_broadcast_and_next_sign_keys_are_exact(
         && broadcast_key.proposal_round() == next_sign_key.proposal_round()
         && broadcast_key.subject() == next_sign_key.subject()
 }
-
 include!("v2_lifecycle_ledger_operations.rs");
-
 /// Startup-fatal failure from the consuming LedgerV1/body-store Ready-Fetch join.
 ///
 /// The failing call has consumed the opened ledger and body-store instances.
@@ -3465,7 +3294,6 @@ pub(super) enum DurableCertifiedFetchRecoveryError {
     #[error("durable Certified Fetch storage recovery cut is inconsistent")]
     InvalidStorageCut,
 }
-
 /// Focused projection of one real authenticated WAL repair through LedgerV1.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3480,7 +3308,6 @@ pub(crate) struct WalVoteLedgerRepairTestSummary {
     durable_frame_bound: bool,
     reopened_exact: bool,
 }
-
 #[cfg(test)]
 impl WalVoteLedgerRepairTestSummary {
     /// Assemble the closed observations from the outer recovery fsync fixture.
@@ -3508,58 +3335,47 @@ impl WalVoteLedgerRepairTestSummary {
             reopened_exact,
         }
     }
-
     /// Return whether the first stage repaired the live parent.
     pub(crate) const fn first_changed(&self) -> bool {
         self.first_changed
     }
-
     /// Return whether the exact repeated stage changed the ledger.
     pub(crate) const fn repeat_changed(&self) -> bool {
         self.repeat_changed
     }
-
     /// Return whether the repaired parent is the exact Advanced tombstone.
     pub(crate) const fn parent_advanced(&self) -> bool {
         self.parent_advanced
     }
-
     /// Return whether the typed Sign child remains live.
     pub(crate) const fn child_live(&self) -> bool {
         self.child_live
     }
-
     /// Return the repaired child ordinal.
     pub(crate) const fn child_ordinal(&self) -> u128 {
         self.child_ordinal
     }
-
     /// Return whether the repair names the exact Validate-to-Prepare-Sign edge.
     pub(crate) const fn is_prepare_edge(&self) -> bool {
         matches!(self.edge, DurableContinuationEdge::ValidateToSignPrepare)
     }
-
     /// Return whether the repair names the exact Validate-to-Commit-Sign edge.
     pub(crate) const fn is_commit_edge(&self) -> bool {
         matches!(self.edge, DurableContinuationEdge::ValidateToSignCommit)
     }
-
     /// Return the repaired durable ordinal high-water mark.
     pub(crate) const fn high_water(&self) -> u128 {
         self.high_water
     }
-
     /// Return whether a nonzero complete-frame hash was bound post-fsync.
     pub(crate) const fn durable_frame_bound(&self) -> bool {
         self.durable_frame_bound
     }
-
     /// Return whether reopening reproduced the exact repaired ledger.
     pub(crate) const fn reopened_exact(&self) -> bool {
         self.reopened_exact
     }
 }
-
 fn record_matches_recovery_candidate(
     record: &LifecycleLedgerRecordV1,
     candidate: &CandidateAdmission,
@@ -3575,7 +3391,5 @@ fn record_matches_recovery_candidate(
             .is_some_and(|payload| payload.same_admission_material(candidate.payload))
         && record.replay_authority == candidate.replay_authority
 }
-
 include!("v2_lifecycle_ledger_store.rs");
-
 include!("v2_lifecycle_ledger_tests.rs");

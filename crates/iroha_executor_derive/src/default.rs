@@ -1,29 +1,22 @@
+use crate::emitter_ext::EmitterExt;
 use darling::{FromDeriveInput, FromMeta, ast::NestedMeta};
 use manyhow::{Emitter, ToTokensError, emit};
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote};
 use syn::{Ident, parse_quote};
-
-use crate::emitter_ext::EmitterExt;
-
 type ExecutorData = darling::ast::Data<darling::util::Ignored, syn::Field>;
-
 #[derive(Debug)]
 struct DarlingErrorWrapper(darling::Error);
-
 impl ToTokensError for DarlingErrorWrapper {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
         self.0.clone().write_errors().to_tokens(tokens);
     }
 }
-
 fn darling_result<T>(result: darling::Result<T>) -> manyhow::Result<T, DarlingErrorWrapper> {
     result.map_err(DarlingErrorWrapper)
 }
-
 #[derive(Debug)]
 struct Custom(Vec<Ident>);
-
 impl FromMeta for Custom {
     fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
         let mut res = Vec::new();
@@ -40,7 +33,6 @@ impl FromMeta for Custom {
         Ok(Self(res))
     }
 }
-
 #[derive(FromDeriveInput, Debug)]
 #[darling(supports(struct_named), attributes(visit, entrypoints))]
 struct ExecutorDeriveInput {
@@ -48,7 +40,6 @@ struct ExecutorDeriveInput {
     data: ExecutorData,
     custom: Option<Custom>,
 }
-
 pub fn impl_derive_entrypoints(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream2 {
     let Some(input) = emitter.handle(darling_result(ExecutorDeriveInput::from_derive_input(
         input,
@@ -62,9 +53,7 @@ pub fn impl_derive_entrypoints(emitter: &mut Emitter, input: &syn::DeriveInput) 
         ..
     } = &input;
     check_required_fields(data, emitter);
-
     let custom_idents = custom_field_idents(data);
-
     let mut entrypoint_fns: Vec<syn::ItemFn> = vec![
         parse_quote! {
             #[::iroha_executor::entrypoint]
@@ -114,12 +103,10 @@ pub fn impl_derive_entrypoints(emitter: &mut Emitter, input: &syn::DeriveInput) 
                 .any(|fn_name| fn_name == &entrypoint.sig.ident)
         });
     }
-
     quote! {
         #(#entrypoint_fns)*
     }
 }
-
 #[allow(clippy::too_many_lines)]
 pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream2 {
     let Some(input) = emitter.handle(darling_result(ExecutorDeriveInput::from_derive_input(
@@ -229,7 +216,6 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         sig
     })
     .collect();
-
     for custom_fn_name in custom.as_ref().map_or(&[][..], |custom| &custom.0) {
         let found = default_visit_sigs
             .iter()
@@ -244,7 +230,6 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
             return quote!();
         }
     }
-
     let visit_items = default_visit_sigs
         .iter()
         .map(|visit_sig| {
@@ -274,14 +259,12 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
             }
         })
         .collect::<Vec<_>>();
-
     quote! {
         impl ::iroha_executor::prelude::Visit for #ident {
             #(#visit_items)*
         }
     }
 }
-
 pub fn impl_derive_execute(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream2 {
     let Some(input) = emitter.handle(darling_result(ExecutorDeriveInput::from_derive_input(
         input,
@@ -295,26 +278,21 @@ pub fn impl_derive_execute(emitter: &mut Emitter, input: &syn::DeriveInput) -> T
             fn host(&self) -> &::iroha_executor::smart_contract::Iroha {
                 &self.host
             }
-
             fn context(&self) -> &::iroha_executor::prelude::Context {
                 &self.context
             }
-
             fn context_mut(&mut self) -> &mut ::iroha_executor::prelude::Context {
                 &mut self.context
             }
-
             fn verdict(&self) -> &::iroha_executor::prelude::Result {
                 &self.verdict
             }
-
             fn deny(&mut self, reason: ::iroha_executor::prelude::ValidationFail) {
                 self.verdict = Err(reason);
             }
         }
     }
 }
-
 fn check_required_fields(ast: &ExecutorData, emitter: &mut Emitter) {
     let required_fields: syn::FieldsNamed = parse_quote!({
         host: ::iroha_executor::prelude::Iroha,
@@ -344,7 +322,6 @@ fn check_required_fields(ast: &ExecutorData, emitter: &mut Emitter) {
         }
     });
 }
-
 /// Check that the required fields of an `Executor` are of the correct types. As
 /// the types can be completely or partially unqualified, we need to go through the type path segments to
 /// determine equivalence. We can't account for any aliases though
@@ -366,7 +343,6 @@ fn check_type_equivalence(full_ty: &syn::Type, given_ty: &syn::Type) -> bool {
         _ => false,
     }
 }
-
 /// Processes an `Executor` by draining it of default fields and returning the idents of the
 /// custom fields and the corresponding function arguments for use in the constructor
 fn custom_field_idents(ast: &ExecutorData) -> Vec<&Ident> {
@@ -396,14 +372,11 @@ fn custom_field_idents(ast: &ExecutorData) -> Vec<&Ident> {
         })
         .collect::<Vec<_>>()
 }
-
 #[cfg(test)]
 mod tests {
-    use manyhow::Emitter;
-
     use super::*;
     use crate::emitter_ext::EmitterExt;
-
+    use manyhow::Emitter;
     #[test]
     fn darling_result_integrates_with_emitter() {
         let mut emitter = Emitter::new();
@@ -412,7 +385,6 @@ mod tests {
         assert!(result.is_none());
         assert!(!emitter.finish_token_stream().is_empty());
     }
-
     #[test]
     fn derive_visit_routes_reputation_source_query_through_default_reexport() {
         let input: syn::DeriveInput = syn::parse_quote! {
@@ -426,7 +398,6 @@ mod tests {
         let generated = impl_derive_visit(&mut emitter, &input);
         assert!(emitter.finish_token_stream().is_empty());
         let rendered = generated.to_string().split_whitespace().collect::<String>();
-
         assert!(
             rendered.contains(
                 "::iroha_executor::default::visit_find_sorafs_reputation_journal_event_by_source_id"

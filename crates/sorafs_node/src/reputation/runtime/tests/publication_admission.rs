@@ -1,7 +1,5 @@
 //! External qualification and committed-visibility tests for reputation publication.
-
 use super::*;
-
 #[test]
 fn publication_construction_rejects_signer_handle_substitution() {
     let projector_root = TempDir::new().expect("projector root");
@@ -42,7 +40,6 @@ fn publication_construction_rejects_signer_handle_substitution() {
         Err(ReputationRuntimeError::RuntimeBindingMismatch)
     ));
 }
-
 #[test]
 fn governance_dag_qualification_binds_peer_identity_and_ed25519_key() {
     let first_key = SigningKey::from_bytes(&[0xB1; 32])
@@ -53,7 +50,6 @@ fn governance_dag_qualification_binds_peer_identity_and_ed25519_key() {
         .to_bytes();
     let expected =
         reputation_governance_dag_policy_digest_v1(b"peer-a", first_key).expect("policy digest");
-
     assert_eq!(
         expected,
         reputation_governance_dag_policy_digest_v1(b"peer-a", first_key)
@@ -78,7 +74,6 @@ fn governance_dag_qualification_binds_peer_identity_and_ed25519_key() {
         Err(ReputationRuntimeError::InvalidRuntimePolicy)
     ));
 }
-
 #[test]
 fn publication_construction_rejects_same_key_different_peer_qualification() {
     let projector_root = TempDir::new().expect("projector root");
@@ -119,7 +114,6 @@ fn publication_construction_rejects_same_key_different_peer_qualification() {
             qualification: substituted_peer_qualification,
         }),
     );
-
     assert!(matches!(
         result,
         Err(ReputationRuntimeError::RuntimeBindingMismatch)
@@ -132,7 +126,6 @@ fn publication_construction_rejects_same_key_different_peer_qualification() {
         "peer substitution must fail before publication state opens"
     );
 }
-
 #[test]
 fn governance_readback_is_discarded_when_provider_qualification_drifts() {
     let projector_root = TempDir::new().expect("projector root");
@@ -175,7 +168,6 @@ fn governance_readback_is_discarded_when_provider_qualification_drifts() {
         }),
     )
     .expect("open reconciler");
-
     assert!(matches!(
         reconciler.reconcile_governance_publication(&request),
         Err(ReputationRuntimeError::RuntimeBindingChanged)
@@ -188,7 +180,6 @@ fn governance_readback_is_discarded_when_provider_qualification_drifts() {
         "a receipt returned during qualification drift must not become durable"
     );
 }
-
 #[test]
 fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict() {
     let projector_root = TempDir::new().expect("projector root");
@@ -213,7 +204,6 @@ fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict()
             policy.digest().expect("publication policy digest")
         )
     );
-
     let signed = signed_snapshot(&trust, [0xE1; 16], None, FINALIZED_AT_MS / 1_000);
     signed
         .verify(&trust, FINALIZED_AT_MS / 1_000)
@@ -233,7 +223,6 @@ fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict()
             .is_none(),
         "threshold signing alone must not enter the committed projection"
     );
-
     let digest = signed_result_digest(&signed).expect("signed result digest");
     let (acknowledgement, governance_readback) = governance_readback(
         &policy,
@@ -265,7 +254,6 @@ fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict()
             .is_none(),
         "DAG readback must remain hidden until projector acknowledgement"
     );
-
     reconciler
         .complete_publication(acknowledgement)
         .expect("commit authoritative projection");
@@ -288,7 +276,6 @@ fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict()
         signed
     );
     assert_eq!(committed.events[0].snapshot_id, signed.snapshot.snapshot_id);
-
     reconciler
         .complete_publication(acknowledgement)
         .expect("exact completion replay");
@@ -300,7 +287,6 @@ fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict()
         "an exact replay must not duplicate committed history"
     );
     drop(reconciler);
-
     let restored = open_publication_reconciler(
         publication_root.path(),
         Arc::clone(&projector),
@@ -314,7 +300,6 @@ fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict()
         committed
     );
     drop(restored);
-
     fs::write(
         publication_root
             .path()

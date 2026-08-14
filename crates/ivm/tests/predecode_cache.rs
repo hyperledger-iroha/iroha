@@ -1,5 +1,4 @@
 use ivm::{ProgramMetadata, encoding, ivm_cache};
-
 fn simple_prog(nops: usize) -> Vec<u8> {
     let meta = ProgramMetadata::default().encode();
     let mut bytes = meta;
@@ -11,14 +10,11 @@ fn simple_prog(nops: usize) -> Vec<u8> {
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 #[test]
 fn global_cache_hits_increase_on_repeat() {
     let prog = simple_prog(64);
     let parsed = ivm::ProgramMetadata::parse(&prog).unwrap();
-
     let meta = parsed.metadata;
-
     let off = parsed.code_offset;
     let code = &prog[off..];
     // Reset global counters by reading before

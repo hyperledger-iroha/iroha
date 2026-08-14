@@ -1,10 +1,7 @@
 //! Deterministic tests for u32-delta on combo NCB shapes.
-
 use norito::columnar::*;
-
 type StrRow<'a> = (u64, &'a str, u32, bool);
 type BytesRow<'a> = (u64, &'a [u8], u32, bool);
-
 fn pad_to(buf: &mut Vec<u8>, align: usize) {
     let mis = buf.len() & (align - 1);
     if mis != 0 {
@@ -12,11 +9,9 @@ fn pad_to(buf: &mut Vec<u8>, align: usize) {
         buf.extend(std::iter::repeat_n(0u8, pad));
     }
 }
-
 fn zigzag_encode(value: i64) -> u64 {
     ((value << 1) ^ (value >> 63)) as u64
 }
-
 fn write_var_u64(buf: &mut Vec<u8>, mut value: u64) {
     while value >= 0x80 {
         buf.push((value as u8) | 0x80);
@@ -24,7 +19,6 @@ fn write_var_u64(buf: &mut Vec<u8>, mut value: u64) {
     }
     buf.push(value as u8);
 }
-
 fn encode_str_u32_delta(rows: &[StrRow<'_>]) -> Vec<u8> {
     const DESC: u8 = 0x37;
     let n = rows.len();
@@ -70,7 +64,6 @@ fn encode_str_u32_delta(rows: &[StrRow<'_>]) -> Vec<u8> {
     }
     buf
 }
-
 fn encode_bytes_u32_delta(rows: &[BytesRow<'_>]) -> Vec<u8> {
     const DESC: u8 = 0x38;
     let n = rows.len();
@@ -116,7 +109,6 @@ fn encode_bytes_u32_delta(rows: &[BytesRow<'_>]) -> Vec<u8> {
     }
     buf
 }
-
 #[test]
 fn str_u32_delta_roundtrip() {
     let cases: Vec<Vec<StrRow<'_>>> = vec![
@@ -128,7 +120,6 @@ fn str_u32_delta_roundtrip() {
             (13, "cc", u32::MAX, true),
         ],
     ];
-
     for rows in cases {
         let ncb = encode_str_u32_delta(&rows);
         let mut prefixed = vec![0xCC, 0xDD];
@@ -143,7 +134,6 @@ fn str_u32_delta_roundtrip() {
         }
     }
 }
-
 #[test]
 fn bytes_u32_delta_roundtrip() {
     let empty: &[u8] = &[];
@@ -158,7 +148,6 @@ fn bytes_u32_delta_roundtrip() {
             (23, maxish, u32::MAX, true),
         ],
     ];
-
     for rows in cases {
         let ncb = encode_bytes_u32_delta(&rows);
         let mut prefixed = vec![0xAB];

@@ -21,7 +21,6 @@ fn collect_config_paths(root: &Path, output: &mut Vec<PathBuf>) {
         }
     }
 }
-
 fn config_fingerprint(root: &Path) -> Result<Option<String>> {
     if !root.exists() {
         return Ok(None);

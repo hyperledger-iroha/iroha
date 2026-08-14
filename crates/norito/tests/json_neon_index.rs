@@ -1,8 +1,6 @@
 //! Validate NEON structural index parity with scalar path.
 #![cfg(all(feature = "json", feature = "simd-accel", target_arch = "aarch64"))]
-
 use norito::json::build_struct_index;
-
 #[test]
 fn neon_struct_index_matches_scalar_for_basic_inputs() {
     // Inputs without ambiguous trailing backslashes in 16-byte blocks

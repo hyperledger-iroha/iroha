@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Miscellaneous integration coverage for status endpoints and helpers.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
@@ -8,7 +7,6 @@ use iroha_telemetry::metrics::Status;
 use iroha_test_network::*;
 use sandbox::start_network_async_or_skip;
 use tokio::task::spawn_blocking;
-
 fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
     lhs.peers == rhs.peers
         && lhs.blocks == rhs.blocks
@@ -17,7 +15,6 @@ fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
         && lhs.txs_rejected == rhs.txs_rejected
         && lhs.view_changes == rhs.view_changes
 }
-
 async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()> {
     let http = integration_tests::http::client();
     let body = http
@@ -29,12 +26,10 @@ async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()>
         .await?;
     let status_json: Status = norito::json::from_str(&body)
         .map_err(|err| eyre::Report::msg(format!("decode status JSON: {err}")))?;
-
     let status_norito = {
         let client = client.clone();
         spawn_blocking(move || client.get_status()).await??
     };
-
     assert!(status_eq_excluding_uptime_and_queue(
         &status_json,
         &status_norito
@@ -44,10 +39,8 @@ async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()>
         "expected blocks_non_empty >= {min_blocks_non_empty}, got {}",
         status_json.blocks_non_empty
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn misc_status_endpoints_smoke() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -59,10 +52,8 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // ensure_blocks_observes_genesis_progress
     network.ensure_blocks(1).await?;
-
     // json_and_norito_statuses_equality
     check(&client, 1).await?;
     {
@@ -85,7 +76,6 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         return Ok(());
     }
     check(&client, 2).await?;
-
     // get_server_version
     let response =
         tokio::task::spawn_blocking(move || client.get_server_version().unwrap()).await?;
@@ -93,7 +83,6 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         .parse()
         .expect("server API version should be a positive integer");
     assert!(version >= 1);
-
     // status_with_norito_accept_header
     let http = integration_tests::http::client();
     let url = network.client().torii_url.join("/status").unwrap();
@@ -105,6 +94,5 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
     assert!(resp.status().is_success());
     let bytes = resp.bytes().await?;
     let _: Status = norito::decode_from_bytes(&bytes)?;
-
     Ok(())
 }

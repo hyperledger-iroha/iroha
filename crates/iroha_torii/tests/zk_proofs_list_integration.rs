@@ -2,9 +2,6 @@
 //! Integration tests for /v1/zk/proofs and /v1/zk/proofs/count.
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
-
-use std::{sync::Arc, time::Duration};
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::defaults;
@@ -14,15 +11,14 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
+use std::{sync::Arc, time::Duration};
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn proofs_list_and_count_with_filters() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
-
     // Seed proofs through the helper so derived indexes such as proofs_by_status stay consistent.
     let backend = "halo2/ipa";
     let id1 = ProofId {
@@ -38,7 +34,6 @@ async fn proofs_list_and_count_with_filters() {
         bridge: None,
     };
     iroha_core::query::insert_proof_record_for_test(&mut state, id1.clone(), rec1);
-
     let id2 = ProofId {
         backend: backend.into(),
         proof_hash: [0x02; 32],
@@ -52,7 +47,6 @@ async fn proofs_list_and_count_with_filters() {
         bridge: None,
     };
     iroha_core::query::insert_proof_record_for_test(&mut state, id2, rec2);
-
     let id3 = ProofId {
         backend: backend.into(),
         proof_hash: [0x03; 32],
@@ -66,9 +60,7 @@ async fn proofs_list_and_count_with_filters() {
         bridge: None,
     };
     iroha_core::query::insert_proof_record_for_test(&mut state, id3, rec3);
-
     insert_proof_tags_for_test(&mut state, id1.clone(), vec![*b"PROF", *b"I10P"]);
-
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::default();
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
@@ -93,7 +85,6 @@ async fn proofs_list_and_count_with_filters() {
                 }
             }),
         );
-
     // List all
     let resp_all = app
         .clone()
@@ -111,7 +102,6 @@ async fn proofs_list_and_count_with_filters() {
         norito::json::from_slice(&resp_all.into_body().collect().await.unwrap().to_bytes())
             .unwrap();
     assert_eq!(arr_all.len(), 3);
-
     // Count with status filter
     let resp_cnt = app
         .clone()
@@ -132,7 +122,6 @@ async fn proofs_list_and_count_with_filters() {
         vcnt.get("count").and_then(norito::json::Value::as_u64),
         Some(1)
     );
-
     // List with has_tag=PROF should return only id1
     let resp_tag = app
         .clone()
@@ -160,7 +149,6 @@ async fn proofs_list_and_count_with_filters() {
         .unwrap();
     assert_eq!(backend_s, backend);
     assert_eq!(hash_s, hex::encode([0x01u8; 32]));
-
     // Height lower-bound filter should return only proofs verified at or above height 2
     let resp_min = app
         .clone()
@@ -185,7 +173,6 @@ async fn proofs_list_and_count_with_filters() {
             .unwrap(),
         hex::encode([0x02u8; 32])
     );
-
     // Upper-bound filter should limit results to the earliest verified proof
     let resp_max = app
         .clone()
@@ -210,7 +197,6 @@ async fn proofs_list_and_count_with_filters() {
             .unwrap(),
         hex::encode([0x01u8; 32])
     );
-
     // Invalid range should yield a bad request.
     let resp_err = app
         .clone()
@@ -229,13 +215,11 @@ async fn proofs_list_and_count_with_filters() {
     assert!(err_json.is_empty());
     assert_eq!(status_err, http::StatusCode::OK);
 }
-
 #[tokio::test]
 async fn proofs_list_rejects_over_limit() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::new(
         5,

@@ -1,12 +1,10 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ed25519_dalek::{Signer, SigningKey};
 use ivm::halo2::Ed25519VerifyCircuit;
-
 const NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY: [u8; 32] = [
     0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
-
 #[test]
 fn test_ed25519_circuit_ok() {
     let keypair = SigningKey::from_bytes(&[0x31; 32]);
@@ -20,7 +18,6 @@ fn test_ed25519_circuit_ok() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ed25519_circuit_bad_sig() {
     let keypair = SigningKey::from_bytes(&[0x32; 32]);
@@ -35,7 +32,6 @@ fn test_ed25519_circuit_bad_sig() {
     };
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_ed25519_circuit_all_zero_signature_is_false() {
     let keypair = SigningKey::from_bytes(&[0x33; 32]);
@@ -45,10 +41,8 @@ fn test_ed25519_circuit_all_zero_signature_is_false() {
         message: b"ed25519 zero signature",
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ed25519_circuit_weak_public_key_is_false() {
     let keypair = SigningKey::from_bytes(&[0x34; 32]);
@@ -60,10 +54,8 @@ fn test_ed25519_circuit_weak_public_key_is_false() {
         message: msg,
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ed25519_circuit_noncanonical_public_key_is_false() {
     let keypair = SigningKey::from_bytes(&[0x35; 32]);
@@ -75,6 +67,5 @@ fn test_ed25519_circuit_noncanonical_public_key_is_false() {
         message: msg,
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }

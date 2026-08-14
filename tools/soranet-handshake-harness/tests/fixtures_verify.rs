@@ -1,7 +1,5 @@
-use std::path::PathBuf;
-
 use soranet_handshake_harness::verify_fixtures;
-
+use std::path::PathBuf;
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir
@@ -11,7 +9,6 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root should exist")
         .to_path_buf()
 }
-
 #[test]
 fn canonical_fixtures_match_generator_output() {
     let root = workspace_root();
@@ -19,7 +16,6 @@ fn canonical_fixtures_match_generator_output() {
         root.join("tests/interop/soranet/capabilities"),
         root.join("fixtures/soranet_handshake/capabilities"),
     ];
-
     for bundle in bundles {
         assert!(
             bundle.exists(),

@@ -1,13 +1,6 @@
 //! Router-level coverage for the authoritative Sumeragi v2 status endpoint.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "telemetry")]
-
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex, MutexGuard},
-};
-
 use axum::{body::Body, http::Request};
 use http::{StatusCode, header};
 use http_body_util::BodyExt as _;
@@ -25,16 +18,16 @@ use iroha_data_model::block::consensus_v2::{
     SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex, MutexGuard},
+};
 use tower::ServiceExt as _;
-
 const NORITO_MIME_TYPE: &str = "application/x-norito";
-
 static STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 struct PublishedStatus {
     _guard: MutexGuard<'static, ()>,
 }
-
 impl PublishedStatus {
     fn install(value: SumeragiV2Status) -> Self {
         let guard = STATUS_TEST_LOCK
@@ -44,13 +37,11 @@ impl PublishedStatus {
         Self { _guard: guard }
     }
 }
-
 impl Drop for PublishedStatus {
     fn drop(&mut self) {
         status::clear_v2_status();
     }
 }
-
 fn status_fixture() -> SumeragiV2Status {
     SumeragiV2Status {
         protocol_version: PROTOCOL_VERSION,
@@ -87,7 +78,6 @@ fn status_fixture() -> SumeragiV2Status {
         liveness: Default::default(),
     }
 }
-
 fn build_status_router() -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -121,7 +111,6 @@ fn build_status_router() -> axum::Router {
     );
     torii.api_router_for_tests()
 }
-
 async fn status_response(accept: &str) -> axum::response::Response {
     build_status_router()
         .oneshot(
@@ -138,13 +127,11 @@ async fn status_response(accept: &str) -> axum::response::Response {
         .await
         .expect("status response")
 }
-
 #[tokio::test]
 async fn json_status_is_exact_authoritative_v2_schema() {
     let expected = status_fixture();
     let _published = PublishedStatus::install(expected.clone());
     let response = status_response("application/json").await;
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = response
         .into_body()
@@ -155,7 +142,6 @@ async fn json_status_is_exact_authoritative_v2_schema() {
     let decoded: SumeragiV2Status =
         norito::json::from_slice(&body).expect("decode authoritative v2 JSON");
     assert_eq!(decoded, expected);
-
     let value: norito::json::Value =
         norito::json::from_slice(&body).expect("decode status JSON object");
     assert!(
@@ -176,13 +162,11 @@ async fn json_status_is_exact_authoritative_v2_schema() {
         );
     }
 }
-
 #[tokio::test]
 async fn norito_status_decodes_as_exact_authoritative_v2_type() {
     let expected = status_fixture();
     let _published = PublishedStatus::install(expected.clone());
     let response = status_response(NORITO_MIME_TYPE).await;
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get(header::CONTENT_TYPE),

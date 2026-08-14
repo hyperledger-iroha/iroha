@@ -3,10 +3,8 @@
 //! While you can implement [`crate::FfiType`] on your `Rust` type directly, it is encouraged
 //! that you map your type into IR by providing the implementation of [`Ir`] and benefit
 //! from automatic, correct and performant conversions from IR to C type equivalent.
-use std::{boxed::Box, vec::Vec};
-
 use crate::{Extern, LocalRef, LocalSlice, repr_c::Cloned};
-
+use std::{boxed::Box, vec::Vec};
 /// Type which is replaced by an opaque pointer on FFI import
 ///
 /// # Safety
@@ -19,7 +17,6 @@ pub unsafe trait External {
     type RefType<'itm>;
     /// Type which replaces `&mut T` on FFI import
     type RefMutType<'itm>;
-
     /// Return shared opaque pointer
     fn as_extern_ptr(&self) -> *const Extern;
     /// Return mutable opaque pointer
@@ -31,7 +28,6 @@ pub unsafe trait External {
     /// The given opaque pointer must be non-null and valid
     unsafe fn from_extern_ptr(source: *mut Extern) -> Self;
 }
-
 /// Marker trait for a type that can be transmuted into some C Type
 ///
 /// # Safety
@@ -41,7 +37,6 @@ pub unsafe trait External {
 pub unsafe trait Transmute {
     /// Type that [`Self`] can be transmuted into
     type Target;
-
     /// Function that is called when transmuting types to check for trap representations. This function
     /// will never return false positives, i.e. return `true` for a trap representations.
     ///
@@ -50,7 +45,6 @@ pub unsafe trait Transmute {
     /// Any raw pointer in [`Self::Target`] that will be dereferenced must be valid.
     unsafe fn is_valid(target: &Self::Target) -> bool;
 }
-
 /// Marker trait for a type whose [`Transmute::is_valid`] always returns true.
 ///
 /// Main use of this trait is to guard against the use of `&mut T` in FFI where
@@ -60,7 +54,6 @@ pub unsafe trait Transmute {
 ///
 /// Implementation of [`Transmute::is_valid`] must always return true for this type
 pub unsafe trait InfallibleTransmute {}
-
 /// Designates a type that can be converted to/from internal representation. Predefined IR
 /// types are given automatic implementation of [`crate::FfiType`] and other conversion traits.
 pub trait Ir {
@@ -82,19 +75,15 @@ pub trait Ir {
     /// that in this case [`crate::FfiType`] implementation will clone the given type.
     type Type;
 }
-
 /// Marker for a type that is transferred as an opaque pointer over FFI
 #[derive(Debug, Clone, Copy)]
 pub enum Opaque {}
-
 /// Marker for a type that is transparent with respect to the wrapped type
 #[derive(Debug, Clone, Copy)]
 pub enum Transparent {}
-
 /// Marker for a type that is a robust [`crate::ReprC`] type and doesn't require conversion
 #[derive(Debug, Clone, Copy)]
 pub enum Robust {}
-
 /// When implemented for a type, defines how dependent types are mapped into [`Ir`]
 pub trait IrTypeFamily {
     /// [`Ir`] type that `&T` is mapped into
@@ -122,7 +111,6 @@ pub trait IrTypeFamily {
     /// [`Ir`] type that `[T; N]` is mapped into
     type Arr<const N: usize>;
 }
-
 impl<R: Cloned> IrTypeFamily for R {
     type Ref<'itm>
         = &'itm Self
@@ -221,14 +209,12 @@ impl IrTypeFamily for &mut Extern {
     type Vec = Vec<Self>;
     type Arr<const N: usize> = [Self; N];
 }
-
 impl<R> Ir for *const R {
     type Type = Robust;
 }
 impl<R> Ir for *mut R {
     type Type = Robust;
 }
-
 impl<'itm, R: Ir> Ir for &'itm R
 where
     R::Type: IrTypeFamily,
@@ -293,7 +279,6 @@ where
 {
     type Type = <R::Type as IrTypeFamily>::Arr<N>;
 }
-
 impl<'itm, R: 'itm> Ir for LocalRef<'itm, R>
 where
     &'itm R: Ir,
@@ -306,31 +291,25 @@ where
 {
     type Type = <&'itm [R] as Ir>::Type;
 }
-
 /// Specialized transmutation helpers re-exported for crates that need to hook
 /// into the FFI conversion pipeline.
 pub mod transmute {
     use super::*;
     use crate::ReprC;
-
     /// The same as [`Ir`] but used to implement specialized impls of [`Transmute`]
     pub trait TransmuteIr {
         /// Internal representation used when deriving [`Transmute`].
         type Type;
     }
-
     impl<R: Ir> TransmuteIr for &R {
         type Type = R::Type;
     }
-
     impl<R: Ir> TransmuteIr for &mut R {
         type Type = R::Type;
     }
-
     impl<R: Ir, const N: usize> TransmuteIr for [R; N] {
         type Type = R::Type;
     }
-
     /// If a type also implements [`TransmuteIr`], i.e. has a defined internal representation,
     /// a blanket implementation of [`Transmute`] will be provided.
     ///
@@ -341,7 +320,6 @@ pub mod transmute {
     pub unsafe trait SpecializedTransmute<S> {
         /// Type that [`Self`] can be transmuted into
         type Target;
-
         /// Function that is called when transmuting types to check for trap representations. This
         /// function will never return false positives, i.e. return `true` for a trap representations.
         ///
@@ -350,86 +328,67 @@ pub mod transmute {
         /// Any raw pointer in [`Self::Target`] that will be dereferenced must be valid.
         unsafe fn is_valid(target: &Self::Target) -> bool;
     }
-
     // SAFETY: Transmuting a reference to a pointer of the same type
     unsafe impl<R> SpecializedTransmute<Opaque> for &R {
         type Target = *const R;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             !target.is_null()
         }
     }
-
     // SAFETY: Transmuting a reference to a pointer of the same type
     unsafe impl<R> SpecializedTransmute<Opaque> for &mut R {
         type Target = *mut R;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             !target.is_null()
         }
     }
-
     // SAFETY: Transmuting a reference to a pointer of the same type
     unsafe impl<R: ReprC> SpecializedTransmute<Robust> for &R {
         type Target = *const R;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             !target.is_null()
         }
     }
-
     // SAFETY: Transmuting a reference to a pointer of the same type
     unsafe impl<R: ReprC> SpecializedTransmute<Robust> for &mut R {
         type Target = *mut R;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             !target.is_null()
         }
     }
-
     // SAFETY: Robust arrays have a defined representation
     unsafe impl<R: ReprC, const N: usize> SpecializedTransmute<Robust> for [R; N] {
         type Target = [R; N];
-
         unsafe fn is_valid(_: &Self::Target) -> bool {
             true
         }
     }
-
     // SAFETY: Arrays have a defined representation
     unsafe impl<R: InfallibleTransmute, const N: usize> InfallibleTransmute for [R; N] {}
-
     // SAFETY: Transmute relation is transitive
     unsafe impl<'itm, R: Transmute> SpecializedTransmute<Transparent> for &'itm R {
         type Target = &'itm R::Target;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             unsafe { R::is_valid(target) }
         }
     }
-
     // SAFETY: Transmute relation is transitive
     unsafe impl<'itm, R: Transmute> SpecializedTransmute<Transparent> for &'itm mut R {
         type Target = &'itm mut R::Target;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             unsafe { R::is_valid(target) }
         }
     }
-
     // SAFETY: Transmute relation is transitive
     unsafe impl<R: Transmute, const N: usize> SpecializedTransmute<Transparent> for [R; N] {
         type Target = [R::Target; N];
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             target.iter().all(|elem| unsafe { R::is_valid(elem) })
         }
     }
-
     // SAFETY: Safe if `SpecializedTransmute` implementation is safe
     unsafe impl<R: TransmuteIr + SpecializedTransmute<R::Type>> Transmute for R {
         type Target = <R as SpecializedTransmute<R::Type>>::Target;
-
         unsafe fn is_valid(target: &Self::Target) -> bool {
             unsafe { <R as SpecializedTransmute<R::Type>>::is_valid(target) }
         }

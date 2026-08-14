@@ -38,6 +38,7 @@
   },
   "congestion": {
     "max_circuits_per_client": 12,
+    "max_active_circuits": 4096,
     "handshake_cooldown_millis": 250
   },
   "privacy": {

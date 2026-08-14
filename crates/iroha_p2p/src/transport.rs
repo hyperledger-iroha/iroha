@@ -3,21 +3,18 @@
 //! This module provides thin abstractions intended to support optional
 //! transports (e.g., QUIC) and handshakes (e.g., Noise/TLS) behind
 //! feature flags without affecting the default TCP path.
-
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 use rustls::{
     DigitallySignedStruct, Error as RustlsError, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
-
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 static SELF_SIGNED_SIGNATURE_ALGORITHMS: std::sync::LazyLock<
     rustls::crypto::WebPkiSupportedAlgorithms,
 > = std::sync::LazyLock::new(|| {
     rustls::crypto::ring::default_provider().signature_verification_algorithms
 });
-
 /// Certificate verifier for self-signed transport certificates.
 ///
 /// An unpinned verifier deliberately leaves naming and trust-root validation to the
@@ -31,7 +28,6 @@ static SELF_SIGNED_SIGNATURE_ALGORITHMS: std::sync::LazyLock<
 pub(crate) struct CertificateKeyProofVerifier {
     expected_fingerprint: Option<[u8; iroha_crypto::Hash::LENGTH]>,
 }
-
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 impl CertificateKeyProofVerifier {
     /// Verify certificate-key possession while deferring identity to the signed P2P handshake.
@@ -40,7 +36,6 @@ impl CertificateKeyProofVerifier {
             expected_fingerprint: None,
         }
     }
-
     /// Verify certificate-key possession and require one exact certificate fingerprint.
     pub(crate) const fn pinned(expected_fingerprint: [u8; iroha_crypto::Hash::LENGTH]) -> Self {
         Self {
@@ -48,7 +43,6 @@ impl CertificateKeyProofVerifier {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 impl ServerCertVerifier for CertificateKeyProofVerifier {
     fn verify_server_cert(
@@ -69,7 +63,6 @@ impl ServerCertVerifier for CertificateKeyProofVerifier {
         }
         Ok(ServerCertVerified::assertion())
     }
-
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -83,7 +76,6 @@ impl ServerCertVerifier for CertificateKeyProofVerifier {
             &SELF_SIGNED_SIGNATURE_ALGORITHMS,
         )
     }
-
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -97,12 +89,10 @@ impl ServerCertVerifier for CertificateKeyProofVerifier {
             &SELF_SIGNED_SIGNATURE_ALGORITHMS,
         )
     }
-
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         SELF_SIGNED_SIGNATURE_ALGORITHMS.supported_schemes()
     }
 }
-
 #[cfg(feature = "quic")]
 pub mod quic {
     #![allow(clippy::missing_errors_doc)]
@@ -114,18 +104,14 @@ pub mod quic {
     //! verifies that the server owns the certificate key. The signed handshake
     //! binds the presented certificate fingerprint to the active session. ALPN
     //! is fixed.
-
-    use std::{io, sync::Arc, time::Duration};
-
     use quinn::{
         ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
         VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
     use rustls::client::danger::ServerCertVerifier;
-
+    use std::{io, sync::Arc, time::Duration};
     /// ALPN negotiated for Iroha P2P QUIC connections.
     pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
-
     /// Number of bidirectional streams used by one Iroha P2P QUIC session.
     pub const P2P_BIDI_STREAMS_PER_CONNECTION: u32 = 2;
     /// Smallest per-direction flow-control allocation used by the budget split.
@@ -136,7 +122,6 @@ pub mod quic {
     // The first datagram retained by `Incoming` is explicitly excluded from
     // both configured incoming-buffer limits, so reserve a whole granule for it.
     const INCOMING_FIRST_PACKET_RESERVE_BYTES: usize = FLOW_CONTROL_GRANULE_BYTES;
-
     /// Inputs used to derive bounded QUIC flow-control credit.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct FlowControlConfig {
@@ -147,7 +132,6 @@ pub mod quic {
         /// Process-wide byte budget shared by QUIC send and receive flow control.
         pub process_budget_bytes: usize,
     }
-
     impl Default for FlowControlConfig {
         fn default() -> Self {
             Self {
@@ -158,7 +142,6 @@ pub mod quic {
             }
         }
     }
-
     /// Checked QUIC flow-control limits shared by client and server endpoints.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct FlowControlGeometry {
@@ -169,7 +152,6 @@ pub mod quic {
         /// Aggregate send credit retained for one connection.
         pub connection_send_window_bytes: u64,
     }
-
     /// Checked endpoint-side admission and datagram buffer geometry.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct EndpointBufferGeometry {
@@ -192,7 +174,6 @@ pub mod quic {
         /// Combined flow-control, pending-Incoming payload, and datagram buffer bound.
         pub endpoint_buffer_bytes_total: usize,
     }
-
     /// Derive bounded Quinn endpoint admission and datagram buffer limits.
     ///
     /// Pending handshakes get one flow-control granule after their first packet,
@@ -295,7 +276,6 @@ pub mod quic {
                     "QUIC combined endpoint buffer geometry overflows usize",
                 )
             })?;
-
         Ok(EndpointBufferGeometry {
             max_incoming,
             incoming_buffer_size_bytes,
@@ -308,7 +288,6 @@ pub mod quic {
             endpoint_buffer_bytes_total,
         })
     }
-
     /// Derive the per-connection QUIC flow-control geometry from a process budget.
     ///
     /// A connection has two receive streams and may retain the same aggregate
@@ -329,7 +308,6 @@ pub mod quic {
                 "QUIC max total connections must be non-zero",
             ));
         }
-
         let minimum_budget = cfg
             .max_total_connections
             .checked_mul(FLOW_CONTROL_DIRECTIONS_PER_CONNECTION)
@@ -349,7 +327,6 @@ pub mod quic {
                 ),
             ));
         }
-
         let complete_frame_bytes = cfg
             .max_encrypted_frame_bytes
             .checked_add(crate::P2P_FRAME_LENGTH_PREFIX_BYTES)
@@ -373,7 +350,6 @@ pub mod quic {
                 "QUIC per-connection flow-control window overflows usize",
             )
         })?;
-
         let stream_receive_window_bytes = u64::try_from(stream_window).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -390,14 +366,12 @@ pub mod quic {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
         VarInt::from_u64(connection_window_bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-
         Ok(FlowControlGeometry {
             stream_receive_window_bytes,
             connection_receive_window_bytes: connection_window_bytes,
             connection_send_window_bytes: connection_window_bytes,
         })
     }
-
     /// Apply the protocol stream count and checked flow-control geometry.
     pub fn configure_flow_control(
         transport: &mut TransportConfig,
@@ -416,7 +390,6 @@ pub mod quic {
             .send_window(geometry.connection_send_window_bytes);
         Ok(geometry)
     }
-
     /// QUIC transport tuning for outbound dials.
     #[derive(Clone, Copy, Debug)]
     pub struct DialerConfig {
@@ -432,7 +405,6 @@ pub mod quic {
         /// Checked process-wide flow-control geometry inputs.
         pub flow_control: FlowControlConfig,
     }
-
     impl Default for DialerConfig {
         fn default() -> Self {
             Self {
@@ -445,18 +417,15 @@ pub mod quic {
             }
         }
     }
-
     /// Reusable outbound QUIC dialer.
     #[derive(Clone, Debug)]
     pub struct Dialer {
         endpoint: Endpoint,
     }
-
     impl Dialer {
         /// Create a QUIC dialer bound to `bind_addr` (usually `0.0.0.0:0`).
         pub fn bind(bind_addr: std::net::SocketAddr, cfg: DialerConfig) -> io::Result<Self> {
             let mut endpoint = Endpoint::client(bind_addr)?;
-
             let verifier: Arc<dyn ServerCertVerifier> =
                 Arc::new(super::CertificateKeyProofVerifier::unpinned());
             let mut tls = rustls::ClientConfig::builder()
@@ -470,15 +439,12 @@ pub mod quic {
             let tls = Arc::new(tls);
             let crypto = QuinnRustlsClientConfig::try_from(tls)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-
             let mut client = ClientConfig::new(Arc::new(crypto));
             let transport = build_transport_config(cfg)?;
             client.transport_config(transport);
             endpoint.set_default_client_config(client);
-
             Ok(Self { endpoint })
         }
-
         /// Connect to `remote` and return an established connection.
         pub async fn connect(
             &self,
@@ -493,7 +459,6 @@ pub mod quic {
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
         }
-
         /// Connect and open a single bi-directional stream.
         pub async fn connect_and_open_bi(
             &self,
@@ -507,7 +472,6 @@ pub mod quic {
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
             Ok((connection, send, recv))
         }
-
         /// Connect and open two bi-directional streams (recommended for separating priorities).
         pub async fn connect_and_open_two_bi(
             &self,
@@ -530,7 +494,6 @@ pub mod quic {
             Ok((connection, hi, lo))
         }
     }
-
     fn build_transport_config(cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {
         endpoint_buffer_geometry(
             cfg.flow_control,
@@ -550,13 +513,10 @@ pub mod quic {
         transport.datagram_send_buffer_size(cfg.datagram_send_buffer);
         Ok(Arc::new(transport))
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         const MIB: usize = 1024 * 1024;
-
         #[test]
         fn core_profile_flow_control_stays_within_process_budget() {
             let cfg = FlowControlConfig {
@@ -565,7 +525,6 @@ pub mod quic {
                 process_budget_bytes: 128 * MIB,
             };
             let geometry = flow_control_geometry(cfg).expect("valid core geometry");
-
             assert_eq!(geometry.stream_receive_window_bytes, 256 * 1024);
             assert_eq!(geometry.connection_receive_window_bytes, 512 * 1024);
             assert_eq!(geometry.connection_send_window_bytes, 512 * 1024);
@@ -580,7 +539,6 @@ pub mod quic {
             .expect("small process budget");
             assert!(total <= cfg.process_budget_bytes);
         }
-
         #[test]
         fn home_profile_uses_larger_window_under_same_process_budget() {
             let geometry = flow_control_geometry(FlowControlConfig {
@@ -589,12 +547,10 @@ pub mod quic {
                 process_budget_bytes: 128 * MIB,
             })
             .expect("valid home geometry");
-
             assert_eq!(geometry.stream_receive_window_bytes, MIB as u64);
             assert_eq!(geometry.connection_receive_window_bytes, (2 * MIB) as u64);
             assert_eq!(geometry.connection_send_window_bytes, (2 * MIB) as u64);
         }
-
         #[test]
         fn budget_one_byte_below_minimum_is_rejected() {
             let connections = 7;
@@ -606,11 +562,9 @@ pub mod quic {
                 process_budget_bytes: minimum - 1,
             })
             .expect_err("undersized process budget must fail closed");
-
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
             assert!(error.to_string().contains("must be at least"));
         }
-
         #[test]
         fn small_frame_window_includes_stream_length_prefix() {
             let geometry = flow_control_geometry(FlowControlConfig {
@@ -619,13 +573,11 @@ pub mod quic {
                 process_budget_bytes: 4 * FLOW_CONTROL_GRANULE_BYTES,
             })
             .expect("valid small-frame geometry");
-
             assert_eq!(
                 geometry.stream_receive_window_bytes,
                 (4096 + crate::P2P_FRAME_LENGTH_PREFIX_BYTES) as u64
             );
         }
-
         #[test]
         fn zero_connections_and_arithmetic_overflow_are_rejected() {
             let zero_connections = flow_control_geometry(FlowControlConfig {
@@ -635,7 +587,6 @@ pub mod quic {
             })
             .expect_err("zero connections must fail closed");
             assert_eq!(zero_connections.kind(), io::ErrorKind::InvalidInput);
-
             let overflow = flow_control_geometry(FlowControlConfig {
                 max_encrypted_frame_bytes: 1,
                 max_total_connections: usize::MAX,
@@ -644,7 +595,6 @@ pub mod quic {
             .expect_err("minimum budget multiplication must be checked");
             assert_eq!(overflow.kind(), io::ErrorKind::InvalidInput);
         }
-
         #[test]
         fn endpoint_buffers_follow_connection_cap_with_checked_aggregates() {
             let cfg = FlowControlConfig {
@@ -654,7 +604,6 @@ pub mod quic {
             };
             let geometry = endpoint_buffer_geometry(cfg, 2, Some(1024), 2048)
                 .expect("small endpoint geometry must fit");
-
             assert_eq!(geometry.max_incoming, 2);
             assert_eq!(
                 geometry.incoming_buffer_size_bytes,
@@ -677,7 +626,6 @@ pub mod quic {
             assert_eq!(geometry.flow_control_buffer_bytes_total, 1_048_576);
             assert_eq!(geometry.endpoint_buffer_bytes_total, 1_323_008);
         }
-
         #[test]
         fn cap_one_and_datagram_overflow_fail_closed() {
             let cap_one = FlowControlConfig {
@@ -699,7 +647,6 @@ pub mod quic {
             let excessive_incoming = endpoint_buffer_geometry(cap_one, 2, None, 0)
                 .expect_err("Incoming cap may not exceed total connection geometry");
             assert_eq!(excessive_incoming.kind(), io::ErrorKind::InvalidInput);
-
             let overflow = endpoint_buffer_geometry(
                 FlowControlConfig {
                     max_encrypted_frame_bytes: 1,
@@ -712,7 +659,6 @@ pub mod quic {
             )
             .expect_err("per-connection datagram addition must be checked");
             assert_eq!(overflow.kind(), io::ErrorKind::InvalidInput);
-
             let aggregate_overflow = endpoint_buffer_geometry(
                 FlowControlConfig {
                     max_encrypted_frame_bytes: 1,
@@ -726,7 +672,6 @@ pub mod quic {
             .expect_err("aggregate datagram multiplication must be checked");
             assert_eq!(aggregate_overflow.kind(), io::ErrorKind::InvalidInput);
         }
-
         #[test]
         fn incoming_first_packet_reserve_is_checked_in_combined_endpoint_geometry() {
             let combined_overflow = endpoint_buffer_geometry(
@@ -745,27 +690,23 @@ pub mod quic {
         }
     }
 }
-
 /// QUIC dialer handle type.
 #[cfg(feature = "quic")]
 pub type QuicDialer = quic::Dialer;
 /// Stub QUIC dialer type when QUIC support is not compiled in.
 #[cfg(not(feature = "quic"))]
 pub type QuicDialer = ();
-
 /// QUIC connection handle type.
 #[cfg(feature = "quic")]
 pub type QuicConnection = quinn::Connection;
 /// Stub QUIC connection handle type when QUIC support is not compiled in.
 #[cfg(not(feature = "quic"))]
 pub type QuicConnection = ();
-
 /// Compute the stable certificate fingerprint used for transport channel binding.
 #[must_use]
 pub fn certificate_fingerprint(cert_der: &[u8]) -> crate::peer::TransportBinding {
     iroha_crypto::Hash::new(cert_der).into()
 }
-
 /// Extract the peer certificate fingerprint from an established TLS client session.
 ///
 /// # Errors
@@ -791,7 +732,6 @@ pub fn tls_peer_certificate_fingerprint<S>(
     })?;
     Ok(certificate_fingerprint(cert.as_ref()))
 }
-
 /// Extract the peer certificate fingerprint from an established QUIC session.
 ///
 /// # Errors
@@ -824,7 +764,6 @@ pub fn quic_peer_certificate_fingerprint(
     })?;
     Ok(certificate_fingerprint(cert.as_ref()))
 }
-
 #[cfg(feature = "p2p_tls")]
 pub mod tls {
     //! TLS-over-TCP transport (feature-gated, optional).
@@ -833,13 +772,10 @@ pub mod tls {
     //! are accepted after TLS proves possession of their private key; peer
     //! identity is then enforced by the application handshake signature bound
     //! to the presented certificate fingerprint.
-
-    use std::sync::Arc;
-
     use rustls::{ClientConfig, client::danger::ServerCertVerifier, pki_types::ServerName};
+    use std::sync::Arc;
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_rustls::{TlsConnector, client::TlsStream};
-
     /// Upgrade an already-connected TCP stream to TLS 1.3.
     pub async fn connect_tls<S>(host: &str, tcp: S) -> tokio::io::Result<TlsStream<S>>
     where
@@ -853,7 +789,6 @@ pub mod tls {
             .with_no_client_auth();
         let config = Arc::new(config);
         let connector = TlsConnector::from(config);
-
         let server_name = if let Ok(name) = ServerName::try_from(host) {
             name.to_owned()
         } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
@@ -867,7 +802,6 @@ pub mod tls {
         let tls = connector.connect(server_name, tcp).await?;
         Ok(tls)
     }
-
     /// Upgrade an already-connected TCP stream to TLS with end-entity certificate pinning.
     ///
     /// This is intended for `https://` proxy connections where operator-supplied pins can prevent
@@ -889,7 +823,6 @@ pub mod tls {
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth();
         let connector = TlsConnector::from(Arc::new(config));
-
         let server_name = if let Ok(name) = ServerName::try_from(host) {
             name.to_owned()
         } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
@@ -904,7 +837,6 @@ pub mod tls {
         Ok(tls)
     }
 }
-
 #[cfg(feature = "p2p_ws")]
 pub mod ws {
     //! WebSocket fallback transport (client-side) over WSS to Torii `/p2p`.
@@ -914,21 +846,18 @@ pub mod ws {
         MaybeTlsStream, client_async_tls_with_config,
         tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
     };
-
     /// Maximum payload carried by one WebSocket transport message.
     ///
     /// P2P's encrypted stream framing remains continuous across these chunks;
     /// this bound prevents a maximal P2P frame from becoming one equally large
     /// WebSocket allocation before the inner frame cap can run.
     pub const WEBSOCKET_CHUNK_BYTES: usize = 64 * 1024;
-
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ReadState {
         Open,
         FlushingCloseReply,
         Eof,
     }
-
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ShutdownState {
         Open,
@@ -936,7 +865,6 @@ pub mod ws {
         Closing,
         Closed,
     }
-
     fn websocket_config() -> WebSocketConfig {
         WebSocketConfig::default()
             .read_buffer_size(WEBSOCKET_CHUNK_BYTES)
@@ -945,7 +873,6 @@ pub mod ws {
             .max_message_size(Some(WEBSOCKET_CHUNK_BYTES))
             .max_frame_size(Some(WEBSOCKET_CHUNK_BYTES))
     }
-
     /// A duplex adaptor that implements `AsyncRead`/`AsyncWrite` over a WebSocket stream.
     /// Bytes written are segmented into bounded Binary messages. Reads concatenate
     /// those messages back into one byte stream, preserving application framing above.
@@ -956,7 +883,6 @@ pub mod ws {
         read_state: ReadState,
         shutdown_state: ShutdownState,
     }
-
     impl<S> WsDuplex<S>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -970,7 +896,6 @@ pub mod ws {
                 shutdown_state: ShutdownState::Open,
             }
         }
-
         fn poll_send_buffered(
             &mut self,
             cx: &mut std::task::Context<'_>,
@@ -991,7 +916,6 @@ pub mod ws {
                 .map_err(|e| std::io::Error::other(format!("ws send error: {e}")))?;
             std::task::Poll::Ready(Ok(()))
         }
-
         fn poll_flush_buffered(
             &mut self,
             cx: &mut std::task::Context<'_>,
@@ -1005,14 +929,12 @@ pub mod ws {
             )?;
             std::task::Poll::Ready(Ok(()))
         }
-
         fn mark_closed(&mut self) {
             self.read_buf = bytes::Bytes::new();
             self.write_buf.clear();
             self.read_state = ReadState::Eof;
             self.shutdown_state = ShutdownState::Closed;
         }
-
         fn begin_peer_close(&mut self) {
             // Tungstenite has queued the protocol-mandated close reply. No
             // buffered application payload may be emitted after that reply.
@@ -1020,7 +942,6 @@ pub mod ws {
             self.read_state = ReadState::FlushingCloseReply;
             self.shutdown_state = ShutdownState::Closing;
         }
-
         fn poll_flush_close_reply(
             &mut self,
             cx: &mut std::task::Context<'_>,
@@ -1047,7 +968,6 @@ pub mod ws {
                 }
             }
         }
-
         fn reject_late_write() -> std::io::Error {
             std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -1055,7 +975,6 @@ pub mod ws {
             )
         }
     }
-
     /// Perform a websocket client handshake over an already-established stream.
     ///
     /// This is useful for applying custom TCP dial logic (proxies, socket options) while
@@ -1080,7 +999,6 @@ pub mod ws {
                 .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?;
         Ok(WsDuplex::new(ws_stream))
     }
-
     impl<S> AsyncRead for WsDuplex<S>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -1152,7 +1070,6 @@ pub mod ws {
             }
         }
     }
-
     impl<S> AsyncWrite for WsDuplex<S>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -1177,7 +1094,6 @@ pub mod ws {
             self.write_buf.extend_from_slice(&data[..accepted]);
             std::task::Poll::Ready(Ok(accepted))
         }
-
         fn poll_flush(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
@@ -1205,7 +1121,6 @@ pub mod ws {
                 ShutdownState::Closed => std::task::Poll::Ready(Ok(())),
             }
         }
-
         fn poll_shutdown(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
@@ -1250,7 +1165,6 @@ pub mod ws {
             }
         }
     }
-
     /// Connect a WSS endpoint `wss://host:port/p2p` and return a duplex stream.
     ///
     /// # Errors
@@ -1270,7 +1184,6 @@ pub mod ws {
                 .map_err(|e| std::io::Error::other(format!("wss connect: {e}")))?;
         Ok(WsDuplex::new(ws_stream))
     }
-
     /// Connect a WS endpoint `ws://host:port/p2p` and return a duplex stream.
     ///
     /// # Errors
@@ -1290,20 +1203,16 @@ pub mod ws {
                 .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?;
         Ok(WsDuplex::new(ws_stream))
     }
-
     #[cfg(test)]
     mod tests {
+        use super::*;
+        use futures::{SinkExt as _, StreamExt as _};
         use std::sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
         };
-
-        use futures::{SinkExt as _, StreamExt as _};
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
-
-        use super::*;
-
         async fn assert_chunked_stream_roundtrip(byte_len: usize) {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
             let (client_ws, mut server_ws) = tokio::join!(
@@ -1314,7 +1223,6 @@ pub mod ws {
             let expected = (0..byte_len)
                 .map(|index| u8::try_from(index % 251).expect("bounded fixture byte"))
                 .collect::<Vec<_>>();
-
             let send = async {
                 client
                     .write_all(&expected)
@@ -1342,7 +1250,6 @@ pub mod ws {
             assert_eq!(received, expected);
             assert_eq!(chunks, byte_len.div_ceil(WEBSOCKET_CHUNK_BYTES));
         }
-
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_duplex_chunks_boundaries_and_default_maximum_p2p_frame() {
             for byte_len in [
@@ -1355,7 +1262,6 @@ pub mod ws {
                 assert_chunked_stream_roundtrip(byte_len).await;
             }
         }
-
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_config_rejects_one_oversized_transport_message() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
@@ -1378,12 +1284,10 @@ pub mod ws {
                 "the receiver must reject a WebSocket message one byte above the chunk cap"
             );
         }
-
         struct ReadPollGuard<S> {
             inner: S,
             reject_reads: Arc<AtomicBool>,
         }
-
         impl<S> ReadPollGuard<S> {
             fn new(inner: S, reject_reads: Arc<AtomicBool>) -> Self {
                 Self {
@@ -1392,7 +1296,6 @@ pub mod ws {
                 }
             }
         }
-
         impl<S: AsyncRead + Unpin> AsyncRead for ReadPollGuard<S> {
             fn poll_read(
                 mut self: std::pin::Pin<&mut Self>,
@@ -1406,7 +1309,6 @@ pub mod ws {
                 std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
             }
         }
-
         impl<S: AsyncWrite + Unpin> AsyncWrite for ReadPollGuard<S> {
             fn poll_write(
                 mut self: std::pin::Pin<&mut Self>,
@@ -1415,14 +1317,12 @@ pub mod ws {
             ) -> std::task::Poll<std::io::Result<usize>> {
                 std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
             }
-
             fn poll_flush(
                 mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<std::io::Result<()>> {
                 std::pin::Pin::new(&mut self.inner).poll_flush(cx)
             }
-
             fn poll_shutdown(
                 mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
@@ -1430,7 +1330,6 @@ pub mod ws {
                 std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
             }
         }
-
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_duplex_zero_capacity_read_does_not_poll_or_consume_frame() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
@@ -1442,12 +1341,10 @@ pub mod ws {
             );
             let mut client = WsDuplex::new(client_ws);
             let expected = [0xC3, 0x7E, 0x41, 0x19];
-
             server_ws
                 .send(Message::Binary(expected.to_vec().into()))
                 .await
                 .expect("send frame before zero-capacity read");
-
             reject_reads.store(true, Ordering::SeqCst);
             let mut empty = [];
             let mut empty_buf = tokio::io::ReadBuf::new(&mut empty);
@@ -1457,7 +1354,6 @@ pub mod ws {
             .await
             .expect("zero-capacity read succeeds immediately");
             assert!(empty_buf.filled().is_empty());
-
             reject_reads.store(false, Ordering::SeqCst);
             let mut received = [0_u8; 4];
             client
@@ -1466,7 +1362,6 @@ pub mod ws {
                 .expect("frame remains available after zero-capacity read");
             assert_eq!(received, expected);
         }
-
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_duplex_ignores_empty_binary_without_reporting_stream_eof() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
@@ -1476,7 +1371,6 @@ pub mod ws {
             );
             let mut client = WsDuplex::new(client_ws);
             let expected = [0xA5, 0x5A, 0x11, 0x22];
-
             server_ws
                 .send(Message::Binary(Vec::new().into()))
                 .await
@@ -1485,7 +1379,6 @@ pub mod ws {
                 .send(Message::Binary(expected.to_vec().into()))
                 .await
                 .expect("send following non-empty WebSocket data message");
-
             let mut received = [0_u8; 4];
             client
                 .read_exact(&mut received)
@@ -1493,7 +1386,6 @@ pub mod ws {
                 .expect("empty Binary message must not terminate the byte stream");
             assert_eq!(received, expected);
         }
-
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_duplex_flushes_close_reply_before_sticky_eof() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
@@ -1504,7 +1396,6 @@ pub mod ws {
                 WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
             );
             let mut client = WsDuplex::new(client_ws);
-
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 let consume_close = async {
                     let mut byte = [0_u8; 1];
@@ -1544,13 +1435,11 @@ pub mod ws {
             .await
             .expect("close acknowledgement and sticky EOF must not stall");
         }
-
         struct PendingFlushOnce<S> {
             inner: S,
             observed: Arc<AtomicBool>,
             pending: bool,
         }
-
         impl<S> PendingFlushOnce<S> {
             fn new(inner: S, observed: Arc<AtomicBool>) -> Self {
                 Self {
@@ -1560,7 +1449,6 @@ pub mod ws {
                 }
             }
         }
-
         impl<S: AsyncRead + Unpin> AsyncRead for PendingFlushOnce<S> {
             fn poll_read(
                 mut self: std::pin::Pin<&mut Self>,
@@ -1570,7 +1458,6 @@ pub mod ws {
                 std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
             }
         }
-
         impl<S: AsyncWrite + Unpin> AsyncWrite for PendingFlushOnce<S> {
             fn poll_write(
                 mut self: std::pin::Pin<&mut Self>,
@@ -1579,7 +1466,6 @@ pub mod ws {
             ) -> std::task::Poll<std::io::Result<usize>> {
                 std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
             }
-
             fn poll_flush(
                 mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
@@ -1592,7 +1478,6 @@ pub mod ws {
                 }
                 std::pin::Pin::new(&mut self.inner).poll_flush(cx)
             }
-
             fn poll_shutdown(
                 mut self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
@@ -1600,7 +1485,6 @@ pub mod ws {
                 std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
             }
         }
-
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_duplex_cancelled_shutdown_rejects_late_writes_and_resumes() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
@@ -1611,7 +1495,6 @@ pub mod ws {
                 WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
             );
             let mut client = WsDuplex::new(client_ws);
-
             let mut shutdown = Box::pin(client.shutdown());
             futures::future::poll_fn(
                 |cx| match std::future::Future::poll(shutdown.as_mut(), cx) {
@@ -1627,13 +1510,11 @@ pub mod ws {
                 pending_observed.load(Ordering::SeqCst),
                 "fixture must suspend shutdown while flushing before Close"
             );
-
             let error = client
                 .write_all(b"must not escape after shutdown cancellation")
                 .await
                 .expect_err("a cancelled shutdown must leave the write side closed");
             assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
-
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 let shutdown = client.shutdown();
                 let observe_close = async {
@@ -1653,7 +1534,6 @@ pub mod ws {
         }
     }
 }
-
 /// Transport connector abstraction (scaffolding).
 ///
 /// The default implementation uses TCP; alternative transports should
@@ -1663,30 +1543,24 @@ pub mod ws {
 pub trait TransportConnector {
     /// Underlying stream type used by the transport.
     type Stream;
-
     /// Dial a remote endpoint.
     fn dial(endpoint: &str) -> tokio::io::Result<Self::Stream>;
 }
-
-use std::sync::{Mutex, OnceLock};
-
+use crate::sampler::LogSampler;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_primitives::addr::SocketAddr;
 use socket2::{SockRef, TcpKeepalive};
+use std::sync::{Mutex, OnceLock};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, Result},
     net::TcpStream,
 };
-
-use crate::sampler::LogSampler;
-
 /// Outbound proxy configuration for TCP-based dials (HTTP CONNECT / SOCKS5).
 #[derive(Debug, Clone, Default)]
 pub struct ProxyPolicy {
     proxy: Option<Proxy>,
     no_proxy: Vec<String>,
 }
-
 impl ProxyPolicy {
     /// Disable proxying entirely.
     #[must_use]
@@ -1696,7 +1570,6 @@ impl ProxyPolicy {
             no_proxy: Vec::new(),
         }
     }
-
     /// Build a proxy policy from config values.
     ///
     /// # Errors
@@ -1706,12 +1579,9 @@ impl ProxyPolicy {
             .map(|raw| parse_proxy_value(&raw))
             .transpose()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
         let no_proxy = normalize_no_proxy(no_proxy);
-
         Ok(Self { proxy, no_proxy })
     }
-
     fn should_bypass_proxy(&self, target_host: &str) -> bool {
         self.no_proxy.iter().any(|entry| {
             if entry.is_empty() {
@@ -1720,7 +1590,6 @@ impl ProxyPolicy {
             target_host.ends_with(entry)
         })
     }
-
     fn pick_proxy_for_target(&self, target: &SocketAddr) -> Option<&Proxy> {
         let proxy = self.proxy.as_ref()?;
         // Resolve target host string for NO_PROXY checks
@@ -1753,7 +1622,6 @@ impl ProxyPolicy {
         }
     }
 }
-
 fn normalize_no_proxy(mut list: Vec<String>) -> Vec<String> {
     for entry in &mut list {
         // Keep ASCII; no unicode normalization needed.
@@ -1762,7 +1630,6 @@ fn normalize_no_proxy(mut list: Vec<String>) -> Vec<String> {
     list.retain(|s| !s.is_empty());
     list
 }
-
 /// TCP socket options applied to outbound dials.
 #[derive(Debug, Clone)]
 pub struct TcpConnectOptions {
@@ -1781,7 +1648,6 @@ pub struct TcpConnectOptions {
     /// Optional keepalive idle time. When `None`, keepalive is disabled.
     pub tcp_keepalive: Option<std::time::Duration>,
 }
-
 impl Default for TcpConnectOptions {
     fn default() -> Self {
         Self {
@@ -1793,7 +1659,6 @@ impl Default for TcpConnectOptions {
         }
     }
 }
-
 /// TCP-like outbound stream returned by [`connect`].
 ///
 /// Most dials return a plain [`TcpStream`]. When tunnelling through an `https://`
@@ -1805,14 +1670,12 @@ pub enum TcpConnectStream {
     #[cfg(feature = "p2p_tls")]
     Tls(tokio_rustls::client::TlsStream<TcpStream>),
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProxyKind {
     HttpConnect,
     HttpConnectTls,
     Socks5,
 }
-
 #[derive(Debug, Clone)]
 struct Proxy {
     kind: ProxyKind,
@@ -1820,7 +1683,6 @@ struct Proxy {
     port: u16,
     auth: Option<(String, String)>,
 }
-
 fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     let mut s = raw;
     let mut kind = ProxyKind::HttpConnect;
@@ -1880,9 +1742,7 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
         auth,
     })
 }
-
 // ---- TCP socket option helpers ----
-
 fn build_connect_request(target: &str, proxy: &Proxy) -> String {
     let mut headers =
         format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nConnection: keep-alive\r\n");
@@ -1896,7 +1756,6 @@ fn build_connect_request(target: &str, proxy: &Proxy) -> String {
     headers.push_str("\r\n");
     headers
 }
-
 async fn socks5_negotiate_method<S>(stream: &mut S, proxy: &Proxy) -> Result<u8>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -1913,7 +1772,6 @@ where
     greeting.extend_from_slice(&methods);
     stream.write_all(&greeting).await?;
     stream.flush().await?;
-
     let mut choice = [0u8; 2];
     stream.read_exact(&mut choice).await?;
     if choice[0] != 0x05 {
@@ -1934,7 +1792,6 @@ where
         )),
     }
 }
-
 async fn socks5_auth_user_pass<S>(stream: &mut S, user: &str, pass: &str) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -1962,7 +1819,6 @@ where
     }
     Ok(())
 }
-
 fn socks5_build_connect_request(target: &SocketAddr) -> Result<Vec<u8>> {
     let mut req = Vec::with_capacity(32);
     req.push(0x05); // version
@@ -1997,7 +1853,6 @@ fn socks5_build_connect_request(target: &SocketAddr) -> Result<Vec<u8>> {
     }
     Ok(req)
 }
-
 async fn socks5_read_connect_reply<S>(stream: &mut S) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -2043,7 +1898,6 @@ where
     stream.read_exact(&mut port).await?;
     Ok(())
 }
-
 async fn socks5_connect<S>(stream: &mut S, proxy: &Proxy, target: &SocketAddr) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -2059,13 +1913,11 @@ where
         })?;
         socks5_auth_user_pass(stream, user, pass).await?;
     }
-
     let req = socks5_build_connect_request(target)?;
     stream.write_all(&req).await?;
     stream.flush().await?;
     socks5_read_connect_reply(stream).await
 }
-
 async fn http_connect_tunnel<S>(
     stream: &mut S,
     proxy: &Proxy,
@@ -2108,7 +1960,6 @@ where
     }
     Ok(())
 }
-
 /// Connect to a peer using the default transport (TCP).
 ///
 /// When the `quic` feature is enabled, this remains a placeholder and
@@ -2194,7 +2045,6 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
         }
     }
 }
-
 pub(crate) fn apply_tcp_socket_options(
     stream: &TcpStream,
     tcp_nodelay: bool,
@@ -2203,7 +2053,6 @@ pub(crate) fn apply_tcp_socket_options(
     let sock_ref = SockRef::from(stream);
     apply_tcp_socket_options_sockref(&sock_ref, tcp_nodelay, tcp_keepalive);
 }
-
 fn apply_tcp_socket_options_sockref(
     sock_ref: &SockRef<'_>,
     tcp_nodelay: bool,
@@ -2216,11 +2065,9 @@ fn apply_tcp_socket_options_sockref(
         let _ = sock_ref.set_tcp_keepalive(&keepalive);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[tokio::test(flavor = "current_thread")]
     async fn connect_failure_sampling_limits_logs() {
         let mut sampler = crate::sampler::LogSampler::new();
@@ -2243,7 +2090,6 @@ mod tests {
                 .is_some()
         );
     }
-
     #[test]
     fn parse_proxy_extracts_auth_and_host() {
         let proxy = parse_proxy_value("http://user:pass@example.com:8080").expect("proxy parsed");
@@ -2255,7 +2101,6 @@ mod tests {
             Some(("user", "pass"))
         );
     }
-
     #[test]
     fn parse_proxy_accepts_socks5_scheme() {
         let proxy = parse_proxy_value("socks5://proxy.example.com:1080").expect("proxy parsed");
@@ -2264,7 +2109,6 @@ mod tests {
         assert_eq!(proxy.port, 1080);
         assert!(proxy.auth.is_none());
     }
-
     #[test]
     fn parse_proxy_accepts_https_scheme() {
         let proxy = parse_proxy_value("https://proxy.example.com:8443").expect("proxy parsed");
@@ -2272,7 +2116,6 @@ mod tests {
         assert_eq!(proxy.host, "proxy.example.com");
         assert_eq!(proxy.port, 8443);
     }
-
     #[test]
     fn connect_request_includes_basic_auth_when_present() {
         let proxy = Proxy {
@@ -2283,7 +2126,6 @@ mod tests {
         };
         let req = build_connect_request("dest:443", &proxy);
         assert!(req.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
-
         let proxy_no_auth = Proxy {
             kind: ProxyKind::HttpConnect,
             host: "example.com".into(),
@@ -2293,11 +2135,9 @@ mod tests {
         let req = build_connect_request("dest:443", &proxy_no_auth);
         assert!(!req.contains("Proxy-Authorization"));
     }
-
     #[test]
     fn apply_tcp_socket_options_enables_keepalive_when_configured() {
         use socket2::{Domain, Protocol, Socket, Type};
-
         // Binding/listening is prohibited in some sandbox environments. Keep this test local
         // to socket options and avoid requiring a live TCP connection.
         let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).expect("socket");
@@ -2307,15 +2147,12 @@ mod tests {
             true,
             Some(std::time::Duration::from_secs(123)),
         );
-
         let enabled = SockRef::from(&socket).keepalive().expect("read keepalive");
         assert!(enabled, "SO_KEEPALIVE was not enabled");
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn socks5_connect_no_auth_ipv4_target_roundtrips() {
         use iroha_primitives::addr::socket_addr;
-
         let (mut client, mut server) = tokio::io::duplex(1024);
         let proxy = Proxy {
             kind: ProxyKind::Socks5,
@@ -2324,7 +2161,6 @@ mod tests {
             auth: None,
         };
         let target = socket_addr!(1.2.3.4:1234);
-
         let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
         let server_fut = async move {
             // Greeting
@@ -2340,7 +2176,6 @@ mod tests {
             );
             // Choose no-auth
             server.write_all(&[0x05, 0x00]).await?;
-
             // CONNECT request
             let mut req = [0u8; 4];
             server.read_exact(&mut req).await?;
@@ -2354,24 +2189,19 @@ mod tests {
             server.read_exact(&mut port).await?;
             assert_eq!(ip, [1, 2, 3, 4]);
             assert_eq!(u16::from_be_bytes(port), 1234);
-
             // Reply: success, bind 0.0.0.0:0
             server
                 .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                 .await?;
-
             Ok::<_, io::Error>(())
         };
-
         let (client_res, server_res) = tokio::join!(client_fut, server_fut);
         client_res.expect("client should succeed");
         server_res.expect("server should complete");
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn socks5_connect_username_password_auth_roundtrips() {
         use iroha_primitives::addr::socket_addr;
-
         let (mut client, mut server) = tokio::io::duplex(1024);
         let proxy = Proxy {
             kind: ProxyKind::Socks5,
@@ -2380,7 +2210,6 @@ mod tests {
             auth: Some(("user".into(), "pass".into())),
         };
         let target = socket_addr!(5.6.7.8:4321);
-
         let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
         let server_fut = async move {
             // Greeting
@@ -2394,7 +2223,6 @@ mod tests {
             assert!(methods.contains(&0x02), "auth method must be advertised");
             // Choose username/password
             server.write_all(&[0x05, 0x02]).await?;
-
             // RFC 1929 auth request
             let mut ver = [0u8; 1];
             server.read_exact(&mut ver).await?;
@@ -2411,7 +2239,6 @@ mod tests {
             assert_eq!(pass, b"pass");
             // Auth success
             server.write_all(&[0x01, 0x00]).await?;
-
             // CONNECT request
             let mut req = [0u8; 4];
             server.read_exact(&mut req).await?;
@@ -2425,23 +2252,18 @@ mod tests {
             server.read_exact(&mut port).await?;
             assert_eq!(ip, [5, 6, 7, 8]);
             assert_eq!(u16::from_be_bytes(port), 4321);
-
             server
                 .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                 .await?;
-
             Ok::<_, io::Error>(())
         };
-
         let (client_res, server_res) = tokio::join!(client_fut, server_fut);
         client_res.expect("client should succeed");
         server_res.expect("server should complete");
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn socks5_connect_uses_domain_type_for_hostname_targets() {
         use iroha_primitives::addr::SocketAddrHost;
-
         let (mut client, mut server) = tokio::io::duplex(1024);
         let proxy = Proxy {
             kind: ProxyKind::Socks5,
@@ -2453,7 +2275,6 @@ mod tests {
             host: "example.com".into(),
             port: 9999,
         });
-
         let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
         let server_fut = async move {
             // Greeting, choose no-auth
@@ -2462,7 +2283,6 @@ mod tests {
             let mut methods = vec![0u8; head[1] as usize];
             server.read_exact(&mut methods).await?;
             server.write_all(&[0x05, 0x00]).await?;
-
             // CONNECT request: DOMAIN
             let mut req = [0u8; 4];
             server.read_exact(&mut req).await?;
@@ -2478,40 +2298,32 @@ mod tests {
             server.read_exact(&mut port).await?;
             assert_eq!(name, b"example.com");
             assert_eq!(u16::from_be_bytes(port), 9999);
-
             server
                 .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
                 .await?;
-
             Ok::<_, io::Error>(())
         };
-
         let (client_res, server_res) = tokio::join!(client_fut, server_fut);
         client_res.expect("client should succeed");
         server_res.expect("server should complete");
     }
-
     #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn self_signed_tls_rejects_certificate_signed_by_another_key() {
-        use std::sync::Arc;
-
         use rustls::{
             server::{ClientHello, ResolvesServerCert},
             sign::CertifiedKey,
         };
+        use std::sync::Arc;
         use tokio::net::{TcpListener, TcpStream};
         use tokio_rustls::TlsAcceptor;
-
         #[derive(Debug)]
         struct FixedCertificate(Arc<CertifiedKey>);
-
         impl ResolvesServerCert for FixedCertificate {
             fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
                 Some(Arc::clone(&self.0))
             }
         }
-
         let rcgen::CertifiedKey { cert, .. } =
             rcgen::generate_simple_self_signed(["iroha-tls".to_owned()])
                 .expect("generate advertised certificate");
@@ -2531,14 +2343,12 @@ mod tests {
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified_key))));
         let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
-
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
             Err(error) => panic!("bind: {error:?}"),
         };
         let addr = listener.local_addr().expect("local addr");
-
         let server = async move {
             let (tcp, _) = listener.accept().await.expect("accept");
             acceptor.accept(tcp).await
@@ -2553,15 +2363,12 @@ mod tests {
             "TLS CertificateVerify must reject a replayed certificate without its private key"
         );
     }
-
     #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn https_proxy_tls_pinning_accepts_only_matching_cert() {
         use std::sync::Arc;
-
         use tokio::net::{TcpListener, TcpStream};
         use tokio_rustls::TlsAcceptor;
-
         // A self-signed TLS server stands in for an `https://` proxy.
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(["proxy.local".to_owned()]).expect("generate cert");
@@ -2576,7 +2383,6 @@ mod tests {
             .with_single_cert(cert_chain, priv_key)
             .expect("server config");
         let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
-
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
@@ -2589,7 +2395,6 @@ mod tests {
                 let _ = acceptor.accept(tcp).await;
             }
         });
-
         // P2P TLS accepts the self-signed certificate after verifying key possession.
         let tcp = TcpStream::connect(addr).await.expect("connect");
         let self_signed = crate::transport::tls::connect_tls("proxy.local", tcp).await;
@@ -2597,7 +2402,6 @@ mod tests {
             self_signed.is_ok(),
             "P2P TLS should accept a self-signed cert with a valid CertificateVerify"
         );
-
         // Pinning should accept the exact end-entity certificate.
         let tcp = TcpStream::connect(addr).await.expect("connect");
         let pinned = Arc::<[u8]>::from(cert.der().as_ref().to_vec());
@@ -2606,7 +2410,6 @@ mod tests {
             verified.is_ok(),
             "pinned TLS should accept the pinned certificate"
         );
-
         // A mismatched pin should be rejected.
         let tcp = TcpStream::connect(addr).await.expect("connect");
         let mut wrong = cert.der().as_ref().to_vec();
@@ -2617,7 +2420,6 @@ mod tests {
             verified.is_err(),
             "pinned TLS should reject mismatched certificates"
         );
-
         let _ = server.await;
     }
 }

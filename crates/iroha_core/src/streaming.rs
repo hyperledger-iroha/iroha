@@ -3,21 +3,9 @@
 //! The handle maintained here keeps per-peer `StreamingSession` records so that incoming
 //! control-plane frames (key updates, content-key rotations) can be validated and made
 //! available to higher-level components.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    error::Error as StdError,
-    fmt, fs, io,
-    io::Write as _,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
-    thread,
-};
-
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StreamingTelemetry;
+use crate::{IrohaNetwork, NetworkMessage};
 use blake3::Hasher as Blake3Hasher;
 use data_events::{
     DomainEvent, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
@@ -67,13 +55,22 @@ use norito::{
     },
     to_bytes,
 };
+use soranet_pq::MlKemSuite;
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    error::Error as StdError,
+    fmt, fs, io,
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+};
 use thiserror::Error;
 use tokio::sync::broadcast;
-
-#[cfg(feature = "telemetry")]
-use crate::telemetry::StreamingTelemetry;
-use crate::{IrohaNetwork, NetworkMessage};
-
 #[derive(Debug)]
 struct StreamingState {
     viewer_sessions: RwLock<BTreeMap<PeerId, StreamingSession>>,
@@ -82,7 +79,6 @@ struct StreamingState {
     route_index: RwLock<BTreeMap<Hash, Hash>>,
     ticket_nullifiers: RwLock<BTreeMap<Hash, Hash>>,
 }
-
 impl StreamingState {
     fn new() -> Self {
         Self {
@@ -94,17 +90,14 @@ impl StreamingState {
         }
     }
 }
-
 #[inline]
 fn stream_hash_from_crypto(hash: &iroha_crypto::Hash) -> Hash {
     (*hash).into()
 }
-
 fn global_handle_storage() -> &'static RwLock<Option<StreamingHandle>> {
     static GLOBAL_HANDLE: OnceLock<RwLock<Option<StreamingHandle>>> = OnceLock::new();
     GLOBAL_HANDLE.get_or_init(|| RwLock::new(None))
 }
-
 /// Register the process-wide streaming handle so other subsystems (e.g. overlays)
 /// can reference negotiated transport metadata when needed.
 pub fn set_global_handle(handle: StreamingHandle) {
@@ -113,7 +106,6 @@ pub fn set_global_handle(handle: StreamingHandle) {
         .expect("global streaming handle lock poisoned");
     *guard = Some(handle);
 }
-
 /// Clear the process-wide streaming handle. Mainly used by tests to avoid
 /// leaking state between scenarios.
 pub fn clear_global_handle() {
@@ -122,7 +114,6 @@ pub fn clear_global_handle() {
         .expect("global streaming handle lock poisoned");
     *guard = None;
 }
-
 /// Retrieve the registered streaming handle (if any).
 #[must_use]
 pub fn global_handle() -> Option<StreamingHandle> {
@@ -131,7 +122,6 @@ pub fn global_handle() -> Option<StreamingHandle> {
         .expect("global streaming handle lock poisoned")
         .clone()
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct SoranetRouteDefaults {
     enabled: bool,
@@ -141,13 +131,11 @@ pub(crate) struct SoranetRouteDefaults {
     access_kind: SoranetAccessKind,
     stream_tag: SoranetStreamTag,
 }
-
 impl SoranetRouteDefaults {
     fn populate(&self, stream_id: &Hash, route: &mut StreamingPrivacyRoute) {
         if !self.enabled || route.soranet().is_some() {
             return;
         }
-
         let channel_id = self.derive_channel_id(stream_id, &route.route_id);
         let soranet_route = StreamingSoranetRoute::new(
             channel_id,
@@ -158,7 +146,6 @@ impl SoranetRouteDefaults {
         );
         route.set_soranet(Some(soranet_route));
     }
-
     fn derive_channel_id(&self, stream_id: &Hash, route_id: &[u8; 32]) -> [u8; 32] {
         let mut hasher = Blake3Hasher::new();
         hasher.update(self.channel_salt.as_bytes());
@@ -167,14 +154,12 @@ impl SoranetRouteDefaults {
         hasher.finalize().into()
     }
 }
-
 impl From<&actual::StreamingSoranet> for SoranetRouteDefaults {
     fn from(config: &actual::StreamingSoranet) -> Self {
         let access_kind = match config.access_kind {
             actual::StreamingSoranetAccessKind::ReadOnly => SoranetAccessKind::ReadOnly,
             actual::StreamingSoranetAccessKind::Authenticated => SoranetAccessKind::Authenticated,
         };
-
         Self {
             enabled: config.enabled,
             channel_salt: config.channel_salt.clone(),
@@ -185,14 +170,12 @@ impl From<&actual::StreamingSoranet> for SoranetRouteDefaults {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct RouteProvisionState {
     route: StreamingPrivacyRoute,
     last_provisioned_segment: Option<u64>,
     acked: bool,
 }
-
 #[derive(Clone, Debug)]
 struct StreamTicketState {
     domain: DomainId,
@@ -200,7 +183,6 @@ struct StreamTicketState {
     routes: BTreeMap<Hash, RouteProvisionState>,
     order: Vec<Hash>,
 }
-
 /// Prepared privacy-route update coupled with the corresponding exit relay metadata.
 #[derive(Clone, Debug)]
 pub struct PreparedPrivacyRouteUpdate {
@@ -209,20 +191,17 @@ pub struct PreparedPrivacyRouteUpdate {
     /// Payload delivered over the control plane.
     pub update: PrivacyRouteUpdate,
 }
-
 #[derive(Clone, Debug)]
 struct PendingPrivacyRouteUpdate {
     prepared: PreparedPrivacyRouteUpdate,
     expiry: u64,
 }
-
 /// Error surfaced by the `SoraNet` circuit transport when registering privacy routes.
 #[derive(Debug)]
 pub struct SoranetTransportError {
     message: String,
     source: Option<Box<dyn StdError + Send + Sync>>,
 }
-
 impl SoranetTransportError {
     /// Construct a transport error with the provided message.
     #[must_use]
@@ -232,7 +211,6 @@ impl SoranetTransportError {
             source: None,
         }
     }
-
     /// Attach an underlying source error to the transport error.
     #[must_use]
     pub fn with_source(
@@ -245,13 +223,11 @@ impl SoranetTransportError {
         }
     }
 }
-
 impl fmt::Display for SoranetTransportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
-
 impl StdError for SoranetTransportError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         self.source
@@ -259,7 +235,6 @@ impl StdError for SoranetTransportError {
             .map(|boxed| -> &(dyn StdError + 'static) { boxed.as_ref() })
     }
 }
-
 /// Abstraction over the `SoraNet` circuit transport that receives blinded route metadata.
 pub trait SoranetRouteProvisionTx: Send + Sync + 'static {
     /// Submit a privacy route update to the `SoraNet` circuit manager before the exit acknowledges
@@ -273,7 +248,6 @@ pub trait SoranetRouteProvisionTx: Send + Sync + 'static {
         exit: &PrivacyRelay,
     ) -> Result<(), SoranetTransportError>;
 }
-
 #[derive(Clone)]
 struct SoranetProvisionJob {
     transport: Arc<dyn SoranetRouteProvisionTx>,
@@ -281,12 +255,10 @@ struct SoranetProvisionJob {
     exit_relay: PrivacyRelay,
     expiry: u64,
 }
-
 #[derive(Debug)]
 struct SoranetProvisionQueue {
     sender: mpsc::SyncSender<SoranetProvisionJob>,
 }
-
 impl SoranetProvisionQueue {
     #[cfg(feature = "telemetry")]
     fn new(
@@ -302,7 +274,6 @@ impl SoranetProvisionQueue {
             .expect("soranet provision worker must spawn");
         Self { sender }
     }
-
     #[cfg(not(feature = "telemetry"))]
     fn new(state: Arc<StreamingState>, capacity: usize) -> Self {
         let capacity = capacity.max(1);
@@ -313,7 +284,6 @@ impl SoranetProvisionQueue {
             .expect("soranet provision worker must spawn");
         Self { sender }
     }
-
     #[allow(clippy::result_large_err)]
     fn enqueue(
         &self,
@@ -322,7 +292,6 @@ impl SoranetProvisionQueue {
         self.sender.try_send(job)
     }
 }
-
 /// Filesystem-backed transport that spools privacy-route updates for `SoraNet` exits.
 #[derive(Debug)]
 pub struct FilesystemSoranetProvisioner {
@@ -332,7 +301,6 @@ pub struct FilesystemSoranetProvisioner {
     #[cfg(feature = "telemetry")]
     telemetry: Option<StreamingTelemetry>,
 }
-
 impl FilesystemSoranetProvisioner {
     /// Construct a new filesystem provisioner rooted at the provided directory.
     #[must_use]
@@ -345,7 +313,6 @@ impl FilesystemSoranetProvisioner {
             telemetry: None,
         }
     }
-
     /// Attach a telemetry sink for budget reporting.
     #[cfg(feature = "telemetry")]
     #[must_use]
@@ -353,12 +320,10 @@ impl FilesystemSoranetProvisioner {
         self.telemetry = Some(telemetry);
         self
     }
-
     fn exit_directory(&self, exit: &PrivacyRelay) -> PathBuf {
         let relay_hex = hex::encode(exit.relay_id);
         self.spool_dir.join(format!("exit-{relay_hex}"))
     }
-
     fn exit_directory_for_update(
         &self,
         exit: &PrivacyRelay,
@@ -373,7 +338,6 @@ impl FilesystemSoranetProvisioner {
             SoranetStreamTag::Kaigi => base.join(KAIGI_STREAM_SUBDIR),
         }
     }
-
     fn file_names(&self, update: &PrivacyRouteUpdate) -> (String, String) {
         let counter = self.counter.fetch_add(1, Ordering::Relaxed);
         let route_hex = hex::encode(update.route_id);
@@ -386,7 +350,6 @@ impl FilesystemSoranetProvisioner {
             .expect("spool path is valid UTF-8");
         (file, tmp)
     }
-
     fn spool_usage_bytes(&self) -> Result<u64, SoranetTransportError> {
         if !self.spool_dir.exists() {
             return Ok(0);
@@ -402,7 +365,6 @@ impl FilesystemSoranetProvisioner {
         })
     }
 }
-
 impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
     fn provision_privacy_route(
         &self,
@@ -419,15 +381,12 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
                 error,
             )
         })?;
-
         let (file_name, tmp_name) = self.file_names(update);
         let final_path = exit_dir.join(file_name);
         let tmp_path = exit_dir.join(tmp_name);
-
         let bytes = to_bytes(update).map_err(|error| {
             SoranetTransportError::with_source("failed to encode privacy route update", error)
         })?;
-
         if self.max_spool_bytes > 0 {
             let used = self.spool_usage_bytes()?;
             #[cfg(feature = "telemetry")]
@@ -454,7 +413,6 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
                 )));
             }
         }
-
         {
             let mut file = fs::File::create(&tmp_path).map_err(|error| {
                 SoranetTransportError::with_source(
@@ -475,7 +433,6 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
                 )
             })?;
         }
-
         fs::rename(&tmp_path, &final_path).map_err(|error| {
             SoranetTransportError::with_source(
                 format!(
@@ -485,7 +442,6 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
                 error,
             )
         })?;
-
         iroha_logger::trace!(
             ?final_path,
             "Queued streaming privacy route update for SoraNet exit relay"
@@ -493,7 +449,6 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
         Ok(())
     }
 }
-
 fn mark_privacy_route_provisioned_in_state(
     state: &StreamingState,
     stream_id: &Hash,
@@ -518,7 +473,6 @@ fn mark_privacy_route_provisioned_in_state(
     route_state.acked = false;
     Ok(())
 }
-
 fn handle_provisioned_state_update(
     result: Result<(), StreamingProcessError>,
     stream_id: Hash,
@@ -540,7 +494,6 @@ fn handle_provisioned_state_update(
         Err(err) => Err(err),
     }
 }
-
 #[cfg(feature = "telemetry")]
 #[allow(clippy::needless_pass_by_value)]
 fn soranet_provision_worker(
@@ -583,7 +536,6 @@ fn soranet_provision_worker(
         }
     }
 }
-
 #[cfg(not(feature = "telemetry"))]
 #[allow(clippy::needless_pass_by_value)]
 fn soranet_provision_worker(
@@ -622,7 +574,6 @@ fn soranet_provision_worker(
         }
     }
 }
-
 fn dir_size(path: &Path) -> io::Result<u64> {
     if !path.exists() {
         return Ok(0);
@@ -643,13 +594,31 @@ fn dir_size(path: &Path) -> io::Result<u64> {
     }
     Ok(total)
 }
-
 const NORITO_STREAM_SUBDIR: &str = "norito-stream";
 const KAIGI_STREAM_SUBDIR: &str = "kaigi-stream";
-
 const SNAPSHOT_VERSION: u8 = 1;
 const SNAPSHOT_AAD: &[u8] = b"iroha.streaming.snapshot.v1";
-
+/// First-release ceiling across viewer and publisher entries in one snapshot.
+const SNAPSHOT_MAX_ENTRIES_V1: usize = 4_096;
+/// First-release ceiling for one canonical decrypted snapshot.
+const SNAPSHOT_MAX_PLAINTEXT_BYTES_V1: usize = 16 * 1024 * 1024;
+/// ChaCha20-Poly1305 easy envelopes prefix a 12-byte nonce and append a 16-byte tag.
+const SNAPSHOT_AEAD_OVERHEAD_BYTES_V1: usize = 12 + 16;
+/// First-release ceiling for one encrypted snapshot file.
+const SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1: usize =
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1 + SNAPSHOT_AEAD_OVERHEAD_BYTES_V1;
+/// A snapshot can retain at most one local and one remote key from the largest v1 ML-KEM suite.
+const SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1: usize = MlKemSuite::MlKem1024.public_key_len();
+/// Group content keys are fixed-width inputs to streaming CEK derivation.
+const SNAPSHOT_GROUP_CONTENT_KEY_BYTES_V1: usize = 32;
+/// Decode budget applied before Norito allocates any snapshot-owned sequence.
+const SNAPSHOT_DECODE_LIMITS_V1: norito_core::DecodeLimits = norito_core::DecodeLimits::new(
+    SNAPSHOT_MAX_ENTRIES_V1,
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1 * 4,
+    32,
+);
 #[cfg(feature = "quic")]
 const FEATURE_PRIVACY_REQUIRED: u32 = 1 << 10;
 const BUNDLE_ACCEL_CPU_SIMD_BIT: u32 = 1 << 13;
@@ -657,7 +626,6 @@ const BUNDLE_ACCEL_GPU_BIT: u32 = 1 << 14;
 const BUNDLE_ACCEL_CAPABILITY_MASK: u32 = BUNDLE_ACCEL_CPU_SIMD_BIT | BUNDLE_ACCEL_GPU_BIT;
 #[cfg(feature = "quic")]
 const FEATURE_PRIVACY_PROVIDER: u32 = 1 << 11;
-
 /// Persisted snapshot entry for a streaming session keyed by peer and role.
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamingSnapshotEntry {
@@ -668,18 +636,15 @@ pub struct StreamingSnapshotEntry {
     /// Snapshot exported from [`StreamingSession::snapshot_state`].
     pub snapshot: StreamingSessionSnapshot,
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct StreamingSnapshotFile {
     version: u8,
     entries: Vec<StreamingSnapshotEntry>,
 }
-
 enum AlignedSlice<'a> {
     Borrowed(&'a [u8]),
     Owned(OwnedAligned),
 }
-
 impl AlignedSlice<'_> {
     fn as_slice(&self) -> &[u8] {
         match self {
@@ -688,13 +653,11 @@ impl AlignedSlice<'_> {
         }
     }
 }
-
 struct OwnedAligned {
     storage: Vec<u8>,
     start: usize,
     len: usize,
 }
-
 impl OwnedAligned {
     fn new(
         bytes: &[u8],
@@ -724,12 +687,10 @@ impl OwnedAligned {
             len: bytes.len(),
         })
     }
-
     fn as_slice(&self) -> &[u8] {
         &self.storage[self.start..self.start + self.len]
     }
 }
-
 fn align_slice(
     bytes: &[u8],
     align: usize,
@@ -741,13 +702,11 @@ fn align_slice(
         OwnedAligned::new(bytes, align, payload_offset).map(AlignedSlice::Owned)
     }
 }
-
 /// Derive the symmetric session key used to encrypt streaming snapshots.
 #[must_use]
 pub fn snapshot_session_key(material: &StreamingKeyMaterial) -> SessionKey {
     material.snapshot_session_key()
 }
-
 /// Errors emitted while handling streaming control frames.
 #[derive(Debug, Error)]
 pub enum StreamingProcessError {
@@ -983,8 +942,15 @@ pub enum StreamingProcessError {
     /// No key material configured for this handle.
     #[error("streaming key material not configured")]
     MissingKeyMaterial,
+    /// A snapshot source or restore stream exceeded the first-release session ceiling.
+    #[error("streaming snapshot entry limit exceeded (attempted {attempted}, limit {limit})")]
+    SnapshotEntryLimitExceeded {
+        /// One-based entry count that crossed the ceiling.
+        attempted: usize,
+        /// Maximum entries accepted by snapshot version 1.
+        limit: usize,
+    },
 }
-
 /// Classification of audio/video sync violations.
 #[derive(Clone, Copy, Debug)]
 pub enum SyncViolation {
@@ -1007,7 +973,6 @@ pub enum SyncViolation {
         window_ms: u16,
     },
 }
-
 impl fmt::Display for SyncViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1030,7 +995,6 @@ impl fmt::Display for SyncViolation {
         }
     }
 }
-
 /// Errors surfaced while loading or persisting streaming session snapshots.
 #[derive(Debug, Error)]
 pub enum StreamingSnapshotError {
@@ -1052,11 +1016,20 @@ pub enum StreamingSnapshotError {
         /// Version value encountered on disk.
         found: u8,
     },
+    /// A snapshot resource exceeded its first-release protocol ceiling.
+    #[error("streaming snapshot {resource} exceeds limit (observed {observed}, limit {limit})")]
+    ResourceLimitExceeded {
+        /// Resource whose size crossed the ceiling.
+        resource: &'static str,
+        /// Observed byte or element count.
+        observed: u64,
+        /// Maximum byte or element count accepted by snapshot version 1.
+        limit: u64,
+    },
     /// Session restoration failed due to handshake invariants.
     #[error(transparent)]
     Process(#[from] StreamingProcessError),
 }
-
 /// Errors surfaced while applying codec-related configuration.
 #[derive(Debug, Error)]
 pub enum StreamingCodecConfigError {
@@ -1092,7 +1065,6 @@ pub enum StreamingCodecConfigError {
     )]
     BundledSupportUnavailable,
 }
-
 /// Lightweight handle for processing streaming control frames and querying session state.
 #[derive(Clone)]
 pub struct StreamingHandle {
@@ -1116,7 +1088,6 @@ pub struct StreamingHandle {
     #[cfg(feature = "telemetry")]
     telemetry: Option<StreamingTelemetry>,
 }
-
 #[derive(Clone, Debug)]
 struct SyncPolicy {
     enabled: bool,
@@ -1125,7 +1096,6 @@ struct SyncPolicy {
     ewma_threshold_ms: u16,
     hard_cap_ms: u16,
 }
-
 impl SyncPolicy {
     const fn disabled() -> Self {
         Self {
@@ -1136,7 +1106,6 @@ impl SyncPolicy {
             hard_cap_ms: u16::MAX,
         }
     }
-
     fn from_config(config: actual::StreamingSync) -> Self {
         Self {
             enabled: config.enabled,
@@ -1146,7 +1115,6 @@ impl SyncPolicy {
             hard_cap_ms: config.hard_cap_ms,
         }
     }
-
     fn violation(&self, diagnostics: &SyncDiagnostics) -> Option<SyncViolation> {
         if !self.enabled {
             return None;
@@ -1171,12 +1139,10 @@ impl SyncPolicy {
         }
         None
     }
-
     fn observe_only(&self) -> bool {
         self.observe_only
     }
 }
-
 /// Parameters required to construct a signed key-update frame.
 pub struct KeyUpdateSpec<'suite> {
     /// Identifier of the session being updated.
@@ -1188,7 +1154,6 @@ pub struct KeyUpdateSpec<'suite> {
     /// Monotonic key counter used for replay protection.
     pub key_counter: u64,
 }
-
 impl fmt::Debug for StreamingHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let viewer_sessions = self
@@ -1264,7 +1229,6 @@ impl fmt::Debug for StreamingHandle {
         debug.finish_non_exhaustive()
     }
 }
-
 impl StreamingHandle {
     /// Construct a new, empty streaming state handle.
     #[must_use]
@@ -1297,7 +1261,6 @@ impl StreamingHandle {
             telemetry: None,
         }
     }
-
     /// Construct a streaming handle preloaded with node key material.
     #[must_use]
     pub fn with_key_material(key_material: StreamingKeyMaterial) -> Self {
@@ -1329,12 +1292,10 @@ impl StreamingHandle {
             telemetry: None,
         }
     }
-
     /// Apply the sync enforcement policy derived from configuration.
     pub fn apply_sync_config(&mut self, config: &actual::StreamingSync) {
         self.sync_policy = SyncPolicy::from_config(*config);
     }
-
     /// Override the sync policy during tests.
     #[cfg(test)]
     #[must_use]
@@ -1342,7 +1303,6 @@ impl StreamingHandle {
         self.sync_policy = policy;
         self
     }
-
     /// Apply entropy-coder toggles derived from configuration.
     ///
     /// # Errors
@@ -1388,7 +1348,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Builder-style variant of [`apply_codec_config`].
     ///
     /// # Errors
@@ -1401,28 +1360,23 @@ impl StreamingHandle {
         self.apply_codec_config(config)?;
         Ok(self)
     }
-
     /// Override the advertised capability flags using a builder-style API.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: CapabilityFlags) -> Self {
         self.capabilities = self.normalize_viewer_feature_bits(capabilities);
         self
     }
-
     /// Update the advertised capability flags in place.
     pub fn set_capabilities(&mut self, capabilities: CapabilityFlags) {
         self.capabilities = self.normalize_viewer_feature_bits(capabilities);
     }
-
     /// Install a `SoraNet` circuit transport that receives blinded route metadata.
     pub fn set_soranet_transport(&mut self, transport: Option<Arc<dyn SoranetRouteProvisionTx>>) {
         self.soranet_transport = transport;
     }
-
     fn soranet_queue_capacity_from_config(capacity: u64) -> usize {
         usize::try_from(capacity).unwrap_or(usize::MAX).max(1)
     }
-
     fn ensure_soranet_provision_queue(
         &self,
     ) -> Result<Arc<SoranetProvisionQueue>, StreamingProcessError> {
@@ -1447,26 +1401,22 @@ impl StreamingHandle {
         *guard = Some(Arc::clone(&queue));
         Ok(queue)
     }
-
     /// Attach a `SoraNet` transport using a builder-style API.
     #[must_use]
     pub fn with_soranet_transport(mut self, transport: Arc<dyn SoranetRouteProvisionTx>) -> Self {
         self.soranet_transport = Some(transport);
         self
     }
-
     /// Hash of the currently configured bundle tables.
     #[must_use]
     pub fn bundle_tables_checksum(&self) -> Hash {
         self.bundle_tables_hash
     }
-
     /// Clone the currently configured bundle table set.
     #[must_use]
     pub fn bundle_tables(&self) -> Arc<BundleAnsTables> {
         Arc::clone(&self.bundle_tables)
     }
-
     fn bundle_accel_capability_mask(&self) -> u32 {
         match self.bundle_accel {
             actual::BundleAcceleration::None => 0,
@@ -1474,18 +1424,15 @@ impl StreamingHandle {
             actual::BundleAcceleration::Gpu => BUNDLE_ACCEL_GPU_BIT,
         }
     }
-
     #[cfg_attr(not(feature = "quic"), allow(dead_code))]
     fn bundled_entropy_required(&self) -> bool {
         self.entropy_mode.is_bundled()
     }
-
     #[cfg_attr(not(feature = "quic"), allow(dead_code))]
     fn normalize_viewer_feature_bits(&self, bits: CapabilityFlags) -> CapabilityFlags {
         let bits = bits.insert(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
         self.normalize_bundle_accel_bits(bits)
     }
-
     fn normalize_bundle_accel_bits(&self, bits: CapabilityFlags) -> CapabilityFlags {
         let cleared = bits.remove(BUNDLE_ACCEL_CAPABILITY_MASK);
         let mask = self.bundle_accel_capability_mask();
@@ -1495,7 +1442,6 @@ impl StreamingHandle {
             cleared.insert(mask)
         }
     }
-
     fn ensure_manifest_entropy_mode_supported(
         &self,
         manifest: &ManifestV1,
@@ -1521,7 +1467,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     fn ensure_manifest_entropy_mode_negotiated(
         &self,
         peer_id: &PeerId,
@@ -1555,13 +1500,11 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Install default `SoraNet` routing metadata applied to privacy routes lacking explicit values.
     #[allow(dead_code)]
     pub(crate) fn set_soranet_defaults(&mut self, defaults: Option<SoranetRouteDefaults>) {
         self.soranet_defaults = defaults;
     }
-
     /// Attach `SoraNet` defaults using a builder-style API.
     #[must_use]
     #[allow(dead_code)]
@@ -1569,7 +1512,6 @@ impl StreamingHandle {
         self.soranet_defaults = Some(defaults);
         self
     }
-
     /// Apply `SoraNet` defaults derived from configuration.
     pub fn set_soranet_config(&mut self, config: &actual::StreamingSoranet) {
         self.soranet_provisioning_enabled = config.enabled;
@@ -1582,14 +1524,12 @@ impl StreamingHandle {
             self.soranet_defaults = None;
         }
     }
-
     /// Apply `SoraNet` defaults in a builder-style fashion.
     #[must_use]
     pub fn with_soranet_config(mut self, config: &actual::StreamingSoranet) -> Self {
         self.set_soranet_config(config);
         self
     }
-
     /// Apply crypto configuration gating to the advertised capability mask.
     pub fn apply_crypto_config(&mut self, crypto: &actual::Crypto) {
         #[cfg(feature = "sm")]
@@ -1612,7 +1552,6 @@ impl StreamingHandle {
                 .remove(CapabilityFlags::FEATURE_SM_TRANSACTIONS);
         }
     }
-
     /// Install a telemetry sink used to emit streaming metrics.
     #[cfg(feature = "telemetry")]
     #[must_use]
@@ -1620,27 +1559,23 @@ impl StreamingHandle {
         self.telemetry = Some(telemetry);
         self
     }
-
     /// Return the configured streaming telemetry handle, if any.
     #[cfg(feature = "telemetry")]
     #[must_use]
     pub fn telemetry_handle(&self) -> Option<StreamingTelemetry> {
         self.telemetry.clone()
     }
-
     /// Return the capability flags currently advertised by this handle.
     #[must_use]
     pub fn capabilities(&self) -> CapabilityFlags {
         self.capabilities
     }
-
     /// Attach a snapshot path so session state is persisted to disk automatically.
     #[must_use]
     pub fn with_snapshot_path(mut self, path: PathBuf) -> Self {
         self.snapshot_path = Some(path);
         self
     }
-
     /// Configure the encryption key used when persisting or loading snapshots.
     ///
     /// # Errors
@@ -1653,12 +1588,10 @@ impl StreamingHandle {
         self.set_snapshot_encryption_key(key)?;
         Ok(self)
     }
-
     /// Install or update the snapshot path after construction.
     pub fn set_snapshot_path(&mut self, path: PathBuf) {
         self.snapshot_path = Some(path);
     }
-
     /// Install or update the snapshot encryption key after construction.
     ///
     /// # Errors
@@ -1669,13 +1602,11 @@ impl StreamingHandle {
         self.snapshot_encryptor = Some(encryptor);
         Ok(())
     }
-
     /// Return the configured snapshot path if persistence is enabled.
     #[must_use]
     pub fn snapshot_path(&self) -> Option<&Path> {
         self.snapshot_path.as_deref()
     }
-
     /// Process an incoming control frame from the given peer.
     ///
     /// # Errors
@@ -1718,7 +1649,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Build a signed `KeyUpdate` frame for the given peer and role.
     ///
     /// # Errors
@@ -1744,7 +1674,6 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(frame)
     }
-
     /// Build a signed `KeyUpdate` frame using the configured key material.
     ///
     /// # Errors
@@ -1773,7 +1702,6 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(frame)
     }
-
     /// Build a `ContentKeyUpdate` frame for the given viewer peer.
     ///
     /// # Errors
@@ -1793,7 +1721,6 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(frame)
     }
-
     /// Record the negotiated transport capabilities for a peer session.
     ///
     /// # Errors
@@ -1811,7 +1738,6 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(())
     }
-
     /// Record the negotiated feature flags for a peer session.
     ///
     /// # Errors
@@ -1830,7 +1756,6 @@ impl StreamingHandle {
         self.try_persist_snapshots();
         Ok(())
     }
-
     fn convert_privacy_relay(relay: &StreamingPrivacyRelay) -> PrivacyRelay {
         PrivacyRelay {
             relay_id: relay.relay_id,
@@ -1839,11 +1764,9 @@ impl StreamingHandle {
             capabilities: PrivacyCapabilities::from_bits(relay.capabilities_bits),
         }
     }
-
     fn convert_privacy_route(route: &StreamingPrivacyRoute) -> PrivacyRoute {
         PrivacyRoute::from(route)
     }
-
     /// Register or replace the streaming capability ticket and associated privacy routes for a
     /// stream.
     ///
@@ -1867,7 +1790,6 @@ impl StreamingHandle {
             }
         }
         let ticket_nullifier = stream_hash_from_crypto(ready.ticket().nullifier());
-
         let mut route_index = self
             .inner
             .route_index
@@ -1883,7 +1805,6 @@ impl StreamingHandle {
             .ticket_nullifiers
             .write()
             .map_err(|_| StreamingProcessError::StatePoisoned)?;
-
         if let Some(previous) = tickets.remove(&stream_id) {
             for route_id in previous.order {
                 route_index.remove(&route_id);
@@ -1891,7 +1812,6 @@ impl StreamingHandle {
             let previous_nullifier = stream_hash_from_crypto(previous.ticket.nullifier());
             nullifiers.remove(&previous_nullifier);
         }
-
         if let Some(existing_stream) = nullifiers.get(&ticket_nullifier) {
             if *existing_stream != stream_id {
                 return Err(StreamingProcessError::DuplicateTicketNullifier {
@@ -1900,7 +1820,6 @@ impl StreamingHandle {
                 });
             }
         }
-
         let mut seen = BTreeSet::new();
         for route in &routes {
             let route_id = route.route_id;
@@ -1911,7 +1830,6 @@ impl StreamingHandle {
                 });
             }
         }
-
         for route in &routes {
             let route_id = route.route_id;
             if let Some(owner) = route_index.get(&route_id) {
@@ -1923,7 +1841,6 @@ impl StreamingHandle {
                 }
             }
         }
-
         let mut order = Vec::with_capacity(routes.len());
         let mut route_states = BTreeMap::new();
         for route in routes {
@@ -1948,7 +1865,6 @@ impl StreamingHandle {
                 },
             );
         }
-
         nullifiers.insert(ticket_nullifier, stream_id);
         tickets.insert(
             stream_id,
@@ -1959,10 +1875,8 @@ impl StreamingHandle {
                 order,
             },
         );
-
         Ok(())
     }
-
     /// Remove a stream ticket and its associated privacy routes from state.
     ///
     /// # Errors
@@ -1995,7 +1909,6 @@ impl StreamingHandle {
         nullifiers.remove(&nullifier);
         Ok(())
     }
-
     fn queue_privacy_route_updates_for_manifest(
         &self,
         manifest: &ManifestV1,
@@ -2012,7 +1925,6 @@ impl StreamingHandle {
             valid_until_segment,
         )
     }
-
     /// Prepare `PrivacyRouteUpdate` frames to provision exit relays for the given stream.
     ///
     /// This method updates the local provisioning state but does not perform any transport I/O.
@@ -2038,13 +1950,11 @@ impl StreamingHandle {
             valid_until_segment,
         )
     }
-
     fn privacy_route_window_end(&self, segment_number: u64) -> u64 {
         let window = self.soranet_provision_window_segments.max(1);
         let window_start = segment_number / window * window;
         window_start.saturating_add(window - 1)
     }
-
     fn queue_privacy_route_updates(
         &self,
         stream_id: &Hash,
@@ -2109,7 +2019,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Prepare `PrivacyRouteUpdate` frames to provision exit relays for the given stream.
     ///
     /// # Errors
@@ -2143,10 +2052,8 @@ impl StreamingHandle {
             )?;
             updates.push(pending.prepared);
         }
-
         Ok(updates)
     }
-
     fn pending_privacy_route_updates(
         &self,
         stream_id: &Hash,
@@ -2163,7 +2070,6 @@ impl StreamingHandle {
             let Some(state) = tickets.get_mut(stream_id) else {
                 return Err(StreamingProcessError::MissingStreamTicket { stream: *stream_id });
             };
-
             let mut pending = Vec::new();
             let mut expired_route: Option<(Hash, u64)> = None;
             let mut has_viable_route = false;
@@ -2204,10 +2110,8 @@ impl StreamingHandle {
                     pending.push(PendingPrivacyRouteUpdate { prepared, expiry });
                 }
             }
-
             (pending, expired_route, has_viable_route)
         };
-
         if !has_viable_route {
             if let Some((route_id, expiry)) = expired_route {
                 return Err(StreamingProcessError::PrivacyRouteExpired {
@@ -2221,10 +2125,8 @@ impl StreamingHandle {
                 segment: valid_from_segment,
             });
         }
-
         Ok(pending_updates)
     }
-
     fn mark_privacy_route_provisioned(
         &self,
         stream_id: &Hash,
@@ -2233,7 +2135,6 @@ impl StreamingHandle {
     ) -> Result<(), StreamingProcessError> {
         mark_privacy_route_provisioned_in_state(self.inner.as_ref(), stream_id, route_id, expiry)
     }
-
     /// Record an acknowledgement emitted by an exit relay after receiving a `PrivacyRouteUpdate`.
     ///
     /// # Errors
@@ -2253,7 +2154,6 @@ impl StreamingHandle {
                 },
             )?
         };
-
         let mut tickets = self
             .inner
             .stream_tickets
@@ -2272,7 +2172,6 @@ impl StreamingHandle {
         route_state.acked = true;
         Ok(())
     }
-
     fn manifest_ticket_and_routes(
         &self,
         stream_id: Hash,
@@ -2310,7 +2209,6 @@ impl StreamingHandle {
         let ticket_id = stream_hash_from_crypto(ticket_state.ticket.ticket_id());
         Ok((ticket_id, routes))
     }
-
     fn apply_manifest_ticket_and_routes(
         &self,
         manifest: &mut ManifestV1,
@@ -2332,7 +2230,6 @@ impl StreamingHandle {
         manifest.privacy_routes = routes;
         Ok(())
     }
-
     fn validate_manifest_ticket_and_routes(
         &self,
         manifest: &ManifestV1,
@@ -2345,7 +2242,6 @@ impl StreamingHandle {
         let Some(ticket_state) = tickets.get(&manifest.stream_id) else {
             return Ok(());
         };
-
         let expected_ticket = stream_hash_from_crypto(ticket_state.ticket.ticket_id());
         match manifest.public_metadata.access_policy_id {
             Some(id) if id == expected_ticket => {}
@@ -2357,7 +2253,6 @@ impl StreamingHandle {
                 });
             }
         }
-
         let mut expected_routes: Vec<PrivacyRoute> = ticket_state
             .order
             .iter()
@@ -2372,10 +2267,8 @@ impl StreamingHandle {
                 stream: manifest.stream_id,
             });
         }
-
         Ok(())
     }
-
     fn update_route_binding_state(
         state: &mut StreamTicketState,
         binding: &StreamingRouteBinding,
@@ -2389,7 +2282,6 @@ impl StreamingHandle {
         route_state.acked = binding.acknowledged;
         Ok(())
     }
-
     /// Apply a streaming ticket readiness event to the in-memory state.
     ///
     /// # Errors
@@ -2409,7 +2301,6 @@ impl StreamingHandle {
             .map(|binding| binding.route.clone())
             .collect();
         self.register_stream_ticket(ready, routes)?;
-
         let mut tickets = self
             .inner
             .stream_tickets
@@ -2423,7 +2314,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Apply a streaming ticket revocation event to the in-memory state.
     /// Record a streaming ticket revocation event and drop the associated state.
     ///
@@ -2472,7 +2362,6 @@ impl StreamingHandle {
         }
         self.unregister_stream_ticket(&stream_id)
     }
-
     #[cfg(feature = "quic")]
     /// Perform viewer-side transport negotiation over QUIC and record the resolved capabilities.
     ///
@@ -2496,7 +2385,6 @@ impl StreamingHandle {
         self.record_negotiated_capabilities(peer, CapabilityRole::Viewer, ack.negotiated_features)?;
         Ok((ack, resolution))
     }
-
     #[cfg(feature = "quic")]
     /// Perform publisher-side transport negotiation over QUIC, emit the resulting acknowledgement,
     /// and record the resolved capabilities.
@@ -2527,7 +2415,6 @@ impl StreamingHandle {
         )?;
         Ok((ack, resolution))
     }
-
     #[cfg(feature = "quic")]
     fn build_capability_ack(
         &self,
@@ -2552,15 +2439,12 @@ impl StreamingHandle {
         let viewer_supports_bundled = report
             .feature_bits
             .contains(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
-
         if viewer_requires_privacy && !publisher_advertises_privacy {
             return Err(StreamingProcessError::PrivacyOverlayUnsupported);
         }
-
         if self.bundled_entropy_required() && !viewer_supports_bundled {
             return Err(StreamingProcessError::BundledEntropyUnsupported);
         }
-
         if self.bundled_entropy_required() {
             let accel_mask = self.bundle_accel_capability_mask();
             if accel_mask != 0 && (report_bits & accel_mask) != accel_mask {
@@ -2569,7 +2453,6 @@ impl StreamingHandle {
                 });
             }
         }
-
         let allowed_viewer_bits = supported_bits | FEATURE_PRIVACY_REQUIRED;
         let unsupported = report_bits & !allowed_viewer_bits;
         if unsupported != 0 {
@@ -2578,7 +2461,6 @@ impl StreamingHandle {
                 supported_bits,
             });
         }
-
         let mut negotiated_bits = report_bits & supported_bits;
         negotiated_bits |= report_bits & FEATURE_PRIVACY_REQUIRED;
         if publisher_advertises_privacy {
@@ -2586,9 +2468,7 @@ impl StreamingHandle {
         } else {
             negotiated_bits &= !FEATURE_PRIVACY_PROVIDER;
         }
-
         let negotiated_features = CapabilityFlags::from_bits(negotiated_bits);
-
         Ok(CapabilityAck {
             stream_id: report.stream_id,
             accepted_version: report.protocol_version,
@@ -2597,7 +2477,6 @@ impl StreamingHandle {
             dplpmtud: report.dplpmtud,
         })
     }
-
     fn with_session<F, R>(
         &self,
         peer: &Peer,
@@ -2626,14 +2505,12 @@ impl StreamingHandle {
         };
         mutate(session).map_err(StreamingProcessError::from)
     }
-
     fn map_for_role(&self, role: CapabilityRole) -> &RwLock<BTreeMap<PeerId, StreamingSession>> {
         match role {
             CapabilityRole::Publisher => &self.inner.publisher_sessions,
             CapabilityRole::Viewer => &self.inner.viewer_sessions,
         }
     }
-
     fn snapshot_role(
         &self,
         role: CapabilityRole,
@@ -2645,6 +2522,13 @@ impl StreamingHandle {
             .map_err(|_| StreamingProcessError::StatePoisoned)?;
         for (peer, session) in guard.iter() {
             if let Some(snapshot) = session.snapshot_state() {
+                let attempted = entries.len().saturating_add(1);
+                if attempted > SNAPSHOT_MAX_ENTRIES_V1 {
+                    return Err(StreamingProcessError::SnapshotEntryLimitExceeded {
+                        attempted,
+                        limit: SNAPSHOT_MAX_ENTRIES_V1,
+                    });
+                }
                 entries.push(StreamingSnapshotEntry {
                     role,
                     peer: peer.clone(),
@@ -2654,21 +2538,18 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     fn collect_snapshots(&self) -> Result<Vec<StreamingSnapshotEntry>, StreamingProcessError> {
         let mut entries = Vec::new();
         self.snapshot_role(CapabilityRole::Viewer, &mut entries)?;
         self.snapshot_role(CapabilityRole::Publisher, &mut entries)?;
         Ok(entries)
     }
-
     /// Persist current session snapshots to the configured path, if any.
     fn try_persist_snapshots(&self) {
         if let Err(err) = self.persist_snapshots() {
             iroha_logger::warn!(?err, "failed to persist streaming session snapshots");
         }
     }
-
     fn latest_gck_for_role(&self, role: CapabilityRole, peer_id: &PeerId) -> Option<Vec<u8>> {
         self.map_for_role(role).read().ok().and_then(|sessions| {
             sessions
@@ -2676,7 +2557,6 @@ impl StreamingHandle {
                 .and_then(|s| s.latest_gck().map(Vec::from))
         })
     }
-
     fn transport_keys_for_role(
         &self,
         role: CapabilityRole,
@@ -2688,7 +2568,6 @@ impl StreamingHandle {
                 .and_then(|s| s.transport_keys().copied())
         })
     }
-
     fn transport_capabilities_for_role(
         &self,
         role: CapabilityRole,
@@ -2700,7 +2579,6 @@ impl StreamingHandle {
                 .and_then(|s| s.transport_capabilities().copied())
         })
     }
-
     fn capabilities_for_role(
         &self,
         role: CapabilityRole,
@@ -2712,7 +2590,6 @@ impl StreamingHandle {
                 .and_then(StreamingSession::capabilities)
         })
     }
-
     fn feedback_parity_for_role(&self, role: CapabilityRole, peer_id: &PeerId) -> Option<u8> {
         self.map_for_role(role).read().ok().and_then(|sessions| {
             sessions
@@ -2720,7 +2597,6 @@ impl StreamingHandle {
                 .and_then(StreamingSession::latest_feedback_parity)
         })
     }
-
     fn feedback_snapshot_for_role(
         &self,
         role: CapabilityRole,
@@ -2732,7 +2608,6 @@ impl StreamingHandle {
                 .and_then(StreamingSession::feedback_snapshot)
         })
     }
-
     /// Encode the current session snapshots and persist them to the provided path.
     ///
     /// # Errors
@@ -2748,12 +2623,24 @@ impl StreamingHandle {
             version: SNAPSHOT_VERSION,
             entries: snapshots,
         };
+        validate_snapshot_file_bounds(&file)?;
         let plaintext = norito_core::to_bytes(&file).map_err(StreamingSnapshotError::Codec)?;
+        ensure_snapshot_resource_limit(
+            "plaintext bytes",
+            plaintext.len(),
+            SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+        )?;
         let encryptor = self
             .snapshot_encryptor
             .as_ref()
             .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
-        let bytes = encryptor.encrypt_easy(SNAPSHOT_AAD, &plaintext)?;
+        let mut bytes = Vec::new();
+        encryptor.encrypt_easy_into(SNAPSHOT_AAD, plaintext.as_slice(), &mut bytes)?;
+        ensure_snapshot_resource_limit(
+            "ciphertext bytes",
+            bytes.len(),
+            SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1,
+        )?;
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -2781,7 +2668,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Persist snapshots using the configured snapshot path, if any.
     ///
     /// # Errors
@@ -2793,7 +2679,6 @@ impl StreamingHandle {
             .as_ref()
             .map_or(Ok(()), |path| self.persist_snapshots_to_path(path))
     }
-
     /// Load snapshots using the configured snapshot path, if any.
     ///
     /// # Errors
@@ -2805,7 +2690,6 @@ impl StreamingHandle {
             .as_ref()
             .map_or(Ok(()), |path| self.load_snapshots_from_path(path))
     }
-
     /// Load snapshots from disk, replacing any existing in-memory sessions.
     ///
     /// # Errors
@@ -2818,60 +2702,50 @@ impl StreamingHandle {
     ) -> Result<(), StreamingSnapshotError> {
         let path = path.as_ref();
         let tmp_path = snapshot_temp_path(path);
-        let tmp_bytes = read_snapshot_bytes(&tmp_path)?;
-        let main_bytes = read_snapshot_bytes(path)?;
-        if tmp_bytes.is_none() && main_bytes.is_none() {
-            return Ok(());
-        }
-        let encryptor = self
-            .snapshot_encryptor
-            .as_ref()
-            .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
         let mut tmp_error = None;
-        let mut selected = None;
-        let mut used_tmp = false;
-
-        if let Some(bytes) = tmp_bytes.as_deref() {
-            match decode_snapshot_bytes(bytes, encryptor) {
-                Ok(file) => {
-                    used_tmp = true;
-                    selected = Some(file);
+        match read_snapshot_bytes(&tmp_path) {
+            Ok(Some(bytes)) => {
+                let encryptor = self
+                    .snapshot_encryptor
+                    .as_ref()
+                    .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
+                match decode_snapshot_bytes(bytes, encryptor) {
+                    Ok(file) => {
+                        warn!(
+                            path = %tmp_path.display(),
+                            "streaming snapshot temp file detected; promoting"
+                        );
+                        promote_snapshot_temp(&tmp_path, path);
+                        self.restore_snapshots(file.entries)?;
+                        return Ok(());
+                    }
+                    Err(err) => tmp_error = Some(err),
                 }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %tmp_path.display(),
-                        "streaming snapshot temp file is not usable"
-                    );
-                    tmp_error = Some(err);
-                }
             }
+            Ok(None) => {}
+            Err(err) => tmp_error = Some(err),
         }
-
-        if selected.is_none() {
-            if let Some(bytes) = main_bytes.as_deref() {
-                selected = Some(decode_snapshot_bytes(bytes, encryptor)?);
-            }
+        if let Some(err) = tmp_error.as_ref() {
+            warn!(
+                ?err,
+                path = %tmp_path.display(),
+                "streaming snapshot temp file is not usable"
+            );
         }
-
-        if let Some(file) = selected {
-            if used_tmp {
-                warn!(
-                    path = %tmp_path.display(),
-                    "streaming snapshot temp file detected; promoting"
-                );
-                promote_snapshot_temp(&tmp_path, path);
-            }
+        if let Some(bytes) = read_snapshot_bytes(path)? {
+            let encryptor = self
+                .snapshot_encryptor
+                .as_ref()
+                .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
+            let file = decode_snapshot_bytes(bytes, encryptor)?;
             self.restore_snapshots(file.entries)?;
             return Ok(());
         }
-
         if let Some(err) = tmp_error {
             return Err(err);
         }
         Ok(())
     }
-
     /// Restore snapshots into the in-memory session map, creating sessions as needed.
     ///
     /// # Errors
@@ -2882,7 +2756,14 @@ impl StreamingHandle {
     where
         I: IntoIterator<Item = StreamingSnapshotEntry>,
     {
-        for entry in entries {
+        for (index, entry) in entries.into_iter().enumerate() {
+            let attempted = index.saturating_add(1);
+            if attempted > SNAPSHOT_MAX_ENTRIES_V1 {
+                return Err(StreamingProcessError::SnapshotEntryLimitExceeded {
+                    attempted,
+                    limit: SNAPSHOT_MAX_ENTRIES_V1,
+                });
+            }
             let map = self.map_for_role(entry.role);
             let mut guard = map
                 .write()
@@ -2904,7 +2785,6 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     fn has_publisher_session(&self, peer_id: &PeerId) -> bool {
         self.inner
             .publisher_sessions
@@ -2912,7 +2792,6 @@ impl StreamingHandle {
             .ok()
             .is_some_and(|sessions| sessions.contains_key(peer_id))
     }
-
     fn handle_key_update(
         &self,
         peer: &Peer,
@@ -2935,7 +2814,6 @@ impl StreamingHandle {
         let _ = suite;
         Ok(())
     }
-
     fn handle_content_key_update(
         &self,
         peer: &Peer,
@@ -2959,7 +2837,6 @@ impl StreamingHandle {
         let _ = suite;
         Ok(())
     }
-
     fn handle_feedback_hint(
         &self,
         peer: &Peer,
@@ -2972,7 +2849,6 @@ impl StreamingHandle {
         };
         self.with_session(peer, role, |session| session.process_feedback_hint(hint))
     }
-
     fn handle_receiver_report(
         &self,
         peer: &Peer,
@@ -3009,14 +2885,12 @@ impl StreamingHandle {
         }
         Ok(())
     }
-
     /// Retrieve the latest unwrap key (GCK) recorded for the given peer.
     #[must_use]
     pub fn latest_gck(&self, peer_id: &PeerId) -> Option<Vec<u8>> {
         self.latest_gck_for_role(CapabilityRole::Viewer, peer_id)
             .or_else(|| self.latest_gck_for_role(CapabilityRole::Publisher, peer_id))
     }
-
     /// Retrieve the current transport keys for the given peer, if negotiated.
     #[must_use]
     pub fn transport_keys(&self, peer_id: &PeerId) -> Option<TransportKeysSnapshot> {
@@ -3024,7 +2898,6 @@ impl StreamingHandle {
             .or_else(|| self.transport_keys_for_role(CapabilityRole::Publisher, peer_id))
             .map(TransportKeysSnapshot)
     }
-
     /// Retrieve the negotiated transport capability hash for the given peer, if recorded.
     #[must_use]
     pub fn transport_capabilities_hash(&self, peer_id: &PeerId) -> Option<Hash> {
@@ -3032,7 +2905,6 @@ impl StreamingHandle {
             .or_else(|| self.transport_capabilities_for_role(CapabilityRole::Publisher, peer_id))
             .map(|resolution| resolution.capabilities_hash())
     }
-
     /// Retrieve the negotiated transport capabilities for the given peer, if recorded.
     #[must_use]
     pub fn transport_capabilities(
@@ -3042,14 +2914,12 @@ impl StreamingHandle {
         self.transport_capabilities_for_role(CapabilityRole::Viewer, peer_id)
             .or_else(|| self.transport_capabilities_for_role(CapabilityRole::Publisher, peer_id))
     }
-
     /// Retrieve the negotiated capability flags for the given peer, if recorded.
     #[must_use]
     pub fn negotiated_capabilities(&self, peer_id: &PeerId) -> Option<CapabilityFlags> {
         self.capabilities_for_role(CapabilityRole::Viewer, peer_id)
             .or_else(|| self.capabilities_for_role(CapabilityRole::Publisher, peer_id))
     }
-
     /// Populate a `FeedbackHintFrame` with the negotiated cadence and parity budget.
     ///
     /// # Errors
@@ -3067,7 +2937,6 @@ impl StreamingHandle {
                 peer: peer_id.clone(),
             }
         })?;
-
         hint.stream_id = manifest.stream_id;
         hint.loss_ewma_q16 = snapshot.loss_ewma_q16.unwrap_or(0);
         hint.latency_gradient_q16 = snapshot.latency_gradient_q16;
@@ -3081,10 +2950,8 @@ impl StreamingHandle {
                 hint.report_interval_ms = resolution.fec_feedback_interval_ms;
             }
         }
-
         Ok(())
     }
-
     /// Populate both the manifest capabilities hash and feedback hint frame using the negotiated
     /// session state recorded for the peer.
     ///
@@ -3104,21 +2971,18 @@ impl StreamingHandle {
         self.apply_feedback_hint(peer_id, manifest, hint)?;
         Ok(())
     }
-
     /// Retrieve the current parity budget inferred from viewer feedback, if available.
     #[must_use]
     pub fn feedback_parity(&self, peer_id: &PeerId) -> Option<u8> {
         self.feedback_parity_for_role(CapabilityRole::Publisher, peer_id)
             .or_else(|| self.feedback_parity_for_role(CapabilityRole::Viewer, peer_id))
     }
-
     /// Retrieve the aggregated feedback snapshot for a peer, if available.
     #[must_use]
     pub fn feedback_snapshot(&self, peer_id: &PeerId) -> Option<FeedbackStateSnapshot> {
         self.feedback_snapshot_for_role(CapabilityRole::Publisher, peer_id)
             .or_else(|| self.feedback_snapshot_for_role(CapabilityRole::Viewer, peer_id))
     }
-
     /// Populate a manifest with the negotiated transport capability hash for the peer.
     ///
     /// # Errors
@@ -3144,7 +3008,6 @@ impl StreamingHandle {
         manifest.entropy_tables_checksum = Some(self.bundle_tables_hash);
         Ok(())
     }
-
     /// Ensure the manifest's advertised transport capabilities hash matches the negotiated value.
     ///
     /// # Errors
@@ -3174,25 +3037,161 @@ impl StreamingHandle {
         Ok(())
     }
 }
-
 fn snapshot_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
-
-fn read_snapshot_bytes(path: &Path) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(StreamingSnapshotError::Io(err)),
+fn snapshot_resource_limit_error(
+    resource: &'static str,
+    observed: u64,
+    limit: usize,
+) -> StreamingSnapshotError {
+    StreamingSnapshotError::ResourceLimitExceeded {
+        resource,
+        observed,
+        limit: u64::try_from(limit).unwrap_or(u64::MAX),
     }
 }
-
+fn ensure_snapshot_resource_limit(
+    resource: &'static str,
+    observed: usize,
+    limit: usize,
+) -> Result<(), StreamingSnapshotError> {
+    if observed > limit {
+        return Err(snapshot_resource_limit_error(
+            resource,
+            u64::try_from(observed).unwrap_or(u64::MAX),
+            limit,
+        ));
+    }
+    Ok(())
+}
+fn validate_snapshot_file_bounds(
+    file: &StreamingSnapshotFile,
+) -> Result<(), StreamingSnapshotError> {
+    ensure_snapshot_resource_limit("entries", file.entries.len(), SNAPSHOT_MAX_ENTRIES_V1)?;
+    for entry in &file.entries {
+        if let Some(gck) = entry.snapshot.latest_gck.as_ref() {
+            ensure_snapshot_resource_limit(
+                "group content key bytes",
+                gck.len(),
+                SNAPSHOT_GROUP_CONTENT_KEY_BYTES_V1,
+            )?;
+        }
+        if let Some(public_key) = entry.snapshot.kyber_remote_public.as_ref() {
+            ensure_snapshot_resource_limit(
+                "remote ML-KEM public key bytes",
+                public_key.len(),
+                SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1,
+            )?;
+        }
+        if let Some(public_key) = entry.snapshot.kyber_local_public.as_ref() {
+            ensure_snapshot_resource_limit(
+                "local ML-KEM public key bytes",
+                public_key.len(),
+                SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1,
+            )?;
+        }
+    }
+    Ok(())
+}
+fn read_snapshot_bytes(path: &Path) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
+    read_snapshot_bytes_with_limit(path, SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1)
+}
+fn read_snapshot_bytes_with_limit(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
+    let path_before = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if path_before.file_type().is_symlink() || !path_before.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot must be a direct regular file",
+        )
+        .into());
+    }
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if path_before.len() > max_bytes_u64 {
+        return Err(snapshot_resource_limit_error(
+            "ciphertext bytes",
+            path_before.len(),
+            max_bytes,
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options.open(path)?;
+    let opened_before = file.metadata()?;
+    if !snapshot_file_metadata_unchanged(&path_before, &opened_before) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot identity changed while opening",
+        )
+        .into());
+    }
+    let capacity = usize::try_from(opened_before.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot length does not fit in memory",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    io::Read::by_ref(&mut file)
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(snapshot_resource_limit_error(
+            "ciphertext bytes",
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            max_bytes,
+        ));
+    }
+    let opened_after = file.metadata()?;
+    let path_after = fs::symlink_metadata(path)?;
+    if path_after.file_type().is_symlink()
+        || !path_after.is_file()
+        || !snapshot_file_metadata_unchanged(&opened_before, &opened_after)
+        || !snapshot_file_metadata_unchanged(&opened_before, &path_after)
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot changed while reading",
+        )
+        .into());
+    }
+    Ok(Some(bytes))
+}
 fn decode_snapshot_bytes(
-    bytes: &[u8],
+    mut bytes: Vec<u8>,
     encryptor: &SymmetricEncryptor<ChaCha20Poly1305>,
 ) -> Result<StreamingSnapshotFile, StreamingSnapshotError> {
-    let plaintext = encryptor.decrypt_easy(SNAPSHOT_AAD, bytes)?;
-    let file = decode_snapshot_plaintext(&plaintext)?;
+    ensure_snapshot_resource_limit(
+        "ciphertext bytes",
+        bytes.len(),
+        SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1,
+    )?;
+    let plaintext = encryptor.decrypt_easy_in_place(SNAPSHOT_AAD, bytes.as_mut_slice())?;
+    ensure_snapshot_resource_limit(
+        "plaintext bytes",
+        plaintext.len(),
+        SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    )?;
+    let file = decode_snapshot_plaintext(plaintext)?;
     if file.version != SNAPSHOT_VERSION {
         return Err(StreamingSnapshotError::UnsupportedVersion {
             found: file.version,
@@ -3200,7 +3199,36 @@ fn decode_snapshot_bytes(
     }
     Ok(file)
 }
-
+#[cfg(unix)]
+fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.is_file()
+        && right.is_file()
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+#[cfg(windows)]
+fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.is_file()
+        && right.is_file()
+        && left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+}
+#[cfg(not(any(unix, windows)))]
+fn snapshot_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
 fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
     let promoted = match fs::rename(tmp_path, main_path) {
         Ok(()) => true,
@@ -3232,7 +3260,6 @@ fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
             false
         }
     };
-
     if promoted {
         if let Some(parent) = main_path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -3247,33 +3274,37 @@ fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
         }
     }
 }
-
 fn decode_snapshot_plaintext(
     plaintext: &[u8],
 ) -> Result<StreamingSnapshotFile, StreamingSnapshotError> {
+    ensure_snapshot_resource_limit(
+        "plaintext bytes",
+        plaintext.len(),
+        SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    )?;
     if plaintext.len() < norito_core::Header::SIZE || !plaintext.starts_with(&norito_core::MAGIC) {
         return Err(StreamingSnapshotError::Codec(NoritoError::LengthMismatch));
     }
     let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
     let aligned = align_slice(plaintext, align, norito_core::Header::SIZE)?;
-    norito_core::from_bytes_view(aligned.as_slice())
-        .and_then(|view| {
+    let file = norito_core::with_decode_limits(SNAPSHOT_DECODE_LIMITS_V1, || {
+        norito_core::from_bytes_view(aligned.as_slice()).and_then(|view| {
             view.decode_exact_with(norito_core::decode_field_canonical::<StreamingSnapshotFile>)
         })
-        .map_err(StreamingSnapshotError::Codec)
+    })
+    .map_err(StreamingSnapshotError::Codec)?;
+    validate_snapshot_file_bounds(&file)?;
+    Ok(file)
 }
-
 fn sync_dir(path: &Path) -> io::Result<()> {
     let file = fs::File::open(path)?;
     file.sync_all()
 }
-
 /// Abstraction over the transport used to deliver streaming control frames.
 pub trait StreamingControlTx: Clone + Send + Sync + 'static {
     /// Send a control frame to the specified peer.
     fn send_control(&self, peer_id: &PeerId, frame: ControlFrame);
 }
-
 impl StreamingControlTx for IrohaNetwork {
     fn send_control(&self, peer_id: &PeerId, frame: ControlFrame) {
         self.post(Post {
@@ -3283,7 +3314,6 @@ impl StreamingControlTx for IrohaNetwork {
         });
     }
 }
-
 /// Helper responsible for stamping manifests with negotiated session state and delivering the
 /// resulting control frames to viewers.
 #[derive(Clone)]
@@ -3294,7 +3324,6 @@ where
     streaming: StreamingHandle,
     sender: Tx,
 }
-
 impl<Tx> ManifestPublisher<Tx>
 where
     Tx: StreamingControlTx,
@@ -3305,7 +3334,6 @@ where
     pub fn new(streaming: StreamingHandle, sender: Tx) -> Self {
         Self { streaming, sender }
     }
-
     /// Populate manifest metadata and emit a `ManifestAnnounce` control frame.
     ///
     /// When feedback statistics are available, a `FeedbackHint` frame is emitted immediately after
@@ -3332,11 +3360,9 @@ where
             report_interval_ms: 0,
             parity_chunks: 0,
         });
-
         if hint.stream_id != manifest.stream_id {
             hint.stream_id = manifest.stream_id;
         }
-
         if let Err(err) = self
             .streaming
             .queue_privacy_route_updates_for_manifest(&manifest)
@@ -3347,7 +3373,6 @@ where
                 other => return Err(other),
             }
         }
-
         match self
             .streaming
             .populate_manifest(peer.id(), &mut manifest, &mut hint)
@@ -3366,26 +3391,22 @@ where
             Err(err) => Err(err),
         }
     }
-
     fn send_manifest(&self, peer: &Peer, manifest: ManifestV1) {
         self.sender.send_control(
             peer.id(),
             ControlFrame::ManifestAnnounce(Box::new(ManifestAnnounceFrame { manifest })),
         );
     }
-
     fn send_feedback_hint(&self, peer: &Peer, hint: FeedbackHintFrame) {
         self.sender
             .send_control(peer.id(), ControlFrame::FeedbackHint(hint));
     }
 }
-
 impl Default for StreamingHandle {
     fn default() -> Self {
         Self::new()
     }
 }
-
 /// Consume streaming-related domain events and update the runtime ticket state accordingly.
 pub async fn run_ticket_event_listener(
     streaming: StreamingHandle,
@@ -3408,7 +3429,6 @@ pub async fn run_ticket_event_listener(
         }
     }
 }
-
 fn process_streaming_event(
     streaming: &StreamingHandle,
     event: EventBox,
@@ -3421,7 +3441,6 @@ fn process_streaming_event(
         _ => Ok(()),
     }
 }
-
 fn process_streaming_domain_event(
     streaming: &StreamingHandle,
     domain: &DomainEvent,
@@ -3432,35 +3451,24 @@ fn process_streaming_domain_event(
         _ => Ok(()),
     }
 }
-
 /// Snapshot wrapper for transport keys to avoid leaking the internal representation.
 #[derive(Clone, Copy, Debug)]
 pub struct TransportKeysSnapshot(TransportKeys);
-
 impl TransportKeysSnapshot {
     /// Viewer-side send key (broadcast to publisher).
     #[must_use]
     pub fn send(&self) -> &[u8; 32] {
         &self.0.send
     }
-
     /// Viewer-side receive key (used to decrypt publisher payloads).
     #[must_use]
     pub fn recv(&self) -> &[u8; 32] {
         &self.0.recv
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        path::PathBuf,
-        str::FromStr,
-        sync::{Arc, Mutex, mpsc},
-        time::{Duration, Instant},
-    };
-
+    use super::*;
     use iroha_config::parameters::defaults as config_defaults;
     use iroha_crypto::{
         Algorithm, Hash as CryptoHash, KeyPair, PublicKey,
@@ -3481,26 +3489,67 @@ mod tests {
             SoranetChannelId, SoranetRoute, StreamMetadata, TransportCapabilityResolution,
         },
     };
+    use std::{
+        fs,
+        path::PathBuf,
+        str::FromStr,
+        sync::{Arc, Mutex, mpsc},
+        time::{Duration, Instant},
+    };
     use tempfile::tempdir;
-
-    use super::*;
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked streaming fixture keypair")
     }
-
     fn checked_random_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked streaming Ed25519 fixture keypair")
     }
-
     #[test]
     fn snapshot_temp_path_appends_suffix() {
         let base = Path::new("/var/lib/iroha/streaming.snap.norito");
         let tmp = snapshot_temp_path(base);
         assert_eq!(tmp, Path::new("/var/lib/iroha/streaming.snap.norito.tmp"));
     }
-
+    #[test]
+    fn snapshot_reader_enforces_exact_byte_boundary() {
+        const TEST_LIMIT: usize = 64;
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join("snapshot.norito");
+        let exact = vec![0xA5; TEST_LIMIT];
+        fs::write(&path, &exact).expect("write exact-boundary fixture");
+        let bytes = read_snapshot_bytes_with_limit(&path, TEST_LIMIT)
+            .expect("read exact-boundary snapshot")
+            .expect("snapshot exists");
+        assert_eq!(bytes, exact);
+        fs::write(&path, vec![0x5A; TEST_LIMIT + 1]).expect("write oversized fixture");
+        let err = read_snapshot_bytes_with_limit(&path, TEST_LIMIT)
+            .expect_err("max plus one must be rejected");
+        assert!(matches!(
+            err,
+            StreamingSnapshotError::ResourceLimitExceeded {
+                resource: "ciphertext bytes",
+                observed: 65,
+                limit: 64,
+            }
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_reader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().expect("create temp dir");
+        let target = dir.path().join("target.norito");
+        let link = dir.path().join("snapshot.norito");
+        fs::write(&target, [0x11; 8]).expect("write target");
+        symlink(&target, &link).expect("create symlink");
+        let err = read_snapshot_bytes_with_limit(&link, 64)
+            .expect_err("snapshot symlinks must be rejected");
+        assert!(matches!(
+            err,
+            StreamingSnapshotError::Io(ref source)
+                if source.kind() == io::ErrorKind::InvalidData
+        ));
+    }
     #[test]
     fn file_names_append_tmp_extension() {
         let provisioner = FilesystemSoranetProvisioner::new(PathBuf::from("/tmp/spool"), 0);
@@ -3519,7 +3568,6 @@ mod tests {
             "tmp path should append extension, got {tmp_name:?}"
         );
     }
-
     #[cfg(feature = "telemetry")]
     #[test]
     fn streaming_handle_exposes_telemetry_handle() {
@@ -3527,22 +3575,18 @@ mod tests {
         let telemetry = crate::telemetry::StreamingTelemetry::new(metrics, true);
         let handle = StreamingHandle::new();
         assert!(handle.telemetry_handle().is_none());
-
         let handle = handle.with_telemetry(telemetry);
         assert!(handle.telemetry_handle().is_some());
     }
-
     fn make_peer(key_pair: &KeyPair, port: u16) -> Peer {
         let addr = SocketAddr::from_str(&format!("127.0.0.1:{port}")).expect("valid addr");
         Peer::new(addr, key_pair.public_key().clone())
     }
-
     fn hash_with(byte: u8) -> Hash {
         let mut out = [0u8; 32];
         out.fill(byte);
         out
     }
-
     #[test]
     fn stream_hash_conversion_matches_bytes() {
         let hash = CryptoHash::new(b"stream-hash");
@@ -3550,7 +3594,6 @@ mod tests {
         let expected: [u8; CryptoHash::LENGTH] = hash.into();
         assert_eq!(bytes, expected);
     }
-
     fn sample_resolution() -> TransportCapabilityResolution {
         TransportCapabilityResolution {
             hpke_suite: HpkeSuite::Kyber768AuthPsk,
@@ -3560,7 +3603,32 @@ mod tests {
             privacy_bucket_granularity: PrivacyBucketGranularity::StandardV1,
         }
     }
-
+    fn sample_snapshot_entry(port: u16) -> StreamingSnapshotEntry {
+        let key_pair = checked_random_keypair();
+        let peer = make_peer(&key_pair, port);
+        StreamingSnapshotEntry {
+            role: CapabilityRole::Viewer,
+            peer: peer.id().clone(),
+            snapshot: StreamingSessionSnapshot {
+                role: CapabilityRole::Viewer,
+                session_id: hash_with(0x91),
+                key_counter: 1,
+                suite: EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x92)),
+                kem_suite_id: 1,
+                sts_root: hash_with(0x93),
+                latest_gck: None,
+                last_content_key_id: None,
+                last_content_key_valid_from: None,
+                cadence: None,
+                transport_capabilities: None,
+                negotiated_capabilities: None,
+                kyber_remote_public: None,
+                kyber_remote_fingerprint: None,
+                kyber_local_public: None,
+                kyber_local_fingerprint: None,
+            },
+        }
+    }
     fn sample_manifest() -> ManifestV1 {
         ManifestV1 {
             stream_id: hash_with(0x11),
@@ -3599,11 +3667,9 @@ mod tests {
             signature: [0xAA; 64],
         }
     }
-
     fn sample_domain_id(name: &str) -> DomainId {
         DomainId::try_new(name, "universal").expect("domain id")
     }
-
     fn repo_rans_tables_path() -> PathBuf {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         while !dir.join("Cargo.lock").exists() {
@@ -3615,7 +3681,6 @@ mod tests {
         }
         dir.join("codec/rans/tables/rans_seed0.toml")
     }
-
     #[test]
     fn codec_config_loads_default_bundle_tables() {
         let mut handle = StreamingHandle::new();
@@ -3641,7 +3706,6 @@ mod tests {
             "bundle table checksum should reflect loaded artefact"
         );
     }
-
     #[test]
     fn codec_config_reports_missing_bundle_tables() {
         let mut handle = StreamingHandle::new();
@@ -3658,7 +3722,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn codec_config_rejects_bundle_width_above_tables() {
         let mut handle = StreamingHandle::new();
@@ -3680,7 +3743,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn codec_config_sets_cpu_bundle_acceleration_capabilities() {
         let mut handle = StreamingHandle::new();
@@ -3688,11 +3750,9 @@ mod tests {
         codec.rans_tables_path = repo_rans_tables_path();
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-
         handle
             .apply_codec_config(&codec)
             .expect("cpu-accelerated bundled config must load");
-
         assert!(
             handle
                 .capabilities
@@ -3712,7 +3772,6 @@ mod tests {
             "cpu-only configs must not leak GPU capability bits"
         );
     }
-
     #[test]
     fn codec_config_sets_gpu_bundle_acceleration_capabilities() {
         let mut handle = StreamingHandle::new();
@@ -3720,7 +3779,6 @@ mod tests {
         codec.rans_tables_path = repo_rans_tables_path();
         codec.entropy_mode = EntropyMode::RansBundled;
         codec.bundle_accel = actual::BundleAcceleration::Gpu;
-
         let result = handle.apply_codec_config(&codec);
         if !norito::streaming::BUNDLED_RANS_GPU_BUILD_AVAILABLE {
             let err = result.expect_err("cpu-only builds must reject GPU bundle acceleration");
@@ -3732,9 +3790,7 @@ mod tests {
             }
             return;
         }
-
         result.expect("gpu-accelerated bundled config must load");
-
         assert!(
             handle
                 .capabilities
@@ -3754,16 +3810,13 @@ mod tests {
             "gpu configs must not leak CPU capability bits"
         );
     }
-
     #[test]
     fn normalize_viewer_bits_reflects_handle_capabilities() {
         let mut handle = StreamingHandle::new();
         handle.entropy_mode = EntropyMode::RansBundled;
         handle.bundle_accel = actual::BundleAcceleration::CpuSimd;
         let viewer_bits = CapabilityFlags::from_bits(0);
-
         let normalized = handle.normalize_viewer_feature_bits(viewer_bits);
-
         assert!(
             normalized.contains(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             "bundled handles must force FEATURE_ENTROPY_BUNDLED"
@@ -3777,7 +3830,6 @@ mod tests {
             "cpu handles must not leak GPU capability bits"
         );
     }
-
     #[test]
     fn normalize_viewer_bits_clear_unavailable_capabilities() {
         let mut handle = StreamingHandle::new();
@@ -3788,9 +3840,7 @@ mod tests {
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
-
         let normalized = handle.normalize_viewer_feature_bits(viewer_bits);
-
         assert!(
             normalized.contains(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             "bundled handles must enforce bundled entropy capability bits"
@@ -3804,7 +3854,6 @@ mod tests {
             "handles without acceleration must strip GPU acceleration bits"
         );
     }
-
     fn sample_privacy_route() -> PrivacyRoute {
         PrivacyRoute {
             route_id: hash_with(0x90),
@@ -3826,11 +3875,9 @@ mod tests {
             soranet: None,
         }
     }
-
     fn streaming_route_from_privacy(route: &PrivacyRoute) -> StreamingPrivacyRoute {
         StreamingPrivacyRoute::from(route.clone())
     }
-
     #[test]
     fn process_streaming_event_registers_ticket_from_ready_event() {
         let handle = StreamingHandle::new();
@@ -3839,9 +3886,7 @@ mod tests {
         let event = EventBox::Data(SharedDataEvent::from(DataEvent::Domain(
             DomainEvent::StreamingTicketReady(ready),
         )));
-
         process_streaming_event(&handle, event).expect("ready event processed");
-
         let tickets = handle
             .inner
             .stream_tickets
@@ -3849,7 +3894,6 @@ mod tests {
             .expect("ticket state lock");
         assert!(tickets.contains_key(&stream_key));
     }
-
     #[test]
     fn process_streaming_event_revokes_ticket() {
         let handle = StreamingHandle::new();
@@ -3867,7 +3911,6 @@ mod tests {
                 .expect("ticket state lock");
             assert!(tickets.contains_key(&stream_key));
         }
-
         let revoked = StreamingTicketRevoked::new(
             ready.domain().clone(),
             *ready.stream_id(),
@@ -3880,7 +3923,6 @@ mod tests {
             DomainEvent::StreamingTicketRevoked(revoked),
         )));
         process_streaming_event(&handle, revoked_event).expect("revoked event processed");
-
         let tickets = handle
             .inner
             .stream_tickets
@@ -3888,20 +3930,17 @@ mod tests {
             .expect("ticket state lock");
         assert!(!tickets.contains_key(&stream_key));
     }
-
     #[test]
     fn register_stream_ticket_populates_soranet_defaults() {
         let mut handle = StreamingHandle::new();
         let config = actual::StreamingSoranet::from_defaults();
         handle.set_soranet_config(&config);
-
         let ready = sample_ticket_ready("stream-soranet-defaults", 0xD1, 0xE1);
         let stream_key = stream_hash_from_crypto(ready.stream_id());
         let route = streaming_route_from_privacy(&sample_privacy_route());
         handle
             .register_stream_ticket(&ready, vec![route])
             .expect("register stream ticket with defaults");
-
         let tickets = handle
             .inner
             .stream_tickets
@@ -3923,7 +3962,6 @@ mod tests {
             "expected SoraNet metadata injected via defaults"
         );
     }
-
     fn sample_ticket_ready(domain: &str, stream_seed: u8, ticket_seed: u8) -> StreamingTicketReady {
         let binding = StreamingRouteBinding::new(
             streaming_route_from_privacy(&sample_privacy_route()),
@@ -3972,7 +4010,6 @@ mod tests {
             vec![binding],
         )
     }
-
     fn make_privacy_relay(seed: u8, capabilities: u32) -> PrivacyRelay {
         PrivacyRelay {
             relay_id: hash_with(seed),
@@ -3981,7 +4018,6 @@ mod tests {
             capabilities: PrivacyCapabilities::from_bits(capabilities),
         }
     }
-
     fn privacy_route_with_seed(route_seed: u8, expiry_segment: u64) -> PrivacyRoute {
         PrivacyRoute {
             route_id: hash_with(route_seed),
@@ -4001,7 +4037,6 @@ mod tests {
             soranet: None,
         }
     }
-
     fn soranet_privacy_route(route_seed: u8, expiry_segment: u64) -> PrivacyRoute {
         let mut route = privacy_route_with_seed(route_seed, expiry_segment);
         route.soranet = Some(SoranetRoute {
@@ -4015,18 +4050,15 @@ mod tests {
         });
         route
     }
-
     #[derive(Clone, Default)]
     struct TestControlTx {
         frames: Arc<Mutex<Vec<(PeerId, ControlFrame)>>>,
     }
-
     impl TestControlTx {
         fn frames(&self) -> Vec<(PeerId, ControlFrame)> {
             self.frames.lock().expect("frames lock").clone()
         }
     }
-
     impl StreamingControlTx for TestControlTx {
         fn send_control(&self, peer_id: &PeerId, frame: ControlFrame) {
             self.frames
@@ -4035,17 +4067,14 @@ mod tests {
                 .push((peer_id.clone(), frame));
         }
     }
-
     #[derive(Clone, Default)]
     struct RecordingSoranetTransport {
         calls: Arc<Mutex<Vec<(PrivacyRouteUpdate, PrivacyRelay)>>>,
     }
-
     impl RecordingSoranetTransport {
         fn calls(&self) -> Vec<(PrivacyRouteUpdate, PrivacyRelay)> {
             self.calls.lock().expect("calls lock").clone()
         }
-
         fn wait_for_calls(&self, expected: usize, timeout: Duration) -> bool {
             let deadline = Instant::now() + timeout;
             loop {
@@ -4059,7 +4088,6 @@ mod tests {
             }
         }
     }
-
     impl SoranetRouteProvisionTx for RecordingSoranetTransport {
         fn provision_privacy_route(
             &self,
@@ -4073,12 +4101,10 @@ mod tests {
             Ok(())
         }
     }
-
     #[derive(Clone)]
     struct BlockingSoranetTransport {
         release_rx: Arc<Mutex<mpsc::Receiver<()>>>,
     }
-
     impl BlockingSoranetTransport {
         fn new() -> (Self, mpsc::Sender<()>) {
             let (tx, rx) = mpsc::channel();
@@ -4090,7 +4116,6 @@ mod tests {
             )
         }
     }
-
     impl SoranetRouteProvisionTx for BlockingSoranetTransport {
         fn provision_privacy_route(
             &self,
@@ -4102,21 +4127,17 @@ mod tests {
             Ok(())
         }
     }
-
     #[test]
     fn publisher_viewer_gck_roundtrip() {
         let publisher_keys = checked_random_keypair();
         let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 12001);
         let viewer_peer = make_peer(&viewer_keys, 12002);
-
         let session_id = hash_with(0x11);
         let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x22));
         let protocol_version = 1;
-
         let handle_publisher = StreamingHandle::new();
         let handle_viewer = StreamingHandle::new();
-
         let publisher_update = handle_publisher
             .build_key_update(
                 &viewer_peer,
@@ -4130,12 +4151,10 @@ mod tests {
                 publisher_keys.private_key(),
             )
             .expect("publisher key update");
-
         let publisher_frame = ControlFrame::KeyUpdate(publisher_update.clone());
         handle_viewer
             .process_control_frame(&publisher_peer, &publisher_frame)
             .expect("viewer processes publisher KeyUpdate");
-
         let viewer_update = handle_viewer
             .build_key_update(
                 &publisher_peer,
@@ -4149,12 +4168,10 @@ mod tests {
                 viewer_keys.private_key(),
             )
             .expect("viewer key update");
-
         let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
         handle_publisher
             .process_control_frame(&viewer_peer, &viewer_frame)
             .expect("publisher processes viewer KeyUpdate");
-
         let resolution = sample_resolution();
         handle_publisher
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
@@ -4162,7 +4179,6 @@ mod tests {
         handle_viewer
             .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
             .expect("viewer records capabilities");
-
         assert!(
             handle_publisher.transport_keys(viewer_peer.id()).is_some(),
             "publisher should have negotiated transport keys"
@@ -4179,40 +4195,33 @@ mod tests {
             handle_viewer.transport_capabilities_hash(publisher_peer.id()),
             Some(resolution.capabilities_hash())
         );
-
         let gck = vec![0xAB; 32];
         let content_update = handle_publisher
             .build_content_key_update(&viewer_peer, &gck, 1, 42)
             .expect("publisher content key update");
-
         let publisher_gck = handle_publisher
             .latest_gck(viewer_peer.id())
             .expect("publisher stores latest gck");
         assert_eq!(publisher_gck, gck);
-
         let content_frame = ControlFrame::ContentKeyUpdate(content_update);
         handle_viewer
             .process_control_frame(&publisher_peer, &content_frame)
             .expect("viewer processes content key update");
-
         let viewer_gck = handle_viewer
             .latest_gck(publisher_peer.id())
             .expect("viewer stores latest gck");
         assert_eq!(viewer_gck, gck);
-
         let duplicate_err = handle_publisher
             .build_content_key_update(&viewer_peer, &gck, 1, 84)
             .expect_err("non-monotonic content key id must fail");
         assert!(matches!(duplicate_err, StreamingProcessError::Handshake(_)));
     }
-
     #[test]
     fn content_key_update_requires_negotiation() {
         let handle = StreamingHandle::new();
         let publisher_keys = checked_random_keypair();
         let remote_peer = make_peer(&publisher_keys, 13000);
         let gck = vec![0x44; 32];
-
         let err = handle
             .build_content_key_update(&remote_peer, &gck, 1, 1)
             .expect_err("suite must be negotiated first");
@@ -4223,7 +4232,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn build_key_update_with_material_requires_config() {
         let handle = StreamingHandle::new();
@@ -4245,7 +4253,6 @@ mod tests {
             .expect_err("missing key material must be reported");
         assert!(matches!(err, StreamingProcessError::MissingKeyMaterial));
     }
-
     #[test]
     fn build_key_update_with_material_uses_identity() {
         let publisher_keys = checked_random_ed25519_keypair();
@@ -4254,11 +4261,9 @@ mod tests {
         let viewer_peer = make_peer(&viewer_keys, 15002);
         let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x77));
         let session_id = hash_with(0x88);
-
         let material =
             StreamingKeyMaterial::new(publisher_keys.clone()).expect("ed25519 identity required");
         let publisher_handle = StreamingHandle::with_key_material(material);
-
         let key_update = publisher_handle
             .build_key_update_with_material(
                 &viewer_peer,
@@ -4271,14 +4276,12 @@ mod tests {
                 },
             )
             .expect("publisher key update");
-
         let viewer_handle = StreamingHandle::new();
         let key_update_frame = ControlFrame::KeyUpdate(key_update);
         viewer_handle
             .process_control_frame(&publisher_peer, &key_update_frame)
             .expect("viewer processes key update");
     }
-
     #[test]
     fn records_transport_capabilities_and_exposes_hash() {
         let viewer_keys = checked_random_keypair();
@@ -4317,7 +4320,6 @@ mod tests {
             Some(resolution.capabilities_hash())
         );
     }
-
     #[test]
     fn rejects_invalid_transport_capabilities_without_overwriting_hash() {
         let viewer_keys = checked_random_keypair();
@@ -4327,7 +4329,6 @@ mod tests {
         handle
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Viewer, valid)
             .expect("record valid capabilities");
-
         for (invalid_transport, expected_reason) in [
             (
                 TransportCapabilityResolution {
@@ -4368,7 +4369,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_capabilities_match_config_default() {
         let handle = StreamingHandle::new();
@@ -4377,7 +4377,6 @@ mod tests {
             config_defaults::streaming::FEATURE_BITS,
             "StreamingHandle::new should seed capability mask from defaults",
         );
-
         let kp = checked_random_ed25519_keypair();
         let material = StreamingKeyMaterial::new(kp).expect("material");
         let handle_with_material = StreamingHandle::with_key_material(material);
@@ -4387,7 +4386,6 @@ mod tests {
             "StreamingHandle::with_key_material should seed capability mask from defaults",
         );
     }
-
     #[test]
     fn validate_manifest_detects_hash_mismatch() {
         let viewer_keys = checked_random_keypair();
@@ -4404,13 +4402,11 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record negotiated capabilities");
-
         let mut manifest = sample_manifest();
         handle
             .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
             .expect("apply hash");
         manifest.transport_capabilities_hash = hash_with(0xFE);
-
         let err = handle
             .validate_manifest_transport_capabilities(viewer_peer.id(), &manifest)
             .expect_err("mismatch must raise error");
@@ -4419,7 +4415,6 @@ mod tests {
             StreamingProcessError::TransportCapabilitiesHashMismatch { .. }
         ));
     }
-
     #[test]
     fn process_control_frame_rejects_invalid_manifest() {
         let viewer_keys = checked_random_keypair();
@@ -4436,7 +4431,6 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record negotiated capabilities");
-
         let mut manifest = sample_manifest();
         manifest.transport_capabilities_hash = hash_with(0xEE);
         let frame = ControlFrame::ManifestAnnounce(Box::new(ManifestAnnounceFrame { manifest }));
@@ -4448,7 +4442,6 @@ mod tests {
             StreamingProcessError::TransportCapabilitiesHashMismatch { .. }
         ));
     }
-
     #[test]
     fn process_control_frame_accepts_valid_manifest() {
         let viewer_keys = checked_random_keypair();
@@ -4465,7 +4458,6 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record negotiated capabilities");
-
         let mut manifest = sample_manifest();
         handle
             .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
@@ -4475,7 +4467,6 @@ mod tests {
             .process_control_frame(&viewer_peer, &frame)
             .expect("valid manifest must be accepted");
     }
-
     #[test]
     fn feedback_frames_update_handle_parity() {
         let viewer_keys = checked_random_keypair();
@@ -4485,7 +4476,6 @@ mod tests {
         handle
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Viewer, resolution)
             .expect("record capabilities");
-
         let hint = FeedbackHintFrame {
             stream_id: hash_with(0x99),
             loss_ewma_q16: 5_243,
@@ -4511,16 +4501,13 @@ mod tests {
             fec_budget: 1,
             sync_diagnostics: None,
         };
-
         handle
             .process_control_frame(&viewer_peer, &ControlFrame::FeedbackHint(hint))
             .expect("feedback hint accepted");
         handle
             .process_control_frame(&viewer_peer, &ControlFrame::ReceiverReport(report))
             .expect("receiver report accepted");
-
         assert_eq!(handle.feedback_parity(viewer_peer.id()), Some(2));
-
         // Refresh negotiated state to mirror a completed capability handshake before stamping manifests.
         handle
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Viewer, resolution)
@@ -4532,12 +4519,10 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record negotiated capabilities before manifest");
-
         let ready = sample_ticket_ready("feedback-parity", 0x11, 0xA0);
         handle
             .apply_ticket_ready(&ready)
             .expect("ticket ready must register before manifest");
-
         let mut outbound_hint = FeedbackHintFrame {
             stream_id: Hash::default(),
             loss_ewma_q16: 0,
@@ -4561,7 +4546,6 @@ mod tests {
         );
         assert_eq!(outbound_hint.parity_chunks, 2);
     }
-
     #[test]
     fn apply_ticket_ready_populates_manifest_routes() {
         let handle = StreamingHandle::new();
@@ -4576,21 +4560,17 @@ mod tests {
             vec![binding],
         );
         let ticket_id = stream_hash_from_crypto(ready.ticket_id());
-
         handle
             .apply_ticket_ready(&ready)
             .expect("ticket ready must apply");
-
         handle
             .apply_manifest_ticket_and_routes(&mut manifest)
             .expect("manifest populated");
-
         assert_eq!(manifest.public_metadata.access_policy_id, Some(ticket_id));
         assert_eq!(manifest.privacy_routes.len(), 1);
         let expected_route_id: [u8; iroha_crypto::Hash::LENGTH] = route.route_id;
         assert_eq!(manifest.privacy_routes[0].route_id, expected_route_id);
     }
-
     #[test]
     fn apply_manifest_requires_acknowledged_routes() {
         let handle = StreamingHandle::new();
@@ -4604,11 +4584,9 @@ mod tests {
             base_ready.ticket().clone(),
             vec![binding],
         );
-
         handle
             .apply_ticket_ready(&ready)
             .expect("ticket ready must apply");
-
         let err = handle
             .apply_manifest_ticket_and_routes(&mut manifest)
             .expect_err("manifest must require acknowledged routes");
@@ -4620,7 +4598,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn ticket_revoked_removes_registered_state() {
         let handle = StreamingHandle::new();
@@ -4637,7 +4614,6 @@ mod tests {
             vec![binding],
         );
         handle.apply_ticket_ready(&ready).expect("ticket ready");
-
         let revoked = StreamingTicketRevoked::new(
             domain_id,
             *ready.stream_id(),
@@ -4649,7 +4625,6 @@ mod tests {
         handle
             .apply_ticket_revoked(&revoked)
             .expect("ticket revoked");
-
         let err = handle
             .apply_manifest_ticket_and_routes(&mut manifest)
             .expect_err("manifest should fail without ticket");
@@ -4660,7 +4635,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn duplicate_ticket_nullifier_is_rejected() {
         let handle = StreamingHandle::new();
@@ -4673,7 +4647,6 @@ mod tests {
         handle
             .register_stream_ticket(&first_ready, first_routes)
             .expect("initial ticket registered");
-
         let conflicting_ready = StreamingTicketReady::new(
             sample_domain_id("dup-nullifier-alt"),
             iroha_crypto::Hash::prehashed(hash_with(0x22)),
@@ -4693,12 +4666,10 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn ticket_envelope_commitment_mismatch_is_rejected() {
         let handle = StreamingHandle::new();
         let base_ready = sample_ticket_ready("ticket-envelope-mismatch", 0x31, 0x41);
-
         let mut streaming_route = streaming_route_from_privacy(&sample_privacy_route());
         let body = TicketBodyV1 {
             blinded_cid: [0xAA; 32],
@@ -4721,7 +4692,6 @@ mod tests {
             nullifier: [0xBB; 32],
         };
         streaming_route = streaming_route.with_ticket(envelope);
-
         let binding = StreamingRouteBinding::new(streaming_route.clone(), 0, 16, true);
         let ready = StreamingTicketReady::new(
             base_ready.domain().clone(),
@@ -4729,7 +4699,6 @@ mod tests {
             base_ready.ticket().clone(),
             vec![binding],
         );
-
         let err = handle
             .apply_ticket_ready(&ready)
             .expect_err("mismatched ticket commitment should be rejected");
@@ -4741,7 +4710,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn manifest_publisher_sends_manifest_and_hint() {
         let viewer_keys = checked_random_keypair();
@@ -4762,7 +4730,6 @@ mod tests {
         handle
             .apply_ticket_ready(&ready)
             .expect("ticket ready must register before announce");
-
         let hint = FeedbackHintFrame {
             stream_id: hash_with(0x55),
             loss_ewma_q16: 5_243,
@@ -4788,24 +4755,19 @@ mod tests {
             fec_budget: 2,
             sync_diagnostics: None,
         };
-
         handle
             .process_control_frame(&viewer_peer, &ControlFrame::FeedbackHint(hint))
             .expect("feedback hint accepted");
         handle
             .process_control_frame(&viewer_peer, &ControlFrame::ReceiverReport(report))
             .expect("receiver report accepted");
-
         let tx = TestControlTx::default();
         let publisher = ManifestPublisher::new(handle.clone(), tx.clone());
-
         let manifest = sample_manifest();
         let transport_hash = resolution.capabilities_hash();
-
         publisher
             .announce(&viewer_peer, manifest, None)
             .expect("manifest announce");
-
         let frames = tx.frames();
         assert_eq!(frames.len(), 2, "manifest and feedback hint expected");
         assert_eq!(frames[0].0, viewer_peer.id().clone());
@@ -4828,7 +4790,6 @@ mod tests {
             other => panic!("unexpected frame: {other:?}"),
         }
     }
-
     #[test]
     fn manifest_publisher_emits_manifest_without_feedback_when_missing_state() {
         let viewer_keys = checked_random_keypair();
@@ -4849,17 +4810,13 @@ mod tests {
         handle
             .apply_ticket_ready(&ready)
             .expect("ticket ready must register before announce");
-
         let tx = TestControlTx::default();
         let publisher = ManifestPublisher::new(handle.clone(), tx.clone());
-
         let manifest = sample_manifest();
         let transport_hash = resolution.capabilities_hash();
-
         publisher
             .announce(&viewer_peer, manifest, None)
             .expect("manifest announce without feedback");
-
         let frames = tx.frames();
         assert_eq!(frames.len(), 1, "only manifest expected without feedback");
         match &frames[0].1 {
@@ -4869,7 +4826,6 @@ mod tests {
             other => panic!("unexpected frame: {other:?}"),
         }
     }
-
     #[test]
     fn manifest_requires_privacy_route_ack_before_delivery() {
         let viewer_keys = checked_random_keypair();
@@ -4877,7 +4833,6 @@ mod tests {
         let handle = StreamingHandle::new();
         let tx = TestControlTx::default();
         let publisher = ManifestPublisher::new(handle.clone(), tx.clone());
-
         let resolution = sample_resolution();
         let negotiated =
             CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
@@ -4887,7 +4842,6 @@ mod tests {
         handle
             .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
             .expect("record negotiated capabilities");
-
         let stream_id = hash_with(0x91);
         let route = privacy_route_with_seed(0xA1, 24);
         let streaming_route = streaming_route_from_privacy(&route);
@@ -4908,14 +4862,12 @@ mod tests {
         handle
             .register_stream_ticket(&ready, routes)
             .expect("register stream ticket");
-
         let mut manifest = sample_manifest();
         manifest.stream_id = stream_id;
         manifest.segment_number = 8;
         manifest.content_key_id = 77;
         manifest.public_metadata.access_policy_id = None;
         manifest.privacy_routes.clear();
-
         let updates = handle
             .prepare_privacy_route_updates(
                 &stream_id,
@@ -4936,7 +4888,6 @@ mod tests {
         );
         assert_eq!(prepared.update.exit_token, route.ticket_exit);
         assert_eq!(prepared.exit_relay, route.exit);
-
         let err = publisher
             .announce(&viewer_peer, manifest.clone(), None)
             .expect_err("manifest must be gated until privacy route is acknowledged");
@@ -4948,21 +4899,17 @@ mod tests {
             tx.frames().is_empty(),
             "no frames should be sent before the privacy route is acknowledged"
         );
-
         handle
             .record_privacy_route_ack(&route.route_id)
             .expect("record privacy route acknowledgement");
-
         publisher
             .announce(&viewer_peer, manifest.clone(), None)
             .expect("manifest should be delivered once the route is acknowledged");
-
         let frames = tx.frames();
         assert!(
             !frames.is_empty(),
             "expected manifest frames once privacy route is acknowledged"
         );
-
         let manifest_frame = frames
             .iter()
             .find_map(|(_, frame)| match frame {
@@ -4970,7 +4917,6 @@ mod tests {
                 _ => None,
             })
             .expect("manifest announce frame present");
-
         assert_eq!(
             manifest_frame.privacy_routes,
             vec![route.clone()],
@@ -4982,7 +4928,6 @@ mod tests {
             "manifest should advertise the ticket id as access policy"
         );
     }
-
     #[test]
     fn manifest_publisher_triggers_privacy_route_provisioning() {
         let viewer_keys = checked_random_keypair();
@@ -4990,7 +4935,6 @@ mod tests {
         let mut handle = StreamingHandle::new();
         let recorder = RecordingSoranetTransport::default();
         handle.set_soranet_transport(Some(Arc::new(recorder.clone())));
-
         let route = soranet_privacy_route(0xB6, 24);
         let streaming_route = streaming_route_from_privacy(&route);
         let base_ready = sample_ticket_ready("nsc", 0x19, 0x29);
@@ -5008,14 +4952,12 @@ mod tests {
         handle
             .register_stream_ticket(&ready, vec![streaming_route])
             .expect("register stream ticket");
-
         let mut manifest = sample_manifest();
         manifest.stream_id = stream_hash_from_crypto(ready.stream_id());
         manifest.segment_number = 8;
         manifest.content_key_id = 64;
         manifest.public_metadata.access_policy_id = None;
         manifest.privacy_routes.clear();
-
         let tx = TestControlTx::default();
         let publisher = ManifestPublisher::new(handle, tx);
         let err = publisher
@@ -5030,7 +4972,6 @@ mod tests {
             "auto-provisioning should call the SoraNet transport"
         );
     }
-
     #[test]
     fn manifest_publisher_skips_provisioning_when_disabled() {
         let viewer_keys = checked_random_keypair();
@@ -5041,7 +4982,6 @@ mod tests {
         handle.set_soranet_config(&config);
         let recorder = RecordingSoranetTransport::default();
         handle.set_soranet_transport(Some(Arc::new(recorder.clone())));
-
         let resolution = sample_resolution();
         handle
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
@@ -5053,38 +4993,32 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record negotiated capabilities");
-
         let ready = sample_ticket_ready("nsc", 0x1A, 0x2A);
         handle
             .apply_ticket_ready(&ready)
             .expect("ticket ready must register before announce");
-
         let mut manifest = sample_manifest();
         manifest.stream_id = stream_hash_from_crypto(ready.stream_id());
         manifest.segment_number = 8;
         manifest.content_key_id = 64;
         manifest.public_metadata.access_policy_id = None;
         manifest.privacy_routes.clear();
-
         let tx = TestControlTx::default();
         let publisher = ManifestPublisher::new(handle, tx);
         publisher
             .announce(&viewer_peer, manifest, None)
             .expect("manifest announce when provisioning disabled");
-
         assert!(
             recorder.calls().is_empty(),
             "provisioning should be skipped when disabled"
         );
     }
-
     #[test]
     fn prepare_privacy_route_updates_for_manifest_uses_window_segments() {
         let mut handle = StreamingHandle::new();
         let mut config = actual::StreamingSoranet::from_defaults();
         config.provision_window_segments = 4;
         handle.set_soranet_config(&config);
-
         let route = soranet_privacy_route(0xB7, 24);
         let streaming_route = streaming_route_from_privacy(&route);
         let base_ready = sample_ticket_ready("nsc", 0x21, 0x31);
@@ -5102,14 +5036,12 @@ mod tests {
         handle
             .register_stream_ticket(&ready, vec![streaming_route])
             .expect("register stream ticket");
-
         let mut manifest = sample_manifest();
         manifest.stream_id = stream_hash_from_crypto(ready.stream_id());
         manifest.segment_number = 9;
         manifest.content_key_id = 64;
         manifest.public_metadata.access_policy_id = None;
         manifest.privacy_routes.clear();
-
         let updates = handle
             .prepare_privacy_route_updates_for_manifest(&manifest)
             .expect("prepare manifest privacy route updates");
@@ -5118,13 +5050,11 @@ mod tests {
         assert_eq!(prepared.update.valid_from_segment, 9);
         assert_eq!(prepared.update.valid_until_segment, 11);
     }
-
     #[test]
     fn prepare_privacy_route_updates_does_not_call_transport() {
         let mut handle = StreamingHandle::new();
         let recorder = RecordingSoranetTransport::default();
         handle.set_soranet_transport(Some(Arc::new(recorder.clone())));
-
         let route = soranet_privacy_route(0xB5, 24);
         let streaming_route = streaming_route_from_privacy(&route);
         let base_ready = sample_ticket_ready("nsc", 0x31, 0x32);
@@ -5142,7 +5072,6 @@ mod tests {
         handle
             .register_stream_ticket(&ready, vec![streaming_route])
             .expect("register stream ticket");
-
         let stream_id = stream_hash_from_crypto(ready.stream_id());
         let updates = handle
             .prepare_privacy_route_updates(&stream_id, 77, 0, 8)
@@ -5152,13 +5081,11 @@ mod tests {
             updates[0].update.soranet.is_some(),
             "soranet metadata must be surfaced in prepared update"
         );
-
         assert!(
             recorder.calls().is_empty(),
             "prepare_privacy_route_updates should not invoke transport I/O"
         );
     }
-
     #[test]
     fn filesystem_soranet_provisioner_writes_updates_to_disk() {
         let dir = tempdir().expect("create temp dir");
@@ -5184,11 +5111,9 @@ mod tests {
                 stream_tag: SoranetStreamTag::NoritoStream,
             }),
         };
-
         provisioner
             .provision_privacy_route(&update, &exit)
             .expect("provision privacy route");
-
         let exit_dir = dir
             .path()
             .join(format!("exit-{}", hex::encode(exit.relay_id)))
@@ -5208,13 +5133,11 @@ mod tests {
             1,
             "exactly one queued privacy route update expected"
         );
-
         let encoded = fs::read(&entries[0]).expect("read spooled file");
         let decoded: PrivacyRouteUpdate =
             decode_from_bytes(&encoded).expect("decode privacy route update");
         assert_eq!(decoded, update);
     }
-
     #[test]
     fn filesystem_soranet_provisioner_rejects_when_budget_exceeded() {
         let dir = tempdir().expect("create temp dir");
@@ -5249,7 +5172,6 @@ mod tests {
                 stream_tag: SoranetStreamTag::NoritoStream,
             }),
         };
-
         let err = provisioner
             .provision_privacy_route(&update, &exit)
             .expect_err("spool budget should reject updates");
@@ -5272,7 +5194,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn filesystem_soranet_provisioner_routes_kaigi_updates() {
         let dir = tempdir().expect("create temp dir");
@@ -5298,11 +5219,9 @@ mod tests {
                 stream_tag: SoranetStreamTag::Kaigi,
             }),
         };
-
         provisioner
             .provision_privacy_route(&update, &exit)
             .expect("provision kaigi route");
-
         let exit_dir = dir
             .path()
             .join(format!("exit-{}", hex::encode(exit.relay_id)))
@@ -5318,7 +5237,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(entries.len(), 1);
     }
-
     #[test]
     fn prepare_privacy_route_updates_uses_soranet_defaults() {
         let mut handle = StreamingHandle::new();
@@ -5326,7 +5244,6 @@ mod tests {
         handle.set_soranet_transport(Some(Arc::new(recorder.clone())));
         let config = actual::StreamingSoranet::from_defaults();
         handle.set_soranet_config(&config);
-
         let streaming_route = streaming_route_from_privacy(&sample_privacy_route());
         let base_ready = sample_ticket_ready("nsc", 0x52, 0x62);
         let ready = StreamingTicketReady::new(
@@ -5343,12 +5260,10 @@ mod tests {
         handle
             .register_stream_ticket(&ready, vec![streaming_route])
             .expect("register stream ticket");
-
         let stream_id = stream_hash_from_crypto(ready.stream_id());
         let updates = handle
             .prepare_privacy_route_updates(&stream_id, 91, 0, 12)
             .expect("prepare privacy route updates");
-
         assert!(
             updates.iter().all(|update| update.update.soranet.is_some()),
             "expected prepared updates to include SoraNet metadata derived from defaults"
@@ -5358,17 +5273,14 @@ mod tests {
             "prepare_privacy_route_updates should not invoke SoraNet transport"
         );
     }
-
     #[test]
     fn soranet_provision_queue_reports_backpressure() {
         let mut handle = StreamingHandle::new();
         let mut config = actual::StreamingSoranet::from_defaults();
         config.provision_queue_capacity = 1;
         handle.set_soranet_config(&config);
-
         let (transport, release_tx) = BlockingSoranetTransport::new();
         handle.set_soranet_transport(Some(Arc::new(transport)));
-
         let routes = [
             soranet_privacy_route(0xC7, 18),
             soranet_privacy_route(0xC8, 18),
@@ -5392,7 +5304,6 @@ mod tests {
         handle
             .register_stream_ticket(&ready, streaming_routes)
             .expect("register stream ticket");
-
         let stream_id = stream_hash_from_crypto(ready.stream_id());
         let err = handle
             .queue_privacy_route_updates(&stream_id, 61, 0, 5)
@@ -5403,12 +5314,10 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-
         for _ in 0..3 {
             let _ = release_tx.send(());
         }
     }
-
     #[test]
     fn provision_state_update_ignores_missing_ticket() {
         let handle = StreamingHandle::new();
@@ -5422,7 +5331,6 @@ mod tests {
         handle
             .unregister_stream_ticket(&stream_id)
             .expect("unregister stream ticket");
-
         let result = mark_privacy_route_provisioned_in_state(
             handle.inner.as_ref(),
             &stream_id,
@@ -5434,7 +5342,6 @@ mod tests {
             "missing tickets should be ignored after provisioning races"
         );
     }
-
     #[test]
     fn set_soranet_config_populates_missing_metadata() {
         let mut config = actual::StreamingSoranet::from_defaults();
@@ -5442,10 +5349,8 @@ mod tests {
         config.padding_budget_ms = Some(37);
         config.access_kind = actual::StreamingSoranetAccessKind::ReadOnly;
         config.channel_salt = "override-domain".to_owned();
-
         let mut handle = StreamingHandle::new();
         handle.set_soranet_config(&config);
-
         let ready = sample_ticket_ready("apply-soranet", 0x51, 0x61);
         let routes = ready
             .routes()
@@ -5455,7 +5360,6 @@ mod tests {
         handle
             .register_stream_ticket(&ready, routes)
             .expect("register stream ticket with defaults");
-
         let stream_id = stream_hash_from_crypto(ready.stream_id());
         let tickets = handle
             .inner
@@ -5468,11 +5372,9 @@ mod tests {
             .route
             .soranet()
             .expect("soranet defaults must be attached");
-
         assert_eq!(soranet.exit_multiaddr, config.exit_multiaddr);
         assert_eq!(soranet.padding_budget_ms(), config.padding_budget_ms);
         assert_eq!(soranet.access_kind, StreamingSoranetAccessKind::ReadOnly);
-
         let expected_channel: [u8; 32] = {
             let mut hasher = Blake3Hasher::new();
             hasher.update(config.channel_salt.as_bytes());
@@ -5482,15 +5384,12 @@ mod tests {
         };
         assert_eq!(soranet.channel_id, expected_channel);
     }
-
     #[test]
     fn set_soranet_config_disabled_skips_population() {
         let mut config = actual::StreamingSoranet::from_defaults();
         config.enabled = false;
-
         let mut handle = StreamingHandle::new();
         handle.set_soranet_config(&config);
-
         let ready = sample_ticket_ready("apply-soranet-disabled", 0x71, 0x81);
         let routes = ready
             .routes()
@@ -5500,7 +5399,6 @@ mod tests {
         handle
             .register_stream_ticket(&ready, routes)
             .expect("register stream ticket without defaults");
-
         let stream_id = stream_hash_from_crypto(ready.stream_id());
         let tickets = handle
             .inner
@@ -5514,7 +5412,6 @@ mod tests {
             "soranet metadata should not attach when disabled"
         );
     }
-
     #[test]
     fn privacy_route_expiry_blocks_updates_and_manifest() {
         let viewer_keys = checked_random_keypair();
@@ -5522,7 +5419,6 @@ mod tests {
         let handle = StreamingHandle::new();
         let tx = TestControlTx::default();
         let publisher = ManifestPublisher::new(handle.clone(), tx);
-
         let resolution = sample_resolution();
         handle
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
@@ -5534,7 +5430,6 @@ mod tests {
                 CapabilityFlags::from_bits(0b11),
             )
             .expect("record negotiated capabilities");
-
         let stream_id = hash_with(0xA3);
         let route = privacy_route_with_seed(0xB1, 5);
         let streaming_route = streaming_route_from_privacy(&route);
@@ -5553,14 +5448,12 @@ mod tests {
         handle
             .register_stream_ticket(&ready, vec![streaming_route])
             .expect("register stream ticket");
-
         let mut manifest = sample_manifest();
         manifest.stream_id = stream_id;
         manifest.segment_number = 4;
         manifest.content_key_id = 33;
         manifest.public_metadata.access_policy_id = None;
         manifest.privacy_routes.clear();
-
         let initial_updates = handle
             .prepare_privacy_route_updates(&stream_id, 33, 3, 5)
             .expect("prepare updates within validity window");
@@ -5568,7 +5461,6 @@ mod tests {
         handle
             .record_privacy_route_ack(&route.route_id)
             .expect("ack initial route provisioning");
-
         let expired_err = handle
             .prepare_privacy_route_updates(&stream_id, 33, 6, 7)
             .expect_err("updates beyond expiry must fail");
@@ -5580,7 +5472,6 @@ mod tests {
                 requested_segment
             } if route_id == route.route_id && expiry_segment == 5 && requested_segment == 6
         ));
-
         manifest.segment_number = 6;
         let announce_err = publisher
             .announce(&viewer_peer, manifest, None)
@@ -5591,7 +5482,6 @@ mod tests {
             if stream == stream_id && segment == 6
         ));
     }
-
     #[test]
     fn sync_policy_detects_hard_cap() {
         let policy = SyncPolicy {
@@ -5620,7 +5510,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn receiver_report_violation_returns_error() {
         let viewer_keys = checked_random_keypair();
@@ -5636,7 +5525,6 @@ mod tests {
         handle
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Viewer, resolution)
             .expect("record capabilities");
-
         let report = ReceiverReport {
             stream_id: hash_with(0xAB),
             latest_segment: 16,
@@ -5663,7 +5551,6 @@ mod tests {
                 violation_count: 4,
             }),
         };
-
         let err = handle
             .process_control_frame(&viewer_peer, &ControlFrame::ReceiverReport(report))
             .expect_err("violation must be surfaced");
@@ -5672,14 +5559,12 @@ mod tests {
             StreamingProcessError::AudioSyncViolation { .. }
         ));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn privacy_route_reprovision_required_for_extended_window() {
         let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13962);
         let handle = StreamingHandle::new();
-
         let resolution = sample_resolution();
         let negotiated =
             CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
@@ -5689,7 +5574,6 @@ mod tests {
         handle
             .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
             .expect("record negotiated capabilities");
-
         let stream_id = hash_with(0xC1);
         let route = privacy_route_with_seed(0xD1, 40);
         let streaming_route = streaming_route_from_privacy(&route);
@@ -5709,14 +5593,12 @@ mod tests {
         handle
             .register_stream_ticket(&ready, vec![streaming_route])
             .expect("register stream ticket");
-
         let mut manifest = sample_manifest();
         manifest.stream_id = stream_id;
         manifest.segment_number = 8;
         manifest.content_key_id = 55;
         manifest.public_metadata.access_policy_id = None;
         manifest.privacy_routes.clear();
-
         // First provisioning window covers the initial segment range.
         let initial_updates = handle
             .prepare_privacy_route_updates(&stream_id, manifest.content_key_id, 8, 12)
@@ -5726,11 +5608,9 @@ mod tests {
         assert_eq!(prepared.update.route_id, route.route_id);
         assert_eq!(prepared.update.valid_from_segment, 8);
         assert_eq!(prepared.update.valid_until_segment, 12);
-
         handle
             .record_privacy_route_ack(&route.route_id)
             .expect("acknowledge initial provisioning");
-
         let tx_initial = TestControlTx::default();
         let publisher_initial = ManifestPublisher::new(handle.clone(), tx_initial.clone());
         publisher_initial
@@ -5743,7 +5623,6 @@ mod tests {
                 .any(|(_, frame)| matches!(frame, ControlFrame::ManifestAnnounce(_))),
             "initial manifest announce expected after ack"
         );
-
         // Extend the validity window; reprovisioning should be required.
         let next_segment = 13;
         let extended_updates = handle
@@ -5753,12 +5632,10 @@ mod tests {
         let reprovisioned = &extended_updates[0];
         assert_eq!(reprovisioned.update.valid_from_segment, next_segment);
         assert_eq!(reprovisioned.update.valid_until_segment, 18);
-
         let mut next_manifest = manifest.clone();
         next_manifest.segment_number = next_segment;
         next_manifest.public_metadata.access_policy_id = None;
         next_manifest.privacy_routes.clear();
-
         let tx_next = TestControlTx::default();
         let publisher_next = ManifestPublisher::new(handle.clone(), tx_next.clone());
         let reprovision_err = publisher_next
@@ -5772,15 +5649,12 @@ mod tests {
             tx_next.frames().is_empty(),
             "no frames should be sent before extended window is acknowledged"
         );
-
         handle
             .record_privacy_route_ack(&route.route_id)
             .expect("acknowledge extended provisioning");
-
         publisher_next
             .announce(&viewer_peer, next_manifest.clone(), None)
             .expect("manifest delivered after extended ack");
-
         let frames = tx_next.frames();
         let manifest_frame = frames
             .iter()
@@ -5789,7 +5663,6 @@ mod tests {
                 _ => None,
             })
             .expect("manifest announce frame present after extended ack");
-
         assert_eq!(
             manifest_frame.segment_number, next_segment,
             "manifest should target the extended segment"
@@ -5805,7 +5678,6 @@ mod tests {
             "manifest should advertise ticket id once reprovisioned route is acknowledged"
         );
     }
-
     #[test]
     fn apply_manifest_capabilities_reflect_configured_features() {
         let viewer_keys = checked_random_keypair();
@@ -5826,18 +5698,14 @@ mod tests {
                 ),
             )
             .expect("record negotiated capabilities");
-
         let mut manifest = sample_manifest();
         // overwrite capability field to ensure method updates it
         manifest.capabilities = CapabilityFlags::from_bits(0);
-
         handle
             .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
             .expect("apply transport hash");
-
         assert_eq!(manifest.capabilities, handle.capabilities());
     }
-
     #[test]
     fn bundled_manifest_capabilities_include_entropy_and_accel_bits() {
         let bundled_bits = CapabilityFlags::from_bits(
@@ -5847,7 +5715,6 @@ mod tests {
         let mut handle = StreamingHandle::new().with_capabilities(bundled_bits);
         handle.entropy_mode = EntropyMode::RansBundled;
         handle.bundle_accel = actual::BundleAcceleration::CpuSimd;
-
         let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13991);
         let resolution = sample_resolution();
@@ -5864,14 +5731,11 @@ mod tests {
                 ),
             )
             .expect("record negotiated capabilities");
-
         let mut manifest = sample_manifest();
         manifest.capabilities = CapabilityFlags::from_bits(0);
-
         handle
             .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
             .expect("apply transport hash");
-
         assert!(
             manifest
                 .capabilities
@@ -5885,7 +5749,6 @@ mod tests {
             "manifest should advertise configured acceleration capability"
         );
     }
-
     #[cfg(feature = "quic")]
     async fn run_publisher_transport_negotiation(
         server: iroha_p2p::streaming::StreamingServer,
@@ -5909,7 +5772,6 @@ mod tests {
         sleep(TokioDuration::from_millis(50)).await;
         conn.close();
     }
-
     #[cfg(feature = "quic")]
     async fn run_viewer_transport_negotiation(
         settings: iroha_p2p::streaming::quic::TransportConfigSettings,
@@ -5922,7 +5784,6 @@ mod tests {
         use norito::streaming::{
             AudioCapability, CapabilityFlags, Resolution, TransportCapabilities,
         };
-
         let mut client = StreamingClient::connect(
             &format!("/ip4/127.0.0.1/udp/{listen_port}/quic"),
             server_certificate_fingerprint,
@@ -5930,7 +5791,6 @@ mod tests {
         )
         .await
         .expect("client");
-
         let mut viewer_caps = TransportCapabilities::kyber768_default();
         viewer_caps.max_segment_datagram_size = 1_000;
         let report = CapabilityReport {
@@ -5961,14 +5821,12 @@ mod tests {
         );
         client.close().await;
     }
-
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "multi_thread")]
     async fn negotiate_transport_records_hashes() {
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
         use iroha_p2p::streaming::{StreamingServer, quic::TransportConfigSettings};
         use norito::streaming::CapabilityFlags;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let server = StreamingServer::bind(server_addr, settings)
@@ -5976,17 +5834,14 @@ mod tests {
             .expect("bind server");
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
-
         let publisher_keys = checked_random_ed25519_keypair();
         let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 21001);
         let viewer_peer = make_peer(&viewer_keys, 21002);
-
         let publisher_handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let viewer_handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
-
         let server_task = run_publisher_transport_negotiation(
             server.clone(),
             publisher_handle.clone(),
@@ -5999,9 +5854,7 @@ mod tests {
             viewer_handle.clone(),
             publisher_peer.clone(),
         );
-
         tokio::join!(server_task, viewer_task);
-
         assert!(
             publisher_handle
                 .transport_capabilities_hash(viewer_peer.id())
@@ -6012,9 +5865,7 @@ mod tests {
                 .transport_capabilities_hash(publisher_peer.id())
                 .is_some()
         );
-
         let mut manifest = sample_manifest();
-
         publisher_handle
             .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
             .expect("apply transport hash");
@@ -6027,10 +5878,8 @@ mod tests {
         viewer_handle
             .validate_manifest_transport_capabilities(publisher_peer.id(), &manifest)
             .expect("manifest matches negotiated capabilities");
-
         server.shutdown().await;
     }
-
     #[cfg(feature = "quic")]
     #[test]
     fn privacy_requirement_without_provider_rejected() {
@@ -6062,7 +5911,6 @@ mod tests {
             StreamingProcessError::PrivacyOverlayUnsupported
         ));
     }
-
     #[test]
     fn publisher_rejects_bundled_manifest_without_support() {
         let handle = StreamingHandle::new();
@@ -6072,7 +5920,6 @@ mod tests {
             .ensure_manifest_entropy_mode_supported(&manifest)
             .expect("bundled manifests should be accepted when bundled support is required");
     }
-
     #[test]
     fn bundled_manifest_without_checksum_rejected() {
         let handle = StreamingHandle::new();
@@ -6087,7 +5934,6 @@ mod tests {
             StreamingProcessError::ManifestEntropyTablesMismatch { .. }
         ));
     }
-
     #[test]
     fn bundled_manifest_checksum_mismatch_rejected() {
         let mut handle = StreamingHandle::new();
@@ -6098,7 +5944,6 @@ mod tests {
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
         assert!(handle.entropy_mode.is_bundled(), "handle must be bundled");
-
         let mut manifest = sample_manifest();
         manifest.entropy_mode = EntropyMode::RansBundled;
         manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
@@ -6115,7 +5960,6 @@ mod tests {
             Some(handle.bundle_tables_checksum()),
             "checksum mutation must differ"
         );
-
         let err = handle
             .ensure_manifest_entropy_mode_supported(&manifest)
             .expect_err("checksum should be enforced");
@@ -6124,7 +5968,6 @@ mod tests {
             StreamingProcessError::ManifestEntropyTablesMismatch { .. }
         ));
     }
-
     #[test]
     fn viewer_requires_negotiated_bundled_capability() {
         let mut handle = StreamingHandle::new();
@@ -6147,12 +5990,10 @@ mod tests {
                 CapabilityFlags::from_bits(0),
             )
             .expect("record negotiated bits");
-
         let mut manifest = sample_manifest();
         manifest.entropy_mode = EntropyMode::RansBundled;
         manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
         manifest.transport_capabilities_hash = resolution.capabilities_hash();
-
         let err = handle
             .validate_manifest_transport_capabilities(publisher_peer.id(), &manifest)
             .expect_err("viewer must reject bundled manifest without negotiated flag");
@@ -6161,7 +6002,6 @@ mod tests {
             StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
         ));
     }
-
     #[test]
     fn viewer_requires_negotiated_bundle_acceleration() {
         let mut handle = StreamingHandle::new();
@@ -6186,12 +6026,10 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record negotiated bits");
-
         let mut manifest = sample_manifest();
         manifest.entropy_mode = EntropyMode::RansBundled;
         manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
         manifest.transport_capabilities_hash = resolution.capabilities_hash();
-
         let err = handle
             .validate_manifest_transport_capabilities(publisher_peer.id(), &manifest)
             .expect_err("viewer must reject bundled manifest without negotiated acceleration flag");
@@ -6200,13 +6038,11 @@ mod tests {
             StreamingProcessError::ManifestAccelerationNotNegotiated { .. }
         ));
     }
-
     #[test]
     fn manifest_capabilities_track_codec_config_changes() {
         let viewer_keys = checked_random_ed25519_keypair();
         let viewer_peer = make_peer(&viewer_keys, 19021);
         let resolution = sample_resolution();
-
         let mut handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b111));
         let mut codec = actual::StreamingCodec::from_defaults();
@@ -6226,7 +6062,6 @@ mod tests {
                 CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             )
             .expect("record viewer negotiated capabilities");
-
         let mut bundled_manifest = sample_manifest();
         bundled_manifest.entropy_mode = EntropyMode::RansBundled;
         bundled_manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
@@ -6240,13 +6075,11 @@ mod tests {
             "bundled manifests must advertise FEATURE_ENTROPY_BUNDLED"
         );
     }
-
     #[test]
     fn bundled_manifest_updates_acceleration_bits_on_config_change() {
         let viewer_keys = checked_random_ed25519_keypair();
         let viewer_peer = make_peer(&viewer_keys, 19031);
         let resolution = sample_resolution();
-
         let mut handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b111));
         let mut codec = actual::StreamingCodec::from_defaults();
@@ -6267,12 +6100,10 @@ mod tests {
         handle
             .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Viewer, negotiated)
             .expect("record viewer negotiated capabilities");
-
         let mut manifest = sample_manifest();
         manifest.entropy_mode = EntropyMode::RansBundled;
         manifest.entropy_tables_checksum = Some(handle.bundle_tables_checksum());
         manifest.transport_capabilities_hash = resolution.capabilities_hash();
-
         handle
             .apply_manifest_transport_capabilities(viewer_peer.id(), &mut manifest)
             .expect("stamp bundled manifest");
@@ -6288,7 +6119,6 @@ mod tests {
                 .contains(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU),
             "CPU manifests must not advertise the GPU acceleration bit"
         );
-
         codec.bundle_accel = actual::BundleAcceleration::Gpu;
         let gpu_config = handle.apply_codec_config(&codec);
         if !norito::streaming::BUNDLED_RANS_GPU_BUILD_AVAILABLE {
@@ -6324,7 +6154,6 @@ mod tests {
             "GPU manifests must drop the CPU acceleration bit"
         );
     }
-
     #[cfg(feature = "quic")]
     #[test]
     fn bundled_entropy_requires_viewer_support() {
@@ -6338,7 +6167,6 @@ mod tests {
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
-
         let report = CapabilityReport {
             stream_id: hash_with(0xCB),
             endpoint_role: CapabilityRole::Viewer,
@@ -6365,7 +6193,6 @@ mod tests {
             StreamingProcessError::BundledEntropyUnsupported
         ));
     }
-
     #[test]
     fn normalize_viewer_feature_bits_tracks_codec_config() {
         let handle = StreamingHandle::new();
@@ -6375,7 +6202,6 @@ mod tests {
             normalized.contains(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
             "bundled mode should advertise FEATURE_ENTROPY_BUNDLED by default"
         );
-
         let mut bundled = handle.clone();
         let mut codec = actual::StreamingCodec::from_defaults();
         codec.bundle_width = 2;
@@ -6393,7 +6219,6 @@ mod tests {
             normalized.contains(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD),
             "bundled mode should advertise the configured acceleration bit"
         );
-
         let mut gpu = handle.clone();
         let mut gpu_codec = actual::StreamingCodec::from_defaults();
         gpu_codec.entropy_mode = EntropyMode::RansBundled;
@@ -6418,7 +6243,6 @@ mod tests {
             "GPU acceleration should set the GPU capability bit"
         );
     }
-
     #[test]
     fn normalize_viewer_feature_bits_strips_conflicting_acceleration_bits() {
         let mut cpu_handle = StreamingHandle::new();
@@ -6430,7 +6254,6 @@ mod tests {
         cpu_handle
             .apply_codec_config(&codec)
             .expect("CPU bundler config should load");
-
         let gpu_bit = CapabilityFlags::from_bits(
             CapabilityFlags::FEATURE_ENTROPY_BUNDLED | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
@@ -6447,7 +6270,6 @@ mod tests {
             !normalized_cpu.contains(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU),
             "CPU handle must drop conflicting GPU bits"
         );
-
         let mut gpu_handle = StreamingHandle::new();
         codec.bundle_accel = actual::BundleAcceleration::Gpu;
         let gpu_result = gpu_handle.apply_codec_config(&codec);
@@ -6480,7 +6302,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(feature = "quic")]
     #[test]
     fn unsupported_feature_bits_rejected() {
@@ -6513,7 +6334,6 @@ mod tests {
             StreamingProcessError::UnsupportedFeatures { .. }
         ));
     }
-
     #[cfg(feature = "quic")]
     #[test]
     fn zero_capability_report_protocol_version_rejected() {
@@ -6545,12 +6365,10 @@ mod tests {
             StreamingProcessError::InvalidProtocolVersion { found: 0 }
         ));
     }
-
     #[cfg(feature = "quic")]
     #[test]
     fn non_viewer_capability_report_role_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let report = CapabilityReport {
             stream_id: hash_with(0xDF),
@@ -6581,351 +6399,5 @@ mod tests {
             }
         ));
     }
-
-    #[cfg(feature = "quic")]
-    #[test]
-    fn publisher_rejects_missing_bundle_acceleration_support() {
-        use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
-        let mut handle = StreamingHandle::new();
-        let mut codec = actual::StreamingCodec::from_defaults();
-        codec.entropy_mode = EntropyMode::RansBundled;
-        codec.bundle_width = 2;
-        codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-        codec.rans_tables_path = repo_rans_tables_path();
-        handle
-            .apply_codec_config(&codec)
-            .expect("bundle tables should load");
-
-        let report = CapabilityReport {
-            stream_id: hash_with(0xDE),
-            endpoint_role: CapabilityRole::Viewer,
-            protocol_version: 1,
-            max_resolution: Resolution::R720p,
-            hdr_supported: false,
-            capture_hdr: false,
-            neural_bundles: Vec::new(),
-            audio_caps: AudioCapability {
-                sample_rates: vec![48_000],
-                ambisonics: false,
-                max_channels: 2,
-            },
-            feature_bits: CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
-            max_datagram_size: 900,
-            dplpmtud: false,
-        };
-        let resolution = sample_resolution();
-        let err = handle
-            .build_capability_ack(&report, resolution)
-            .expect_err("publisher should reject viewers lacking bundle acceleration support");
-        assert!(matches!(
-            err,
-            StreamingProcessError::BundledAccelerationUnsupported { .. }
-        ));
-    }
-
-    #[test]
-    fn snapshot_decode_tolerates_misaligned_plaintext() {
-        let key_pair = checked_random_keypair();
-        let peer = make_peer(&key_pair, 16001);
-        let resolution = sample_resolution();
-        let snapshot = StreamingSessionSnapshot {
-            role: CapabilityRole::Viewer,
-            session_id: hash_with(0x99),
-            key_counter: 3,
-            suite: EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x42)),
-            kem_suite_id: 1, // ML-KEM-768 default for streaming snapshots.
-            sts_root: hash_with(0x11),
-            latest_gck: Some(vec![0xAA, 0xBB, 0xCC]),
-            last_content_key_id: Some(7),
-            last_content_key_valid_from: Some(1_702_000_000),
-            cadence: Some(SessionCadenceSnapshot {
-                started_at_ms: 1_701_000_000,
-                total_payload_bytes: 4_096,
-            }),
-            transport_capabilities: Some(TransportCapabilityResolutionSnapshot::from(&resolution)),
-            negotiated_capabilities: Some(CapabilityFlags::from_bits(0b101)),
-            kyber_remote_public: Some(vec![0x55, 0x66, 0x77]),
-            kyber_remote_fingerprint: Some(hash_with(0x22)),
-            kyber_local_public: None,
-            kyber_local_fingerprint: None,
-        };
-        let entry = StreamingSnapshotEntry {
-            role: CapabilityRole::Viewer,
-            peer: peer.id().clone(),
-            snapshot,
-        };
-        let file = StreamingSnapshotFile {
-            version: SNAPSHOT_VERSION,
-            entries: vec![entry],
-        };
-        let plaintext = norito_core::to_bytes(&file).expect("canonical snapshot encode");
-        let decoded =
-            super::decode_snapshot_plaintext(&plaintext).expect("aligned decode succeeds");
-        assert_eq!(decoded, file);
-
-        let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
-        assert!(align > 1, "expected archived snapshot alignment > 1");
-        let mut envelope = vec![0u8; align - 1 + plaintext.len()];
-        envelope[align - 1..align - 1 + plaintext.len()].copy_from_slice(&plaintext);
-        let misaligned_slice = &envelope[align - 1..align - 1 + plaintext.len()];
-        assert_eq!(misaligned_slice, plaintext.as_slice());
-        assert_ne!(
-            (misaligned_slice.as_ptr() as usize) % align,
-            0,
-            "test failed to craft a misaligned view"
-        );
-        let decoded =
-            super::decode_snapshot_plaintext(misaligned_slice).expect("misaligned decode succeeds");
-        assert_eq!(decoded, file);
-    }
-
-    #[test]
-    fn snapshot_persist_roundtrip() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let snapshot_path = dir.path().join("sessions.norito");
-
-        let publisher_keys = checked_random_ed25519_keypair();
-        let viewer_keys = checked_random_keypair();
-        let publisher_peer = make_peer(&publisher_keys, 17001);
-        let viewer_peer = make_peer(&viewer_keys, 17002);
-        let session_id = hash_with(0x55);
-        let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x66));
-        let resolution = sample_resolution();
-
-        let material = StreamingKeyMaterial::new(publisher_keys.clone())
-            .expect("publisher material requires ed25519");
-        let publisher_key = snapshot_session_key(&material);
-        let publisher_handle = StreamingHandle::with_key_material(material.clone())
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&publisher_key)
-            .expect("configure snapshot encryption key");
-        let viewer_key = snapshot_session_key(&material);
-        let viewer_handle = StreamingHandle::new()
-            .with_snapshot_encryption_key(&viewer_key)
-            .expect("configure viewer snapshot encryption key");
-
-        let publisher_update = publisher_handle
-            .build_key_update(
-                &viewer_peer,
-                CapabilityRole::Publisher,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 1,
-                },
-                publisher_keys.private_key(),
-            )
-            .expect("publisher key update");
-
-        let publisher_frame = ControlFrame::KeyUpdate(publisher_update.clone());
-        viewer_handle
-            .process_control_frame(&publisher_peer, &publisher_frame)
-            .expect("viewer processes key update");
-
-        let viewer_update = viewer_handle
-            .build_key_update(
-                &publisher_peer,
-                CapabilityRole::Viewer,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 2,
-                },
-                viewer_keys.private_key(),
-            )
-            .expect("viewer key update");
-
-        let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
-        publisher_handle
-            .process_control_frame(&viewer_peer, &viewer_frame)
-            .expect("publisher processes viewer key update");
-
-        publisher_handle
-            .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
-            .expect("publisher records capabilities");
-        viewer_handle
-            .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
-            .expect("viewer records capabilities");
-        let negotiated =
-            CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
-        publisher_handle
-            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
-            .expect("publisher records features");
-        viewer_handle
-            .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
-            .expect("viewer records features");
-
-        publisher_handle
-            .persist_snapshots()
-            .expect("persist streaming snapshots");
-        assert!(snapshot_path.exists(), "snapshot file should exist");
-
-        let restored_key = snapshot_session_key(&material);
-        let restored_handle = StreamingHandle::with_key_material(material)
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&restored_key)
-            .expect("configure restored snapshot encryption key");
-        restored_handle
-            .load_snapshots_from_path(&snapshot_path)
-            .expect("load streaming snapshots");
-        assert!(
-            restored_handle.transport_keys(viewer_peer.id()).is_some(),
-            "restored handle should retain transport keys"
-        );
-        assert_eq!(
-            restored_handle.transport_capabilities_hash(viewer_peer.id()),
-            Some(resolution.capabilities_hash()),
-            "restored handle retains transport capability hash"
-        );
-    }
-
-    #[test]
-    fn snapshot_load_promotes_temp_file() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let snapshot_path = dir.path().join("sessions.norito");
-
-        let publisher_keys = checked_random_ed25519_keypair();
-        let viewer_keys = checked_random_keypair();
-        let publisher_peer = make_peer(&publisher_keys, 18001);
-        let viewer_peer = make_peer(&viewer_keys, 18002);
-        let session_id = hash_with(0x5A);
-        let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x6B));
-        let resolution = sample_resolution();
-
-        let material = StreamingKeyMaterial::new(publisher_keys.clone())
-            .expect("publisher material requires ed25519");
-        let publisher_key = snapshot_session_key(&material);
-        let publisher_handle = StreamingHandle::with_key_material(material.clone())
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&publisher_key)
-            .expect("configure snapshot encryption key");
-        let viewer_key = snapshot_session_key(&material);
-        let viewer_handle = StreamingHandle::new()
-            .with_snapshot_encryption_key(&viewer_key)
-            .expect("configure viewer snapshot encryption key");
-
-        let publisher_update = publisher_handle
-            .build_key_update(
-                &viewer_peer,
-                CapabilityRole::Publisher,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 1,
-                },
-                publisher_keys.private_key(),
-            )
-            .expect("publisher key update");
-        let publisher_frame = ControlFrame::KeyUpdate(publisher_update);
-        viewer_handle
-            .process_control_frame(&publisher_peer, &publisher_frame)
-            .expect("viewer processes key update");
-
-        let viewer_update = viewer_handle
-            .build_key_update(
-                &publisher_peer,
-                CapabilityRole::Viewer,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 2,
-                },
-                viewer_keys.private_key(),
-            )
-            .expect("viewer key update");
-        let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
-        publisher_handle
-            .process_control_frame(&viewer_peer, &viewer_frame)
-            .expect("publisher processes viewer key update");
-
-        publisher_handle
-            .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
-            .expect("publisher records capabilities");
-        viewer_handle
-            .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
-            .expect("viewer records capabilities");
-        let negotiated =
-            CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
-        publisher_handle
-            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
-            .expect("publisher records features");
-        viewer_handle
-            .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
-            .expect("viewer records features");
-
-        publisher_handle
-            .persist_snapshots()
-            .expect("persist streaming snapshots");
-        let tmp_path = snapshot_temp_path(&snapshot_path);
-        fs::rename(&snapshot_path, &tmp_path).expect("move snapshot to temp");
-
-        let restored_key = snapshot_session_key(&material);
-        let restored_handle = StreamingHandle::with_key_material(material)
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&restored_key)
-            .expect("configure restored snapshot encryption key");
-        restored_handle
-            .load_snapshots_from_path(&snapshot_path)
-            .expect("load streaming snapshots from temp");
-        assert!(snapshot_path.exists(), "snapshot file should be promoted");
-        assert!(!tmp_path.exists(), "temp snapshot file should be removed");
-        assert!(
-            restored_handle.transport_keys(viewer_peer.id()).is_some(),
-            "restored handle should retain transport keys"
-        );
-    }
-
-    #[test]
-    fn snapshot_session_key_derivation_is_deterministic() {
-        let key_pair = checked_random_ed25519_keypair();
-        let material = StreamingKeyMaterial::new(key_pair.clone()).expect("material created");
-        let first = snapshot_session_key(&material);
-        let second = snapshot_session_key(&material);
-        assert_eq!(first.payload(), second.payload());
-
-        let other_pair = checked_random_ed25519_keypair();
-        let other_material = StreamingKeyMaterial::new(other_pair).expect("material created");
-        let other = snapshot_session_key(&other_material);
-        assert_ne!(first.payload(), other.payload());
-    }
-
-    #[test]
-    fn apply_crypto_config_sets_sm_feature_bit_from_build() {
-        let mut handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b1));
-        let cfg = actual::Crypto::default();
-        handle.apply_crypto_config(&cfg);
-        #[cfg(feature = "sm")]
-        assert!(
-            !handle
-                .capabilities()
-                .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
-            "SM feature bit should be cleared when SM support is disabled in config"
-        );
-        #[cfg(not(feature = "sm"))]
-        assert!(
-            !handle
-                .capabilities()
-                .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
-            "SM feature bit should be absent when the build lacks SM support"
-        );
-
-        #[cfg(feature = "sm")]
-        {
-            let mut cfg_enabled = actual::Crypto::default();
-            cfg_enabled.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
-            handle.apply_crypto_config(&cfg_enabled);
-        }
-        #[cfg(feature = "sm")]
-        assert!(
-            handle
-                .capabilities()
-                .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
-            "SM feature bit should be present when both build and config enable SM support"
-        );
-    }
+    include!("streaming/snapshot_bounds_and_capability_tests.rs");
 }

@@ -3,13 +3,11 @@
 //! The runtime kernels are generated via NVRTC/Metal in `gpu.rs`. This build
 //! script remains to support the static CUDA path when `fastpq-gpu` is enabled.
 // SPDX-License-Identifier: Apache-2.0
-
 use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
 };
-
 fn main() {
     println!("cargo:rerun-if-env-changed=FASTPQ_GPU");
     println!("cargo:rerun-if-env-changed=FASTPQ_SKIP_GPU_BUILD");
@@ -23,7 +21,6 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/kernels/ntt_stage.metal");
     println!("cargo:rerun-if-changed=metal/kernels/poseidon2.metal");
     println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
-
     let cuda_feature = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -54,7 +51,6 @@ fn main() {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
     }
-
     let cuda_root = locate_cuda_root();
     if let Some(root) = &cuda_root {
         let lib_dir = cuda_lib_dir(root);
@@ -62,10 +58,8 @@ fn main() {
             println!("cargo:rustc-link-search=native={}", path.display());
         }
     }
-
     // Link against cudart; nvcc will add device runtime automatically.
     println!("cargo:rustc-link-lib=cudart");
-
     let mut build = cc::Build::new();
     build.cuda(true);
     build.debug(false);
@@ -79,24 +73,20 @@ fn main() {
         .flag("-Xptxas=-fmad=false")
         .flag("-Xcompiler=-fno-fast-math")
         .flag("-Xcudafe=--display_error_number");
-
     if let Some(root) = &cuda_root {
         let include_dir = root.join("include");
         if include_dir.exists() {
             build.include(include_dir);
         }
     }
-
     if let Some(host_compiler) = select_cuda_host_compiler(&target_os) {
         build.ccbin(false);
         build.flag(format!("-ccbin={}", host_compiler.display()));
     } else if target_os == "linux" && !explicit_cxx_configured() {
         build.ccbin(false);
     }
-
     build.compile("fastpq_cuda");
 }
-
 fn nvcc_available() -> bool {
     Command::new("nvcc")
         .arg("--version")
@@ -104,7 +94,6 @@ fn nvcc_available() -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
-
 fn compile_metal_shaders() -> Result<(), String> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let kernels = [
@@ -119,11 +108,9 @@ fn compile_metal_shaders() -> Result<(), String> {
             return Err(format!("Metal shader source missing: {}", path.display()));
         }
     }
-
     let metallib_path = out_dir.join("fastpq.metallib");
     let modules_cache = out_dir.join("metal_modules");
     std::fs::create_dir_all(&modules_cache).map_err(|err| err.to_string())?;
-
     let metal_exe = find_xcrun_tool("metal")?;
     let mut air_paths = Vec::new();
     for (name, source) in &kernels {
@@ -152,7 +139,6 @@ fn compile_metal_shaders() -> Result<(), String> {
         }
         air_paths.push(air_path);
     }
-
     let metallib_exe = find_xcrun_tool("metallib").or_else(|_| {
         let mut candidate = metal_exe.clone();
         candidate.set_file_name("metallib");
@@ -161,7 +147,6 @@ fn compile_metal_shaders() -> Result<(), String> {
             .then_some(candidate)
             .ok_or_else(|| "failed to locate metallib binary".to_string())
     })?;
-
     let mut link_cmd = Command::new(metallib_exe);
     for air in &air_paths {
         link_cmd.arg(air);
@@ -175,7 +160,6 @@ fn compile_metal_shaders() -> Result<(), String> {
         let stderr = String::from_utf8_lossy(&link.stderr);
         return Err(format!("failed to link Metal library: {}", stderr.trim()));
     }
-
     println!(
         "cargo:rustc-env=FASTPQ_METAL_LIB={}",
         metallib_path.display()
@@ -183,12 +167,10 @@ fn compile_metal_shaders() -> Result<(), String> {
     println!("cargo:rustc-cfg=fastpq_metal_available");
     Ok(())
 }
-
 fn find_xcrun_tool(tool: &str) -> Result<PathBuf, String> {
     find_xcrun_tool_with_args(&["-sdk", "macosx", "--find", tool])
         .or_else(|_| find_xcrun_tool_with_args(&["--find", tool]))
 }
-
 fn find_xcrun_tool_with_args(args: &[&str]) -> Result<PathBuf, String> {
     let output = Command::new("xcrun")
         .args(args)
@@ -198,7 +180,6 @@ fn find_xcrun_tool_with_args(args: &[&str]) -> Result<PathBuf, String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(stderr.trim().to_string());
     }
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let path = PathBuf::from(stdout.trim());
     if path.exists() {
@@ -210,7 +191,6 @@ fn find_xcrun_tool_with_args(args: &[&str]) -> Result<PathBuf, String> {
         ))
     }
 }
-
 fn locate_cuda_root() -> Option<PathBuf> {
     env::var_os("CUDA_HOME")
         .or_else(|| env::var_os("CUDA_PATH"))
@@ -224,7 +204,6 @@ fn locate_cuda_root() -> Option<PathBuf> {
             }
         })
 }
-
 fn cuda_lib_dir(root: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -241,12 +220,10 @@ fn cuda_lib_dir(root: &Path) -> Option<PathBuf> {
         alt.exists().then_some(alt)
     }
 }
-
 fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     if target_os != "linux" || explicit_cxx_configured() {
         return None;
     }
-
     for candidate in [
         Path::new("/usr/bin/g++-12"),
         Path::new("/usr/local/bin/g++-12"),
@@ -256,10 +233,8 @@ fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
             return Some(candidate.to_path_buf());
         }
     }
-
     None
 }
-
 fn explicit_cxx_configured() -> bool {
     env::var_os("CXX").is_some()
         || env::var_os("HOST_CXX").is_some()

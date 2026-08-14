@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Asset query regression scenarios.
-
-use std::{thread, time::Duration};
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -11,10 +8,9 @@ use iroha::{
 };
 use iroha_test_network::submit_ensure_domain_for_network;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-
+use std::{thread, time::Duration};
 const UNREGISTER_ATTEMPTS: usize = 30;
 const UNREGISTER_DELAY: Duration = Duration::from_millis(250);
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn find_asset_total_quantity() -> Result<()> {
@@ -26,12 +22,10 @@ fn find_asset_total_quantity() -> Result<()> {
         return Ok(());
     };
     let test_client = super::query_client(&network);
-
     let result: Result<()> = (|| {
         // Register new domain
         let domain_id: DomainId = DomainId::try_new("looking-glass", "universal")?;
         submit_ensure_domain_for_network(&network, &test_client, Domain::new(domain_id))?;
-
         let accounts: [AccountId; 5] = [
             ALICE_ID.clone(),
             gen_account_in("wonderland").0,
@@ -46,7 +40,6 @@ fn find_asset_total_quantity() -> Result<()> {
         );
         let fixed_definition =
             AssetDefinitionId::derive_from_components(wonderland_domain.clone(), "fixed".parse()?);
-
         // Registering accounts
         let register_accounts = accounts
             .iter()
@@ -58,7 +51,6 @@ fn find_asset_total_quantity() -> Result<()> {
             register_accounts,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         // Test asset quantity values.
         test_total_quantity(
             &test_client,
@@ -89,7 +81,6 @@ fn find_asset_total_quantity() -> Result<()> {
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 fn test_total_quantity(
@@ -120,7 +111,6 @@ fn test_total_quantity(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let account_count = accounts.len();
-
     let expected_initial_total = sum_value(initial_value, account_count)?;
     let expected_minted_total = sum_value(to_mint, account_count)?;
     let expected_burned_total = sum_value(to_burn, account_count)?;
@@ -134,17 +124,14 @@ fn test_total_quantity(
         expected_total_asset_quantity, &expected_after_burn,
         "expected_total_asset_quantity should match computed totals"
     );
-
     let asset_ids = accounts
         .iter()
         .cloned()
         .map(|account_id| AssetId::new(definition_id.clone(), account_id))
         .collect::<Vec<_>>();
-
     let get_quantity = || -> Result<Quantity, SingleQueryError<QueryError>> {
         const MAX_ATTEMPTS: usize = 5;
         let mut last_err = None;
-
         for attempt in 1..=MAX_ATTEMPTS {
             match test_client
                 .query(FindAssetsDefinitions::new())
@@ -163,7 +150,6 @@ fn test_total_quantity(
                     last_err = Some(SingleQueryError::QueryError(err));
                 }
             }
-
             if attempt < MAX_ATTEMPTS {
                 println!(
                     "retrying total_quantity query for {definition_id} (attempt {}/{MAX_ATTEMPTS})",
@@ -172,15 +158,12 @@ fn test_total_quantity(
                 thread::sleep(Duration::from_millis(250 * attempt as u64));
             }
         }
-
         Err(last_err.unwrap_or(SingleQueryError::ExpectedOneGotNone))
     };
-
     // Assert that initial total quantity before any burns and mints is zero
     let initial_total_asset_quantity =
         wait_for_quantity(&get_quantity, &Quantity::zero(), context)?;
     assert!(initial_total_asset_quantity.is_zero());
-
     let mut mint_and_burn_assets: Vec<InstructionBox> = Vec::new();
     for asset_id in asset_ids.iter().cloned() {
         mint_and_burn_assets
@@ -193,7 +176,6 @@ fn test_total_quantity(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let observed_after_burn = wait_for_quantity(&get_quantity, &expected_after_burn, "mint+burn")?;
-
     // Assert that total asset quantity is equal to: `n_accounts * (initial_value + to_mint - to_burn)`
     let total_asset_quantity = observed_after_burn;
     let log_balances = |stage: &str, definition_total: &Quantity| -> Result<Quantity> {
@@ -203,7 +185,6 @@ fn test_total_quantity(
             .map_err(|e| eyre!("failed to fetch assets: {e}"))?;
         let mut manual_total = Quantity::zero();
         let mut missing_accounts = Vec::new();
-
         println!(
             "[{stage}] balances for asset definition {definition_id} (definition total {definition_total})"
         );
@@ -223,18 +204,14 @@ fn test_total_quantity(
                 .checked_add(&balance)
                 .map_err(|_| eyre!("quantity overflow while summing balances"))?;
         }
-
         if !missing_accounts.is_empty() {
             println!("[{stage}] accounts missing asset {definition_id}: {missing_accounts:?}");
         }
-
         println!(
             "[{stage}] manual total for {definition_id}: {manual_total} (definition total {definition_total})"
         );
-
         Ok(manual_total)
     };
-
     let manual_total =
         match sandbox::handle_result(log_balances("after burn", &total_asset_quantity), context)? {
             Some(value) => value,
@@ -246,13 +223,11 @@ fn test_total_quantity(
         );
     }
     assert_eq!(expected_total_asset_quantity, &total_asset_quantity);
-
     // Unregister asset definition
     test_client.submit_blocking(
         Unregister::asset_definition(definition_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-
     let mut removed = false;
     let mut last_value: Option<Quantity> = None;
     for _ in 0..UNREGISTER_ATTEMPTS {
@@ -276,14 +251,12 @@ fn test_total_quantity(
         }
         thread::sleep(UNREGISTER_DELAY);
     }
-
     if !removed {
         return Err(eyre!(
             "expected no aggregate after unregister but observed {:?} for {definition_id}",
             last_value
         ));
     }
-
     let remaining_assets = test_client.query(FindAssets::new()).execute_all()?;
     assert!(
         remaining_assets
@@ -291,17 +264,14 @@ fn test_total_quantity(
             .all(|asset| asset.id().definition() != &definition_id),
         "expected assets for {definition_id} to be removed after unregister"
     );
-
     Ok(())
 }
-
 fn wait_for_quantity<F>(get_quantity: &F, expected: &Quantity, context: &str) -> Result<Quantity>
 where
     F: Fn() -> Result<Quantity, SingleQueryError<QueryError>>,
 {
     const MAX_ATTEMPTS: usize = 30; // 7.5 seconds at 250ms
     const DELAY: Duration = Duration::from_millis(250);
-
     let mut last_err: Option<eyre::Report> = None;
     for attempt in 1..=MAX_ATTEMPTS {
         match get_quantity() {
@@ -313,17 +283,14 @@ where
             }
             Err(err) => last_err = Some(eyre::Report::new(err)),
         }
-
         thread::sleep(DELAY);
     }
-
     Err(last_err.unwrap_or_else(|| {
         eyre!(
             "{context}: total quantity did not reach expected {expected} after {MAX_ATTEMPTS} attempts"
         )
     }))
 }
-
 fn sum_value(value: &Quantity, count: usize) -> Result<Quantity> {
     let mut total = Quantity::zero();
     for _ in 0..count {

@@ -1,15 +1,12 @@
+use crate::workspace_root;
+use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
 };
-
-use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
-use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
-
-use crate::workspace_root;
-
 const SCORECARD_VERSION: u32 = 1;
 const HANDOFF_VERSION: u32 = 1;
 const DEFAULT_RENEWAL_TARGET: f64 = 0.55;
@@ -22,7 +19,6 @@ const REPLACEMENT_DEADLINE_DAYS: u32 = 14;
 const ADVISORY_ACK_DAYS: i64 = 2;
 const STEWARD_PLAYBOOK_PATH: &str = "specs/sns/steward_replacement_playbook.md";
 const GOVERNANCE_PLAYBOOK_PATH: &str = "specs/sns/governance_playbook.md";
-
 #[derive(Clone)]
 pub struct ScorecardOptions {
     pub input: PathBuf,
@@ -32,7 +28,6 @@ pub struct ScorecardOptions {
     pub output_handoff_markdown: Option<PathBuf>,
     pub handoff_dir: Option<PathBuf>,
 }
-
 pub fn generate_scorecard(opts: ScorecardOptions) -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&opts.input)
         .map_err(|err| format!("failed to read {}: {err}", opts.input.display()))?;
@@ -42,15 +37,12 @@ pub fn generate_scorecard(opts: ScorecardOptions) -> Result<(), Box<dyn Error>> 
             opts.input.display()
         )
     })?;
-
     let scorecard = build_scorecard(&source)?;
     write_json(&opts.output_json, &scorecard)?;
-
     if let Some(markdown_path) = &opts.output_markdown {
         let markdown = render_markdown(&scorecard);
         write_text(markdown_path, &markdown)?;
     }
-
     let needs_handoff = opts.output_handoff_json.is_some()
         || opts.output_handoff_markdown.is_some()
         || opts.handoff_dir.is_some();
@@ -71,14 +63,11 @@ pub fn generate_scorecard(opts: ScorecardOptions) -> Result<(), Box<dyn Error>> 
             write_handoff_directory(dir, &packet)?;
         }
     }
-
     Ok(())
 }
-
 fn write_json(path: &Path, value: &StewardScorecard) -> Result<(), Box<dyn Error>> {
     write_json_value(path, value, "scorecard")
 }
-
 fn write_text(path: &Path, body: &str) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -86,7 +75,6 @@ fn write_text(path: &Path, body: &str) -> Result<(), Box<dyn Error>> {
     fs::write(path, body.as_bytes())?;
     Ok(())
 }
-
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -94,7 +82,6 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     fs::write(path, bytes)?;
     Ok(())
 }
-
 fn write_json_value<T: JsonSerialize>(
     path: &Path,
     value: &T,
@@ -109,19 +96,16 @@ fn write_json_value<T: JsonSerialize>(
     fs::write(path, json_text.as_bytes())?;
     Ok(())
 }
-
 fn build_scorecard(source: &StewardScorecardSource) -> Result<StewardScorecard, Box<dyn Error>> {
     let generated_at = if let Some(ts) = &source.generated_at {
         ts.clone()
     } else {
         OffsetDateTime::now_utc().format(&Rfc3339)?
     };
-
     let mut suffixes = Vec::with_capacity(source.suffixes.len());
     for suffix in &source.suffixes {
         suffixes.push(evaluate_suffix(suffix));
     }
-
     Ok(StewardScorecard {
         version: SCORECARD_VERSION,
         quarter: source.quarter.clone(),
@@ -129,13 +113,11 @@ fn build_scorecard(source: &StewardScorecardSource) -> Result<StewardScorecard, 
         suffixes,
     })
 }
-
 fn evaluate_suffix(source: &SuffixMetricSource) -> SuffixScorecard {
     let renewal = build_renewal_metric(&source.renewals);
     let support = build_support_metric(&source.support);
     let dispute = build_dispute_metric(&source.disputes);
     let incidents = source.incidents.clone().unwrap_or_default();
-
     let mut alerts = Vec::new();
     if renewal.status_value != MetricStatus::Pass {
         alerts.push(format!(
@@ -164,14 +146,12 @@ fn evaluate_suffix(source: &SuffixMetricSource) -> SuffixScorecard {
             incidents.guardian_freezes
         ));
     }
-
     let rotation = compute_rotation(&renewal, &support, &dispute, &incidents);
     let overall_status = match rotation.level_value {
         RotationLevel::Replace => "critical",
         RotationLevel::Monitor => "watch",
         RotationLevel::None => "healthy",
     };
-
     SuffixScorecard {
         suffix_id: source.suffix_id,
         suffix: source.suffix.clone(),
@@ -189,14 +169,12 @@ fn evaluate_suffix(source: &SuffixMetricSource) -> SuffixScorecard {
         notes: source.notes.clone().unwrap_or_default(),
     }
 }
-
 fn build_renewal_metric(source: &RenewalWindow) -> RenewalMetric {
     let renewed_total = source.renewed_on_time + source.renewed_late;
     let target_rate = source.target_rate.unwrap_or(DEFAULT_RENEWAL_TARGET);
     let renewal_rate = ratio(renewed_total, source.expiring);
     let on_time_rate = ratio(source.renewed_on_time, source.expiring);
     let status = classify_minimum(renewal_rate, target_rate, 0.05);
-
     RenewalMetric {
         status_value: status,
         status: status.as_str().to_string(),
@@ -209,7 +187,6 @@ fn build_renewal_metric(source: &RenewalWindow) -> RenewalMetric {
         target_rate,
     }
 }
-
 fn build_support_metric(source: &SupportWindow) -> SupportMetric {
     let target_rate = source.target_rate.unwrap_or(DEFAULT_SUPPORT_TARGET);
     let within_sla_rate = ratio(source.tickets_within_sla, source.tickets_total);
@@ -220,7 +197,6 @@ fn build_support_metric(source: &SupportWindow) -> SupportMetric {
     } else {
         classify_minimum(within_sla_rate, target_rate, SUPPORT_WARNING_DELTA)
     };
-
     SupportMetric {
         status_value: status,
         status: status.as_str().to_string(),
@@ -232,7 +208,6 @@ fn build_support_metric(source: &SupportWindow) -> SupportMetric {
         within_sla_rate,
     }
 }
-
 fn build_dispute_metric(source: &DisputeWindow) -> DisputeMetric {
     let target_hours = source.target_hours.unwrap_or(DEFAULT_DISPUTE_TARGET_HOURS);
     let median = source.median_resolution_hours;
@@ -256,7 +231,6 @@ fn build_dispute_metric(source: &DisputeWindow) -> DisputeMetric {
             .unwrap_or_else(|| source.cases_opened.saturating_sub(source.cases_resolved)),
     }
 }
-
 fn compute_rotation(
     renewal: &RenewalMetric,
     support: &SupportMetric,
@@ -276,7 +250,6 @@ fn compute_rotation(
         .iter()
         .filter(|status| **status == MetricStatus::Warning)
         .count();
-
     let mut reasons = Vec::new();
     if breaches >= 2 {
         reasons.push("Multiple KPI breaches in the quarter".to_string());
@@ -292,7 +265,6 @@ fn compute_rotation(
             incidents.guardian_freezes
         ));
     }
-
     let level = if incidents.guardian_freezes > 0 || breaches >= 2 {
         RotationLevel::Replace
     } else if breaches == 1 || warnings > 0 {
@@ -300,14 +272,12 @@ fn compute_rotation(
     } else {
         RotationLevel::None
     };
-
     RotationRecommendation {
         level_value: level,
         level: level.as_str().to_string(),
         reasons,
     }
 }
-
 fn classify_minimum(value: f64, target: f64, warning_delta: f64) -> MetricStatus {
     if value >= target {
         MetricStatus::Pass
@@ -317,7 +287,6 @@ fn classify_minimum(value: f64, target: f64, warning_delta: f64) -> MetricStatus
         MetricStatus::Breach
     }
 }
-
 fn ratio(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
         1.0
@@ -325,7 +294,6 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
         numerator as f64 / denominator as f64
     }
 }
-
 fn render_markdown(scorecard: &StewardScorecard) -> String {
     let mut body = String::new();
     body.push_str("---\n");
@@ -340,7 +308,6 @@ fn render_markdown(scorecard: &StewardScorecard) -> String {
         "_Generated at {} (version {})_\n\n",
         scorecard.generated_at, scorecard.version
     ));
-
     body.push_str("| Suffix | Steward | Renewal | Support SLA | Dispute | Rotation |\n");
     body.push_str("|--------|---------|---------|-------------|---------|----------|\n");
     for suffix in &scorecard.suffixes {
@@ -355,7 +322,6 @@ fn render_markdown(scorecard: &StewardScorecard) -> String {
         ));
     }
     body.push('\n');
-
     for suffix in &scorecard.suffixes {
         body.push_str(&format!("## {} ({})\n\n", suffix.suffix, suffix.steward));
         body.push_str(&format!(
@@ -400,10 +366,8 @@ fn render_markdown(scorecard: &StewardScorecard) -> String {
         }
         body.push('\n');
     }
-
     body
 }
-
 fn build_handoff_packet(
     scorecard: &StewardScorecard,
     scorecard_json_path: &Path,
@@ -418,7 +382,6 @@ fn build_handoff_packet(
     let scorecard_path = relative_to_root(scorecard_json_path);
     let scorecard_markdown_path = scorecard_markdown_path.map(relative_to_root);
     let mut motions = Vec::new();
-
     for suffix in &scorecard.suffixes {
         if suffix.rotation.level_value == RotationLevel::None {
             continue;
@@ -430,7 +393,6 @@ fn build_handoff_packet(
         }
         let attachments =
             default_handoff_attachments(&scorecard_path, scorecard_markdown_path.as_deref());
-
         motions.push(StewardHandoffMotion {
             suffix_id: suffix.suffix_id,
             suffix: suffix.suffix.clone(),
@@ -446,7 +408,6 @@ fn build_handoff_packet(
             dao_actions: plan.dao_actions,
         });
     }
-
     Ok(StewardHandoffPacket {
         version: HANDOFF_VERSION,
         quarter: scorecard.quarter.clone(),
@@ -458,7 +419,6 @@ fn build_handoff_packet(
         motions,
     })
 }
-
 struct MotionPlan {
     council_motion: MotionChecklist,
     dao_motion: MotionChecklist,
@@ -467,7 +427,6 @@ struct MotionPlan {
     deadline_days: u32,
     deadline_at: String,
 }
-
 fn build_motion_details(
     suffix: &SuffixScorecard,
     generated_at: OffsetDateTime,
@@ -633,7 +592,6 @@ fn build_motion_details(
         }
     }
 }
-
 fn due_in_days(
     generated_at: OffsetDateTime,
     days: i64,
@@ -645,7 +603,6 @@ fn due_in_days(
         .ok_or_else(|| format!("failed to compute due date (+{days}d) for {suffix}"))?;
     Ok(due.format(&Rfc3339)?)
 }
-
 fn default_handoff_attachments(
     scorecard_path: &str,
     scorecard_markdown_path: Option<&str>,
@@ -662,11 +619,9 @@ fn default_handoff_attachments(
     attachments.dedup();
     attachments
 }
-
 fn write_handoff_json(path: &Path, packet: &StewardHandoffPacket) -> Result<(), Box<dyn Error>> {
     write_json_value(path, packet, "hand-off")
 }
-
 fn write_handoff_directory(
     dir: &Path,
     packet: &StewardHandoffPacket,
@@ -675,7 +630,6 @@ fn write_handoff_directory(
     if packet.motions.is_empty() {
         return Ok(());
     }
-
     let mut entries = Vec::new();
     for motion in &packet.motions {
         let base = sanitize_suffix_for_file(&motion.suffix);
@@ -704,7 +658,6 @@ fn write_handoff_directory(
             markdown: relative_to_root(&markdown_path),
         });
     }
-
     let index = HandoffIndex {
         version: packet.version,
         generated_at: packet.generated_at.clone(),
@@ -714,7 +667,6 @@ fn write_handoff_directory(
     write_json_value(&dir.join("handoff_index.json"), &index, "hand-off index")?;
     Ok(())
 }
-
 fn render_handoff_markdown(packet: &StewardHandoffPacket) -> String {
     let mut body = String::new();
     body.push_str("---\n");
@@ -741,12 +693,10 @@ fn render_handoff_markdown(packet: &StewardHandoffPacket) -> String {
         "- Governance playbook: `{}`\n\n",
         packet.governance_playbook_path
     ));
-
     if packet.motions.is_empty() {
         body.push_str("No rotation or remediation motions are required for this quarter.\n");
         return body;
     }
-
     body.push_str("| Suffix | Steward | Rotation | Deadline (days) | Due (UTC) |\n");
     body.push_str("|--------|---------|---------|-----------------|-----------|\n");
     for motion in &packet.motions {
@@ -760,7 +710,6 @@ fn render_handoff_markdown(packet: &StewardHandoffPacket) -> String {
         ));
     }
     body.push('\n');
-
     for motion in &packet.motions {
         body.push_str(&format!(
             "## {} ({}) — {}\n\n",
@@ -820,10 +769,8 @@ fn render_handoff_markdown(packet: &StewardHandoffPacket) -> String {
         }
         body.push('\n');
     }
-
     body
 }
-
 fn render_single_handoff(file: &StewardHandoffFile) -> String {
     let mut body = String::new();
     body.push_str("---\n");
@@ -901,18 +848,14 @@ fn render_single_handoff(file: &StewardHandoffFile) -> String {
         }
     }
     body.push('\n');
-
     body
 }
-
 fn format_metric(metric: &impl MetricDisplay) -> String {
     metric.summary_cell()
 }
-
 trait MetricDisplay {
     fn summary_cell(&self) -> String;
 }
-
 impl MetricDisplay for RenewalMetric {
     fn summary_cell(&self) -> String {
         format!(
@@ -922,7 +865,6 @@ impl MetricDisplay for RenewalMetric {
         )
     }
 }
-
 impl MetricDisplay for SupportMetric {
     fn summary_cell(&self) -> String {
         format!(
@@ -932,7 +874,6 @@ impl MetricDisplay for SupportMetric {
         )
     }
 }
-
 impl MetricDisplay for DisputeMetric {
     fn summary_cell(&self) -> String {
         format!(
@@ -942,14 +883,12 @@ impl MetricDisplay for DisputeMetric {
         )
     }
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 struct StewardScorecardSource {
     quarter: String,
     generated_at: Option<String>,
     suffixes: Vec<SuffixMetricSource>,
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 struct SuffixMetricSource {
     suffix_id: u16,
@@ -962,7 +901,6 @@ struct SuffixMetricSource {
     incidents: Option<IncidentWindow>,
     notes: Option<Vec<String>>,
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 struct RenewalWindow {
     expiring: u64,
@@ -970,7 +908,6 @@ struct RenewalWindow {
     renewed_late: u64,
     target_rate: Option<f64>,
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 struct SupportWindow {
     tickets_total: u64,
@@ -980,7 +917,6 @@ struct SupportWindow {
     target_rate: Option<f64>,
     p1_breach_budget: Option<u64>,
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 struct DisputeWindow {
     cases_opened: u64,
@@ -990,19 +926,16 @@ struct DisputeWindow {
     target_hours: Option<f64>,
     backlog: Option<u64>,
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize, Clone)]
 struct RevenueSummary {
     treasury_xor: u64,
     steward_xor: u64,
 }
-
 #[derive(Debug, JsonDeserialize, JsonSerialize, Clone, Default)]
 struct IncidentWindow {
     guardian_freezes: u64,
     pager_incidents: u64,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct StewardScorecard {
     version: u32,
@@ -1010,7 +943,6 @@ struct StewardScorecard {
     generated_at: String,
     suffixes: Vec<SuffixScorecard>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct SuffixScorecard {
     suffix_id: u16,
@@ -1024,14 +956,12 @@ struct SuffixScorecard {
     overall_status: String,
     notes: Vec<String>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct ScorecardMetrics {
     renewal: RenewalMetric,
     support: SupportMetric,
     dispute: DisputeMetric,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct RenewalMetric {
     #[norito(skip)]
@@ -1045,7 +975,6 @@ struct RenewalMetric {
     on_time_rate: f64,
     target_rate: f64,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct SupportMetric {
     #[norito(skip)]
@@ -1058,7 +987,6 @@ struct SupportMetric {
     target_rate: f64,
     within_sla_rate: f64,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct DisputeMetric {
     #[norito(skip)]
@@ -1071,14 +999,12 @@ struct DisputeMetric {
     sla_breaches: u64,
     backlog: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MetricStatus {
     Pass,
     Warning,
     Breach,
 }
-
 impl MetricStatus {
     fn as_str(&self) -> &'static str {
         match self {
@@ -1088,7 +1014,6 @@ impl MetricStatus {
         }
     }
 }
-
 #[derive(Debug, JsonSerialize)]
 struct RotationRecommendation {
     #[norito(skip)]
@@ -1096,14 +1021,12 @@ struct RotationRecommendation {
     level: String,
     reasons: Vec<String>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RotationLevel {
     None,
     Monitor,
     Replace,
 }
-
 impl RotationLevel {
     fn as_str(&self) -> &'static str {
         match self {
@@ -1113,7 +1036,6 @@ impl RotationLevel {
         }
     }
 }
-
 #[derive(Debug, JsonSerialize)]
 struct StewardHandoffPacket {
     version: u32,
@@ -1125,7 +1047,6 @@ struct StewardHandoffPacket {
     governance_playbook_path: String,
     motions: Vec<StewardHandoffMotion>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, Clone)]
 struct StewardHandoffMotion {
     suffix_id: u16,
@@ -1141,21 +1062,18 @@ struct StewardHandoffMotion {
     council_actions: Vec<MotionAction>,
     dao_actions: Vec<MotionAction>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, Clone)]
 struct MotionChecklist {
     title: String,
     summary: String,
     next_steps: Vec<String>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, Clone)]
 struct MotionAction {
     owner: String,
     description: String,
     due: String,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct StewardHandoffFile {
     version: u32,
@@ -1167,7 +1085,6 @@ struct StewardHandoffFile {
     governance_playbook_path: String,
     motion: StewardHandoffMotion,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct HandoffIndex {
     version: u32,
@@ -1175,7 +1092,6 @@ struct HandoffIndex {
     quarter: String,
     entries: Vec<HandoffIndexEntry>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct HandoffIndexEntry {
     suffix: String,
@@ -1186,7 +1102,6 @@ struct HandoffIndexEntry {
     json: String,
     markdown: String,
 }
-
 #[derive(Clone)]
 pub struct AnnexOptions {
     pub suffix: String,
@@ -1197,7 +1112,6 @@ pub struct AnnexOptions {
     pub dashboard_artifact: Option<PathBuf>,
     pub regulatory_entry: Option<PathBuf>,
 }
-
 pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
     let AnnexOptions {
         suffix,
@@ -1208,7 +1122,6 @@ pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
         dashboard_artifact,
         regulatory_entry,
     } = opts;
-
     let bytes = fs::read(&dashboard_path).map_err(|err| {
         format!(
             "failed to read dashboard export {}: {err}",
@@ -1230,7 +1143,6 @@ pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
     };
     let regulatory_hint = default_regulatory_hint(&suffix, &cycle);
     let annex_path = relative_to_root(&output_markdown);
-
     let document = AnnexDocument {
         suffix,
         cycle,
@@ -1248,7 +1160,6 @@ pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
         templating: metadata.templating,
         regulatory_hint,
     };
-
     let markdown = render_annex_document(&document);
     write_text(&output_markdown, &markdown)?;
     if let Some(regulatory_path) = regulatory_entry {
@@ -1256,7 +1167,6 @@ pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 struct DashboardMetadata {
     title: Option<String>,
     uid: Option<String>,
@@ -1267,7 +1177,6 @@ struct DashboardMetadata {
     time_to: Option<String>,
     templating: Vec<TemplateVariable>,
 }
-
 struct AnnexDocument {
     suffix: String,
     cycle: String,
@@ -1285,18 +1194,15 @@ struct AnnexDocument {
     templating: Vec<TemplateVariable>,
     regulatory_hint: String,
 }
-
 #[derive(Clone)]
 struct TemplateVariable {
     name: String,
     label: Option<String>,
     selection: Option<String>,
 }
-
 fn parse_dashboard_metadata(bytes: &[u8]) -> Result<DashboardMetadata, Box<dyn Error>> {
     let value: Value = json::from_slice(bytes)
         .map_err(|err| format!("failed to parse dashboard export JSON: {err}"))?;
-
     let title = value
         .get("title")
         .and_then(Value::as_str)
@@ -1340,7 +1246,6 @@ fn parse_dashboard_metadata(bytes: &[u8]) -> Result<DashboardMetadata, Box<dyn E
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(parse_template_variable).collect())
         .unwrap_or_default();
-
     Ok(DashboardMetadata {
         title,
         uid,
@@ -1352,7 +1257,6 @@ fn parse_dashboard_metadata(bytes: &[u8]) -> Result<DashboardMetadata, Box<dyn E
         templating,
     })
 }
-
 fn parse_template_variable(value: &Value) -> Option<TemplateVariable> {
     let name = value.get("name").and_then(Value::as_str)?.to_string();
     let label = value
@@ -1366,14 +1270,12 @@ fn parse_template_variable(value: &Value) -> Option<TemplateVariable> {
             .map(ToOwned::to_owned)
             .or_else(|| display_value(current.get("value")))
     });
-
     Some(TemplateVariable {
         name,
         label,
         selection,
     })
 }
-
 fn render_annex_document(doc: &AnnexDocument) -> String {
     let mut body = String::new();
     body.push_str("---\n");
@@ -1402,13 +1304,11 @@ fn render_annex_document(doc: &AnnexDocument) -> String {
         doc.regulatory_hint
     ));
     body.push_str("---\n\n");
-
     body.push_str(&format!("# {} KPI Annex — {}\n\n", doc.suffix, doc.cycle));
     body.push_str(&format!(
         "_Generated at {} using `{}` (SHA-256 `{}`)._\n\n",
         doc.generated_at, doc.dashboard_path, doc.dashboard_sha256
     ));
-
     body.push_str("## 1. Dashboard Snapshot\n\n");
     if let Some(title) = &doc.dashboard_title {
         body.push_str(&format!("- Title: `{}`\n", title));
@@ -1433,7 +1333,6 @@ fn render_annex_document(doc: &AnnexDocument) -> String {
         body.push_str(&format!("- Tags: {}\n", tags));
     }
     body.push('\n');
-
     if doc.templating.is_empty() {
         body.push_str("No template variables defined in the export.\n\n");
     } else {
@@ -1450,7 +1349,6 @@ fn render_annex_document(doc: &AnnexDocument) -> String {
         }
         body.push('\n');
     }
-
     body.push_str("## 2. Attachments\n\n");
     body.push_str("| Artifact | Path | SHA-256 |\n");
     body.push_str("|----------|------|---------|\n");
@@ -1458,7 +1356,6 @@ fn render_annex_document(doc: &AnnexDocument) -> String {
         "| Grafana dashboard export | `{}` | `{}` |\n\n",
         doc.dashboard_path, doc.dashboard_sha256
     ));
-
     body.push_str("## 3. Review Checklist\n\n");
     body.push_str(&format!(
         "- [ ] Attach the dashboard export to `{}` before filing the regulatory memo.\n",
@@ -1468,10 +1365,8 @@ fn render_annex_document(doc: &AnnexDocument) -> String {
         "- [ ] Capture PDF/CSV snapshots from Grafana and reference them in the annex entry.\n",
     );
     body.push_str("- [ ] Log this file path in the governance tracker once reviewers sign off.\n");
-
     body
 }
-
 fn update_regulatory_entry(path: &Path, doc: &AnnexDocument) -> Result<(), Box<dyn Error>> {
     let mut memo = fs::read_to_string(path)
         .map_err(|err| format!("failed to read regulatory memo {}: {err}", path.display()))?;
@@ -1502,7 +1397,6 @@ fn update_regulatory_entry(path: &Path, doc: &AnnexDocument) -> Result<(), Box<d
     write_text(path, &memo)?;
     Ok(())
 }
-
 fn render_regulatory_block(doc: &AnnexDocument, marker_id: &str) -> String {
     format!(
         "<!-- sns-annex:{marker_id}:start -->\n\
@@ -1520,7 +1414,6 @@ fn render_regulatory_block(doc: &AnnexDocument, marker_id: &str) -> String {
         generated = doc.generated_at
     )
 }
-
 fn display_value(value: Option<&Value>) -> Option<String> {
     value.and_then(|v| match v {
         Value::String(text) => Some(text.clone()),
@@ -1534,7 +1427,6 @@ fn display_value(value: Option<&Value>) -> Option<String> {
         Value::Null => None,
     })
 }
-
 fn sanitize_suffix_for_file(suffix: &str) -> String {
     let cleaned = suffix
         .trim_start_matches('.')
@@ -1554,14 +1446,12 @@ fn sanitize_suffix_for_file(suffix: &str) -> String {
         normalized
     }
 }
-
 fn relative_to_root(path: &Path) -> String {
     let root = workspace_root();
     path.strip_prefix(&root)
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| path.display().to_string())
 }
-
 fn default_regulatory_hint(suffix: &str, cycle: &str) -> String {
     let sanitized = suffix.trim_start_matches('.');
     if sanitized.is_empty() {
@@ -1570,7 +1460,6 @@ fn default_regulatory_hint(suffix: &str, cycle: &str) -> String {
         format!("specs/sns/regulatory/{sanitized}/{cycle}.md")
     }
 }
-
 fn regulatory_marker_id(suffix: &str, cycle: &str) -> String {
     let trimmed = suffix.trim();
     let cleaned = trimmed
@@ -1591,21 +1480,16 @@ fn regulatory_marker_id(suffix: &str, cycle: &str) -> String {
         format!("{normalized}-{cycle}")
     }
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
-
-    use tempfile::{NamedTempFile, tempdir};
-
     use super::*;
-
+    use std::{fs, path::Path};
+    use tempfile::{NamedTempFile, tempdir};
     fn sample_source(
         renewal_rate: f64,
         support_rate: f64,
@@ -1649,7 +1533,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn scorecard_tracks_statuses() {
         let source = sample_source(0.60, 0.97, 140.0);
@@ -1660,7 +1543,6 @@ mod tests {
         assert_eq!(suffix.metrics.dispute.status_value, MetricStatus::Pass);
         assert_eq!(suffix.rotation.level_value, RotationLevel::None);
     }
-
     #[test]
     fn scorecard_flags_rotation() {
         let source = sample_source(0.30, 0.60, 300.0);
@@ -1671,7 +1553,6 @@ mod tests {
         assert_eq!(suffix.rotation.level_value, RotationLevel::Replace);
         assert!(!suffix.rotation.reasons.is_empty());
     }
-
     #[test]
     fn markdown_includes_suffix_details() {
         let source = sample_source(0.70, 0.92, 100.0);
@@ -1681,7 +1562,6 @@ mod tests {
         assert!(markdown.contains(".sora"));
         assert!(markdown.contains("Test Steward"));
     }
-
     #[test]
     fn handoff_packet_includes_rotation_actions() {
         let mut healthy = sample_source(0.70, 0.97, 96.0);
@@ -1760,7 +1640,6 @@ mod tests {
                 .is_some_and(|path| path.ends_with("steward_scorecard_2026q1.md"))
         );
     }
-
     #[test]
     fn handoff_markdown_lists_motions() {
         let source = sample_source(0.35, 0.70, 200.0);
@@ -1777,7 +1656,6 @@ mod tests {
         assert!(markdown.contains("Council replacement motion"));
         assert!(markdown.contains("DAO ratification"));
     }
-
     #[test]
     fn handoff_directory_writes_per_suffix_packets() {
         let dir = tempdir().expect("tempdir");
@@ -1816,7 +1694,6 @@ mod tests {
             fs::read_to_string(handoff_dir.join("steward_handoff_sora.md")).expect("read markdown");
         assert!(markdown.contains("DAO motion"));
     }
-
     #[test]
     fn parse_dashboard_metadata_handles_basic_fields() {
         let json = r#"{
@@ -1841,7 +1718,6 @@ mod tests {
         assert_eq!(metadata.templating.len(), 1);
         assert_eq!(metadata.templating[0].selection.as_deref(), Some("All"));
     }
-
     #[test]
     fn render_annex_document_includes_expected_sections() {
         let doc = AnnexDocument {
@@ -1870,11 +1746,9 @@ mod tests {
         assert!(markdown.contains("Grafana dashboard export"));
         assert!(markdown.contains("specs/sns/regulatory/sora/2026-03.md"));
     }
-
     #[test]
     fn generate_annex_copies_dashboard_export_when_artifact_specified() {
         use tempfile::tempdir_in;
-
         let workspace = workspace_root();
         let temp = tempdir_in(&workspace).expect("tempdir");
         let source = temp.path().join("sns_dashboard.json");
@@ -1892,7 +1766,6 @@ mod tests {
             .path()
             .join("artifacts/sns/regulatory/.sora/2026-03/sns_suffix_analytics.json");
         let output = temp.path().join("annex.md");
-
         let options = AnnexOptions {
             suffix: ".sora".into(),
             cycle: "2026-03".into(),
@@ -1902,9 +1775,7 @@ mod tests {
             dashboard_artifact: Some(artifact.clone()),
             regulatory_entry: None,
         };
-
         generate_annex(options).expect("annex generation");
-
         let artifact_bytes = fs::read(&artifact).expect("artifact copy");
         assert_eq!(artifact_bytes, dashboard_json.as_bytes());
         let markdown = fs::read_to_string(&output).expect("annex markdown");
@@ -1914,12 +1785,10 @@ mod tests {
             "annex should reference copied artifact path"
         );
     }
-
     #[test]
     fn regulatory_entry_appends_and_replaces_block() {
         let temp = NamedTempFile::new().expect("temp memo");
         fs::write(temp.path(), "# Memo Header\n").expect("write memo");
-
         let mut doc = AnnexDocument {
             suffix: ".sora".into(),
             cycle: "2026-03".into(),
@@ -1944,7 +1813,6 @@ mod tests {
             "appended memo should include annex heading"
         );
         assert!(appended.contains("deadbeef"), "sha should be present");
-
         doc.dashboard_sha256 = "beadfeed".into();
         doc.generated_at = "2026-03-06T12:34:56Z".into();
         update_regulatory_entry(temp.path(), &doc).expect("replace block");

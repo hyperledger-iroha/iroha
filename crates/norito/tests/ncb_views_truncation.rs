@@ -1,7 +1,5 @@
 //! NCB view truncation detection for combo shapes
-
 use norito::core::Error;
-
 #[test]
 fn ncb_view_str_u32_truncation_detected() {
     let rows: Vec<(u64, &str, u32, bool)> = vec![(1, "a", 3, true), (2, "", 0, false)];
@@ -13,7 +11,6 @@ fn ncb_view_str_u32_truncation_detected() {
         assert!(matches!(e, Error::LengthMismatch));
     }
 }
-
 #[test]
 fn ncb_view_bytes_u32_truncation_detected() {
     let rows: Vec<(u64, &[u8], u32, bool)> = vec![

@@ -8,17 +8,12 @@
 //! introduced in SNNet-7 models relay bonding, bandwidth attestations, and
 //! reward instructions so the treasury can remunerate SoraNet relays with
 //! deterministic Norito payloads.
-
 #![allow(clippy::module_name_repetitions)]
-
 use iroha_crypto::{Algorithm, PublicKey, Signature};
-
 /// Canonical 32-byte digest type used across `SoraNet` payloads.
 pub type Digest32 = [u8; 32];
-
 /// Relay identifier derived from the directory fingerprint.
 pub type RelayId = Digest32;
-
 pub(crate) fn signature_for_public_key_algorithm(
     public_key: &PublicKey,
     signature: &Signature,
@@ -35,13 +30,10 @@ pub(crate) fn signature_for_public_key_algorithm(
             .map_err(|_| iroha_crypto::Error::BadSignature),
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
-
     use super::*;
-
+    use iroha_crypto::KeyPair;
     #[test]
     fn signature_for_public_key_algorithm_rejects_malformed_mldsa_signature_lengths() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
@@ -51,7 +43,6 @@ mod tests {
         signature_for_public_key_algorithm(key_pair.public_key(), &signature)
             .expect("valid SoraNet ML-DSA signature parses");
         let valid_signature = signature.payload().to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -72,7 +63,6 @@ mod tests {
         }
     }
 }
-
 /// Incentive and payout scaffolding for SoraNet relays.
 pub mod incentives;
 /// Aggregated privacy-preserving telemetry buckets and summaries.
@@ -81,7 +71,6 @@ pub mod privacy_metrics;
 pub mod ticket;
 /// VPN cell/control-plane payloads for the native SoraNet tunnel.
 pub mod vpn;
-
 /// Re-export commonly used `SoraNet` types.
 pub mod prelude {
     pub use super::{

@@ -10,16 +10,14 @@
     clippy::match_same_arms,
     clippy::unnecessary_debug_formatting
 )]
+use clap::{Args as ClapArgs, Parser, Subcommand};
+use color_eyre::eyre::WrapErr as _;
+use iroha_genesis::init_instruction_registry;
 use std::{
     fmt,
     io::{BufWriter, Write, stdout},
     process::ExitCode,
 };
-
-use clap::{Args as ClapArgs, Parser, Subcommand};
-use color_eyre::eyre::WrapErr as _;
-use iroha_genesis::init_instruction_registry;
-
 mod client_configs;
 mod codec;
 mod crypto;
@@ -36,19 +34,15 @@ mod swarm;
 mod tui;
 mod verify;
 mod wizard;
-
 /// Norito JSON derive macros available to Kagami modules.
 pub mod json_macros {
     pub use norito::derive::{FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize};
 }
-
 /// Outcome shorthand used throughout this crate
 // Note: migrate Kagami CLI to `error_stack` once modules no longer depend on `color_eyre` convenience macros.
 pub(crate) type Outcome = color_eyre::Result<()>;
-
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
-
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
     "  kagami localnet-wizard\n",
@@ -59,7 +53,6 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami keys --algorithm bls_normal --pop --json\n",
     "  kagami advanced markdown-help\n",
 );
-
 /// Error requesting one deliberate non-default CLI exit status.
 ///
 /// Security-sensitive publication commands use this after the publication
@@ -71,7 +64,6 @@ pub(crate) struct ExplicitExitError {
     code: u8,
     message: String,
 }
-
 impl ExplicitExitError {
     /// Construct one explicit CLI exit request with its operator-facing error.
     pub(crate) fn new(code: u8, message: impl Into<String>) -> Self {
@@ -80,20 +72,16 @@ impl ExplicitExitError {
             message: message.into(),
         }
     }
-
     const fn code(&self) -> u8 {
         self.code
     }
 }
-
 impl fmt::Display for ExplicitExitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.message)
     }
 }
-
 impl std::error::Error for ExplicitExitError {}
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -111,7 +99,6 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn run() -> Outcome {
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     color_eyre::install()?;
@@ -121,7 +108,6 @@ fn run() -> Outcome {
     let mut writer = BufWriter::new(stdout());
     cli.command.run(&mut writer)
 }
-
 /// Trait to encapsulate common attributes of the commands and sub-commands.
 trait RunArgs<T: Write> {
     /// Run the given command.
@@ -130,7 +116,6 @@ trait RunArgs<T: Write> {
     /// if inner command fails.
     fn run(self, writer: &mut BufWriter<T>) -> Outcome;
 }
-
 #[derive(Parser, Debug)]
 #[command(
     name = "kagami",
@@ -145,7 +130,6 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 /// Kagami is a task-first Iroha operator toolbox with guided flows for node setup and local
 /// devnets, plus advanced low-level helpers.
 #[derive(Debug, Subcommand)]
@@ -173,7 +157,6 @@ enum Command {
     #[clap(subcommand)]
     Advanced(AdvancedCommand),
 }
-
 #[derive(Debug, Subcommand)]
 enum AdvancedCommand {
     /// Generate per-client CLI configs from a base client.toml
@@ -188,7 +171,6 @@ enum AdvancedCommand {
     /// Generate the schema used for code generation in Iroha SDKs
     Schema(schema::Args),
 }
-
 impl<T: Write> RunArgs<T> for AdvancedCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
@@ -200,11 +182,9 @@ impl<T: Write> RunArgs<T> for AdvancedCommand {
         }
     }
 }
-
 impl<T: Write> RunArgs<T> for Command {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         use Command::*;
-
         match self {
             Wizard(args) => args.run(writer),
             LocalnetWizard(args) => args.run(writer),
@@ -219,10 +199,8 @@ impl<T: Write> RunArgs<T> for Command {
         }
     }
 }
-
 #[derive(Debug, ClapArgs, Clone)]
 struct MarkdownHelp;
-
 impl<T: Write> RunArgs<T> for MarkdownHelp {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let command_info = clap_markdown::help_markdown::<Cli>();
@@ -230,22 +208,17 @@ impl<T: Write> RunArgs<T> for MarkdownHelp {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Error};
-
     use super::{Cli, Parser};
-
+    use clap::{CommandFactory, Error};
     fn parse(args: &str) -> Result<Cli, Error> {
         Cli::try_parse_from(args.split(' '))
     }
-
     #[test]
     fn verify_args() {
         Cli::command().debug_assert();
     }
-
     #[test]
     fn privacy_bootstrap_commands_require_complete_exact_v1_artifact_paths() {
         assert!(
@@ -303,7 +276,6 @@ mod tests {
             "the first release has no compatibility command aliases"
         );
     }
-
     #[test]
     fn retired_kagemusha_verify_release_command_is_rejected() {
         assert!(
@@ -337,7 +309,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn kagemusha_v4_commands_are_distinct_and_require_complete_evidence() {
         assert!(
@@ -398,7 +369,6 @@ mod tests {
             "the historical V3 command must not accept a V4 alias flag"
         );
     }
-
     #[test]
     fn kagemusha_taira_base_genesis_rejects_pre_genesis_release_inputs() {
         let base = "kagami kagemusha prepare-taira-testnet-base-genesis-v4 \
@@ -424,7 +394,6 @@ mod tests {
             "the self-referential pre-genesis release command must remain retired"
         );
     }
-
     #[test]
     fn docker_accepts_valid_flags() {
         assert!(
@@ -439,7 +408,6 @@ mod tests {
             .is_ok()
         )
     }
-
     #[test]
     fn docker_cannot_mix_print_and_force() {
         assert!(
@@ -454,7 +422,6 @@ mod tests {
             .is_err()
         )
     }
-
     #[test]
     fn docker_accepts_pull_image_mode() {
         assert!(
@@ -468,7 +435,6 @@ mod tests {
             .is_ok()
         )
     }
-
     #[test]
     fn docker_accepts_build_mode() {
         assert!(
@@ -483,7 +449,6 @@ mod tests {
             .is_ok()
         )
     }
-
     #[test]
     fn docker_requires_image() {
         assert!(
@@ -496,14 +461,12 @@ mod tests {
             .is_err()
         )
     }
-
     #[test]
     fn keys_owner_only_output_is_a_distinct_format() {
         assert!(parse("kagami keys --out-dir ./custody").is_ok());
         assert!(parse("kagami keys --out-dir ./custody --compact").is_err());
         assert!(parse("kagami keys --out-dir ./custody --json").is_err());
     }
-
     #[test]
     fn advanced_subcommands_parse() {
         assert!(parse("kagami advanced codec list-types").is_ok());
@@ -527,7 +490,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn removed_top_level_commands_fail() {
         assert!(parse("kagami crypto --algorithm ed25519").is_err());
@@ -538,7 +500,6 @@ mod tests {
         assert!(parse("kagami client-configs --base-config ./client.toml --names alice").is_err());
         assert!(parse("kagami markdown-help").is_err());
     }
-
     #[test]
     fn checked_in_markdown_help_matches_generated_help() {
         let generated = clap_markdown::help_markdown::<Cli>();

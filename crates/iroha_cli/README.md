@@ -82,10 +82,17 @@ Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instruc
 
 ### Sumeragi consensus helpers
 
+Operator reads require an explicit runtime key file whose public key is allowlisted by the node.
+Pass the absolute file path on every invocation; the CLI does not read this credential from the
+environment or client TOML and never substitutes the account key. On Unix the file must be an
+owner-owned, singly linked regular file with exact mode `0600`. Requests are signed for the exact
+`network_id` in `client.toml`.
+
 Fetch the exact reducer-owned consensus status:
 
 ```bash
-iroha --output-format text ops sumeragi status
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  --output-format text ops sumeragi status
 ```
 
 > `--output-format text` prints protocol version, height, view, reducer phase, leader, body state, persistence state, committed height, and restart requirement.
@@ -93,30 +100,23 @@ iroha --output-format text ops sumeragi status
 Fetch non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics separately:
 
 ```bash
-iroha --output-format text ops sumeragi diagnostics
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  --output-format text ops sumeragi diagnostics
 ```
 
 Fetch latest per-phase latencies (ms):
 
 ```bash
-iroha --output-format text ops sumeragi phases
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  --output-format text ops sumeragi phases
 # Example: propose=11 da=22 prevote=33 precommit=44 exec=55 witness=66 commit=77 ms | ema(propose=15 da=24 prevote=31 precommit=40 commit=70)
-```
-
-RBC status and sessions (throughput and active sessions):
-
-```bash
-iroha --output-format text ops sumeragi rbc status
-# Example: active=2 pruned=10 ready=8 deliver=7 bytes=1234567 skip_payload=1 skip_ready=2
-
-iroha --output-format text ops sumeragi rbc sessions
-# Example: active=1 first=[h:1234 v:7 chunks=12/12 delivered=true] items=1
 ```
 
 Fetch commit QC (if present) for a block hash:
 
 ```bash
-iroha ops sumeragi commit-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  ops sumeragi commit-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
 # Prints JSON with fields: subject_block_hash, parent_state_root, post_state_root (hex), height, view, epoch,
 # signers_bitmap (hex), bls_aggregate_signature (hex). If missing, commit_qc is null.
 ```

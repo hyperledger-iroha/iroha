@@ -1,10 +1,8 @@
 //! Sanity-check adaptive AoS/NCB telemetry under a controlled small-N sample.
-
 use norito::columnar::{
     adaptive_metrics_reset, adaptive_metrics_snapshot, encode_ncb_u64_str_bool,
     encode_rows_u64_str_bool_adaptive,
 };
-
 #[test]
 fn adaptive_two_pass_records_probe_and_bytes_saved() {
     // Build a tiny dataset (<= small_n) to trigger the two-pass probe path.
@@ -15,14 +13,11 @@ fn adaptive_two_pass_records_probe_and_bytes_saved() {
     let aos_len = norito::aos::encode_rows_u64_str_bool(&rows).len();
     let ncb_len = encode_ncb_u64_str_bool(&rows).len();
     let diff = aos_len.abs_diff(ncb_len) as u64;
-
     // Reset counters (best-effort: other tests may race; use >= assertions below)
     adaptive_metrics_reset();
     let before = adaptive_metrics_snapshot();
-
     // Trigger the adaptive encoder (two-pass probe)
     let _bytes = encode_rows_u64_str_bool_adaptive(&rows);
-
     let after = adaptive_metrics_snapshot();
     // At least one probe and one selection must have been recorded
     assert!(after.probes > before.probes, "probes not incremented");

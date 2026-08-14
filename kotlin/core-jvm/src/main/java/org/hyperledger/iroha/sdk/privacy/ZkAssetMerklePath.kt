@@ -60,11 +60,21 @@ interface ZkAssetMerklePathProvider {
     fun getMerklePaths(asset: String, commitments: List<ByteArray>): CompletableFuture<List<ZkAssetMerklePath>>
 }
 
-/** Fetches current confidential-v2 commitment inclusion paths from Torii. */
+/**
+ * Fetches current confidential-v2 commitment inclusion paths with exact-network authentication.
+ *
+ * Freshness is generated for every request; reusable explicit timestamp/nonce pairs are rejected.
+ */
 class ToriiZkAssetMerklePathProvider(
     private val client: ConfidentialAssetToriiClient,
     private val canonicalAuth: ToriiCanonicalRequestAuth,
 ) : ZkAssetMerklePathProvider {
+    init {
+        require(canonicalAuth.timestampMs == null && canonicalAuth.nonce == null) {
+            "Torii Merkle path providers require generated per-request freshness"
+        }
+    }
+
     override fun getMerklePathForCommitment(asset: String, commitment: ByteArray): CompletableFuture<ZkAssetMerklePath> {
         return getMerklePaths(asset, listOf(commitment)).thenApply { paths -> paths.single() }
     }

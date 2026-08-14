@@ -3,7 +3,7 @@
 //! The data-model types deliberately expose a closed profile inventory. This
 //! module gives those profiles an explicit canonical byte layout so protocol
 //! hashes never depend on Rust discriminants, JSON spelling, or a platform ABI.
-
+use crate::H256;
 pub use iroha_data_model::bridge::{
     SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
     SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSolanaSourceEmitterV1,
@@ -14,12 +14,8 @@ pub use iroha_data_model::bridge::{
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
 };
 use tiny_keccak::{Hasher as _, Keccak};
-
-use crate::H256;
-
 /// Keccak-256 source-event domain separator used by every native route contract.
 pub const SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1: &[u8] = b"sccp:source:event:v1";
-
 fn keccak256(prefix: &[u8], payload: &[u8]) -> H256 {
     let mut hasher = Keccak::v256();
     hasher.update(prefix);
@@ -28,7 +24,6 @@ fn keccak256(prefix: &[u8], payload: &[u8]) -> H256 {
     hasher.finalize(&mut output);
     output
 }
-
 /// Decode one stable V1 network-profile tag.
 #[must_use]
 pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
@@ -45,7 +40,6 @@ pub const fn sccp_network_from_tag_v1(tag: u8) -> Option<SccpNetworkV1> {
         _ => None,
     }
 }
-
 /// Return the canonical V1 preimage for an SCCP event emitted on one exact lane.
 ///
 /// Binding the exact lane hash, rather than only the two numeric protocol
@@ -73,7 +67,6 @@ pub fn canonical_sccp_lane_source_event_bytes_v1(
     out.extend_from_slice(&payload_hash);
     Some(out)
 }
-
 /// Hash an SCCP event emitted on one exact V1 lane.
 ///
 /// The contract-computable preimage is exactly
@@ -89,13 +82,10 @@ pub fn sccp_lane_source_event_digest_v1(
     let preimage = canonical_sccp_lane_source_event_bytes_v1(lane, message_id, payload_hash)?;
     Some(keccak256(SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1, &preimage))
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use super::*;
-
+    use std::collections::BTreeSet;
     const NETWORKS: [SccpNetworkV1; 9] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,
@@ -107,7 +97,6 @@ mod tests {
         SccpNetworkV1::TronShasta,
         SccpNetworkV1::SolanaTestnet,
     ];
-
     fn sample_identity() -> SccpSourceIdentityV1 {
         SccpSourceIdentityV1 {
             lane: SccpLaneIdV1 {
@@ -121,7 +110,6 @@ mod tests {
             }),
         }
     }
-
     #[test]
     fn closed_network_profiles_have_distinct_canonical_bytes_and_hashes() {
         let bytes = NETWORKS
@@ -135,7 +123,6 @@ mod tests {
         assert_eq!(bytes.len(), NETWORKS.len());
         assert_eq!(hashes.len(), NETWORKS.len());
     }
-
     #[test]
     fn canonical_network_bytes_bind_exact_native_identity() {
         assert_eq!(
@@ -165,7 +152,6 @@ mod tests {
             sccp_network_identity_hash_v1(SccpNetworkV1::BscTestnet)
         );
     }
-
     #[test]
     fn source_identity_hashes_match_independent_golden_vectors() {
         let identity = sample_identity();
@@ -173,7 +159,6 @@ mod tests {
         let emitter_hash =
             sccp_source_emitter_identity_hash_v1(&identity.emitter).expect("valid emitter");
         let identity_hash = sccp_source_identity_hash_v1(&identity).expect("valid identity");
-
         assert_eq!(
             sccp_network_identity_hash_v1(SccpNetworkV1::EthereumMainnet),
             crate::decode_fixed_hex_bytes::<32>(
@@ -203,7 +188,6 @@ mod tests {
             .expect("source identity hash vector"),
         );
     }
-
     #[test]
     fn lane_hash_is_directional_and_rejects_invalid_topologies() {
         let inbound = SccpLaneIdV1 {
@@ -232,7 +216,6 @@ mod tests {
             assert!(sccp_lane_id_hash_v1(invalid).is_none());
         }
     }
-
     #[test]
     fn network_profile_tags_are_bijective_and_reject_unknown_values() {
         let networks = [
@@ -257,7 +240,6 @@ mod tests {
             assert!(sccp_network_from_tag_v1(unknown).is_none());
         }
     }
-
     #[test]
     fn source_event_digest_binds_exact_profiles_and_rejects_sentinels() {
         let message_id = [0x71; 32];
@@ -301,12 +283,10 @@ mod tests {
             .is_none()
         );
     }
-
     #[test]
     fn identity_hash_commits_to_every_emitter_role() {
         let identity = sample_identity();
         let expected = sccp_source_identity_hash_v1(&identity).expect("valid source identity");
-
         let mut mutations = Vec::new();
         for field in 0..3 {
             let mut mutated = identity;
@@ -334,7 +314,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn solana_identity_hash_commits_to_every_immutable_deployment_role() {
         let identity = SccpSourceIdentityV1 {
@@ -373,7 +352,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn malformed_emitters_fail_before_hashing() {
         for emitter in [
@@ -400,7 +378,6 @@ mod tests {
             assert!(sccp_source_emitter_identity_hash_v1(&emitter).is_none());
         }
     }
-
     #[test]
     fn shared_native_transfer_event_vectors_match_exact_rust_wire() {
         fn object(value: &norito::json::Value) -> &norito::json::Map {
@@ -415,7 +392,6 @@ mod tests {
         fn hex(value: &str) -> Vec<u8> {
             crate::decode_hex_bytes(&format!("0x{value}")).expect("fixture lowercase hexadecimal")
         }
-
         let fixture = norito::json::from_str::<norito::json::Value>(include_str!(
             "../../../fixtures/sccp/native_transfer_event_v1.json"
         ))

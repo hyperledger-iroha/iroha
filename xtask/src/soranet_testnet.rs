@@ -1,3 +1,9 @@
+use crate::{JsonTarget, workspace_root};
+use blake3::hash as blake3_hash;
+use eyre::{Context, Result, bail, ensure, eyre};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use norito::json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File},
@@ -5,16 +11,7 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use blake3::hash as blake3_hash;
-use eyre::{Context, Result, bail, ensure, eyre};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-use norito::json::{Map, Value};
-use sha2::{Digest, Sha256};
 use time::{Date, format_description::well_known::Iso8601};
-
-use crate::{JsonTarget, workspace_root};
-
 const KIT_FILES: &[(&str, &str)] = &[
     (
         "01-readme.md",
@@ -45,7 +42,6 @@ const KIT_FILES: &[(&str, &str)] = &[
         include_str!("../templates/soranet_testnet/07-metrics-sample.json"),
     ),
 ];
-
 fn value_object<I, K>(entries: I) -> Value
 where
     I: IntoIterator<Item = (K, Value)>,
@@ -57,7 +53,6 @@ where
     }
     Value::Object(map)
 }
-
 #[derive(Clone)]
 struct AttachmentDigest {
     label: String,
@@ -66,7 +61,6 @@ struct AttachmentDigest {
     sha256: String,
     blake3: String,
 }
-
 impl AttachmentDigest {
     fn to_value(&self) -> Value {
         value_object([
@@ -77,7 +71,6 @@ impl AttachmentDigest {
             ("blake3", Value::from(self.blake3.clone())),
         ])
     }
-
     fn to_signing_attachment(&self) -> SigningAttachment {
         SigningAttachment {
             label: self.label.clone(),
@@ -88,7 +81,6 @@ impl AttachmentDigest {
         }
     }
 }
-
 pub fn generate_testnet_kit(output_dir: PathBuf) -> Result<()> {
     fs::create_dir_all(&output_dir).context("create output directory")?;
     for (name, contents) in KIT_FILES {
@@ -99,7 +91,6 @@ pub fn generate_testnet_kit(output_dir: PathBuf) -> Result<()> {
     }
     Ok(())
 }
-
 pub fn evaluate_testnet_metrics(input_path: PathBuf, target: JsonTarget) -> Result<()> {
     let file = File::open(&input_path)
         .with_context(|| format!("open SNNet-10 metrics snapshot {}", input_path.display()))?;
@@ -115,7 +106,6 @@ pub fn evaluate_testnet_metrics(input_path: PathBuf, target: JsonTarget) -> Resu
         bail!("one or more SNNet-10 success metrics fell below the required thresholds");
     }
 }
-
 fn write_report_output(value: &Value, target: JsonTarget) -> Result<()> {
     let mut json_text = norito::json::to_string_pretty(value)?;
     json_text.push('\n');
@@ -132,13 +122,11 @@ fn write_report_output(value: &Value, target: JsonTarget) -> Result<()> {
     }
     Ok(())
 }
-
 #[derive(Clone)]
 pub struct VerificationAttachment {
     pub label: String,
     pub path: PathBuf,
 }
-
 pub struct VerificationFeedOptions {
     pub promotion: String,
     pub window_start: Date,
@@ -150,7 +138,6 @@ pub struct VerificationFeedOptions {
     pub attachments: Vec<VerificationAttachment>,
     pub output: JsonTarget,
 }
-
 pub struct DrillBundleOptions {
     pub log_path: PathBuf,
     pub signing_key: PathBuf,
@@ -160,18 +147,15 @@ pub struct DrillBundleOptions {
     pub attachments: Vec<VerificationAttachment>,
     pub output: JsonTarget,
 }
-
 pub fn generate_verification_feed(options: VerificationFeedOptions) -> Result<()> {
     ensure!(
         options.window_end >= options.window_start,
         "window end must be on or after the start date"
     );
-
     ensure!(
         !options.relays.is_empty(),
         "at least one relay id must be provided"
     );
-
     let mut relays = options
         .relays
         .into_iter()
@@ -179,7 +163,6 @@ pub fn generate_verification_feed(options: VerificationFeedOptions) -> Result<()
         .collect::<Vec<_>>();
     relays.sort();
     relays.dedup();
-
     let (metrics_value, metrics_sha256, metrics_blake3) =
         read_json_with_hashes(&options.metrics_report).with_context(|| {
             format!(
@@ -187,7 +170,6 @@ pub fn generate_verification_feed(options: VerificationFeedOptions) -> Result<()
                 options.metrics_report.display()
             )
         })?;
-
     let drill_entry = if let Some(path) = &options.drill_log {
         let (value, sha256, blake3) = read_json_with_hashes(path)
             .with_context(|| format!("failed to load drill log from {}", path.display()))?;
@@ -205,7 +187,6 @@ pub fn generate_verification_feed(options: VerificationFeedOptions) -> Result<()
     } else {
         None
     };
-
     let stage_report_entry = if let Some(path) = &options.stage_report {
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read stage report from {}", path.display()))?;
@@ -222,18 +203,14 @@ pub fn generate_verification_feed(options: VerificationFeedOptions) -> Result<()
     } else {
         None
     };
-
     let attachment_digests = digest_attachments(options.attachments)?;
     let attachments: Vec<Value> = attachment_digests
         .iter()
         .map(AttachmentDigest::to_value)
         .collect();
-
     let start_iso = format_date(options.window_start)?;
     let end_iso = format_date(options.window_end)?;
-
     let generated_unix_ms = unix_ms_now();
-
     let mut root = Map::new();
     root.insert("promotion".into(), Value::from(options.promotion));
     root.insert(
@@ -264,11 +241,9 @@ pub fn generate_verification_feed(options: VerificationFeedOptions) -> Result<()
         root.insert("stage_report".into(), stage);
     }
     root.insert("attachments".into(), Value::Array(attachments));
-
     let feed = Value::Object(root);
     write_report_output(&feed, options.output).context("failed to write SNNet-10 verification feed")
 }
-
 struct SigningAttachment {
     label: String,
     sha256: String,
@@ -276,7 +251,6 @@ struct SigningAttachment {
     bytes: u64,
     path: String,
 }
-
 impl SigningAttachment {
     fn to_value(&self) -> Value {
         value_object([
@@ -288,13 +262,11 @@ impl SigningAttachment {
         ])
     }
 }
-
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
     signature_hex: String,
 }
-
 pub fn generate_drill_bundle(options: DrillBundleOptions) -> Result<()> {
     let window = match (options.window_start, options.window_end) {
         (Some(start), Some(end)) => {
@@ -310,7 +282,6 @@ pub fn generate_drill_bundle(options: DrillBundleOptions) -> Result<()> {
         (None, None) => None,
         _ => bail!("both --window-start and --window-end must be provided together"),
     };
-
     let log_bytes = fs::read(&options.log_path)
         .with_context(|| format!("failed to read drill log {}", options.log_path.display()))?;
     let log_value: Value = norito::json::from_slice(&log_bytes).with_context(|| {
@@ -322,7 +293,6 @@ pub fn generate_drill_bundle(options: DrillBundleOptions) -> Result<()> {
     let log_sha256 = sha256_hex(&log_bytes);
     let log_blake3 = blake3_hex(&log_bytes);
     let log_size = log_bytes.len() as u64;
-
     let attachment_digests = digest_attachments(options.attachments)?;
     let signing_payload = build_drill_signing_payload(
         options.promotion.as_deref(),
@@ -333,12 +303,10 @@ pub fn generate_drill_bundle(options: DrillBundleOptions) -> Result<()> {
     );
     let signing_payload_bytes = norito::json::to_vec(&signing_payload)?;
     let signature = sign_payload(&signing_payload_bytes, &options.signing_key)?;
-
     let attachments_value: Vec<Value> = attachment_digests
         .iter()
         .map(AttachmentDigest::to_value)
         .collect();
-
     let mut root = Map::new();
     root.insert("version".into(), Value::from(1));
     root.insert("generated_unix_ms".into(), Value::from(unix_ms_now()));
@@ -368,11 +336,9 @@ pub fn generate_drill_bundle(options: DrillBundleOptions) -> Result<()> {
         ]),
     );
     root.insert("attachments".into(), Value::Array(attachments_value));
-
     let bundle = Value::Object(root);
     write_report_output(&bundle, options.output).context("write signed SNNet-10 drill bundle")
 }
-
 fn build_drill_signing_payload(
     promotion: Option<&str>,
     window: Option<Value>,
@@ -398,7 +364,6 @@ fn build_drill_signing_payload(
     entries.push(("attachments", Value::Array(signing_attachments)));
     value_object(entries)
 }
-
 fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope> {
     let key_text = fs::read_to_string(signing_key)
         .with_context(|| format!("failed to read signing key {}", signing_key.display()))?;
@@ -429,7 +394,6 @@ fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope>
         signature_hex: hex::encode(signature.payload()),
     })
 }
-
 fn digest_attachments(attachments: Vec<VerificationAttachment>) -> Result<Vec<AttachmentDigest>> {
     let mut seen_labels = HashSet::new();
     let mut digests = Vec::with_capacity(attachments.len());
@@ -457,7 +421,6 @@ fn digest_attachments(attachments: Vec<VerificationAttachment>) -> Result<Vec<At
     digests.sort_by(|left, right| left.label.cmp(&right.label));
     Ok(digests)
 }
-
 fn read_json_with_hashes(path: &Path) -> Result<(Value, String, String)> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let value: Value = norito::json::from_slice(&bytes)
@@ -466,17 +429,14 @@ fn read_json_with_hashes(path: &Path) -> Result<(Value, String, String)> {
     let blake3 = blake3_hex(&bytes);
     Ok((value, sha256, blake3))
 }
-
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
 }
-
 fn blake3_hex(data: &[u8]) -> String {
     blake3_hash(data).to_hex().to_string()
 }
-
 fn unix_ms_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -485,7 +445,6 @@ fn unix_ms_now() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
-
 fn display_path(path: &Path) -> String {
     if let Ok(relative) = path.strip_prefix(workspace_root()) {
         relative.display().to_string()
@@ -493,12 +452,10 @@ fn display_path(path: &Path) -> String {
         path.display().to_string()
     }
 }
-
 fn format_date(date: Date) -> Result<String> {
     date.format(&Iso8601::DATE)
         .map_err(|err| eyre!("failed to format date {date}: {err}"))
 }
-
 #[derive(Debug)]
 struct MetricsInput {
     circuit_completed: f64,
@@ -513,7 +470,6 @@ struct MetricsInput {
     pow_p95_seconds: f64,
     latency_p95_ms: f64,
 }
-
 impl MetricsInput {
     fn from_value(value: &Value) -> Result<Self> {
         let root = expect_object(value, "metrics snapshot")?;
@@ -522,18 +478,15 @@ impl MetricsInput {
             window_days > 0.0,
             "metrics.window_days must be greater than zero"
         );
-
         let circuit = object_field(root, "circuit_events", "metrics")?;
         let circuit_completed =
             non_negative_number(circuit, "completed", "metrics.circuit_events")?;
         let circuit_brownout = non_negative_number(circuit, "brownout", "metrics.circuit_events")?;
         let circuit_downgrade =
             non_negative_number(circuit, "downgrade", "metrics.circuit_events")?;
-
         let fetch = object_field(root, "fetch_sessions", "metrics")?;
         let fetch_total = non_negative_number(fetch, "total", "metrics.fetch_sessions")?;
         let fetch_brownout = non_negative_number(fetch, "brownout", "metrics.fetch_sessions")?;
-
         let gar = object_field(root, "gar_mix", "metrics")?;
         let gar_expected = ratio_map_field(
             gar,
@@ -556,7 +509,6 @@ impl MetricsInput {
             "metrics.gar_mix",
             /*allow_zero=*/ false,
         )?;
-
         let pow = object_field(root, "pow", "metrics")?;
         let pow_attempts = non_negative_number(pow, "attempts", "metrics.pow")?;
         let pow_successes = non_negative_number(pow, "successes", "metrics.pow")?;
@@ -569,14 +521,12 @@ impl MetricsInput {
             pow_p95_seconds >= 0.0,
             "metrics.pow.p95_seconds must be non-negative"
         );
-
         let latency = object_field(root, "latency_ms", "metrics")?;
         let latency_p95_ms = number_field(latency, "p95", "metrics.latency_ms")?;
         ensure!(
             latency_p95_ms >= 0.0,
             "metrics.latency_ms.p95 must be non-negative"
         );
-
         Ok(Self {
             circuit_completed,
             circuit_brownout,
@@ -591,10 +541,8 @@ impl MetricsInput {
             latency_p95_ms,
         })
     }
-
     fn evaluate(&self) -> MetricsReport {
         let mut checks = Vec::new();
-
         let total_circuits =
             self.circuit_completed + self.circuit_brownout + self.circuit_downgrade;
         let success_ratio = if total_circuits > 0.0 {
@@ -621,7 +569,6 @@ impl MetricsInput {
             circuits_pass,
             circuit_details,
         ));
-
         let brownout_ratio = if self.fetch_total > 0.0 {
             self.fetch_brownout / self.fetch_total
         } else {
@@ -644,7 +591,6 @@ impl MetricsInput {
             fetch_pass,
             fetch_details,
         ));
-
         let total_observed: f64 = self.gar_observed.values().sum();
         let mut categories = Vec::new();
         let mut max_deviation = 0.0;
@@ -685,7 +631,6 @@ impl MetricsInput {
             ("categories", Value::Array(categories)),
         ]);
         checks.push(MetricCheck::new("gar_mix_variance", gar_pass, gar_details));
-
         let pow_success_rate = if self.pow_attempts > 0.0 {
             self.pow_successes / self.pow_attempts
         } else {
@@ -702,7 +647,6 @@ impl MetricsInput {
             ("p95_threshold", Value::from(3.0)),
         ]);
         checks.push(MetricCheck::new("pow_success_rate", pow_pass, pow_details));
-
         let latency_pass = self.latency_p95_ms <= 200.0;
         let latency_details = value_object([
             ("p95_ms", Value::from(self.latency_p95_ms)),
@@ -713,20 +657,16 @@ impl MetricsInput {
             latency_pass,
             latency_details,
         ));
-
         MetricsReport { checks }
     }
 }
-
 struct MetricsReport {
     checks: Vec<MetricCheck>,
 }
-
 impl MetricsReport {
     fn all_passed(&self) -> bool {
         self.checks.iter().all(|check| check.passed)
     }
-
     fn to_value(&self) -> Value {
         let checks: Vec<Value> = self.checks.iter().map(MetricCheck::to_value).collect();
         let status = if self.all_passed() { "pass" } else { "fail" };
@@ -736,13 +676,11 @@ impl MetricsReport {
         ])
     }
 }
-
 struct MetricCheck {
     name: &'static str,
     passed: bool,
     details: Value,
 }
-
 impl MetricCheck {
     fn new(name: &'static str, passed: bool, details: Value) -> Self {
         Self {
@@ -751,7 +689,6 @@ impl MetricCheck {
             details,
         }
     }
-
     fn to_value(&self) -> Value {
         value_object([
             ("name", Value::from(self.name)),
@@ -760,20 +697,17 @@ impl MetricCheck {
         ])
     }
 }
-
 fn expect_object<'a>(value: &'a Value, context: &str) -> Result<&'a Map> {
     value
         .as_object()
         .ok_or_else(|| eyre!("{context} must be a JSON object"))
 }
-
 fn object_field<'a>(map: &'a Map, key: &str, parent: &str) -> Result<&'a Map> {
     let value = map
         .get(key)
         .ok_or_else(|| eyre!("missing {parent}.{key}"))?;
     expect_object(value, &format!("{parent}.{key}"))
 }
-
 fn number_field(map: &Map, key: &str, parent: &str) -> Result<f64> {
     let value = map
         .get(key)
@@ -782,13 +716,11 @@ fn number_field(map: &Map, key: &str, parent: &str) -> Result<f64> {
         .as_f64()
         .ok_or_else(|| eyre!("{parent}.{key} must be a number"))
 }
-
 fn non_negative_number(map: &Map, key: &str, parent: &str) -> Result<f64> {
     let value = number_field(map, key, parent)?;
     ensure!(value >= 0.0, "{parent}.{key} must be non-negative");
     Ok(value)
 }
-
 fn ratio_map_field(
     map: &Map,
     key: &str,
@@ -800,7 +732,6 @@ fn ratio_map_field(
         .ok_or_else(|| eyre!("missing {parent}.{key}"))?;
     parse_ratio_map(value, &format!("{parent}.{key}"), allow_zero)
 }
-
 fn count_map_field(
     map: &Map,
     key: &str,
@@ -812,7 +743,6 @@ fn count_map_field(
         .ok_or_else(|| eyre!("missing {parent}.{key}"))?;
     parse_count_map(value, &format!("{parent}.{key}"), allow_zero)
 }
-
 fn parse_ratio_map(
     value: &Value,
     context: &str,
@@ -831,7 +761,6 @@ fn parse_ratio_map(
     }
     Ok(result)
 }
-
 fn parse_count_map(
     value: &Value,
     context: &str,
@@ -850,16 +779,13 @@ fn parse_count_map(
     }
     Ok(result)
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::JsonTarget;
     use iroha_crypto::PublicKey;
     use tempfile::TempDir;
     use time::Month;
-
-    use super::*;
-    use crate::JsonTarget;
-
     fn passing_metrics_value() -> Value {
         value_object([
             ("window_days", Value::from(14.0)),
@@ -910,7 +836,6 @@ mod tests {
             ("latency_ms", value_object([("p95", Value::from(182.0))])),
         ])
     }
-
     #[test]
     fn metrics_report_passes_when_within_thresholds() {
         let metrics = MetricsInput::from_value(&passing_metrics_value()).expect("parse metrics");
@@ -920,7 +845,6 @@ mod tests {
         assert_eq!(value["status"], Value::from("pass"));
         assert_eq!(value["checks"].as_array().unwrap().len(), 5);
     }
-
     #[test]
     fn metrics_report_fails_on_latency_regression() {
         let mut failing = passing_metrics_value();
@@ -942,7 +866,6 @@ mod tests {
             .expect("latency check present");
         assert_eq!(latency_entry["details"]["p95_ms"], Value::from(245.0));
     }
-
     #[test]
     fn evaluate_testnet_metrics_writes_report_and_errors_on_failure() {
         let temp = TempDir::new().expect("temp dir");
@@ -1006,7 +929,6 @@ mod tests {
         let report_value: Value = norito::json::from_str(&report_text).expect("parse report json");
         assert_eq!(report_value["status"], Value::from("fail"));
     }
-
     #[test]
     fn verification_feed_includes_expected_fields() {
         let temp = TempDir::new().expect("temp dir");
@@ -1015,20 +937,16 @@ mod tests {
         let mut metrics_text = norito::json::to_string_pretty(&metrics_value).unwrap();
         metrics_text.push('\n');
         fs::write(&metrics_path, metrics_text).unwrap();
-
         let drill_path = temp.path().join("drills.json");
         fs::write(
             &drill_path,
             r#"[{"timestamp":"2026-11-05T03:17:00Z","region":"NRT","event":"brownout"}]"#,
         )
         .unwrap();
-
         let stage_report = temp.path().join("stage.md");
         fs::write(&stage_report, "# Report\nAll good.\n").unwrap();
-
         let attachment_path = temp.path().join("exit_bond.to");
         fs::write(&attachment_path, b"bond-data").unwrap();
-
         let feed_path = temp.path().join("feed.json");
         let options = VerificationFeedOptions {
             promotion: "T0->T1".into(),
@@ -1044,9 +962,7 @@ mod tests {
             }],
             output: JsonTarget::File(feed_path.clone()),
         };
-
         generate_verification_feed(options).expect("generate feed");
-
         let feed_text = fs::read_to_string(&feed_path).expect("read feed");
         let feed_value: Value = norito::json::from_str(&feed_text).expect("parse feed");
         assert_eq!(feed_value["promotion"], Value::from("T0->T1"));
@@ -1075,7 +991,6 @@ mod tests {
         );
         assert!(attachments[0]["blake3"].is_string());
     }
-
     #[test]
     fn drill_bundle_signs_and_feed_marks_signed() {
         let temp = TempDir::new().expect("temp dir");
@@ -1090,7 +1005,6 @@ mod tests {
             JsonTarget::File(metrics_report.clone()),
         )
         .expect("evaluate metrics");
-
         let drill_log_path = temp.path().join("drills.json");
         fs::write(
             &drill_log_path,
@@ -1101,12 +1015,10 @@ mod tests {
         fs::write(&guard_path, "rotation-ok").expect("write guard log");
         let exit_path = temp.path().join("exit-bond.to");
         fs::write(&exit_path, "bond-data").expect("write exit bond");
-
         let signing_key_path = temp.path().join("signing.key");
         let signing_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let signing_hex = hex::encode(signing_pair.private_key().to_bytes().1);
         fs::write(&signing_key_path, signing_hex).expect("write signing key");
-
         let window_start = Date::from_calendar_date(2026, Month::November, 1).unwrap();
         let window_end = Date::from_calendar_date(2026, Month::November, 14).unwrap();
         let bundle_path = temp.path().join("drills-signed.json");
@@ -1129,7 +1041,6 @@ mod tests {
             output: JsonTarget::File(bundle_path.clone()),
         };
         generate_drill_bundle(bundle_options).expect("drill bundle");
-
         let bundle_text = fs::read_to_string(&bundle_path).expect("read bundle");
         let bundle_value: Value = norito::json::from_str(&bundle_text).expect("parse bundle json");
         let payload = bundle_value["signing"]["payload"].clone();
@@ -1148,7 +1059,6 @@ mod tests {
         signature
             .verify(&public_key, &payload_bytes)
             .expect("signature must verify");
-
         let stage_report_path = temp.path().join("stage.md");
         fs::write(&stage_report_path, "# Stage report\n").expect("write stage report");
         let feed_path = temp.path().join("feed.json");

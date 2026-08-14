@@ -1,11 +1,7 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
-
 use eyre::Result;
-
 use crate::{CliOutputFormat, RunContext};
-
 use super::commands::{VrfEpochArgs, VrfPenaltiesArgs};
-
 pub(crate) fn penalties<C: RunContext>(context: &mut C, args: VrfPenaltiesArgs) -> Result<()> {
     let client = context.client_from_config();
     let epoch = parse_epoch(&args.epoch);
@@ -35,7 +31,6 @@ pub(crate) fn penalties<C: RunContext>(context: &mut C, args: VrfPenaltiesArgs) 
     }
     Ok(())
 }
-
 pub(crate) fn epoch<C: RunContext>(context: &mut C, args: VrfEpochArgs) -> Result<()> {
     let client = context.client_from_config();
     let epoch = parse_epoch(&args.epoch);
@@ -73,28 +68,23 @@ pub(crate) fn epoch<C: RunContext>(context: &mut C, args: VrfEpochArgs) -> Resul
     }
     Ok(())
 }
-
 fn parse_epoch(raw: &str) -> u64 {
     raw.strip_prefix("0x").map_or_else(
         || raw.parse::<u64>().unwrap_or(0),
         |rest| u64::from_str_radix(rest, 16).unwrap_or(0),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::parse_epoch;
-
     #[test]
     fn parse_epoch_accepts_decimal() {
         assert_eq!(parse_epoch("42"), 42);
     }
-
     #[test]
     fn parse_epoch_accepts_hex_with_prefix() {
         assert_eq!(parse_epoch("0xff"), 255);
     }
-
     #[test]
     fn parse_epoch_returns_zero_on_invalid_input() {
         assert_eq!(parse_epoch("not-a-number"), 0);

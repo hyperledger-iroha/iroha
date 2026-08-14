@@ -1,12 +1,4 @@
 //! Regenerate grouped Nexus and streaming golden fixtures from canonical Rust encoders.
-
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
-
 use hex::encode as hex_encode;
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
@@ -24,23 +16,25 @@ use norito::{
     },
     to_bytes,
 };
-
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 const FIXTURE_PUBLIC_KEY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-
 const BASE_CAPABILITIES: CapabilityFlags = CapabilityFlags::from_bits(
     CapabilityFlags::FEATURE_FEEDBACK_HINTS
         | CapabilityFlags::FEATURE_PRIVACY_PROVIDER
         | CapabilityFlags::FEATURE_ENTROPY_BUNDLED,
 );
-
 struct InstructionFixture<'a> {
     file_name: &'a str,
     fixture_id: &'a str,
     description: &'a str,
     instruction: InstructionBox,
 }
-
 struct StreamingTestVector {
     manifest: ManifestV1,
     manifest_bytes: Vec<u8>,
@@ -51,7 +45,6 @@ struct StreamingTestVector {
     ticket: StreamingTicket,
     ticket_revocation: TicketRevocation,
 }
-
 impl StreamingTestVector {
     fn snapshot_json(&self) -> Result<String, norito::Error> {
         let manifest_hex = hex_encode(&self.manifest_bytes);
@@ -61,7 +54,6 @@ impl StreamingTestVector {
         let chunk_payloads: Vec<String> = self.chunk_payloads.iter().map(hex_encode).collect();
         let storage_commitment_hex = hex_encode(self.storage_commitment);
         let da_root_hex = hex_encode(self.da_root);
-
         let mut map = norito::json::Map::new();
         map.insert(
             "manifest_template_hex".into(),
@@ -93,13 +85,11 @@ impl StreamingTestVector {
             .map_err(norito::Error::from)
     }
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     refresh_norito_instruction_fixtures()?;
     refresh_streaming_snapshot_fixtures()?;
     Ok(())
 }
-
 fn refresh_norito_instruction_fixtures() -> Result<(), Box<dyn Error>> {
     for fixture in instruction_fixtures()? {
         let path = norito_instruction_fixture_path(fixture.file_name);
@@ -109,31 +99,25 @@ fn refresh_norito_instruction_fixtures() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn refresh_streaming_snapshot_fixtures() -> Result<(), Box<dyn Error>> {
     let baseline = baseline_test_vector().snapshot_json()?;
     let baseline_path = streaming_fixture_path("baseline.json");
     write_fixture(&baseline_path, &baseline)?;
     println!("updated {}", baseline_path.display());
-
     let bundled = bundled_test_vector().snapshot_json()?;
     let bundled_path = streaming_fixture_path("bundled.json");
     write_fixture(&bundled_path, &bundled)?;
     println!("updated {}", bundled_path.display());
-
     Ok(())
 }
-
 fn baseline_test_vector() -> StreamingTestVector {
     let segment = baseline_segment(2).1;
     vector_from_segment(&segment)
 }
-
 fn bundled_test_vector() -> StreamingTestVector {
     let segment = bundled_segment(2, 4).1;
     vector_from_segment(&segment)
 }
-
 fn baseline_segment(frame_count: usize) -> (BaselineEncoderConfig, EncodedSegment, Vec<RawFrame>) {
     assert!(frame_count > 0, "frame_count must be non-zero");
     let dims = FrameDimensions::new(8, 8);
@@ -143,7 +127,6 @@ fn baseline_segment(frame_count: usize) -> (BaselineEncoderConfig, EncodedSegmen
     for _ in 0..frame_count {
         frames.push(RawFrame::new(dims, base_luma.clone()).expect("valid frame"));
     }
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dims,
         frame_duration_ns,
@@ -152,15 +135,12 @@ fn baseline_segment(frame_count: usize) -> (BaselineEncoderConfig, EncodedSegmen
         quantizer: 0,
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(config.clone());
     let segment = encoder
         .encode_segment(5, 1_000_000, 3, &frames, None)
         .expect("encode baseline segment");
-
     (config, segment, frames)
 }
-
 fn bundled_segment(
     frame_count: usize,
     bundle_width: u8,
@@ -173,12 +153,10 @@ fn bundled_segment(
     for _ in 0..frame_count {
         frames.push(RawFrame::new(dims, base_luma.clone()).expect("valid frame"));
     }
-
     let bundle_tables =
         load_bundle_tables_from_toml(repo_rans_tables_path()).expect("load bundle tables");
     let max_width = bundle_tables.max_width().max(2);
     let configured_width = bundle_width.clamp(2, max_width);
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dims,
         frame_duration_ns,
@@ -190,15 +168,12 @@ fn bundled_segment(
         bundle_tables,
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(config.clone());
     let segment = encoder
         .encode_segment(6, 2_000_000, 9, &frames, None)
         .expect("encode bundled segment");
-
     (config, segment, frames)
 }
-
 fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
     let manifest = build_manifest(segment);
     let chunk_refs: Vec<(u16, &[u8])> = segment
@@ -208,7 +183,6 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         .map(|(descriptor, chunk)| (descriptor.chunk_id, chunk.as_slice()))
         .collect();
     let chunk_commitments = chunk::chunk_commitments(segment.header.segment_number, &chunk_refs);
-
     let chunk_ids: Vec<_> = segment
         .descriptors
         .iter()
@@ -228,7 +202,6 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         &chunk_ids,
     )
     .expect("da root");
-
     let manifest_bytes = to_bytes(&manifest).expect("serialize manifest template");
     let capabilities = TicketCapabilities::from_bits(
         TicketCapabilities::LIVE | TicketCapabilities::HDR | TicketCapabilities::SPATIAL_AUDIO,
@@ -260,14 +233,12 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         nullifier: fill_hash(0x48),
         proof_id: fill_hash(0x49),
     };
-
     let ticket_revocation = TicketRevocation {
         ticket_id: ticket.ticket_id,
         nullifier: ticket.nullifier,
         reason_code: 17,
         revocation_signature: fill_signature(0xCC),
     };
-
     StreamingTestVector {
         manifest,
         manifest_bytes,
@@ -279,7 +250,6 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
         ticket_revocation,
     }
 }
-
 fn build_manifest(segment: &EncodedSegment) -> ManifestV1 {
     let params = BaselineManifestParams {
         stream_id: fill_hash(0x31),
@@ -299,17 +269,14 @@ fn build_manifest(segment: &EncodedSegment) -> ManifestV1 {
         neural_bundle: None,
         transport_capabilities_hash: [0u8; 32],
     };
-
     segment.build_manifest(params)
 }
-
 fn instruction_fixture_document(
     fixture: &InstructionFixture<'_>,
 ) -> Result<String, Box<dyn Error>> {
     let instruction = norito::json::to_value(&fixture.instruction)?;
     let mut bytes = Vec::new();
     fixture.instruction.encode_to(&mut bytes);
-
     let mut document = norito::json::Map::new();
     document.insert(
         "fixture_id".into(),
@@ -324,13 +291,11 @@ fn instruction_fixture_document(
         "encoded_hex".into(),
         norito::json::Value::from(hex_encode(bytes)),
     );
-
     Ok(format!(
         "{}\n",
         norito::json::to_string_pretty(&norito::json::Value::Object(document))?
     ))
 }
-
 fn ticket_json_value(ticket: &StreamingTicket) -> Result<norito::json::Value, norito::Error> {
     let mut map = norito::json::Map::new();
     map.insert(
@@ -382,12 +347,10 @@ fn ticket_json_value(ticket: &StreamingTicket) -> Result<norito::json::Value, no
     map.insert("ticket_id".into(), hex_value(ticket.ticket_id));
     Ok(norito::json::Value::Object(map))
 }
-
 fn ticket_policy_json(policy: Option<&TicketPolicy>) -> Result<norito::json::Value, norito::Error> {
     let Some(policy) = policy else {
         return Ok(norito::json::Value::Null);
     };
-
     let mut map = norito::json::Map::new();
     map.insert(
         "allowed_regions".into(),
@@ -407,7 +370,6 @@ fn ticket_policy_json(policy: Option<&TicketPolicy>) -> Result<norito::json::Val
     );
     Ok(norito::json::Value::Object(map))
 }
-
 fn ticket_revocation_json_value(revocation: &TicketRevocation) -> norito::json::Value {
     let mut map = norito::json::Map::new();
     map.insert("nullifier".into(), hex_value(revocation.nullifier));
@@ -422,18 +384,15 @@ fn ticket_revocation_json_value(revocation: &TicketRevocation) -> norito::json::
     map.insert("ticket_id".into(), hex_value(revocation.ticket_id));
     norito::json::Value::Object(map)
 }
-
 fn hex_value(bytes: impl AsRef<[u8]>) -> norito::json::Value {
     norito::json::Value::from(hex_encode(bytes.as_ref()))
 }
-
 fn u128_json_value(value: u128) -> norito::json::Value {
     u64::try_from(value).map_or_else(
         |_| norito::json::Value::from(value.to_string()),
         norito::json::Value::from,
     )
 }
-
 fn write_fixture(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
     let Some(parent) = path.parent() else {
         return Err(format!("fixture path has no parent: {}", path.display()).into());
@@ -442,7 +401,6 @@ fn write_fixture(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
     fs::write(path, contents)?;
     Ok(())
 }
-
 fn workspace_root() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !dir.join("Cargo.lock").exists() {
@@ -453,22 +411,18 @@ fn workspace_root() -> PathBuf {
     }
     dir
 }
-
 fn repo_rans_tables_path() -> PathBuf {
     workspace_root().join("codec/rans/tables/rans_seed0.toml")
 }
-
 fn repo_root() -> PathBuf {
     workspace_root()
 }
-
 fn norito_instruction_fixture_path(file_name: &str) -> PathBuf {
     repo_root()
         .join("fixtures")
         .join("norito_instructions")
         .join(file_name)
 }
-
 fn streaming_fixture_path(file_name: &str) -> PathBuf {
     repo_root()
         .join("integration_tests")
@@ -477,22 +431,18 @@ fn streaming_fixture_path(file_name: &str) -> PathBuf {
         .join("rans")
         .join(file_name)
 }
-
 fn fill_hash(byte: u8) -> Hash {
     [byte; 32]
 }
-
 fn fill_signature(byte: u8) -> [u8; 64] {
     [byte; 64]
 }
-
 fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Error>> {
     let asset_id = fixture_asset_id()?;
     let burn_quantity = Quantity::from_str("4")?;
     let burn_fractional = Quantity::from_str("3.1415")?;
     let mint_quantity = Quantity::from_str("4")?;
     let trigger_id = TriggerId::from_str("reconciliation_guard")?;
-
     Ok(vec![
         InstructionFixture {
             file_name: "burn_asset_quantity.json",
@@ -520,7 +470,6 @@ fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Er
         },
     ])
 }
-
 fn fixture_asset_id() -> Result<AssetId, Box<dyn Error>> {
     let public_key = FIXTURE_PUBLIC_KEY.parse()?;
     let account = AccountId::new(public_key);
@@ -530,11 +479,9 @@ fn fixture_asset_id() -> Result<AssetId, Box<dyn Error>> {
     );
     Ok(AssetId::new(definition, account))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn instruction_fixture_document_matches_canonical_hex() {
         let fixture = instruction_fixtures()
@@ -545,7 +492,6 @@ mod tests {
         let document = instruction_fixture_document(&fixture).expect("document");
         let value: norito::json::Value = norito::json::from_str(&document).expect("json");
         let object = value.as_object().expect("fixture object");
-
         let encoded_hex = object
             .get("encoded_hex")
             .and_then(norito::json::Value::as_str)
@@ -554,7 +500,6 @@ mod tests {
         fixture.instruction.encode_to(&mut bytes);
         assert_eq!(encoded_hex, hex_encode(bytes));
     }
-
     #[test]
     fn streaming_snapshot_refresh_emits_manifest_template_hex() {
         let snapshot = baseline_test_vector()

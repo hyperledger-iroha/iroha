@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../vm_aes_wide.rs"]
 mod vm_aes_wide;
 #[path = "../vm_circuit.rs"]

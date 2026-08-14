@@ -2,9 +2,7 @@
 //!
 //! Goal: exercise the bytes combo layout and typical u32-delta cases.
 //! Run with: cargo bench -p norito --bench view_vs_materialize_bytes_u32
-
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-
 fn make_rows(n: usize) -> Vec<(u64, Vec<u8>, u32, bool)> {
     let mut rows = Vec::with_capacity(n);
     let mut val: u32 = 1000; // small deltas likely trigger u32-delta encoding
@@ -24,7 +22,6 @@ fn make_rows(n: usize) -> Vec<(u64, Vec<u8>, u32, bool)> {
     }
     rows
 }
-
 fn bench_view_vs_materialize_bytes_u32(c: &mut Criterion) {
     let mut group = c.benchmark_group("view_vs_materialize_u64_bytes_u32_bool");
     for &n in &[1_000usize, 10_000] {
@@ -35,7 +32,6 @@ fn bench_view_vs_materialize_bytes_u32(c: &mut Criterion) {
             .map(|(id, bs, v, b)| (*id, bs.as_slice(), *v, *b))
             .collect();
         let body = norito::columnar::encode_ncb_u64_bytes_u32_bool(&borrowed);
-
         // Sanity: compute both accumulators once and ensure equality
         let acc_view = {
             let view = norito::columnar::view_ncb_u64_bytes_u32_bool(&body).expect("view");
@@ -63,7 +59,6 @@ fn bench_view_vs_materialize_bytes_u32(c: &mut Criterion) {
             acc_view, acc_mat,
             "view/materialize accumulators must match"
         );
-
         group.bench_with_input(BenchmarkId::new("view_iter", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_ncb_u64_bytes_u32_bool(&body).expect("view");
@@ -78,7 +73,6 @@ fn bench_view_vs_materialize_bytes_u32(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("materialize", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_ncb_u64_bytes_u32_bool(&body).expect("view");
@@ -98,6 +92,5 @@ fn bench_view_vs_materialize_bytes_u32(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_view_vs_materialize_bytes_u32);
 criterion_main!(benches);

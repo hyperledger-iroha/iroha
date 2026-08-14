@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -15,7 +16,8 @@ from typing import Any
 from urllib import error, request
 
 
-FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
+FAUCET_POW_ALGORITHM = "scrypt-leading-zero-bits-v2"
+FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v3"
 OPENSSL_ENV = "TAIRA_FAUCET_OPENSSL"
 DEFAULT_STATUS_TIMEOUT_MS = 120_000
 DEFAULT_POLL_INTERVAL_MS = 1_000
@@ -34,8 +36,35 @@ def leading_zero_bits(data: bytes) -> int:
     return total
 
 
+def _crc16_ccitt_false(value: bytes) -> int:
+    crc = 0xFFFF
+    for byte in value:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def parse_network_id(value: Any) -> bytes:
+    """Decode one canonical checksummed exact NetworkId into its raw 32 bytes."""
+
+    if not isinstance(value, str):
+        raise ValueError("faucet puzzle network_id must be a canonical NetworkId string")
+    matched = re.fullmatch(r"hash:([0-9A-F]{64})#([0-9A-F]{4})", value)
+    if matched is None:
+        raise ValueError("faucet puzzle network_id must be a canonical NetworkId string")
+    body_hex, checksum_hex = matched.groups()
+    if _crc16_ccitt_false(f"hash:{body_hex}".encode("ascii")) != int(checksum_hex, 16):
+        raise ValueError("faucet puzzle network_id checksum mismatch")
+    network_id = bytes.fromhex(body_hex)
+    if network_id[-1] & 1 == 0:
+        raise ValueError("faucet puzzle network_id has an invalid Iroha hash marker bit")
+    return network_id
+
+
 def build_challenge(
     account_id: str,
+    network_id: str,
     anchor_height: int,
     anchor_block_hash_hex: str,
     challenge_salt_hex: str | None,
@@ -44,6 +73,7 @@ def build_challenge(
 
     hasher = hashlib.sha256()
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR)
+    hasher.update(parse_network_id(network_id))
     hasher.update(account_id.encode("utf-8"))
     hasher.update(anchor_height.to_bytes(8, byteorder="big", signed=False))
     hasher.update(bytes.fromhex(anchor_block_hash_hex))
@@ -166,13 +196,27 @@ def scrypt_digest(password: bytes, *, salt: bytes, n: int, r: int, p: int, dklen
 def solve_puzzle(account_id: str, puzzle: dict[str, Any]) -> dict[str, Any]:
     """Solve the Taira faucet PoW challenge and build the request body."""
 
+    if puzzle.get("algorithm") != FAUCET_POW_ALGORITHM:
+        raise ValueError(
+            f"faucet puzzle algorithm must be {FAUCET_POW_ALGORITHM}"
+        )
+    network_id = puzzle.get("network_id")
+    parse_network_id(network_id)
+    chain_discriminant = puzzle.get("chain_discriminant")
+    if (
+        isinstance(chain_discriminant, bool)
+        or not isinstance(chain_discriminant, int)
+        or not 0 <= chain_discriminant <= 0xFFFF
+    ):
+        raise ValueError("faucet puzzle chain_discriminant must be an unsigned 16-bit integer")
     difficulty_bits = int(puzzle["difficulty_bits"])
     body = {"account_id": account_id}
     if difficulty_bits <= 0:
-        return body
+        raise ValueError("faucet puzzle difficulty_bits must be positive")
 
     challenge = build_challenge(
         account_id=account_id,
+        network_id=str(network_id),
         anchor_height=int(puzzle["anchor_height"]),
         anchor_block_hash_hex=str(puzzle["anchor_block_hash_hex"]),
         challenge_salt_hex=(

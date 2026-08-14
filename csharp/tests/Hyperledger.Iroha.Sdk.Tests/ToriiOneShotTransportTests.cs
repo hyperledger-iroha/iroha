@@ -52,7 +52,9 @@ public sealed class ToriiOneShotTransportTests
 
         var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
             client.GetPipelineTransactionDetailsAsync(
-                new SignedIterableQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
+                new SignedIterableQueryBuilder(
+                    CanonicalAccountId,
+                    NetworkId.Parse(CanonicalNetworkId))
                     .FindTransactionDetails(transactionHash)
                     .BuildSigned(CanonicalPrivateKeySeed),
                 transactionHash,
@@ -212,7 +214,9 @@ public sealed class ToriiOneShotTransportTests
 
     private static SignedQueryEnvelope ValidSignedQueryEnvelope()
     {
-        return new SignedQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
+        return new SignedQueryBuilder(
+            CanonicalAccountId,
+            NetworkId.Parse(CanonicalNetworkId))
             .FindParameters()
             .BuildSigned(CanonicalPrivateKeySeed);
     }

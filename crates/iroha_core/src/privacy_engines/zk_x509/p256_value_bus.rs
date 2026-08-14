@@ -19,12 +19,6 @@
 //! boundaries in factor-slot units also permits a later source-bound external
 //! read stream to concatenate complete 16-limb values without per-value
 //! padding.  No unconstrained external-read API is exposed here.
-
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use std::sync::Arc;
-
-use thiserror::Error;
-
 use super::p256_air::ZkX509P256ModulusV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
@@ -41,7 +35,9 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use std::sync::Arc;
+use thiserror::Error;
 /// Number of independently sampled grand-product lanes.
 pub(crate) const P256_VALUE_BUS_LANES_V1: usize = 4;
 /// `beta`, id, limb, read/write, modulus, value kind, and value.
@@ -68,7 +64,6 @@ pub(crate) const P256_VALUE_BUS_STARK_CONSTRAINT_COUNT_V1: usize =
     P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * 41 + 2 * P256_VALUE_BUS_LANES_V1;
 /// Maximum total degree of the numeric adapter.
 pub(crate) const P256_VALUE_BUS_STARK_CONSTRAINT_DEGREE_V1: u8 = 2;
-
 /// Unambiguous transcript labels for all 28 challenge coordinates.
 pub(crate) const P256_VALUE_BUS_CHALLENGE_LABELS_V1: [[&[u8]; P256_VALUE_BUS_TUPLE_TERMS_V1];
     P256_VALUE_BUS_LANES_V1] = [
@@ -109,17 +104,14 @@ pub(crate) const P256_VALUE_BUS_CHALLENGE_LABELS_V1: [[&[u8]; P256_VALUE_BUS_TUP
         b"zk-x509-p256-value-bus-lane3-value-v1",
     ],
 ];
-
 const _: () = assert!(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 == 2);
 const _: () = assert!(P256_VALUE_BUS_STARK_BASE_WIDTH_V1 == 34);
 const _: () = assert!(P256_VALUE_BUS_STARK_AUX_WIDTH_V1 == 12);
 const _: () = assert!(P256_VALUE_BUS_STARK_FIXED_WIDTH_V1 == 22);
 const _: () = assert!(P256_VALUE_BUS_STARK_CONSTRAINT_COUNT_V1 == 90);
-
 /// Verifier-assigned SSA value identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct P256ValueIdV1(pub(crate) u32);
-
 /// Origin of an initial SSA value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256InitialValueKindV1 {
@@ -128,7 +120,6 @@ pub(crate) enum P256InitialValueKindV1 {
     /// Verifier-fixed constant supplied by the surrounding relation.
     Constant,
 }
-
 /// One arithmetic operation linked to fixed SSA operand/result identifiers.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,7 +133,6 @@ pub(crate) struct P256LinkedOperationV1 {
     /// Exact arithmetic instruction and its committed operand cells.
     pub(crate) operation: ZkX509P256ArithmeticOperationV1,
 }
-
 /// One initial value written in an operation's sixteen spare coefficient rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +146,6 @@ pub(crate) struct P256InitialValueBindingV1 {
     /// Input or verifier-fixed constant.
     pub(crate) kind: P256InitialValueKindV1,
 }
-
 /// Verifier-owned metadata for one initial SSA writer.
 ///
 /// Witness bytes are deliberately absent. Fixed preprocessing accepts this
@@ -170,7 +159,6 @@ pub(crate) struct P256InitialValueTopologyV1 {
     /// Surrounding input or verifier-fixed constant.
     pub(crate) kind: P256InitialValueKindV1,
 }
-
 /// Verifier-owned metadata for one arithmetic SSA instruction.
 ///
 /// Operand and result values are committed elsewhere and never enter this
@@ -188,7 +176,6 @@ pub(crate) struct P256LinkedOperationTopologyV1 {
     /// Fixed arithmetic modulus.
     pub(crate) modulus: ZkX509P256ModulusV1,
 }
-
 /// Explicit equality between two already-written values in the same modulus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256EqualityBindingV1 {
@@ -197,7 +184,6 @@ pub(crate) struct P256EqualityBindingV1 {
     /// Second existing value.
     pub(crate) right: P256ValueIdV1,
 }
-
 /// Equality bridge for a canonical scalar-field bit and base-field bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256BooleanBridgeBindingV1 {
@@ -206,7 +192,6 @@ pub(crate) struct P256BooleanBridgeBindingV1 {
     /// Existing base-field value constrained to the same zero or one.
     pub(crate) base_bit: P256ValueIdV1,
 }
-
 /// Value origin included in every active permutation tuple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ValueKindV1 {
@@ -217,7 +202,6 @@ pub(crate) enum P256ValueKindV1 {
     /// Unique result of one arithmetic operation.
     Derived,
 }
-
 /// Memory access direction included in every active permutation tuple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ValueAccessKindV1 {
@@ -226,7 +210,6 @@ pub(crate) enum P256ValueAccessKindV1 {
     /// A use of an already-written value limb.
     Read,
 }
-
 /// Verifier-regenerated address for one logical bus row.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,7 +230,6 @@ pub(crate) enum P256ValueBusFixedAccessV1 {
         value_kind: P256ValueKindV1,
     },
 }
-
 /// One challenged product row.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,7 +245,6 @@ pub(crate) struct P256ValueBusRowV1 {
     /// Products after this access.
     pub(crate) product_after: [F; P256_VALUE_BUS_LANES_V1],
 }
-
 /// One fixed-size physical segment with explicit product boundaries.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,7 +258,6 @@ pub(crate) struct P256ValueBusSegmentV1 {
     /// Products leaving this segment.
     pub(crate) product_after: [F; P256_VALUE_BUS_LANES_V1],
 }
-
 /// Product endpoint.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -287,7 +267,6 @@ pub(crate) enum P256ValueBusEndpointV1 {
     /// The same accesses verifier-sorted by id, limb, and writer-first.
     Sorted,
 }
-
 /// One endpoint's segmented product trace.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,7 +276,6 @@ pub(crate) struct P256ValueBusEndpointTraceV1 {
     /// Arithmetic segments, equality segments, then Boolean-bridge segments.
     pub(crate) segments: Vec<P256ValueBusSegmentV1>,
 }
-
 /// Complete differential memory-bus trace.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -307,7 +285,6 @@ pub(crate) struct P256ValueBusTraceV1 {
     /// Verifier-sorted accesses used for writer/read adjacency.
     pub(crate) sorted: P256ValueBusEndpointTraceV1,
 }
-
 /// One challenge-independent value-bus cell.
 ///
 /// Product accumulators are deliberately absent. The 16-bit decomposition is
@@ -323,7 +300,6 @@ pub(crate) struct P256ValueBusBaseCellV1 {
     /// and inactive cells must be zero.
     pub(crate) value: F,
 }
-
 /// One challenge-independent execution or writer-first endpoint.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,7 +309,6 @@ pub(crate) struct P256ValueBusBaseEndpointTraceV1 {
     /// Exact logical factor rows, including canonical 64-row segment padding.
     pub(crate) rows: Vec<P256ValueBusBaseCellV1>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseEndpointTraceV1 {
     /// Exact number of complete logical segments.
@@ -348,7 +323,6 @@ impl P256ValueBusBaseEndpointTraceV1 {
         }
         Ok(self.rows.len() / P256_VALUE_BUS_SEGMENT_ROWS_V1)
     }
-
     /// Read one challenge-independent logical cell.
     pub(crate) fn source_cell_v1(
         &self,
@@ -361,20 +335,17 @@ impl P256ValueBusBaseEndpointTraceV1 {
         validate_base_cell_v1(*row)?;
         Ok((row.fixed, row.value))
     }
-
     fn zeroize_private_v1(&mut self) {
         for row in &mut self.rows {
             row.value = F::ZERO;
         }
         self.rows.clear();
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.rows.is_empty()
     }
 }
-
 /// Complete challenge-independent P-256 value-memory material.
 ///
 /// This is the only production input to the value-bus base commitment. It is
@@ -388,7 +359,6 @@ struct P256ValueBusBaseMaterialV1 {
     execution: P256ValueBusBaseEndpointTraceV1,
     sorted: P256ValueBusBaseEndpointTraceV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ValueBusBaseMaterialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -399,7 +369,6 @@ impl core::fmt::Debug for P256ValueBusBaseMaterialV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseMaterialV1 {
     /// Compile one canonical role-separated value bus without sampling or
@@ -438,7 +407,6 @@ impl P256ValueBusBaseMaterialV1 {
         value_bus.validate_integrity_v1()?;
         Ok(value_bus)
     }
-
     #[cfg(test)]
     fn fixture_v1(
         role: P256EcdsaRoleV1,
@@ -477,27 +445,22 @@ impl P256ValueBusBaseMaterialV1 {
         value_bus.validate_integrity_v1()?;
         Ok(value_bus)
     }
-
     /// Role fixed by the verifier-owned topology compiler.
     const fn role_v1(&self) -> P256EcdsaRoleV1 {
         self.role
     }
-
     /// Challenge-independent execution endpoint.
     const fn execution_v1(&self) -> &P256ValueBusBaseEndpointTraceV1 {
         &self.execution
     }
-
     /// Challenge-independent writer-first endpoint.
     const fn sorted_v1(&self) -> &P256ValueBusBaseEndpointTraceV1 {
         &self.sorted
     }
-
     /// Verifier-owned canonical SSA topology.
     const fn topology_v1(&self) -> &P256EcdsaTopologyV1 {
         &self.topology
     }
-
     fn fixed_provider_v1(
         &self,
         endpoint: P256ValueBusStarkEndpointV1,
@@ -511,7 +474,6 @@ impl P256ValueBusBaseMaterialV1 {
             P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
         )
     }
-
     fn validate_integrity_v1(&self) -> Result<(), P256ValueBusErrorV1> {
         if self.topology.role != self.role
             || self.execution.endpoint != P256ValueBusEndpointV1::Execution
@@ -548,39 +510,33 @@ impl P256ValueBusBaseMaterialV1 {
             &self.topology.boolean_bridges,
         )
     }
-
     fn zeroize_private_v1(&mut self) {
         self.execution.zeroize_private_v1();
         self.sorted.zeroize_private_v1();
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.execution.private_is_zeroized_v1() && self.sorted.private_is_zeroized_v1()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueBusBaseMaterialV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// One tuple-compression lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ValueBusLaneChallengesV1 {
     /// `beta` followed by six tuple coefficients.
     pub(crate) terms: [F; P256_VALUE_BUS_TUPLE_TERMS_V1],
 }
-
 /// Four independently sampled tuple products.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ValueBusChallengesV1 {
     /// Independent lanes.
     pub(crate) lanes: [P256ValueBusLaneChallengesV1; P256_VALUE_BUS_LANES_V1],
 }
-
 impl P256ValueBusChallengesV1 {
     pub(crate) fn validate(self) -> Result<(), P256ValueBusErrorV1> {
         let mut seen = [F::ZERO; P256_VALUE_BUS_LANES_V1 * P256_VALUE_BUS_TUPLE_TERMS_V1];
@@ -600,7 +556,6 @@ impl P256ValueBusChallengesV1 {
         Ok(())
     }
 }
-
 /// Value-bus topology, source, range, or algebraic failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum P256ValueBusErrorV1 {
@@ -646,7 +601,6 @@ pub(crate) enum P256ValueBusErrorV1 {
     #[error("zk-X509 P-256 value-bus resource bound is exceeded")]
     Resource,
 }
-
 /// Derive bus challenges only after execution and sorted base traces commit.
 pub(crate) fn derive_zk_x509_p256_value_bus_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -661,7 +615,6 @@ pub(crate) fn derive_zk_x509_p256_value_bus_challenges_v1(
     }
     Ok(P256ValueBusChallengesV1 { lanes })
 }
-
 /// Build both endpoints and fail closed unless the completed bus validates.
 #[cfg(test)]
 pub(crate) fn build_zk_x509_p256_value_bus_trace_v1(
@@ -699,7 +652,6 @@ pub(crate) fn build_zk_x509_p256_value_bus_trace_v1(
     )?;
     Ok(trace)
 }
-
 /// Read one unique writer cell from the committed execution endpoint.
 ///
 /// The caller supplies the verifier-owned initial-value count, modulus, and
@@ -747,7 +699,6 @@ fn p256_value_bus_writer_location_v1(
     };
     Ok((segment_index, local_row, expected_fixed))
 }
-
 /// Read one unique writer cell from the challenged execution endpoint.
 ///
 /// This compatibility-free internal projection exists only for differential
@@ -790,7 +741,6 @@ pub(crate) fn p256_value_bus_writer_limb_cell_v1(
     }
     Ok(row.value)
 }
-
 /// Read one unique writer cell from a challenge-independent execution
 /// endpoint.
 ///
@@ -833,7 +783,6 @@ pub(crate) fn p256_value_bus_base_writer_limb_cell_v1(
     validate_base_cell_v1(*row)?;
     Ok(row.value)
 }
-
 /// Exact committed execution cell at one flattened factor-row ordinal.
 ///
 /// This is the narrow source projection used while constructing auxiliary
@@ -870,7 +819,6 @@ pub(crate) fn p256_value_bus_execution_source_cell_v1(
     }
     Ok((row.fixed, row.value))
 }
-
 /// Read one logical cell from a challenge-independent execution endpoint.
 ///
 /// Cross-writer products consume this projection after X5B1; they never
@@ -885,7 +833,6 @@ pub(crate) fn p256_value_bus_base_execution_source_cell_v1(
     }
     endpoint.source_cell_v1(ordinal)
 }
-
 #[cfg(test)]
 impl P256ValueBusTraceV1 {
     /// Validate fixed topology, source binding, range checks, adjacency,
@@ -936,7 +883,6 @@ impl P256ValueBusTraceV1 {
         Ok(())
     }
 }
-
 #[cfg(test)]
 impl P256ValueBusEndpointTraceV1 {
     fn validate(
@@ -994,7 +940,6 @@ impl P256ValueBusEndpointTraceV1 {
         }
         Ok(())
     }
-
     fn row(&self, ordinal: usize) -> Result<&P256ValueBusRowV1, P256ValueBusErrorV1> {
         let segment = ordinal / P256_VALUE_BUS_SEGMENT_ROWS_V1;
         let local = ordinal % P256_VALUE_BUS_SEGMENT_ROWS_V1;
@@ -1003,7 +948,6 @@ impl P256ValueBusEndpointTraceV1 {
             .and_then(|segment| segment.rows.get(local))
             .ok_or(P256ValueBusErrorV1::Topology)
     }
-
     fn terminal(&self) -> Result<[F; P256_VALUE_BUS_LANES_V1], P256ValueBusErrorV1> {
         self.segments
             .last()
@@ -1011,7 +955,6 @@ impl P256ValueBusEndpointTraceV1 {
             .ok_or(P256ValueBusErrorV1::Topology)
     }
 }
-
 /// Low-degree constraints for one range-checked product transition.
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_value_bus_row_constraints_v1(
@@ -1041,7 +984,6 @@ pub(crate) fn evaluate_zk_x509_p256_value_bus_row_constraints_v1(
     }
     constraints
 }
-
 /// Four terminal constraints equating execution and sorted products.
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_value_bus_terminal_constraints_v1(
@@ -1060,7 +1002,6 @@ pub(crate) fn evaluate_zk_x509_p256_value_bus_terminal_constraints_v1(
         execution[lane].sub(sorted[lane])
     }))
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ValueMetadataV1 {
@@ -1068,7 +1009,6 @@ struct ValueMetadataV1 {
     value_kind: P256ValueKindV1,
     limbs: [u16; P256_VALUE_BUS_LIMBS_V1],
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ExpectedAccessV1 {
@@ -1076,7 +1016,6 @@ struct ExpectedAccessV1 {
     value: F,
     source_bound: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpectedAccessV1 {
     const fn inactive() -> Self {
@@ -1087,7 +1026,6 @@ impl ExpectedAccessV1 {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn execution_events_v1(
     initial_values: &[P256InitialValueBindingV1],
@@ -1124,7 +1062,6 @@ fn execution_events_v1(
     events
         .try_reserve_exact(rows)
         .map_err(|_| P256ValueBusErrorV1::Resource)?;
-
     for (operation_index, linked) in linked_operations.iter().copied().enumerate() {
         let first_row = operation_index
             .checked_mul(P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
@@ -1214,7 +1151,6 @@ fn execution_events_v1(
             ));
         }
     }
-
     for equality in equalities.iter().copied() {
         append_assertion_segment_v1(&mut events, &metadata, equality.left, equality.right)?;
     }
@@ -1227,7 +1163,6 @@ fn execution_events_v1(
     validate_unique_writers_v1(&events, metadata.len())?;
     Ok(events)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_value_topology_v1(
     initial_values: &[P256InitialValueBindingV1],
@@ -1315,7 +1250,6 @@ fn validate_value_topology_v1(
     }
     Ok(metadata)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn value_metadata_v1(
     metadata: &[ValueMetadataV1],
@@ -1327,7 +1261,6 @@ fn value_metadata_v1(
         .copied()
         .ok_or(P256ValueBusErrorV1::Topology)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_assertion_segment_v1(
     events: &mut Vec<ExpectedAccessV1>,
@@ -1358,7 +1291,6 @@ fn append_assertion_segment_v1(
     ));
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_unique_writers_v1(
     events: &[ExpectedAccessV1],
@@ -1395,7 +1327,6 @@ fn validate_unique_writers_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sorted_events_v1(
     execution: &[ExpectedAccessV1],
@@ -1419,7 +1350,6 @@ fn sorted_events_v1(
     ));
     Ok(active)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fixed_sort_key_v1(fixed: P256ValueBusFixedAccessV1) -> (u32, u8, u8) {
     match fixed {
@@ -1436,7 +1366,6 @@ fn fixed_sort_key_v1(fixed: P256ValueBusFixedAccessV1) -> (u32, u8, u8) {
         ),
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_trace_material_topology_v1(
     material: &P256EcdsaTraceMaterialV1,
@@ -1451,7 +1380,6 @@ fn validate_trace_material_topology_v1(
         expected,
     )
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_value_bus_topology_components_v1(
     role: P256EcdsaRoleV1,
@@ -1489,7 +1417,6 @@ fn validate_value_bus_topology_components_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_base_endpoint_v1(
     endpoint: P256ValueBusEndpointV1,
@@ -1511,7 +1438,6 @@ fn build_base_endpoint_v1(
     }
     Ok(P256ValueBusBaseEndpointTraceV1 { endpoint, rows })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_base_cell_v1(cell: P256ValueBusBaseCellV1) -> Result<(), P256ValueBusErrorV1> {
     if F::canonical(cell.value.0).is_none()
@@ -1527,7 +1453,6 @@ fn validate_base_cell_v1(cell: P256ValueBusBaseCellV1) -> Result<(), P256ValueBu
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sorted_base_cells_v1(
     execution: &[P256ValueBusBaseCellV1],
@@ -1552,7 +1477,6 @@ fn sorted_base_cells_v1(
     ));
     Ok(sorted)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fixed_access_from_numeric_row_v1(
     fixed: &[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
@@ -1597,7 +1521,6 @@ fn fixed_access_from_numeric_row_v1(
         value_kind,
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_base_endpoint_against_fixed_v1(
     endpoint: &P256ValueBusBaseEndpointTraceV1,
@@ -1621,7 +1544,6 @@ fn validate_base_endpoint_against_fixed_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_base_equality_segments_v1(
     execution: &P256ValueBusBaseEndpointTraceV1,
@@ -1668,7 +1590,6 @@ fn validate_base_equality_segments_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_base_boolean_bridge_segments_v1(
     execution: &P256ValueBusBaseEndpointTraceV1,
@@ -1728,7 +1649,6 @@ fn validate_base_boolean_bridge_segments_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn build_endpoint_v1(
     endpoint: P256ValueBusEndpointV1,
@@ -1783,7 +1703,6 @@ fn build_endpoint_v1(
     }
     Ok(P256ValueBusEndpointTraceV1 { endpoint, segments })
 }
-
 #[cfg(test)]
 fn validate_row_range_v1(row: &P256ValueBusRowV1) -> Result<(), P256ValueBusErrorV1> {
     if F::canonical(row.value.0).is_none()
@@ -1816,7 +1735,6 @@ fn validate_row_range_v1(row: &P256ValueBusRowV1) -> Result<(), P256ValueBusErro
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn validate_sorted_adjacency_v1(
     sorted: &P256ValueBusEndpointTraceV1,
@@ -1853,7 +1771,6 @@ fn validate_sorted_adjacency_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn validate_equality_segments_v1(
     execution: &P256ValueBusEndpointTraceV1,
@@ -1885,7 +1802,6 @@ fn validate_equality_segments_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn validate_boolean_bridge_segments_v1(
     execution: &P256ValueBusEndpointTraceV1,
@@ -1928,7 +1844,6 @@ fn validate_boolean_bridge_segments_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compress_access_v1(
     fixed: P256ValueBusFixedAccessV1,
@@ -1964,14 +1879,12 @@ fn compress_access_v1(
         })))
         .add(terms[6].mul(value))
 }
-
 #[cfg(test)]
 fn canonical_products_v1(products: [F; P256_VALUE_BUS_LANES_V1]) -> bool {
     products
         .iter()
         .all(|product| F::canonical(product.0).is_some())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_VALUE_BUS_LIMBS_V1] {
     core::array::from_fn(|index| {
@@ -1979,7 +1892,6 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_VALUE_BUS_LIMBS_V1] {
         u16::from_le_bytes([bytes[low], bytes[low - 1]])
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn modulus_bytes_v1(modulus: ZkX509P256ModulusV1) -> [u8; 32] {
     match modulus {
@@ -1987,7 +1899,6 @@ fn modulus_bytes_v1(modulus: ZkX509P256ModulusV1) -> [u8; 32] {
         ZkX509P256ModulusV1::ScalarField => P256_SCALAR_MODULUS_BE_V1,
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ValueBusErrorV1 {
     match error {
@@ -1996,7 +1907,6 @@ fn map_arithmetic_error_v1(error: ZkX509P256AirErrorV1) -> P256ValueBusErrorV1 {
         _ => P256ValueBusErrorV1::Source,
     }
 }
-
 const STARK_BASE_SLOT_WIDTH: usize = 1 + P256_VALUE_BUS_LIMBS_V1;
 const STARK_BASE_VALUE: usize = 0;
 const STARK_BASE_BITS: usize = STARK_BASE_VALUE + 1;
@@ -2013,19 +1923,15 @@ const STARK_FIXED_BOOLEAN: usize = STARK_FIXED_EQUAL_NEXT + 1;
 const STARK_FIXED_ZERO: usize = STARK_FIXED_BOOLEAN + 1;
 const STARK_FIXED_FIRST: usize = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * STARK_FIXED_SLOT_WIDTH;
 const STARK_FIXED_CONTINUATION: usize = STARK_FIXED_FIRST + 1;
-
 const fn stark_base_offset_v1(slot: usize) -> usize {
     slot * STARK_BASE_SLOT_WIDTH
 }
-
 const fn stark_fixed_offset_v1(slot: usize) -> usize {
     slot * STARK_FIXED_SLOT_WIDTH
 }
-
 const fn stark_aux_product_offset_v1(state: usize) -> usize {
     state * P256_VALUE_BUS_LANES_V1
 }
-
 const _: () = assert!(
     P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * STARK_BASE_SLOT_WIDTH
         == P256_VALUE_BUS_STARK_BASE_WIDTH_V1
@@ -2036,7 +1942,6 @@ const _: () = assert!(
 );
 const _: () = assert!(STARK_FIXED_ZERO + 1 == STARK_FIXED_SLOT_WIDTH);
 const _: () = assert!(STARK_FIXED_CONTINUATION + 1 == P256_VALUE_BUS_STARK_FIXED_WIDTH_V1);
-
 /// Numeric aggregate endpoint selected entirely by verifier registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ValueBusStarkEndpointV1 {
@@ -2045,14 +1950,12 @@ pub(crate) enum P256ValueBusStarkEndpointV1 {
     /// Writer-first address order.
     Sorted,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ValueBusStarkMetadataV1 {
     modulus: ZkX509P256ModulusV1,
     value_kind: P256ValueKindV1,
     reads: usize,
 }
-
 /// Compact verifier-owned fixed-row provider for either value-bus endpoint.
 ///
 /// Storage is proportional to the 15,678 SSA values and 14,828 operations,
@@ -2071,7 +1974,6 @@ pub(crate) struct P256ValueBusStarkFixedProviderV1 {
     sorted_active_factor_rows: usize,
     trace_size: usize,
 }
-
 impl P256ValueBusStarkFixedProviderV1 {
     /// Validate the complete SSA address topology and establish a padded
     /// native domain.
@@ -2233,7 +2135,6 @@ impl P256ValueBusStarkFixedProviderV1 {
             trace_size,
         })
     }
-
     /// Exact numeric fixed row, including all logical inactive slots and the
     /// canonical domain suffix.
     pub(crate) fn row_v1(
@@ -2265,7 +2166,6 @@ impl P256ValueBusStarkFixedProviderV1 {
         }
         Ok(fixed)
     }
-
     /// One verifier-preprocessed cell without retaining a fixed-row matrix.
     #[cfg(test)]
     pub(crate) fn fixed_cell_v1(
@@ -2278,7 +2178,6 @@ impl P256ValueBusStarkFixedProviderV1 {
         }
         Ok(self.row_v1(index)?[column])
     }
-
     /// Regenerate one complete verifier-preprocessed native column.
     #[cfg(test)]
     pub(crate) fn fill_fixed_column_v1(
@@ -2294,7 +2193,6 @@ impl P256ValueBusStarkFixedProviderV1 {
         }
         Ok(())
     }
-
     fn execution_access_v1(
         &self,
         index: usize,
@@ -2367,7 +2265,6 @@ impl P256ValueBusStarkFixedProviderV1 {
         fixed[STARK_FIXED_ZERO] = F(u64::from(local >= 2));
         Ok(true)
     }
-
     fn sorted_access_v1(&self, index: usize, fixed: &mut [F]) -> Result<bool, P256ValueBusErrorV1> {
         if fixed.len() != STARK_FIXED_SLOT_WIDTH {
             return Err(P256ValueBusErrorV1::Topology);
@@ -2406,7 +2303,6 @@ impl P256ValueBusStarkFixedProviderV1 {
         fixed[STARK_FIXED_EQUAL_NEXT] = F(u64::from(position + 1 < per_limb));
         Ok(true)
     }
-
     fn fill_access_v1(
         &self,
         fixed: &mut [F],
@@ -2441,14 +2337,12 @@ impl P256ValueBusStarkFixedProviderV1 {
         });
         Ok(())
     }
-
     /// Exact product-factor rows before two-factor packing.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) const fn logical_factor_rows_v1(&self) -> usize {
         self.logical_factor_rows
     }
 }
-
 /// Challenge-independent committed base-row provider.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug)]
@@ -2457,7 +2351,6 @@ pub(crate) struct P256ValueBusStarkBaseRowProviderV1<'a> {
     packed_rows: usize,
     trace_size: usize,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
     /// Validate one endpoint against its expected identity and native domain.
@@ -2488,7 +2381,6 @@ impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
             trace_size,
         })
     }
-
     /// Exact committed base row with canonical domain padding.
     pub(crate) fn base_row_v1(
         self,
@@ -2519,13 +2411,11 @@ impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
         }
         Ok(base)
     }
-
     /// Challenge-independent endpoint.
     pub(crate) const fn endpoint_v1(self) -> &'a P256ValueBusBaseEndpointTraceV1 {
         self.endpoint
     }
 }
-
 /// Challenge-bound product replay for one endpoint.
 ///
 /// Construction is private to [`P256ValueBusBoundSourceV1`], so raw
@@ -2540,7 +2430,6 @@ pub(crate) struct P256ValueBusStarkAuxSourceV1<'a> {
     next_row: usize,
     trace_size: usize,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
     fn new_v1(
@@ -2561,7 +2450,6 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
             trace_size,
         })
     }
-
     /// Emit the next exact challenge-dependent auxiliary row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -2598,7 +2486,6 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
         }
         Ok(Some(aux))
     }
-
     /// Restart deterministic auxiliary replay.
     pub(crate) fn replay_v1(&self) -> Self {
         Self {
@@ -2610,13 +2497,11 @@ impl<'a> P256ValueBusStarkAuxSourceV1<'a> {
             trace_size: self.trace_size,
         }
     }
-
     /// Endpoint terminal under the bound X5B1 challenges.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_VALUE_BUS_LANES_V1] {
         self.terminal
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueBusStarkAuxSourceV1<'_> {
     fn drop(&mut self) {
@@ -2625,7 +2510,6 @@ impl Drop for P256ValueBusStarkAuxSourceV1<'_> {
         self.next_row = self.trace_size;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compute_base_endpoint_terminal_v1(
     endpoint: &P256ValueBusBaseEndpointTraceV1,
@@ -2645,7 +2529,6 @@ fn compute_base_endpoint_terminal_v1(
     }
     Ok(terminal)
 }
-
 /// Pre-commitment value-bus capability.
 ///
 /// Binding is poison-on-attempt: the sole transition is consumed before any
@@ -2658,7 +2541,6 @@ pub(crate) struct P256ValueBusBaseSourceV1 {
     sorted_fixed: Option<Arc<P256ValueBusStarkFixedProviderV1>>,
     bind_attempted: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ValueBusBaseSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -2669,7 +2551,6 @@ impl core::fmt::Debug for P256ValueBusBaseSourceV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseSourceV1 {
     /// Validate canonical witness material and enter the challenge-independent
@@ -2680,7 +2561,6 @@ impl P256ValueBusBaseSourceV1 {
             material,
         )?)
     }
-
     fn from_base_material_v1(
         material: P256ValueBusBaseMaterialV1,
     ) -> Result<Self, P256ValueBusErrorV1> {
@@ -2694,7 +2574,6 @@ impl P256ValueBusBaseSourceV1 {
             bind_attempted: false,
         })
     }
-
     fn ensure_base_phase_v1(&self) -> Result<(), P256ValueBusErrorV1> {
         if self.bind_attempted
             || self.material.is_none()
@@ -2706,7 +2585,6 @@ impl P256ValueBusBaseSourceV1 {
             Ok(())
         }
     }
-
     /// Verifier-selected role while the pre-commitment capability remains
     /// live.
     pub(crate) fn role_v1(&self) -> Result<P256EcdsaRoleV1, P256ValueBusErrorV1> {
@@ -2717,7 +2595,6 @@ impl P256ValueBusBaseSourceV1 {
             .ok_or(P256ValueBusErrorV1::Phase)?
             .role_v1())
     }
-
     /// Challenge-independent execution endpoint while the pre-commitment
     /// capability remains live.
     pub(crate) fn execution_endpoint_v1(
@@ -2730,7 +2607,6 @@ impl P256ValueBusBaseSourceV1 {
             .ok_or(P256ValueBusErrorV1::Phase)?
             .execution_v1())
     }
-
     /// One challenge-independent committed base row.
     pub(crate) fn base_row_v1(
         &self,
@@ -2750,7 +2626,6 @@ impl P256ValueBusBaseSourceV1 {
         )?
         .base_row_v1(row)
     }
-
     /// One verifier-owned fixed row. No witness value is accepted by this
     /// path.
     #[cfg(test)]
@@ -2773,7 +2648,6 @@ impl P256ValueBusBaseSourceV1 {
                 .row_v1(row),
         }
     }
-
     /// Consume the sole phase transition using an opaque X5B1 token.
     pub(crate) fn bind_v1(
         &mut self,
@@ -2805,7 +2679,6 @@ impl P256ValueBusBaseSourceV1 {
             sorted_terminal,
         })
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         if let Some(material) = self.material.as_mut()
             && let Some(material) = Arc::get_mut(material)
@@ -2817,7 +2690,6 @@ impl P256ValueBusBaseSourceV1 {
         self.sorted_fixed = None;
         self.bind_attempted = true;
     }
-
     #[cfg(test)]
     fn material_mut_for_test_v1(
         &mut self,
@@ -2826,25 +2698,21 @@ impl P256ValueBusBaseSourceV1 {
         Arc::get_mut(self.material.as_mut().ok_or(P256ValueBusErrorV1::Phase)?)
             .ok_or(P256ValueBusErrorV1::Phase)
     }
-
     #[cfg(test)]
     const fn bind_attempted_for_test_v1(&self) -> bool {
         self.bind_attempted
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.material.is_none()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueBusBaseSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Post-X5B1 value-bus capability.
 ///
 /// It retains the base commitment material for constraint and cross-source
@@ -2859,7 +2727,6 @@ pub(crate) struct P256ValueBusBoundSourceV1 {
     execution_terminal: [F; P256_VALUE_BUS_LANES_V1],
     sorted_terminal: [F; P256_VALUE_BUS_LANES_V1],
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256ValueBusBoundSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -2869,44 +2736,37 @@ impl core::fmt::Debug for P256ValueBusBoundSourceV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBoundSourceV1 {
     fn material_v1(&self) -> Result<&P256ValueBusBaseMaterialV1, P256ValueBusErrorV1> {
         self.material.as_deref().ok_or(P256ValueBusErrorV1::Phase)
     }
-
     /// Role selected before base commitment.
     pub(crate) fn role_v1(&self) -> Result<P256EcdsaRoleV1, P256ValueBusErrorV1> {
         Ok(self.material_v1()?.role_v1())
     }
-
     /// Verifier-owned canonical topology.
     pub(crate) fn topology_v1(&self) -> Result<&P256EcdsaTopologyV1, P256ValueBusErrorV1> {
         Ok(self.material_v1()?.topology_v1())
     }
-
     /// Challenge-independent execution endpoint used by writer projection.
     pub(crate) fn execution_endpoint_v1(
         &self,
     ) -> Result<&P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1> {
         Ok(self.material_v1()?.execution_v1())
     }
-
     /// Challenge-independent sorted endpoint.
     pub(crate) fn sorted_endpoint_v1(
         &self,
     ) -> Result<&P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1> {
         Ok(self.material_v1()?.sorted_v1())
     }
-
     /// Opaque post-base phase token for sibling P-256 adapters.
     pub(crate) fn post_base_v1(
         &self,
     ) -> Result<ZkX509CredentialMainPostBaseChallengesV1, P256ValueBusErrorV1> {
         self.post_base.ok_or(P256ValueBusErrorV1::Phase)
     }
-
     /// Committed execution base rows.
     pub(crate) fn execution_base_rows_v1(
         &self,
@@ -2917,7 +2777,6 @@ impl P256ValueBusBoundSourceV1 {
             P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
         )
     }
-
     /// Committed sorted base rows.
     pub(crate) fn sorted_base_rows_v1(
         &self,
@@ -2928,7 +2787,6 @@ impl P256ValueBusBoundSourceV1 {
             P256_VALUE_BUS_STARK_TRACE_SIZE_V1,
         )
     }
-
     /// Challenge-bound execution product replay.
     pub(crate) fn execution_aux_source_v1(
         &self,
@@ -2944,7 +2802,6 @@ impl P256ValueBusBoundSourceV1 {
         }
         Ok(source)
     }
-
     /// Challenge-bound sorted product replay.
     pub(crate) fn sorted_aux_source_v1(
         &self,
@@ -2960,7 +2817,6 @@ impl P256ValueBusBoundSourceV1 {
         }
         Ok(source)
     }
-
     /// Verifier-owned fixed execution row retained across the phase
     /// transition.
     #[cfg(test)]
@@ -2973,7 +2829,6 @@ impl P256ValueBusBoundSourceV1 {
             .ok_or(P256ValueBusErrorV1::Phase)?
             .row_v1(row)
     }
-
     /// Recursively overwrite the retained bound value material and
     /// challenge-derived terminals.
     ///
@@ -2994,14 +2849,12 @@ impl P256ValueBusBoundSourceV1 {
         self.sorted_fixed = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueBusBoundSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Constant-memory committed base/aux row provider for one completed endpoint.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -3012,7 +2865,6 @@ pub(crate) struct P256ValueBusStarkRowProviderV1<'a> {
     terminal: [F; P256_VALUE_BUS_LANES_V1],
     trace_size: usize,
 }
-
 #[cfg(test)]
 impl<'a> P256ValueBusStarkRowProviderV1<'a> {
     /// Validate endpoint identity and establish one padded domain.
@@ -3057,7 +2909,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
             trace_size,
         })
     }
-
     /// Direct committed base opening at one native ordinal.
     pub(crate) fn base_row_v1(
         self,
@@ -3086,7 +2937,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(base)
     }
-
     /// One directly committed base cell without copying a complete row.
     pub(crate) fn base_cell_v1(
         self,
@@ -3098,7 +2948,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(self.base_row_v1(index)?[column])
     }
-
     /// Copy one complete committed base column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         self,
@@ -3113,7 +2962,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(())
     }
-
     /// Existing four-lane value-bus products at one native ordinal.
     pub(crate) fn aux_row_v1(
         self,
@@ -3150,7 +2998,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(aux)
     }
-
     /// One challenge-dependent product cell without retaining an auxiliary
     /// row matrix.
     pub(crate) fn aux_cell_v1(self, index: usize, column: usize) -> Result<F, P256ValueBusErrorV1> {
@@ -3159,7 +3006,6 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(self.aux_row_v1(index)?[column])
     }
-
     /// Copy one complete challenge-dependent auxiliary column into
     /// caller-owned storage.
     pub(crate) fn fill_aux_column_v1(
@@ -3176,14 +3022,12 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         Ok(())
     }
 }
-
 /// Project both committed limb cells used by packed writer/copy products.
 pub(crate) fn p256_value_bus_opened_values_v1(
     base: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
 ) -> [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1] {
     core::array::from_fn(|slot| base[stark_base_offset_v1(slot) + STARK_BASE_VALUE])
 }
-
 /// Evaluate one numeric value-bus row on the aggregate extension domain.
 ///
 /// All topology, endpoint ordering, adjacency, assertion, and boundary
@@ -3273,7 +3117,6 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
     }
     Ok(residues)
 }
-
 /// Project the terminal product from one verifier-fixed native-row opening.
 pub(crate) fn p256_value_bus_stark_opened_terminal_v1(
     aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],
@@ -3282,7 +3125,6 @@ pub(crate) fn p256_value_bus_stark_opened_terminal_v1(
         aux[stark_aux_product_offset_v1(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) + lane]
     })
 }
-
 /// Terminal equality over verifier-fixed final native-row openings.
 #[cfg(test)]
 pub(crate) fn evaluate_p256_value_bus_stark_terminal_openings_v1(
@@ -3293,14 +3135,12 @@ pub(crate) fn evaluate_p256_value_bus_stark_terminal_openings_v1(
     let sorted = p256_value_bus_stark_opened_terminal_v1(sorted);
     core::array::from_fn(|lane| execution[lane].sub(sorted[lane]))
 }
-
 /// Verifier-preprocessed selector for the final shared native-domain row.
 pub(crate) fn p256_value_bus_stark_last_domain_selector_v1(
     fixed: &[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
 ) -> F {
     F::ONE.sub(fixed[STARK_FIXED_CONTINUATION])
 }
-
 /// Gate execution/sorted terminal equality at the final shared-domain row.
 ///
 /// This is the aggregate-quotient form; the ungated helper above is reserved
@@ -3314,7 +3154,6 @@ pub(crate) fn evaluate_p256_value_bus_stark_terminal_opened_rows_v1(
     evaluate_p256_value_bus_stark_terminal_openings_v1(execution, sorted)
         .map(|residue| last_domain_selector.mul(residue))
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::p256_air::{
@@ -3325,7 +3164,6 @@ mod tests {
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
         derive_zk_x509_credential_pre_aux_binding_v1,
     };
-
     #[derive(Clone)]
     struct ProgramV1 {
         initial: Vec<P256InitialValueBindingV1>,
@@ -3334,13 +3172,11 @@ mod tests {
         bridges: Vec<P256BooleanBridgeBindingV1>,
         arithmetic: ZkX509P256ArithmeticTraceV1,
     }
-
     fn small(value: u64) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         bytes
     }
-
     fn operation(
         kind: ZkX509P256ArithmeticKindV1,
         modulus: ZkX509P256ModulusV1,
@@ -3356,7 +3192,6 @@ mod tests {
             c: small(c),
         }
     }
-
     fn program(bit: u64) -> ProgramV1 {
         let initial = vec![
             P256InitialValueBindingV1 {
@@ -3487,7 +3322,6 @@ mod tests {
                 .expect("valid arithmetic fixture"),
         }
     }
-
     fn fixed_topology_v1(
         program: &ProgramV1,
     ) -> (
@@ -3516,7 +3350,6 @@ mod tests {
             .collect::<Vec<_>>();
         (initial, linked)
     }
-
     fn fixed_provider_v1(
         program: &ProgramV1,
         endpoint: P256ValueBusStarkEndpointV1,
@@ -3532,7 +3365,6 @@ mod tests {
             trace_size,
         )
     }
-
     fn topology_v1(program: &ProgramV1, role: P256EcdsaRoleV1) -> P256EcdsaTopologyV1 {
         let mut topology = compile_p256_ecdsa_topology_v1(role).expect("canonical topology");
         let (initial_values, linked_operations) = fixed_topology_v1(program);
@@ -3542,7 +3374,6 @@ mod tests {
         topology.boolean_bridges = program.bridges.clone();
         topology
     }
-
     fn base_material_v1(program: &ProgramV1) -> P256ValueBusBaseMaterialV1 {
         P256ValueBusBaseMaterialV1::fixture_v1(
             P256EcdsaRoleV1::WalletOwnership,
@@ -3555,12 +3386,10 @@ mod tests {
         )
         .expect("challenge-independent value bus")
     }
-
     fn base_source_v1(program: &ProgramV1) -> P256ValueBusBaseSourceV1 {
         P256ValueBusBaseSourceV1::from_base_material_v1(base_material_v1(program))
             .expect("base source")
     }
-
     fn post_base_v1(seed: u8) -> ZkX509CredentialMainPostBaseChallengesV1 {
         let main = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [seed; 32],
@@ -3578,7 +3407,6 @@ mod tests {
         .expect("opaque X5B1 binding")
         .main_post_base()
     }
-
     fn challenges() -> P256ValueBusChallengesV1 {
         P256ValueBusChallengesV1 {
             lanes: core::array::from_fn(|lane| P256ValueBusLaneChallengesV1 {
@@ -3586,7 +3414,6 @@ mod tests {
             }),
         }
     }
-
     fn build(program: &ProgramV1) -> Result<P256ValueBusTraceV1, P256ValueBusErrorV1> {
         build_zk_x509_p256_value_bus_trace_v1(
             &program.initial,
@@ -3597,7 +3424,6 @@ mod tests {
             challenges(),
         )
     }
-
     fn validate(
         trace: &P256ValueBusTraceV1,
         program: &ProgramV1,
@@ -3611,7 +3437,6 @@ mod tests {
             challenges(),
         )
     }
-
     fn endpoint_events(endpoint: &P256ValueBusEndpointTraceV1) -> Vec<ExpectedAccessV1> {
         endpoint
             .segments
@@ -3625,12 +3450,10 @@ mod tests {
             })
             .collect()
     }
-
     fn rebuild_endpoint(endpoint: &P256ValueBusEndpointTraceV1) -> P256ValueBusEndpointTraceV1 {
         build_endpoint_v1(endpoint.endpoint, &endpoint_events(endpoint), challenges())
             .expect("rebuild endpoint products")
     }
-
     fn row_mut(
         endpoint: &mut P256ValueBusEndpointTraceV1,
         ordinal: usize,
@@ -3639,12 +3462,10 @@ mod tests {
         let local = ordinal % P256_VALUE_BUS_SEGMENT_ROWS_V1;
         &mut endpoint.segments[segment].rows[local]
     }
-
     fn set_row_value(row: &mut P256ValueBusRowV1, value: u16) {
         row.value = F(u64::from(value));
         row.value_bits = core::array::from_fn(|bit| F(u64::from((value >> bit) & 1)));
     }
-
     fn set_id_value(events: &mut [ExpectedAccessV1], id: P256ValueIdV1, value: u16) {
         for event in events {
             if matches!(
@@ -3655,7 +3476,6 @@ mod tests {
             }
         }
     }
-
     fn raw_trace(program: &ProgramV1) -> P256ValueBusTraceV1 {
         let execution = execution_events_v1(
             &program.initial,
@@ -3677,7 +3497,6 @@ mod tests {
                 .expect("raw sorted"),
         }
     }
-
     #[test]
     fn canonical_bus_has_exact_writers_sorted_adjacency_and_segment_boundaries() {
         let program = program(0);
@@ -3685,7 +3504,6 @@ mod tests {
         validate(&trace, &program).expect("canonical validation");
         assert_eq!(trace.execution.segments.len(), 8);
         assert_eq!(trace.sorted.segments.len(), 8);
-
         let execution = execution_events_v1(
             &program.initial,
             &program.linked,
@@ -3723,7 +3541,6 @@ mod tests {
             .iter()
             .all(|constraint| *constraint == F::ZERO)
         );
-
         let mut arithmetic_only = program;
         arithmetic_only.equalities.clear();
         arithmetic_only.bridges.clear();
@@ -3731,7 +3548,6 @@ mod tests {
         assert_eq!(trace.execution.segments.len(), arithmetic_only.linked.len());
         validate(&trace, &arithmetic_only).expect("arithmetic-only validation");
     }
-
     #[test]
     fn checked_writer_accessor_regenerates_exact_initial_and_derived_addresses() {
         let program = program(1);
@@ -3751,7 +3567,6 @@ mod tests {
                 })
                 .collect(),
         };
-
         assert_eq!(
             p256_value_bus_writer_limb_cell_v1(
                 &trace,
@@ -3814,7 +3629,6 @@ mod tests {
                 Ok(expected)
             );
         }
-
         for result in [
             p256_value_bus_writer_limb_cell_v1(
                 &trace,
@@ -3867,7 +3681,6 @@ mod tests {
         ] {
             assert!(result.is_err());
         }
-
         let mut wrong_endpoint = trace.clone();
         wrong_endpoint.execution.endpoint = P256ValueBusEndpointV1::Sorted;
         assert_eq!(
@@ -3881,7 +3694,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let mut wrong_address = trace.clone();
         wrong_address.execution.segments[0].rows[48].fixed = P256ValueBusFixedAccessV1::Inactive;
         assert_eq!(
@@ -3895,7 +3707,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Source)
         );
-
         let mut non_limb = trace;
         non_limb.execution.segments[0].rows[48].value = F(u64::from(u16::MAX) + 1);
         assert_eq!(
@@ -3909,7 +3720,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Range)
         );
-
         let mut wrong_base_endpoint = base.clone();
         wrong_base_endpoint.endpoint = P256ValueBusEndpointV1::Sorted;
         assert_eq!(
@@ -3995,7 +3805,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Range)
         );
     }
-
     #[test]
     fn execution_source_projection_is_exact_flattened_and_fail_closed() {
         let program = program(1);
@@ -4016,7 +3825,6 @@ mod tests {
             p256_value_bus_execution_source_cell_v1(&trace, rows),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let mut wrong_endpoint = trace.clone();
         wrong_endpoint.execution.endpoint = P256ValueBusEndpointV1::Sorted;
         assert_eq!(
@@ -4042,7 +3850,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Range)
         );
     }
-
     #[test]
     fn every_source_bound_execution_access_is_checked_pointwise() {
         let program = program(0);
@@ -4072,7 +3879,6 @@ mod tests {
         }
         assert_eq!(mutations, 6 * 48 + 5 * 16);
     }
-
     #[test]
     fn all_tuple_fields_bits_products_and_inactive_padding_are_constrained() {
         let program = program(0);
@@ -4085,7 +3891,6 @@ mod tests {
             &program.arithmetic,
         )
         .expect("execution schedule");
-
         for bit in 0..P256_VALUE_BUS_LIMBS_V1 {
             let mut row = trace.execution.segments[0].rows[0];
             row.value_bits[bit] = F(2);
@@ -4101,7 +3906,6 @@ mod tests {
         assert_eq!(validate_row_range_v1(&row), Err(P256ValueBusErrorV1::Range));
         row.value = F(u64::MAX);
         assert_eq!(validate_row_range_v1(&row), Err(P256ValueBusErrorV1::Range));
-
         for ordinal in 0..expected.len() {
             for lane in 0..P256_VALUE_BUS_LANES_V1 {
                 let mut changed = trace.execution.clone();
@@ -4119,7 +3923,6 @@ mod tests {
                 );
             }
         }
-
         let inactive = 5 * P256_VALUE_BUS_SEGMENT_ROWS_V1 + 48;
         assert_eq!(
             trace.execution.row(inactive).expect("inactive").fixed,
@@ -4137,7 +3940,6 @@ mod tests {
             validate(&changed, &program),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let sorted_inactive = expected.len() - 1;
         assert_eq!(
             trace
@@ -4154,50 +3956,39 @@ mod tests {
             Err(P256ValueBusErrorV1::Range)
         );
     }
-
     #[test]
     fn sequential_ids_unique_writers_moduli_and_operation_kinds_fail_closed() {
         let canonical = program(0);
-
         let mut empty = canonical.clone();
         empty.initial.clear();
         empty.linked.clear();
         empty.arithmetic.fixed.clear();
         empty.arithmetic.base.clear();
         assert_eq!(build(&empty), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.initial[1].id = P256ValueIdV1(0);
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.linked[0].c = P256ValueIdV1(6);
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.linked[0].a = P256ValueIdV1(10);
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.linked.truncate(changed.initial.len() - 1);
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.initial[0].modulus = ZkX509P256ModulusV1::ScalarField;
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.initial[0].value = P256_BASE_MODULUS_BE_V1;
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Topology));
-
         let mut changed = canonical.clone();
         changed.linked[0].operation.kind = ZkX509P256ArithmeticKindV1::Add;
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Source));
-
         let mut changed = canonical.clone();
         changed.linked[0].operation.a = small(4);
         assert_eq!(build(&changed), Err(P256ValueBusErrorV1::Source));
-
         let trace = build(&canonical).expect("canonical value bus");
         let expected = execution_events_v1(
             &canonical.initial,
@@ -4251,14 +4042,12 @@ mod tests {
             validate_unique_writers_v1(&missing_events, 11),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let mut changed_program = canonical.clone();
         changed_program.initial[0].kind = P256InitialValueKindV1::Constant;
         assert_eq!(
             validate(&trace, &changed_program),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let mut duplicate_writer = trace.clone();
         let read = duplicate_writer.execution.segments[0].rows[0].fixed;
         let P256ValueBusFixedAccessV1::Active {
@@ -4283,7 +4072,6 @@ mod tests {
             validate(&duplicate_writer, &canonical),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let mut missing_writer = trace;
         let writer = missing_writer.execution.segments[0].rows[2].fixed;
         let P256ValueBusFixedAccessV1::Active {
@@ -4309,7 +4097,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Topology)
         );
     }
-
     #[test]
     fn verifier_fixed_access_metadata_rejects_coordinated_endpoint_changes() {
         let program = program(0);
@@ -4372,12 +4159,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sorted_adjacency_and_four_lane_permutation_resist_coordinated_values() {
         let program = program(0);
         let trace = build(&program).expect("canonical value bus");
-
         let mut sorted_events = endpoint_events(&trace.sorted);
         let read = sorted_events
             .iter_mut()
@@ -4402,7 +4187,6 @@ mod tests {
             validate(&changed, &program),
             Err(P256ValueBusErrorV1::Adjacency)
         );
-
         let mut sorted_events = endpoint_events(&trace.sorted);
         set_id_value(&mut sorted_events, P256ValueIdV1(0), 4);
         let mut changed = trace.clone();
@@ -4413,7 +4197,6 @@ mod tests {
             validate(&changed, &program),
             Err(P256ValueBusErrorV1::Terminal)
         );
-
         let mut execution_events = endpoint_events(&trace.execution);
         let mut sorted_events = endpoint_events(&trace.sorted);
         set_id_value(&mut execution_events, P256ValueIdV1(0), 4);
@@ -4432,7 +4215,6 @@ mod tests {
             validate(&coordinated, &program),
             Err(P256ValueBusErrorV1::Source)
         );
-
         for lane in 0..P256_VALUE_BUS_LANES_V1 {
             let canonical = compress_access_v1(original_active(), F(3), challenges().lanes[lane]);
             for mutation in tuple_mutations() {
@@ -4449,7 +4231,6 @@ mod tests {
             );
         }
     }
-
     fn original_active() -> P256ValueBusFixedAccessV1 {
         P256ValueBusFixedAccessV1::Active {
             id: P256ValueIdV1(7),
@@ -4459,7 +4240,6 @@ mod tests {
             value_kind: P256ValueKindV1::Derived,
         }
     }
-
     fn tuple_mutations() -> [P256ValueBusFixedAccessV1; 5] {
         [
             P256ValueBusFixedAccessV1::Active {
@@ -4499,12 +4279,10 @@ mod tests {
             },
         ]
     }
-
     #[test]
     fn equality_rows_are_explicit_same_modulus_and_memory_bound() {
         let canonical = program(0);
         build(&canonical).expect("true equality");
-
         let mut false_equality = canonical.clone();
         false_equality.equalities[0] = P256EqualityBindingV1 {
             left: P256ValueIdV1(6),
@@ -4515,7 +4293,6 @@ mod tests {
             validate(&raw_trace(&false_equality), &false_equality),
             Err(P256ValueBusErrorV1::Equality)
         );
-
         let mut different_modulus = canonical.clone();
         different_modulus.equalities[0] = P256EqualityBindingV1 {
             left: P256ValueIdV1(3),
@@ -4525,15 +4302,12 @@ mod tests {
             build(&different_modulus),
             Err(P256ValueBusErrorV1::Topology)
         );
-
         let mut self_equality = canonical.clone();
         self_equality.equalities[0].right = self_equality.equalities[0].left;
         assert_eq!(build(&self_equality), Err(P256ValueBusErrorV1::Topology));
-
         let mut unknown_id = canonical.clone();
         unknown_id.equalities[0].right = P256ValueIdV1(99);
         assert_eq!(build(&unknown_id), Err(P256ValueBusErrorV1::Topology));
-
         let false_trace = raw_trace(&false_equality);
         let mut execution_events = endpoint_events(&false_trace.execution);
         let mut sorted_events = endpoint_events(&false_trace.sorted);
@@ -4554,7 +4328,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Source)
         );
     }
-
     #[test]
     fn boolean_bridge_accepts_zero_and_one_and_rejects_every_non_bit_shape() {
         build(&program(0)).expect("zero bridge");
@@ -4564,14 +4337,12 @@ mod tests {
             build(&program(1 << 16)),
             Err(P256ValueBusErrorV1::BooleanBridge)
         );
-
         let mut swapped = program(0);
         swapped.bridges[0] = P256BooleanBridgeBindingV1 {
             scalar_bit: P256ValueIdV1(4),
             base_bit: P256ValueIdV1(3),
         };
         assert_eq!(build(&swapped), Err(P256ValueBusErrorV1::Topology));
-
         let program = program(0);
         let trace = build(&program).expect("canonical bridge");
         let mut execution_events = endpoint_events(&trace.execution);
@@ -4595,7 +4366,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Source)
         );
     }
-
     #[test]
     fn subtraction_operations_use_the_same_fixed_bus_without_special_cases() {
         let operations = vec![
@@ -4654,27 +4424,22 @@ mod tests {
         let trace = build(&program).expect("subtraction value bus");
         validate(&trace, &program).expect("subtraction bus validation");
     }
-
     #[test]
     fn omitted_reordered_duplicated_and_reindexed_segments_fail() {
         let program = program(0);
         let trace = build(&program).expect("canonical value bus");
-
         let mut omitted = trace.clone();
         omitted.execution.segments.pop();
         assert!(validate(&omitted, &program).is_err());
-
         let mut duplicated = trace.clone();
         duplicated
             .sorted
             .segments
             .push(duplicated.sorted.segments[0].clone());
         assert!(validate(&duplicated, &program).is_err());
-
         let mut reordered = trace.clone();
         reordered.execution.segments.swap(0, 1);
         assert!(validate(&reordered, &program).is_err());
-
         let mut coordinated_reorder = trace.clone();
         coordinated_reorder.execution.segments.swap(0, 1);
         for (index, segment) in coordinated_reorder
@@ -4686,14 +4451,12 @@ mod tests {
             segment.index = index as u32;
         }
         assert!(validate(&coordinated_reorder, &program).is_err());
-
         let mut reindexed = trace.clone();
         reindexed.sorted.segments[2].index ^= 1;
         assert_eq!(
             validate(&reindexed, &program),
             Err(P256ValueBusErrorV1::Constraint)
         );
-
         let mut boundary = trace;
         boundary.execution.segments[1].product_before[2] =
             boundary.execution.segments[1].product_before[2].add(F::ONE);
@@ -4702,13 +4465,11 @@ mod tests {
             Err(P256ValueBusErrorV1::Constraint)
         );
     }
-
     type NumericEndpointRowsV1 = (
         Vec<[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1]>,
         Vec<[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1]>,
         Vec<[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1]>,
     );
-
     fn numeric_endpoint_rows(
         program: &ProgramV1,
         trace: &P256ValueBusTraceV1,
@@ -4735,7 +4496,6 @@ mod tests {
                 .collect(),
         )
     }
-
     fn numeric_endpoint_residues(
         base: &[[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1]],
         aux: &[[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1]],
@@ -4758,7 +4518,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn numeric_fixed_and_row_providers_cover_active_logical_and_domain_padding() {
         let program = program(1);
@@ -4829,7 +4588,6 @@ mod tests {
                 );
             }
         }
-
         let (execution_base, execution_aux, execution_fixed) = numeric_endpoint_rows(
             &program,
             &trace,
@@ -4881,7 +4639,6 @@ mod tests {
             F::ZERO
         );
     }
-
     #[test]
     fn numeric_fixed_provider_is_independent_of_private_values() {
         let first = program(0);
@@ -4904,7 +4661,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn numeric_fixed_provider_rejects_adversarial_ssa_topologies() {
         let program = program(1);
@@ -4927,7 +4683,6 @@ mod tests {
                 Err(P256ValueBusErrorV1::Topology),
             );
         };
-
         let mut changed_initial = initial.clone();
         changed_initial[0].id.0 = 1;
         rejects(
@@ -4936,7 +4691,6 @@ mod tests {
             &program.equalities,
             &program.bridges,
         );
-
         let mut changed_linked = linked.clone();
         changed_linked[0].a = changed_linked[0].c;
         rejects(
@@ -4961,20 +4715,17 @@ mod tests {
             &program.equalities,
             &program.bridges,
         );
-
         let self_equality = [P256EqualityBindingV1 {
             left: P256ValueIdV1(0),
             right: P256ValueIdV1(0),
         }];
         rejects(&initial, &linked, &self_equality, &program.bridges);
-
         let reversed_bridge = [P256BooleanBridgeBindingV1 {
             scalar_bit: P256ValueIdV1(4),
             base_bit: P256ValueIdV1(3),
         }];
         rejects(&initial, &linked, &program.equalities, &reversed_bridge);
     }
-
     #[test]
     fn numeric_adapter_rejects_every_committed_column_mutation_and_terminal_forgery() {
         let program = program(1);
@@ -4991,7 +4742,6 @@ mod tests {
                 .iter()
                 .all(|residue| *residue == F::ZERO)
         );
-
         for column in 0..P256_VALUE_BUS_STARK_BASE_WIDTH_V1 {
             let mut changed = base.clone();
             changed[0][column] = changed[0][column].add(F::ONE);
@@ -5012,7 +4762,6 @@ mod tests {
                 "active aux column {column}"
             );
         }
-
         let padding = trace.execution.segments.len() * P256_VALUE_BUS_SEGMENT_ROWS_V1
             / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         for column in 0..P256_VALUE_BUS_STARK_BASE_WIDTH_V1 {
@@ -5037,7 +4786,6 @@ mod tests {
                 );
             }
         }
-
         let (_, mut sorted_aux, _) = numeric_endpoint_rows(
             &program,
             &trace,
@@ -5073,7 +4821,6 @@ mod tests {
             [F::ZERO; P256_VALUE_BUS_LANES_V1]
         );
     }
-
     fn assert_numeric_base_attack_rejected_v1(
         base: &[[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1]],
         aux: &[[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1]],
@@ -5085,7 +4832,6 @@ mod tests {
                 .any(|residue| *residue != F::ZERO)
         );
     }
-
     #[test]
     fn exact_two_factor_packing_rejects_swaps_drops_duplicates_splices_and_activation() {
         let program = program(1);
@@ -5102,21 +4848,17 @@ mod tests {
                 .iter()
                 .all(|residue| *residue == F::ZERO)
         );
-
         let mut within_row_swap = base.clone();
         for column in 0..STARK_BASE_SLOT_WIDTH {
             within_row_swap[0].swap(column, STARK_BASE_SLOT_WIDTH + column);
         }
         assert_numeric_base_attack_rejected_v1(&within_row_swap, &aux, &fixed);
-
         let mut cross_row_swap = base.clone();
         cross_row_swap.swap(0, 1);
         assert_numeric_base_attack_rejected_v1(&cross_row_swap, &aux, &fixed);
-
         let mut dropped = base.clone();
         dropped[0][..STARK_BASE_SLOT_WIDTH].fill(F::ZERO);
         assert_numeric_base_attack_rejected_v1(&dropped, &aux, &fixed);
-
         let mut duplicated = base.clone();
         let first_slot: [F; STARK_BASE_SLOT_WIDTH] = duplicated[0][..STARK_BASE_SLOT_WIDTH]
             .try_into()
@@ -5124,14 +4866,12 @@ mod tests {
         duplicated[0][STARK_BASE_SLOT_WIDTH..2 * STARK_BASE_SLOT_WIDTH]
             .copy_from_slice(&first_slot);
         assert_numeric_base_attack_rejected_v1(&duplicated, &aux, &fixed);
-
         let mut segment_boundary_splice = base.clone();
         segment_boundary_splice.swap(
             P256_VALUE_BUS_SEGMENT_ROWS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - 1,
             P256_VALUE_BUS_SEGMENT_ROWS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1,
         );
         assert_numeric_base_attack_rejected_v1(&segment_boundary_splice, &aux, &fixed);
-
         let packed_rows = trace.execution.segments.len() * P256_VALUE_BUS_SEGMENT_ROWS_V1
             / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         let mut inactive_factor_activation = base;
@@ -5139,7 +4879,6 @@ mod tests {
         inactive_factor_activation[packed_rows][STARK_BASE_BITS] = F::ONE;
         assert_numeric_base_attack_rejected_v1(&inactive_factor_activation, &aux, &fixed);
     }
-
     #[test]
     fn odd_terminal_factor_is_canonical_identity_padding() {
         let mut current = [F::ZERO; P256_VALUE_BUS_STARK_BASE_WIDTH_V1];
@@ -5156,7 +4895,6 @@ mod tests {
         fixed[STARK_FIXED_VALUE_KIND] = F::ONE;
         fixed[stark_fixed_offset_v1(1) + STARK_FIXED_PADDING] = F::ONE;
         fixed[STARK_FIXED_FIRST] = F::ONE;
-
         let mut aux = [F::ZERO; P256_VALUE_BUS_STARK_AUX_WIDTH_V1];
         for lane in 0..P256_VALUE_BUS_LANES_V1 {
             aux[stark_aux_product_offset_v1(0) + lane] = F::ONE;
@@ -5181,7 +4919,6 @@ mod tests {
         )
         .expect("odd-factor residues");
         assert!(residues.iter().all(|residue| *residue == F::ZERO));
-
         let mut forged = aux;
         forged[stark_aux_product_offset_v1(2)] = forged[stark_aux_product_offset_v1(2)].add(F::ONE);
         assert!(
@@ -5198,7 +4935,6 @@ mod tests {
             .any(|residue| *residue != F::ZERO)
         );
     }
-
     #[test]
     fn challenge_validation_and_derivation_are_lane_separated() {
         let program = program(0);
@@ -5215,7 +4951,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Challenge)
         );
-
         let mut bad = challenges();
         bad.lanes[2] = bad.lanes[0];
         assert_eq!(
@@ -5229,7 +4964,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Challenge)
         );
-
         let mut bad = challenges();
         bad.lanes[2].terms[6] = bad.lanes[0].terms[1];
         assert_eq!(
@@ -5243,7 +4977,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Challenge)
         );
-
         let mut bad = challenges();
         bad.lanes[0].terms[0] = F(u64::MAX);
         assert_eq!(
@@ -5257,7 +4990,6 @@ mod tests {
             ),
             Err(P256ValueBusErrorV1::Challenge)
         );
-
         let mut transcript =
             TransparentTranscriptV1::new(b"p256-value-bus-test", &[0x51; 32], &[0xa7; 32])
                 .expect("test transcript");
@@ -5269,7 +5001,6 @@ mod tests {
             assert!(!flat[..index].contains(value));
         }
     }
-
     #[test]
     fn phased_base_and_fixed_rows_ignore_x5b1_while_auxiliary_products_bind_it() {
         let program = program(1);
@@ -5295,7 +5026,6 @@ mod tests {
         }
         assert!(!first.bind_attempted_for_test_v1());
         assert!(!second.bind_attempted_for_test_v1());
-
         let first_base = (0..sampled_rows)
             .map(|row| {
                 first
@@ -5325,7 +5055,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Phase),
             "base-phase capability survived X5B1 binding",
         );
-
         let first_bound_base = first_bound
             .execution_base_rows_v1()
             .expect("bound base rows");
@@ -5341,7 +5070,6 @@ mod tests {
                 first_fixed[row],
             );
         }
-
         let mut first_aux = first_bound
             .execution_aux_source_v1()
             .expect("first auxiliary replay");
@@ -5372,7 +5100,6 @@ mod tests {
                 .terminal_v1(),
         );
     }
-
     #[test]
     fn phased_source_matches_legacy_projection_base_and_auxiliary_rows() {
         let program = program(1);
@@ -5390,7 +5117,6 @@ mod tests {
                 "writer projection diverged at logical row {ordinal}",
             );
         }
-
         let trace_size = 1 << 10;
         for (base_endpoint, legacy_endpoint, endpoint) in [
             (
@@ -5435,22 +5161,18 @@ mod tests {
             assert_eq!(phased_aux.next_aux_row_v1(), Ok(None));
         }
     }
-
     #[test]
     fn phased_source_rejects_ssa_value_padding_and_sorted_corruption() {
         let program = program(1);
-
         let mut changed = base_material_v1(&program);
         changed.execution.rows[0].fixed = P256ValueBusFixedAccessV1::Inactive;
         assert_eq!(
             changed.validate_integrity_v1(),
             Err(P256ValueBusErrorV1::Topology),
         );
-
         let mut changed = base_material_v1(&program);
         changed.execution.rows[0].value = changed.execution.rows[0].value.add(F::ONE);
         assert!(changed.validate_integrity_v1().is_err());
-
         let mut changed = base_material_v1(&program);
         let padding = changed
             .execution
@@ -5463,18 +5185,15 @@ mod tests {
             changed.validate_integrity_v1(),
             Err(P256ValueBusErrorV1::Range),
         );
-
         let mut changed = base_material_v1(&program);
         changed.sorted.rows.swap(0, 1);
         assert!(changed.validate_integrity_v1().is_err());
-
         let mut changed = base_material_v1(&program);
         changed.sorted.rows[0].value = changed.sorted.rows[0].value.add(F::ONE);
         assert_eq!(
             changed.validate_integrity_v1(),
             Err(P256ValueBusErrorV1::Adjacency),
         );
-
         let mut source = base_source_v1(&program);
         source
             .material_mut_for_test_v1()
@@ -5499,7 +5218,6 @@ mod tests {
             Err(P256ValueBusErrorV1::Phase),
         );
     }
-
     #[test]
     fn canonical_topology_validation_rejects_every_value_bus_family_mutation() {
         let program = program(1);
@@ -5515,11 +5233,9 @@ mod tests {
             )
         };
         validate(&canonical).expect("canonical value-bus topology");
-
         let mut changed = canonical.clone();
         changed.role = P256EcdsaRoleV1::CertificateOrCrl;
         assert_eq!(validate(&changed), Err(P256ValueBusErrorV1::Topology));
-
         for mutate in 0..3 {
             let mut changed = canonical.clone();
             match mutate {
@@ -5553,14 +5269,12 @@ mod tests {
         changed.boolean_bridges.clear();
         assert_eq!(validate(&changed), Err(P256ValueBusErrorV1::Topology));
     }
-
     #[test]
     fn phased_private_material_zeroizes_recursively() {
         let program = program(1);
         let mut material = base_material_v1(&program);
         material.zeroize_private_v1();
         assert!(material.private_is_zeroized_v1());
-
         let mut source = base_source_v1(&program);
         source.zeroize_private_v1();
         assert!(source.private_is_zeroized_v1());

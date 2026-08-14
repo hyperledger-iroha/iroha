@@ -1,5 +1,4 @@
 pub mod peers;
-
 /// Record an API hit for Torii endpoints when telemetry is enabled.
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 pub fn report_torii_api_hit(
@@ -11,7 +10,6 @@ pub fn report_torii_api_hit(
         metrics.inc_torii_api_token_hit(endpoint, api_token_state(api_token));
     });
 }
-
 #[cfg(not(all(feature = "app_api", feature = "telemetry")))]
 pub fn report_torii_api_hit(
     _telemetry: &crate::routing::MaybeTelemetry,
@@ -19,7 +17,6 @@ pub fn report_torii_api_hit(
     _endpoint: &str,
 ) {
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn api_token_state(api_token: &str) -> &'static str {
     if api_token.is_empty() {
@@ -28,17 +25,13 @@ fn api_token_state(api_token: &str) -> &'static str {
         "present"
     }
 }
-
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod tests {
-    use std::sync::Arc;
-
+    use super::*;
     use iroha_config::parameters::actual::TelemetryProfile;
     use iroha_core::telemetry::Telemetry;
     use iroha_telemetry::metrics::Metrics;
-
-    use super::*;
-
+    use std::sync::Arc;
     #[test]
     fn api_hits_increment_without_exporting_token_material() {
         let metrics = Arc::new(Metrics::default());
@@ -46,10 +39,8 @@ mod tests {
         let gate =
             crate::routing::MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Full);
         let token = "top-secret-token";
-
         report_torii_api_hit(&gate, token, "v1/sccp/capabilities");
         report_torii_api_hit(&gate, "", "v1/sccp/capabilities");
-
         assert_eq!(
             metrics
                 .torii_api_token_hits_total

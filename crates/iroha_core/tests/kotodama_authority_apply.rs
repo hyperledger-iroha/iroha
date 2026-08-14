@@ -1,14 +1,11 @@
 //! Verify Kotodama program using `authority()` enqueues expected ISIs via `CoreHost`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use norito::to_bytes;
-
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn kotodama_set_account_detail_with_authority() {
@@ -33,7 +30,6 @@ fn kotodama_set_account_detail_with_authority() {
     };
     let mut program = meta.encode();
     program.extend_from_slice(&code);
-
     // Build authority and VM with CoreHost
     let authority = ALICE_ID.clone();
     // Prepare TLVs for (&AccountId, &Name, &Json)
@@ -82,12 +78,10 @@ fn kotodama_set_account_detail_with_authority() {
         blob.extend_from_slice(hash.as_ref());
         blob
     };
-
     let align8 = |n: u64| (n + 7) & !7;
     let off_acc = 0u64;
     let off_name = align8(off_acc + account_tlv.len() as u64);
     let off_json = align8(off_name + name_tlv.len() as u64);
-
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
     vm.memory
@@ -104,7 +98,6 @@ fn kotodama_set_account_detail_with_authority() {
     vm.set_register(11, ivm::Memory::INPUT_START + off_name);
     vm.set_register(12, ivm::Memory::INPUT_START + off_json);
     vm.run().expect("run");
-
     // Drain instructions and verify SetKeyValue<Account>
     let mut queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
     if queued.is_empty() {

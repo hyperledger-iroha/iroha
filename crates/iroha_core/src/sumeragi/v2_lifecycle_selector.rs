@@ -1,13 +1,9 @@
 //! Sealed executor join for exact fair-ingress selector debt.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+#[cfg(test)]
+use super::{
+    CapacityClass, OwnerId, PhysicalSlotId,
+    work_registry::{ConcreteLifecycleWork, ConcreteWorkAddress},
 };
-
-use iroha_crypto::HashOf;
-use iroha_data_model::block::consensus_v2 as wire;
-
 use super::{
     LifecycleCoordinator, LifecycleWorkRegistryHolder,
     ingress_position::{
@@ -27,6 +23,8 @@ use super::{
         ConcreteLifecycleWorkRegistry, PreparedCertifiedFetchCompletion,
     },
 };
+#[cfg(test)]
+use crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition,
     FairV2IngressQueueGateVerdict, FairV2IngressSourceClass, InboundBlockMessage,
@@ -45,15 +43,12 @@ use crate::sumeragi::{
     v2_transport::V2TransportError,
     v2_worker::{PreparedCertifiedFetchBodyPersistenceCompletion, ProductionV2Services},
 };
-
-#[cfg(test)]
-use super::{
-    CapacityClass, OwnerId, PhysicalSlotId,
-    work_registry::{ConcreteLifecycleWork, ConcreteWorkAddress},
+use iroha_crypto::HashOf;
+use iroha_data_model::block::consensus_v2 as wire;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
 };
-#[cfg(test)]
-use crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding;
-
 /// Exact typed reason why one drainable occurrence owns selector priority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleIngressPriorityAuthority {
@@ -62,20 +57,17 @@ enum LifecycleIngressPriorityAuthority {
     /// The lowest physical occurrence in one authenticated response family.
     ClaimedResponseFamily,
 }
-
 /// Complete classification of one exact pre-cut physical occurrence.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LifecycleIngressOccurrenceVerdict {
     request_fenced_completion: bool,
     claimed_response_family: bool,
 }
-
 impl LifecycleIngressOccurrenceVerdict {
     const NOT_PRIORITY: Self = Self {
         request_fenced_completion: false,
         claimed_response_family: false,
     };
-
     const fn with_authority(mut self, authority: LifecycleIngressPriorityAuthority) -> Self {
         match authority {
             LifecycleIngressPriorityAuthority::RequestFencedCompletion => {
@@ -87,12 +79,10 @@ impl LifecycleIngressOccurrenceVerdict {
         }
         self
     }
-
     const fn is_priority(self) -> bool {
         self.request_fenced_completion || self.claimed_response_family
     }
 }
-
 /// Why the executor could not seal an exact selector snapshot.
 #[derive(Debug)]
 pub(crate) enum LifecycleIngressSelectorError {
@@ -124,7 +114,6 @@ pub(crate) enum LifecycleIngressSelectorError {
     /// The complete occurrence key set or cardinality was not representable.
     InvalidCensus,
 }
-
 /// Opaque exact identity of one bounded certified-Fetch persistence command.
 ///
 /// The physical queue identity remains nested and cannot be reconstructed from
@@ -134,7 +123,6 @@ pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceId {
     ingress_identity: PendingFairIngressIdentity,
     work_id: EffectWorkId,
 }
-
 /// Move-only storage-worker command prepared from one consumed selector.
 ///
 /// It owns the sole retained [`AuthenticatedCertifiedBodyResponse`] minted by
@@ -145,13 +133,11 @@ pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceTask {
     id: CertifiedFetchBodyPersistenceId,
     authenticated: AuthenticatedCertifiedBodyResponse,
 }
-
 impl CertifiedFetchBodyPersistenceTask {
     /// Return the exact indexed command identity used by the bounded I/O FIFO.
     pub(in crate::sumeragi) const fn id(&self) -> CertifiedFetchBodyPersistenceId {
         self.id
     }
-
     /// Return whether this command came from the exact queue-selected carrier.
     pub(in crate::sumeragi) fn matches_ingress_identity(
         &self,
@@ -159,17 +145,14 @@ impl CertifiedFetchBodyPersistenceTask {
     ) -> bool {
         self.id.ingress_identity == identity
     }
-
     /// Return the existing executor work id; this does not allocate a runtime ordinal.
     pub(in crate::sumeragi) const fn work_id(&self) -> EffectWorkId {
         self.id.work_id
     }
-
     /// Hash the complete response for the existing exact-command descriptor.
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
     }
-
     /// Persist through the one height-local body-store owner.
     ///
     /// Failure returns this whole move-only task. Success carries the exact
@@ -191,7 +174,6 @@ impl CertifiedFetchBodyPersistenceTask {
         })
     }
 }
-
 /// Move-only ordinary I/O completion for one exact persisted response body.
 ///
 /// This value is the only input to the fresh-selector Phase-B transaction. It
@@ -203,24 +185,20 @@ pub(crate) struct CertifiedFetchBodyPersistenceCompletion {
     authenticated: AuthenticatedCertifiedBodyResponse,
     receipt: DurableCertifiedFetchBodyReceipt,
 }
-
 impl CertifiedFetchBodyPersistenceCompletion {
     /// Return the exact indexed command identity for completion acknowledgement.
     pub(in crate::sumeragi) const fn id(&self) -> CertifiedFetchBodyPersistenceId {
         self.id
     }
-
     /// Return the existing executor work id without exposing queue coordinates.
     pub(in crate::sumeragi) const fn work_id(&self) -> EffectWorkId {
         self.id.work_id
     }
-
     /// Hash the complete authenticated response for exact command acknowledgement.
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
     }
 }
-
 /// Opaque physical-ingress and lifecycle identity of one recovered Decision
 /// Fetch body persistence command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,7 +206,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistenceIdV1 {
     ingress_identity: PendingFairIngressIdentity,
     dispatch_key: super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
 }
-
 /// Move-only body-store command owned by the recovered Decision Fetch carrier.
 #[derive(Debug)]
 #[must_use = "the recovered Decision Fetch response must be durably persisted"]
@@ -237,7 +214,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistenceTaskV1 {
     claim_preflight: crate::sumeragi::v2_transport::CertifiedBodyResponseClaimPreflight,
     authenticated: AuthenticatedCertifiedBodyResponse,
 }
-
 impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
     /// Build one exact authenticated persistence task behind a sealed test target.
     #[cfg(test)]
@@ -261,24 +237,20 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
             authenticated,
         }
     }
-
     /// Return the dedicated lifecycle/ingress queue identity.
     pub(in crate::sumeragi) const fn id(&self) -> RecoveredDecisionFetchBodyPersistenceIdV1 {
         self.id
     }
-
     /// Return the recovered lifecycle dispatch owner.
     pub(in crate::sumeragi) const fn dispatch_key(
         &self,
     ) -> super::work_registry::RecoveredDecisionFetchDispatchKeyV1 {
         self.id.dispatch_key
     }
-
     /// Return the exact queue ordinal solely for fresh selector recapture.
     pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
         self.id.ingress_identity.physical_admission_ordinal()
     }
-
     /// Match the exact selected physical ingress occurrence.
     pub(in crate::sumeragi) fn matches_ingress_identity(
         &self,
@@ -286,19 +258,16 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
     ) -> bool {
         self.id.ingress_identity == identity
     }
-
     /// Hash the complete authenticated response without exposing its parts.
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
     }
-
     /// Return the response-family state observed by the final exact probe.
     pub(in crate::sumeragi) const fn claim_preflight(
         &self,
     ) -> crate::sumeragi::v2_transport::CertifiedBodyResponseClaimPreflight {
         self.claim_preflight
     }
-
     /// Persist the authenticated response through the crash-safe body store.
     pub(in crate::sumeragi) fn persist(
         self,
@@ -316,7 +285,6 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
         })
     }
 }
-
 /// Durable body receipt retained under the recovered Decision Fetch owner.
 #[derive(Debug)]
 #[must_use = "the recovered Decision Fetch completion must enter the fixed Store settlement"]
@@ -325,30 +293,25 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistenceCompletionV1
     authenticated: AuthenticatedCertifiedBodyResponse,
     receipt: DurableCertifiedFetchBodyReceipt,
 }
-
 impl RecoveredDecisionFetchBodyPersistenceCompletionV1 {
     /// Return the exact dedicated queue identity.
     pub(in crate::sumeragi) const fn id(&self) -> RecoveredDecisionFetchBodyPersistenceIdV1 {
         self.id
     }
-
     /// Return the lifecycle dispatch owner without exposing response parts.
     pub(in crate::sumeragi) const fn dispatch_key(
         &self,
     ) -> super::work_registry::RecoveredDecisionFetchDispatchKeyV1 {
         self.id.dispatch_key
     }
-
     /// Return the queue ordinal solely for fresh exact-selector recapture.
     pub(in crate::sumeragi) const fn physical_admission_ordinal(&self) -> u64 {
         self.id.ingress_identity.physical_admission_ordinal()
     }
-
     /// Hash the exact durable authenticated response.
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
     }
-
     /// Project the fixed body-frame authority without exposing response or receipt parts.
     pub(in crate::sumeragi) fn project_store_body_authority(
         &self,
@@ -359,7 +322,6 @@ impl RecoveredDecisionFetchBodyPersistenceCompletionV1 {
         )
     }
 }
-
 /// Why a recovered selector could not become one dedicated persistence task.
 #[derive(Debug)]
 pub(in crate::sumeragi) enum RecoveredDecisionFetchBodyPersistencePreparationFailureV1 {
@@ -368,21 +330,18 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchBodyPersistencePreparationFai
     /// The executor candidate changed during the final equality re-probe.
     Executor(EffectTransportError),
 }
-
 /// Ownership-preserving recovered persistence preparation failure.
 #[must_use = "the unchanged selector remains available for capacity rollback"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
     _failure: RecoveredDecisionFetchBodyPersistencePreparationFailureV1,
     prepared: PreparedLifecycleIngressSelector,
 }
-
 impl RecoveredDecisionFetchBodyPersistencePreparationErrorV1 {
     /// Recover the unchanged complete selector for reservation rollback.
     pub(in crate::sumeragi) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
         self.prepared
     }
 }
-
 /// Why a selector could not be consumed into one storage-worker command.
 #[derive(Debug)]
 #[allow(variant_size_differences)]
@@ -392,26 +351,22 @@ pub(crate) enum CertifiedFetchBodyPersistencePreparationFailure {
     /// The executor changed before the selector's final equality re-probe.
     Executor(EffectTransportError),
 }
-
 /// Ownership-preserving Phase-A preparation failure.
 #[must_use = "the unchanged selector remains available for retry or drop"]
 pub(crate) struct CertifiedFetchBodyPersistencePreparationError {
     failure: CertifiedFetchBodyPersistencePreparationFailure,
     prepared: PreparedLifecycleIngressSelector,
 }
-
 impl CertifiedFetchBodyPersistencePreparationError {
     /// Return the closed failure classification.
     pub(crate) const fn failure(&self) -> &CertifiedFetchBodyPersistencePreparationFailure {
         &self.failure
     }
-
     /// Recover the complete unchanged selector preparation.
     pub(crate) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
         self.prepared
     }
 }
-
 /// Retryable failure before the LedgerV1 publication call begins.
 #[derive(Debug)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -425,7 +380,6 @@ enum CertifiedFetchBodyPersistenceRetryFailure {
     Service(String),
     OutputClosed,
 }
-
 /// Ownership-preserving failure from the pre-LedgerV1 half of Phase B.
 ///
 /// The only recovery surface returns the complete opaque ordinary-completion
@@ -436,7 +390,6 @@ pub(crate) struct CertifiedFetchBodyPersistenceRetryError {
     failure: CertifiedFetchBodyPersistenceRetryFailure,
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
 }
-
 impl CertifiedFetchBodyPersistenceRetryError {
     /// Stable diagnostic category for the retryable pre-ledger rejection.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -453,12 +406,10 @@ impl CertifiedFetchBodyPersistenceRetryError {
             CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => "consensus output closed",
         }
     }
-
     /// Recover the whole move-only completion for a later fresh-selector retry.
     pub(crate) fn into_completion(self) -> PreparedCertifiedFetchBodyPersistenceCompletion {
         self.completion
     }
-
     /// Preserve the underlying typed error for diagnostics without exposing it.
     pub(crate) fn detail(&self) -> String {
         match &self.failure {
@@ -481,14 +432,12 @@ impl CertifiedFetchBodyPersistenceRetryError {
         }
     }
 }
-
 /// Exact fresh queue witness retained after LedgerV1 may have advanced.
 struct PreparedCertifiedFetchExactDequeue {
     context: LifecycleContext,
     ingress_identity: PendingFairIngressIdentity,
     queue_witness: PreparedFairIngressQueueWitness,
 }
-
 /// Closed pre-fsync failure for recovered exact-ingress locking.
 #[derive(Debug)]
 pub(in crate::sumeragi) enum RecoveredDecisionFetchExactDequeueErrorV1 {
@@ -499,13 +448,11 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchExactDequeueErrorV1 {
     /// The frozen queue prefix changed before the service lock was acquired.
     Queue(FairIngressQueueCutError),
 }
-
 /// Prevalidated recovered response dequeue held across LedgerV1 fsync.
 #[must_use = "recovered Decision Fetch ingress occurrence has not been acknowledged"]
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchExactDequeueV1<'a> {
     locked: LockedPreparedFairIngressExactDequeue<'a>,
 }
-
 impl PreparedRecoveredDecisionFetchExactDequeueV1<'_> {
     /// Assertion-remove the exact selected response after durable publication.
     pub(in crate::sumeragi) fn commit(self) {
@@ -514,12 +461,10 @@ impl PreparedRecoveredDecisionFetchExactDequeueV1<'_> {
         drop(inbound);
     }
 }
-
 impl PreparedCertifiedFetchExactDequeue {
     const fn physical_admission_ordinal(&self) -> u64 {
         self.ingress_identity.physical_admission_ordinal()
     }
-
     fn commit(
         self,
         ingress: &FairV2Ingress,
@@ -550,7 +495,6 @@ impl PreparedCertifiedFetchExactDequeue {
         }
     }
 }
-
 /// Restart-only failure after LedgerV1 publication was invoked.
 #[derive(Debug)]
 #[allow(variant_size_differences)]
@@ -558,7 +502,6 @@ enum CertifiedFetchBodyPersistenceRestartFailure {
     Ledger(String),
     Queue(FairIngressQueueCutError),
 }
-
 /// Sealed post-ledger authority which may never be retried in-process.
 ///
 /// Both the still-indexed I/O completion and fresh exact queue witness remain
@@ -570,7 +513,6 @@ pub(crate) struct CertifiedFetchBodyPersistenceRestartError {
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
     exact_dequeue: PreparedCertifiedFetchExactDequeue,
 }
-
 impl CertifiedFetchBodyPersistenceRestartError {
     /// Stable diagnostic category for the restart-only boundary.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -579,7 +521,6 @@ impl CertifiedFetchBodyPersistenceRestartError {
             CertifiedFetchBodyPersistenceRestartFailure::Queue(_) => "post-ledger queue CAS",
         }
     }
-
     /// Preserve the exact post-ledger error for restart diagnostics.
     pub(crate) fn detail(&self) -> String {
         match &self.failure {
@@ -587,18 +528,15 @@ impl CertifiedFetchBodyPersistenceRestartError {
             CertifiedFetchBodyPersistenceRestartFailure::Queue(error) => format!("{error:?}"),
         }
     }
-
     /// Return the still-indexed existing executor work identity.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
         self.completion.work_id()
     }
-
     /// Return the retained fresh physical queue occurrence for diagnostics.
     pub(crate) const fn physical_admission_ordinal(&self) -> u64 {
         self.exact_dequeue.physical_admission_ordinal()
     }
 }
-
 /// Closed Phase-B status split at the LedgerV1 durability boundary.
 #[must_use = "retryable and restart-only failures have different ownership rules"]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -608,7 +546,6 @@ pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
     /// Ledger publication was invoked; output is closed and retry is forbidden.
     RestartRequired(CertifiedFetchBodyPersistenceRestartError),
 }
-
 /// Typed reason an authenticated selected response could not wake its exact
 /// existing certified-Fetch record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -643,7 +580,6 @@ pub(crate) enum CertifiedFetchReadyPublicationError {
     /// The existing Fetch row is already owned by an active lease.
     ClaimedRecord,
 }
-
 /// Result of an exact certified-Fetch response readiness publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -655,41 +591,34 @@ enum CertifiedFetchReadyPublication {
     /// The exact row was already terminal; no generation changed.
     StutterTerminal,
 }
-
 /// Move-only logical mutation prepared before the fallible queue CAS.
 struct PreparedCertifiedFetchReadyMutation<'a> {
     target: &'a mut LifecycleCoordinator,
     next: LifecycleCoordinator,
     location: CertifiedFetchWaitingLocation,
 }
-
 impl PreparedCertifiedFetchReadyMutation<'_> {
     #[cfg(test)]
     fn target_for_test(&self) -> &LifecycleCoordinator {
         self.target
     }
-
     fn commit(self) {
         *self.target = self.next;
     }
-
     fn persist_exact_staged_successor(&self) -> Result<(), super::ledger::LifecycleLedgerError> {
         self.target.persist_exact_staged_successor(&self.next)
     }
 }
-
 enum PreparedCertifiedFetchReadyTransition<'a> {
     Mutation(PreparedCertifiedFetchReadyMutation<'a>),
     Stutter(CertifiedFetchReadyPublication),
 }
-
 #[derive(Debug)]
 #[allow(dead_code)]
 enum CertifiedFetchCompletionPreparationError {
     ReadyAuthority(CertifiedFetchReadyPublicationError),
     Registry(CertifiedFetchCompletionError),
 }
-
 /// One executor-authenticated claimed-response family winner.
 ///
 /// The queue identity remains distinct across byte-identical retransmissions.
@@ -702,13 +631,11 @@ struct PreparedClaimedResponseFamily {
     inbound: Arc<InboundBlockMessage>,
     candidate: PreparedCertifiedResponseCandidate,
 }
-
 #[derive(Debug)]
 enum PreparedCertifiedResponseCandidate {
     Ordinary(Box<CertifiedResponsePriorityCandidate>),
     Recovered(Box<RecoveredDecisionFetchResponseCandidateV1>),
 }
-
 impl PreparedCertifiedResponseCandidate {
     fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         match self {
@@ -716,14 +643,12 @@ impl PreparedCertifiedResponseCandidate {
             Self::Recovered(candidate) => candidate.request_hash(),
         }
     }
-
     fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         match self {
             Self::Ordinary(candidate) => candidate.response_hash(),
             Self::Recovered(candidate) => candidate.response_hash(),
         }
     }
-
     fn matches_authenticated_response(
         &self,
         response: &wire::CertifiedBodyResponse,
@@ -738,14 +663,12 @@ impl PreparedCertifiedResponseCandidate {
             }
         }
     }
-
     fn ordinary(&self) -> Option<&CertifiedResponsePriorityCandidate> {
         match self {
             Self::Ordinary(candidate) => Some(candidate),
             Self::Recovered(_) => None,
         }
     }
-
     fn recovered(&self) -> Option<&RecoveredDecisionFetchResponseCandidateV1> {
         match self {
             Self::Ordinary(_) => None,
@@ -753,12 +676,10 @@ impl PreparedCertifiedResponseCandidate {
         }
     }
 }
-
 impl PreparedClaimedResponseFamily {
     fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.candidate.request_hash()
     }
-
     fn authenticated_response(
         &self,
     ) -> Option<(
@@ -775,7 +696,6 @@ impl PreparedClaimedResponseFamily {
         Some((response, self.inbound.sender()?))
     }
 }
-
 /// Sealed semantic authority derived only from one selected family winner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CertifiedFetchReadyAuthority {
@@ -784,7 +704,6 @@ struct CertifiedFetchReadyAuthority {
     key: LifecycleKey,
     causal_root: CausalRoot,
 }
-
 /// Exact response owner returned only by the consuming queue witness.
 ///
 /// The registry may inspect this sealed carrier, but no sibling can construct
@@ -796,30 +715,25 @@ pub(super) struct CertifiedFetchDequeuedResponse {
     inbound: InboundBlockMessage,
     disposition: FairV2IngressDequeueDisposition,
 }
-
 impl CertifiedFetchDequeuedResponse {
     /// Return the queue-minted identity transferred by checked dequeue.
     pub(super) const fn ingress_identity(&self) -> PendingFairIngressIdentity {
         self.ingress_identity
     }
-
     /// Borrow the exact owned authenticated wire carrier.
     pub(super) fn inbound(&self) -> &InboundBlockMessage {
         &self.inbound
     }
-
     /// Return the frozen ordinary dequeue disposition.
     pub(super) const fn disposition(&self) -> FairV2IngressDequeueDisposition {
         self.disposition
     }
 }
-
 impl CertifiedFetchReadyAuthority {
     fn wait_source(self) -> WaitSource {
         certified_fetch_wait_source(self.request_hash)
     }
 }
-
 /// Unforgeable selector-minted authority for one concrete certified-Fetch
 /// completion preflight.
 ///
@@ -835,38 +749,31 @@ pub(super) struct CertifiedFetchCompletionAuthority<'a> {
     authenticated_response: &'a wire::CertifiedBodyResponse,
     candidate_pending: &'a crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
 }
-
 impl CertifiedFetchCompletionAuthority<'_> {
     /// Return the queue-minted identity of the selected physical occurrence.
     pub(super) const fn ingress_identity(&self) -> PendingFairIngressIdentity {
         self.ready.ingress_identity
     }
-
     /// Return the exact signed-request family selected by the executor join.
     pub(super) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.ready.request_hash
     }
-
     /// Return the hash of the authenticated selected response.
     pub(super) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         self.response_hash
     }
-
     /// Return the authenticated causal root retained by the pending Fetch.
     pub(super) const fn causal_root(&self) -> CausalRoot {
         self.ready.causal_root
     }
-
     /// Borrow the authenticated outer responder bound by the selector.
     pub(super) const fn authenticated_responder(&self) -> &iroha_data_model::peer::PeerId {
         self.authenticated_responder
     }
-
     /// Borrow the complete signed response retained by the queue witness.
     pub(super) const fn authenticated_response(&self) -> &wire::CertifiedBodyResponse {
         self.authenticated_response
     }
-
     /// Borrow the executor-minted exact pending-effect authority.
     pub(super) const fn candidate_pending(
         &self,
@@ -874,7 +781,6 @@ impl CertifiedFetchCompletionAuthority<'_> {
         self.candidate_pending
     }
 }
-
 /// Borrow-free exact selector preparation from one validated queue/executor cut.
 ///
 /// This value is not `SchedulerInputs` or rank authority. Phase A consumes it
@@ -894,7 +800,6 @@ pub(crate) struct PreparedLifecycleIngressSelector {
         BTreeMap<HashOf<wire::CertifiedBodyRequest>, PreparedClaimedResponseFamily>,
     selector_debt: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedLifecycleIngressIoTarget {
     CertifiedServe { request: LifecycleDigest },
@@ -902,7 +807,6 @@ enum PreparedLifecycleIngressIoTarget {
     RecoveredDecisionFetchBodyPersistence,
     Unsupported,
 }
-
 /// Closed I/O command family derived from one authenticated selected carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LifecycleIngressIoTargetKind {
@@ -913,7 +817,6 @@ pub(crate) enum LifecycleIngressIoTargetKind {
     /// Persist one lifecycle-recovered Decision Fetch response without ordinary work ownership.
     RecoveredDecisionFetchBodyPersistence,
 }
-
 /// Opaque binding between a selected fair-ingress occurrence and its I/O target.
 ///
 /// No constructor or scalar debt accessor is exposed. The production service
@@ -929,14 +832,11 @@ pub(crate) struct LifecycleIngressIoTargetSeal {
     recovered_decision_fetch_key: Option<super::work_registry::RecoveredDecisionFetchDispatchKeyV1>,
     _linearity: LifecycleIngressIoTargetSealLinearity,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct LifecycleIngressIoTargetSealLinearity;
-
 impl Drop for LifecycleIngressIoTargetSealLinearity {
     fn drop(&mut self) {}
 }
-
 impl LifecycleIngressIoTargetSeal {
     /// Construct a closed target around fixture-owned height coordinates.
     #[cfg(test)]
@@ -964,7 +864,6 @@ impl LifecycleIngressIoTargetSeal {
             _linearity: LifecycleIngressIoTargetSealLinearity,
         }
     }
-
     /// Construct a fixture-only recovered Fetch target with its exact owner key.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_recovered_decision_fetch_test(
@@ -987,7 +886,6 @@ impl LifecycleIngressIoTargetSeal {
             _linearity: LifecycleIngressIoTargetSealLinearity,
         }
     }
-
     /// Construct a fixture-only Serve target carrying the selector-derived
     /// exact signed-request digest and no Fetch identity.
     #[cfg(test)]
@@ -1013,22 +911,18 @@ impl LifecycleIngressIoTargetSeal {
             _linearity: LifecycleIngressIoTargetSealLinearity,
         }
     }
-
     /// Return the immutable height context authenticated by the selector.
     pub(in crate::sumeragi) const fn context(&self) -> LifecycleContext {
         self.context
     }
-
     /// Return the selected queue-minted occurrence identity.
     pub(in crate::sumeragi) const fn ingress_identity(&self) -> PendingFairIngressIdentity {
         self.ingress_identity
     }
-
     /// Return the closed command family authenticated by the carrier.
     pub(in crate::sumeragi) const fn kind(&self) -> LifecycleIngressIoTargetKind {
         self.kind
     }
-
     /// Return whether a tracked executor id is the selected Fetch command id.
     ///
     /// This comparison keeps the sealed id opaque: the service may reject an
@@ -1040,7 +934,6 @@ impl LifecycleIngressIoTargetSeal {
         self.kind == LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
             && self.certified_fetch_work_id == Some(candidate)
     }
-
     /// Compare the dedicated recovered Decision Fetch owner key without exposing it.
     pub(in crate::sumeragi) fn matches_recovered_decision_fetch_key(
         &self,
@@ -1049,7 +942,6 @@ impl LifecycleIngressIoTargetSeal {
         self.kind == LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
             && self.recovered_decision_fetch_key == Some(candidate)
     }
-
     /// Return whether this selector-owned target names one exact signed
     /// Certified-Serve request. The stored digest remains opaque and no reply
     /// route or queue position is reconstructed.
@@ -1065,7 +957,6 @@ impl LifecycleIngressIoTargetSeal {
             && self.recovered_decision_fetch_key.is_none()
     }
 }
-
 /// Failure to derive an I/O command family from the selected ingress carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LifecycleIngressIoTargetError {
@@ -1074,7 +965,6 @@ pub(crate) enum LifecycleIngressIoTargetError {
     /// A certified-Fetch response lost its exact authenticated family binding.
     InvalidCertifiedFetch,
 }
-
 /// Failure to join the selected Fetch family to its exact waiting coordinator
 /// row and concrete registry incumbent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1086,7 +976,6 @@ pub(super) enum LifecycleIngressSchedulerCarrierError {
     /// The concrete registry incumbent did not match the waiting Fetch slot.
     InvalidRegistryIncumbent,
 }
-
 /// Opaque exact Waiting-Fetch generation transition authenticated by the
 /// selector, coordinator, and concrete registry together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1095,45 +984,37 @@ pub(super) struct LifecycleIngressSchedulerFetchSeal {
     wake_generation: (WaitSource, u64),
     post_submit_wait: super::WaitToken,
 }
-
 impl LifecycleIngressSchedulerFetchSeal {
     /// Return the exact waiting Fetch ordinal.
     pub(super) const fn ordinal(self) -> u128 {
         self.ordinal
     }
-
     /// Return the authenticated prospective-ready generation advancement.
     pub(super) const fn wake_generation(self) -> (WaitSource, u64) {
         self.wake_generation
     }
-
     /// Return the same-source fence installed after reserved submission.
     pub(super) const fn post_submit_wait(self) -> super::WaitToken {
         self.post_submit_wait
     }
 }
-
 impl PreparedLifecycleIngressSelector {
     /// Return the exact height context shared by the queue and executor.
     pub(super) const fn context(&self) -> LifecycleContext {
         self.context
     }
-
     /// Return the cardinality of exact concrete priority occurrences.
     pub(super) const fn selector_debt(&self) -> u64 {
         self.selector_debt
     }
-
     /// Return the target's exact one-based lane/source rank components.
     pub(super) const fn selected_positions(&self) -> FairIngressQueuePositions {
         self.queue_witness.selected_positions()
     }
-
     /// Return the queue-minted selected physical identity.
     pub(super) const fn selected_identity(&self) -> &PendingFairIngressIdentity {
         self.queue_witness.selected_identity()
     }
-
     /// Seal the selected carrier's exact I/O command family without exposing
     /// an admission class, queue depth, or caller-constructible identity.
     pub(crate) fn take_lifecycle_io_target(
@@ -1195,7 +1076,6 @@ impl PreparedLifecycleIngressSelector {
         self.io_target = PreparedLifecycleIngressIoTarget::Unsupported;
         Ok(target)
     }
-
     /// Restore a one-shot target after the service rejected the atomic capture
     /// before acquiring capacity. The seal must still name this exact selector;
     /// no scalar reconstruction path exists.
@@ -1245,7 +1125,6 @@ impl PreparedLifecycleIngressSelector {
         };
         Ok(())
     }
-
     /// Prove that this selected response names the exact waiting Fetch row and
     /// its installed concrete registry incumbent without changing either.
     pub(super) fn attest_scheduler_fetch_carrier(
@@ -1295,7 +1174,6 @@ impl PreparedLifecycleIngressSelector {
             post_submit_wait: super::WaitToken::new(wait.source(), next_generation),
         })
     }
-
     /// Derive a sealed wake authority only when the queue-selected occurrence
     /// is the unique authenticated winner of its exact response family.
     fn selected_claimed_response_family(
@@ -1332,7 +1210,6 @@ impl PreparedLifecycleIngressSelector {
         }
         Ok(prepared)
     }
-
     fn selected_certified_fetch_ready_authority(
         &self,
     ) -> Result<CertifiedFetchReadyAuthority, CertifiedFetchReadyPublicationError> {
@@ -1383,7 +1260,6 @@ impl PreparedLifecycleIngressSelector {
             causal_root: pending_effect_causal_root(binding),
         })
     }
-
     fn persisted_family(
         &self,
         id: CertifiedFetchBodyPersistenceId,
@@ -1419,7 +1295,6 @@ impl PreparedLifecycleIngressSelector {
         }
         Ok(family)
     }
-
     fn recovered_persisted_family(
         &self,
         completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
@@ -1452,7 +1327,6 @@ impl PreparedLifecycleIngressSelector {
         }
         Ok(family)
     }
-
     /// Re-probe and pre-lock one recovered response occurrence before LedgerV1 fsync.
     pub(in crate::sumeragi) fn into_locked_recovered_decision_fetch_dequeue<'a>(
         self,
@@ -1502,7 +1376,6 @@ impl PreparedLifecycleIngressSelector {
             .map_err(|(error, _witness)| RecoveredDecisionFetchExactDequeueErrorV1::Queue(error))?;
         Ok(PreparedRecoveredDecisionFetchExactDequeueV1 { locked })
     }
-
     fn into_exact_certified_fetch_dequeue(
         self,
         executor: &V2EffectExecutor<SerializedV2Runtime>,
@@ -1545,7 +1418,6 @@ impl PreparedLifecycleIngressSelector {
             queue_witness,
         })
     }
-
     /// Mint the sole concrete-registry preflight capability from the selected
     /// authenticated family winner.
     fn selected_certified_fetch_completion_authority(
@@ -1584,7 +1456,6 @@ impl PreparedLifecycleIngressSelector {
                 .pending_effect_binding(),
         })
     }
-
     /// Prepare the concrete same-slot conversion while every registry byte is
     /// still untouched and the selected response candidate is available for
     /// exact equality checks.
@@ -1615,7 +1486,6 @@ impl PreparedLifecycleIngressSelector {
             .prepare_certified_fetch_completion(location, authority)
             .map_err(CertifiedFetchCompletionPreparationError::Registry)
     }
-
     /// Test-only projection proving the real prepared selector derives one
     /// complete sealed readiness authority without exposing its candidate.
     #[cfg(test)]
@@ -1644,7 +1514,6 @@ impl PreparedLifecycleIngressSelector {
             authority.wait_source(),
         ))
     }
-
     /// Prove that this real prepared selector crosses the sealed
     /// selector-to-registry preflight against an exact installed Fetch and that
     /// dropping the borrow-bound token leaves that incumbent byte-for-byte
@@ -1691,19 +1560,16 @@ impl PreparedLifecycleIngressSelector {
         }
         Ok((incumbent_digest, ready.ingress_identity.digest()))
     }
-
     /// Test-only concrete priority-owner projection for cross-module fixtures.
     #[cfg(test)]
     pub(crate) fn priority_owners_for_test(&self) -> &BTreeSet<u64> {
         &self.priority_owners
     }
-
     /// Test-only checked selector-debt cardinality.
     #[cfg(test)]
     pub(crate) const fn selector_debt_for_test(&self) -> u64 {
         self.selector_debt()
     }
-
     /// Test-only family-to-winning-physical-ordinal projection.
     #[cfg(test)]
     pub(crate) fn claimed_family_winners_for_test(
@@ -1719,13 +1585,11 @@ impl PreparedLifecycleIngressSelector {
             })
             .collect()
     }
-
     /// Test-only complete verdict-census size.
     #[cfg(test)]
     pub(crate) fn verdict_count_for_test(&self) -> usize {
         self.verdicts.len()
     }
-
     /// Test-only projection proving the selected target remains embedded in
     /// the complete opaque queue witness and shares its request-fence cut.
     #[cfg(test)]
@@ -1744,13 +1608,11 @@ impl PreparedLifecycleIngressSelector {
         )
     }
 }
-
 fn certified_fetch_scheduler_generation(wait: super::WaitToken) -> Option<u64> {
     wait.observed_generation()
         .checked_add(1)
         .filter(|next| *next != u64::MAX)
 }
-
 impl LifecycleCoordinator {
     /// Complete one persisted certified-Fetch response across every exact owner.
     ///
@@ -1793,7 +1655,6 @@ impl LifecycleCoordinator {
                 ))
             };
         }
-
         let selector = match executor.prepare_lifecycle_ingress_selector(
             ingress,
             id.ingress_identity.physical_admission_ordinal(),
@@ -1926,7 +1787,6 @@ impl LifecycleCoordinator {
                 receipt
             );
         };
-
         if let PreparedCertifiedFetchReadyTransition::Mutation(ready_mutation) = &ready
             && let Err(error) = ready_mutation.persist_exact_staged_successor()
         {
@@ -1972,7 +1832,6 @@ impl LifecycleCoordinator {
                 );
             }
         };
-
         durable_registry.commit_after_exact_dequeue(dequeued);
         match ready {
             PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit(),
@@ -1984,7 +1843,6 @@ impl LifecycleCoordinator {
         operation.complete();
         Ok(())
     }
-
     /// Exercise the pure logical Ready reducer in coordinator unit tests.
     #[cfg(test)]
     fn publish_certified_fetch_ready_authority(
@@ -2004,7 +1862,6 @@ impl LifecycleCoordinator {
             PreparedCertifiedFetchReadyTransition::Stutter(publication) => Ok(publication),
         }
     }
-
     /// Resolve one exact Fetch address without deriving a replacement digest.
     fn certified_fetch_current_location(
         &self,
@@ -2070,7 +1927,6 @@ impl LifecycleCoordinator {
         CertifiedFetchWaitingLocation::new(record.owner, ordinal, slot, incumbent_digest)
             .ok_or(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
     }
-
     fn prepare_certified_fetch_ready_projection(
         &mut self,
         authority: CertifiedFetchReadyAuthority,
@@ -2260,7 +2116,6 @@ impl LifecycleCoordinator {
             },
         ))
     }
-
     fn exact_terminal_tombstone(
         &self,
         ordinal: u128,
@@ -2292,7 +2147,6 @@ impl LifecycleCoordinator {
                         .count(),
                 )
     }
-
     fn exact_fetch_physical_slot(
         &self,
         record: &super::LifecycleRecord,
@@ -2324,7 +2178,6 @@ impl LifecycleCoordinator {
             .then_some((slot, digest))
     }
 }
-
 impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     /// Consume one exact recovered response family into its dedicated body-store command.
     pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(
@@ -2390,7 +2243,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 });
             }
         }
-
         let family = prepared
             .claimed_response_families
             .remove(&request_hash)
@@ -2429,7 +2281,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             authenticated,
         })
     }
-
     /// Consume one exact selected family into a bounded body-store command.
     ///
     /// The final equality re-probe runs while the immutable family carrier and
@@ -2438,7 +2289,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     /// entire stale selector, including every inbound `Arc` and queue witness.
     /// Failure returns the byte-for-byte preparation and mutates no executor,
     /// queue, tracker, registry, coordinator, or service state.
-    pub(crate) fn prepare_certified_fetch_body_persistence(
+    pub(in crate::sumeragi) fn prepare_certified_fetch_body_persistence(
         &self,
         mut prepared: PreparedLifecycleIngressSelector,
     ) -> Result<CertifiedFetchBodyPersistenceTask, CertifiedFetchBodyPersistencePreparationError>
@@ -2496,7 +2347,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 });
             }
         }
-
         let family = prepared
             .claimed_response_families
             .remove(&ready.request_hash)
@@ -2530,7 +2380,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         } = prepared;
         drop(queue_witness);
         drop(claimed_response_families);
-
         Ok(CertifiedFetchBodyPersistenceTask {
             id: CertifiedFetchBodyPersistenceId {
                 ingress_identity,
@@ -2539,7 +2388,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             authenticated,
         })
     }
-
     /// Prepare one opaque complete selector census from an exact queue target.
     ///
     /// This is the sole crate-visible mint. It returns borrow-free census state,
@@ -2555,7 +2403,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
         self.capture_lifecycle_ingress_selector(cut)
     }
-
     /// Select the next fair authenticated recovered Decision-Fetch response.
     ///
     /// The queue runs the same strict-then-dependency source/lane selection as
@@ -2604,7 +2451,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(Some(prepared))
     }
-
     /// Decide whether an already selected exact cut is the recovered Fetch owner.
     ///
     /// Only the selected response's exact signed-request family is
@@ -2794,7 +2640,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(prepared)
     }
-
     /// Classify every exact pre-cut fair-ingress occurrence without mutation.
     ///
     /// The queue's service guard remains held while queue state is released for
@@ -2831,7 +2676,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                     ordinal: None,
                     error: Box::new(error),
                 })?;
-
         let mut occurrence_identities = BTreeMap::new();
         for occurrence in cut.selector_occurrences() {
             let ordinal = occurrence.physical_admission_ordinal();
@@ -3013,7 +2857,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 return Err(LifecycleIngressSelectorError::InvalidCensus);
             }
         }
-
         let family_winners = lowest_physical_ordinal_per_family(
             response_candidates
                 .iter()
@@ -3038,7 +2881,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             *verdict =
                 verdict.with_authority(LifecycleIngressPriorityAuthority::ClaimedResponseFamily);
         }
-
         for prepared in claimed_response_families.values() {
             let (response, authenticated_responder) = prepared.authenticated_response().ok_or(
                 LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
@@ -3069,7 +2911,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 });
             }
         }
-
         if matches!(
             io_target,
             PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
@@ -3086,7 +2927,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                 }
             };
         }
-
         let (priority_owners, selector_debt) =
             validate_selector_census(&expected_ordinals, &verdicts)
                 .map_err(|_| LifecycleIngressSelectorError::InvalidCensus)?;
@@ -3104,7 +2944,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         if revalidated_presence != request_fence_active || !cut.pre_cut_is_intact() {
             return Err(LifecycleIngressSelectorError::QueueCutChanged);
         }
-
         let queue_witness = cut.into_prepared_witness();
         if !queue_witness.is_internally_exact() {
             return Err(LifecycleIngressSelectorError::InvalidCensus);
@@ -3121,7 +2960,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         })
     }
 }
-
 /// Map receiver-local delivery ownership into the formal ingress resource lane.
 ///
 /// Certified responses are route-neutral in the formal scheduler and always
@@ -3134,13 +2972,11 @@ const fn lifecycle_ingress_resource_is_untrusted(
 ) -> bool {
     certified_response || matches!(source_class, FairV2IngressSourceClass::Anonymous)
 }
-
 fn lifecycle_context_from_wire(context: &wire::HeightContext) -> LifecycleContext {
     let mut digest = [0_u8; 32];
     digest.copy_from_slice(context.id().0.as_ref());
     LifecycleContext::new(LifecycleDigest::new(digest), context.height)
 }
-
 fn response_error_is_remote_nonpriority(error: &EffectTransportError) -> bool {
     matches!(
         error,
@@ -3152,7 +2988,6 @@ fn response_error_is_remote_nonpriority(error: &EffectTransportError) -> bool {
         ) | EffectTransportError::BodyMismatch(_)
     )
 }
-
 fn lowest_physical_ordinal_per_family<K>(
     occurrences: impl IntoIterator<Item = (K, u64)>,
 ) -> Result<BTreeMap<K, u64>, LifecycleIngressSelectorError>
@@ -3171,13 +3006,11 @@ where
     }
     Ok(lowest)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectorCensusError {
     KeySetMismatch,
     CardinalityOverflow,
 }
-
 fn validate_selector_census(
     expected_ordinals: &BTreeSet<u64>,
     verdicts: &BTreeMap<u64, LifecycleIngressOccurrenceVerdict>,
@@ -3197,32 +3030,26 @@ fn validate_selector_census(
         .map_err(|_| SelectorCensusError::CardinalityOverflow)?;
     Ok((priority_owners, selector_debt))
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Hash;
-
     use super::super::schema::{
         AdmissionDecision, AdmissionRequest, CandidateAdmission, CapacityClass, CapacityGeometry,
-        CoordinatorFault, DurablePayloadReference, InitialLifecycleState, LeaseId, LifecycleRound,
-        LifecycleStage, LifecycleStageKind, OwnerId, PhysicalGeometry, PhysicalSlot,
-        PhysicalSlotId, PredecessorScope, SchedulerInputs, SchedulerReadyInputs, TerminalOutcome,
-        TurnOutcome, TurnPlan, WaitToken,
+        CoordinatorFault, DurablePayloadReference, InitialLifecycleState, LeaseId, LifecycleStage,
+        LifecycleStageKind, OwnerId, PhysicalGeometry, PhysicalSlot, PhysicalSlotId,
+        PredecessorScope, SchedulerInputs, SchedulerReadyInputs, TerminalOutcome, TurnOutcome,
+        TurnPlan, WaitToken,
     };
     use super::*;
-
+    use iroha_crypto::Hash;
     fn digest(seed: u8) -> LifecycleDigest {
         LifecycleDigest::new([seed; 32])
     }
-
     fn context(seed: u8) -> LifecycleContext {
         LifecycleContext::new(digest(seed), 7)
     }
-
     fn request_hash(seed: u8) -> HashOf<wire::CertifiedBodyRequest> {
         HashOf::from_untyped_unchecked(Hash::new([seed]))
     }
-
     fn fetch_key(context: LifecycleContext, seed: u8) -> LifecycleKey {
         super::super::replay_authority::exact_record_fixture(
             context,
@@ -3231,11 +3058,9 @@ mod tests {
         )
         .key
     }
-
     fn capacities(limit: usize) -> CapacityGeometry {
         CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, limit)))
     }
-
     fn waiting_fetch(
         context: LifecycleContext,
         key: LifecycleKey,
@@ -3286,7 +3111,6 @@ mod tests {
         };
         (coordinator, authority, ordinal)
     }
-
     fn assert_rejection_preserved(before: &LifecycleCoordinator, after: &LifecycleCoordinator) {
         assert_eq!(after.fault, before.fault);
         assert_eq!(after.high_water, before.high_water);
@@ -3304,7 +3128,6 @@ mod tests {
         assert_eq!(after.observed_generation, before.observed_generation);
         assert_eq!(after.producer_debts, before.producer_debts);
     }
-
     #[test]
     fn selector_census_requires_exact_keys_and_counts_concrete_occurrences() {
         let expected = BTreeSet::from([1, 2, 3]);
@@ -3317,7 +3140,6 @@ mod tests {
             validate_selector_census(&expected, &zero),
             Ok((BTreeSet::new(), 0))
         );
-
         let priority = BTreeMap::from([
             (
                 1,
@@ -3336,7 +3158,6 @@ mod tests {
             validate_selector_census(&expected, &priority),
             Ok((BTreeSet::from([1, 3]), 2))
         );
-
         let missing = BTreeMap::from([
             (1, LifecycleIngressOccurrenceVerdict::NOT_PRIORITY),
             (2, LifecycleIngressOccurrenceVerdict::NOT_PRIORITY),
@@ -3346,7 +3167,6 @@ mod tests {
             Err(SelectorCensusError::KeySetMismatch)
         );
     }
-
     #[test]
     fn response_family_winner_is_lowest_physical_ordinal_not_iteration_order() {
         let first = lowest_physical_ordinal_per_family([
@@ -3370,7 +3190,6 @@ mod tests {
             Err(LifecycleIngressSelectorError::InvalidCensus)
         ));
     }
-
     #[test]
     fn exact_certified_fetch_wake_reuses_owner_ordinal_and_record() {
         let context = context(1);
@@ -3394,7 +3213,6 @@ mod tests {
         let slot_universe = coordinator.records[&ordinal].episode.slot_universe.clone();
         let consumed_slots = coordinator.records[&ordinal].episode.consumed_slots.clone();
         assert_ne!(incumbent_digest, authority.ingress_identity.digest());
-
         let before = coordinator.clone();
         let PreparedCertifiedFetchReadyTransition::Mutation(prepared) = coordinator
             .prepare_certified_fetch_ready_projection(authority, &projection)
@@ -3436,7 +3254,6 @@ mod tests {
         );
         assert_eq!(coordinator.fault, None);
     }
-
     #[test]
     fn duplicate_certified_fetch_wake_stutters_without_generation_change() {
         let context = context(2);
@@ -3455,7 +3272,6 @@ mod tests {
         let generation = coordinator.observed_generation[&authority.wait_source()];
         let high_water = coordinator.high_water;
         let record_count = coordinator.records.len();
-
         assert_eq!(
             coordinator.publish_certified_fetch_ready_authority(authority),
             Ok(CertifiedFetchReadyPublication::StutterReady)
@@ -3467,7 +3283,6 @@ mod tests {
         );
         assert_eq!(coordinator.high_water, high_water);
         assert_eq!(coordinator.records.len(), record_count);
-
         let exact_ready = coordinator.clone();
         let mut stale_carrier = exact_ready.clone();
         stale_carrier
@@ -3482,7 +3297,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
         );
         assert_rejection_preserved(&before, &stale_carrier);
-
         let mut damaged_geometry = exact_ready;
         damaged_geometry
             .records
@@ -3498,7 +3312,6 @@ mod tests {
         );
         assert_rejection_preserved(&before, &damaged_geometry);
     }
-
     #[test]
     fn invalid_physical_replacement_rejects_without_mutation() {
         let context = context(0x21);
@@ -3509,7 +3322,6 @@ mod tests {
             .physical_slots
             .first_key_value()
             .expect("one exact Fetch slot");
-
         let mut trial = coordinator.clone();
         let projection = super::super::replay_authority::durable_certified_fetch_projection_fixture(
             context,
@@ -3528,7 +3340,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
         );
         assert_rejection_preserved(&before, &trial);
-
         let mut missing_universe = coordinator.clone();
         missing_universe
             .records
@@ -3543,7 +3354,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
         );
         assert_rejection_preserved(&before, &missing_universe);
-
         let mut missing_consumed = coordinator.clone();
         missing_consumed
             .records
@@ -3558,7 +3368,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
         );
         assert_rejection_preserved(&before, &missing_consumed);
-
         let mut foreign_capacity_geometry = coordinator.clone();
         foreign_capacity_geometry
             .records
@@ -3573,7 +3382,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
         );
         assert_rejection_preserved(&before, &foreign_capacity_geometry);
-
         let mut multiple_slots = coordinator;
         let extra_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 1);
         multiple_slots
@@ -3589,14 +3397,12 @@ mod tests {
         );
         assert_rejection_preserved(&before, &multiple_slots);
     }
-
     #[test]
     fn foreign_context_key_and_causal_root_fail_without_coordinator_mutation() {
         let context = context(3);
         let key = fetch_key(context, 5);
         let root = CausalRoot::new(digest(6));
         let (coordinator, authority, _) = waiting_fetch(context, key, root, request_hash(7), 2);
-
         let mut foreign_context = authority;
         foreign_context.ingress_identity = PendingFairIngressIdentity::for_test(
             LifecycleContext::new(digest(0xF0), 7),
@@ -3609,7 +3415,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::ForeignContext)
         );
         assert_rejection_preserved(&coordinator, &trial);
-
         let mut foreign_key = authority;
         foreign_key.key = fetch_key(context, 0xF1);
         let mut trial = coordinator.clone();
@@ -3618,7 +3423,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::MissingLifecycleKey)
         );
         assert_rejection_preserved(&coordinator, &trial);
-
         let mut foreign_root = authority;
         foreign_root.causal_root = CausalRoot::new(digest(0xF2));
         let mut trial = coordinator.clone();
@@ -3627,7 +3431,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::ForeignCausalRoot)
         );
         assert_rejection_preserved(&coordinator, &trial);
-
         let mut faulted = coordinator.clone();
         faulted.fault = Some(CoordinatorFault::InvalidSchedulerInputs);
         let before = faulted.clone();
@@ -3637,7 +3440,6 @@ mod tests {
         );
         assert_rejection_preserved(&before, &faulted);
     }
-
     #[test]
     fn damaged_ready_key_and_owner_indexes_reject_without_normalization() {
         let context = context(0x31);
@@ -3645,7 +3447,6 @@ mod tests {
         let root = CausalRoot::new(digest(9));
         let (coordinator, authority, ordinal) =
             waiting_fetch(context, key, root, request_hash(10), 4);
-
         let mut spurious_ready = coordinator.clone();
         spurious_ready.ready_index.insert(ordinal);
         let before = spurious_ready.clone();
@@ -3654,7 +3455,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &spurious_ready);
-
         let mut reverse_key_alias = coordinator.clone();
         reverse_key_alias
             .key_index
@@ -3665,7 +3465,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &reverse_key_alias);
-
         let mut reverse_owner_alias = coordinator.clone();
         reverse_owner_alias.owner_index.insert(
             CausalRoot::new(digest(0x34)),
@@ -3677,7 +3476,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &reverse_owner_alias);
-
         let mut internal_ordinal_alias = coordinator.clone();
         let mut aliased_record = internal_ordinal_alias.records[&ordinal].clone();
         aliased_record.key = fetch_key(context, 0x35);
@@ -3690,7 +3488,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &internal_ordinal_alias);
-
         let mut inconsistent_owner = coordinator.clone();
         let mut foreign_record = inconsistent_owner.records[&ordinal].clone();
         let foreign_ordinal = ordinal + 1;
@@ -3709,7 +3506,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &inconsistent_owner);
-
         let mut missing_ready = coordinator;
         assert_eq!(
             missing_ready.publish_certified_fetch_ready_authority(authority),
@@ -3723,14 +3519,12 @@ mod tests {
         );
         assert_rejection_preserved(&before, &missing_ready);
     }
-
     #[test]
     fn wrong_certified_fetch_wait_source_or_generation_fails_closed() {
         let context = context(4);
         let key = fetch_key(context, 6);
         let (coordinator, authority, ordinal) =
             waiting_fetch(context, key, CausalRoot::new(digest(7)), request_hash(8), 3);
-
         let mut wrong_source = coordinator.clone();
         let other_wait = WaitToken::new(certified_fetch_wait_source(request_hash(0xF3)), 3);
         wrong_source
@@ -3744,7 +3538,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::WrongWaitSource)
         );
         assert_rejection_preserved(&before, &wrong_source);
-
         let mut wrong_generation = coordinator;
         wrong_generation
             .records
@@ -3758,7 +3551,6 @@ mod tests {
         );
         assert_rejection_preserved(&before, &wrong_generation);
     }
-
     #[test]
     fn scheduler_fetch_generation_stays_below_the_terminal_wait_value() {
         let source = WaitSource::External(digest(0xF4));
@@ -3779,7 +3571,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn ambiguous_certified_fetch_source_and_generation_overflow_reject_unchanged() {
         let context = context(0x41);
@@ -3822,7 +3613,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::AmbiguousWaitSource)
         );
         assert_rejection_preserved(&before, &coordinator);
-
         let mut overflow = before;
         overflow.records.get_mut(&ordinal).expect("exact row").state =
             LifecycleState::Waiting(WaitToken::new(authority.wait_source(), u64::MAX));
@@ -3841,14 +3631,12 @@ mod tests {
         );
         assert_rejection_preserved(&before, &overflow);
     }
-
     #[test]
     fn claimed_rejects_but_terminal_stutters_without_advancing_generation() {
         let context = context(5);
         let key = fetch_key(context, 7);
         let (coordinator, authority, ordinal) =
             waiting_fetch(context, key, CausalRoot::new(digest(8)), request_hash(9), 5);
-
         let mut claimed = coordinator.clone();
         claimed.records.get_mut(&ordinal).expect("exact row").state =
             LifecycleState::Claimed(LeaseId(99));
@@ -3858,7 +3646,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::ClaimedRecord)
         );
         assert_rejection_preserved(&before, &claimed);
-
         let mut damaged_terminal = coordinator.clone();
         damaged_terminal
             .records
@@ -3871,7 +3658,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &damaged_terminal);
-
         let mut terminal = coordinator;
         assert_eq!(
             terminal.publish_certified_fetch_ready_authority(authority),
@@ -3891,7 +3677,6 @@ mod tests {
         let generation = terminal.observed_generation[&authority.wait_source()];
         let high_water = terminal.high_water;
         let record_count = terminal.records.len();
-
         let mut damaged_geometry = terminal.clone();
         let slot = *damaged_geometry.records[&ordinal]
             .physical_slots
@@ -3911,7 +3696,6 @@ mod tests {
             Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)
         );
         assert_rejection_preserved(&before, &damaged_geometry);
-
         assert_eq!(
             terminal.publish_certified_fetch_ready_authority(authority),
             Ok(CertifiedFetchReadyPublication::StutterTerminal)
@@ -3927,7 +3711,6 @@ mod tests {
             LifecycleState::Terminal(TerminalOutcome::Cancelled)
         );
     }
-
     #[test]
     fn certified_fetch_completion_source_keeps_the_durable_cut_ordered() {
         let source = include_str!("v2_lifecycle_selector.rs");
@@ -3968,7 +3751,6 @@ mod tests {
         assert!(!transaction.contains("runtime_lifecycle_ordinal"));
         assert!(!transaction.contains("BodyAvailableReservation"));
     }
-
     #[test]
     fn certified_response_maps_to_formal_untrusted_resource_source() {
         assert!(lifecycle_ingress_resource_is_untrusted(

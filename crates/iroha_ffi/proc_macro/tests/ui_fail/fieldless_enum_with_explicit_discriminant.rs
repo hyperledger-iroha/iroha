@@ -1,5 +1,4 @@
 use iroha_ffi::FfiType;
-
 #[derive(FfiType)]
 #[repr(u8)]
 pub enum EnumWithExplicitDiscriminant {
@@ -8,5 +7,4 @@ pub enum EnumWithExplicitDiscriminant {
     C,
     D,
 }
-
 fn main() {}

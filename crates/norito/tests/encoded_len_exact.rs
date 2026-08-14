@@ -1,9 +1,6 @@
 //! Tests for encoded_len_exact to ensure exact sizing and buffer preallocation.
-
-use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
-
 use norito::{NoritoDeserialize, NoritoSerialize, to_bytes};
-
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 #[test]
 fn primitive_exact_len() {
     norito::core::reset_decode_state();
@@ -14,7 +11,6 @@ fn primitive_exact_len() {
     assert_eq!(bytes.len(), norito::core::Header::SIZE + exact);
     norito::core::reset_decode_state();
 }
-
 #[test]
 fn string_exact_len_matches() {
     norito::core::reset_decode_state();
@@ -29,29 +25,24 @@ fn string_exact_len_matches() {
     assert_eq!(bytes.len(), norito::core::Header::SIZE + expected);
     norito::core::reset_decode_state();
 }
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct S {
     a: u32,
     b: String,
 }
-
 #[derive(NoritoSerialize)]
 struct NamedByteArrays {
     tag: u8,
     digest: [u8; 32],
     suffix: [u8; 7],
 }
-
 #[derive(NoritoSerialize)]
 struct TupleByteArrays(u8, [u8; 32], [u8; 7]);
-
 fn assert_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(
     value: &T,
     emits_field_bitset: bool,
 ) {
     use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-
     for flags in [
         0,
         COMPACT_LEN,
@@ -101,7 +92,6 @@ fn assert_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(
     }
     norito::core::reset_decode_state();
 }
-
 #[test]
 fn derive_named_byte_array_lengths_match_every_supported_layout() {
     assert_lengths_match_payload_for_supported_layouts(
@@ -113,7 +103,6 @@ fn derive_named_byte_array_lengths_match_every_supported_layout() {
         true,
     );
 }
-
 #[test]
 fn derive_tuple_byte_array_lengths_match_every_supported_layout() {
     assert_lengths_match_payload_for_supported_layouts(
@@ -121,7 +110,6 @@ fn derive_tuple_byte_array_lengths_match_every_supported_layout() {
         true,
     );
 }
-
 #[test]
 fn nested_builtin_tuple_lengths_match_every_supported_layout() {
     assert_lengths_match_payload_for_supported_layouts(
@@ -129,7 +117,6 @@ fn nested_builtin_tuple_lengths_match_every_supported_layout() {
         false,
     );
 }
-
 #[test]
 fn derive_struct_exact_len() {
     norito::core::reset_decode_state();
@@ -152,7 +139,6 @@ fn derive_struct_exact_len() {
     assert_eq!(bytes.len(), norito::core::Header::SIZE + expected);
     norito::core::reset_decode_state();
 }
-
 #[test]
 fn tuple_exact_len_matches_encoded_payload() {
     norito::core::reset_decode_state();
@@ -162,7 +148,6 @@ fn tuple_exact_len_matches_encoded_payload() {
     assert_eq!(bytes.len(), norito::core::Header::SIZE + exact);
     norito::core::reset_decode_state();
 }
-
 #[test]
 fn option_exact_len() {
     norito::core::reset_decode_state();
@@ -175,7 +160,6 @@ fn option_exact_len() {
         1 + norito::core::len_prefix_len(4) + 4,
         "Some encodes as discriminator, length prefix, and payload"
     );
-
     let none: Option<u32> = None;
     let exact = none
         .encoded_len_exact()
@@ -183,7 +167,6 @@ fn option_exact_len() {
     assert_eq!(exact, 1, "None encodes as only the discriminator tag");
     norito::core::reset_decode_state();
 }
-
 #[test]
 fn nonzero_exact_len_matches_primitive_width() {
     norito::core::reset_decode_state();
@@ -210,7 +193,6 @@ fn nonzero_exact_len_matches_primitive_width() {
     );
     norito::core::reset_decode_state();
 }
-
 #[test]
 fn vec_sequential_exact_len() {
     norito::core::reset_decode_state();

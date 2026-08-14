@@ -113,6 +113,7 @@ MACOS_CONTROLLER_FILES = (
     "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
     "scripts/taira_privacy_action_driver_ipc.py",
+    "scripts/taira_privacy_governance_authority.py",
     "scripts/taira_privacy_protocol_receipt.py",
     "scripts/taira_privacy_rollout_contract.py",
     "scripts/taira_privacy_sealed_controller.py",

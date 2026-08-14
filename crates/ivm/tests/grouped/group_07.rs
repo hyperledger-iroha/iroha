@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../poseidon_bridge.rs"]
 mod poseidon_bridge;
 #[path = "../poseidon_circuit.rs"]

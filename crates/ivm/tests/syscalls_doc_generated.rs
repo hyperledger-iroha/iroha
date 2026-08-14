@@ -1,5 +1,4 @@
 // Verify the generated section in docs/syscalls.md matches the code.
-
 #[test]
 fn generated_syscall_list_section_is_up_to_date() {
     const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";

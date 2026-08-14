@@ -3,9 +3,6 @@
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "zk-ipa-native")]
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
-
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
-
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -29,7 +26,7 @@ use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
 use sha2::{Digest, Sha256};
-
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
@@ -40,13 +37,11 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
     vm.memory
         .input_write_aligned(cursor, tlv, 8)
         .expect("write TLV into INPUT")
 }
-
 fn derive_ballot_nullifier(
     domain_tag: &str,
     network_id: &iroha_data_model::NetworkId,
@@ -54,12 +49,10 @@ fn derive_ballot_nullifier(
     commit: &[u8; 32],
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
-
     fn push_len(buf: &mut Vec<u8>, len: usize) {
         let len_u64 = len as u64;
         buf.extend_from_slice(&len_u64.to_le_bytes());
     }
-
     let mut input = Vec::with_capacity(
         domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
     );
@@ -75,7 +68,6 @@ fn derive_ballot_nullifier(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 #[test]
 fn verify_then_vendor_submit_ballot_applies() {
     // Minimal node state
@@ -99,7 +91,6 @@ fn verify_then_vendor_submit_ballot_applies() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     // Authority and VM/host configured for Halo2 IPA (ToyP61), max_k >= 8
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
@@ -153,7 +144,6 @@ fn verify_then_vendor_submit_ballot_applies() {
         enforce_transcript_label_ascii: defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
     });
     vm.set_host(host);
-
     // Grant authority permissions and register verifying keys in the WSV for governance plumbing.
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     let perm_parliament: Permission = CanManageParliament.into();
@@ -178,7 +168,6 @@ fn verify_then_vendor_submit_ballot_applies() {
     }
     .execute(&authority, &mut stx)
     .expect("register ballot vk");
-
     // 1) Verify ballot: prepare envelope TLV in INPUT and run SCALL
     let env_bytes = fixture.proof_bytes.clone();
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
@@ -208,7 +197,6 @@ fn verify_then_vendor_submit_ballot_applies() {
         verify_res, 0,
         "verify must succeed under enabled config (err code {verify_err})"
     );
-
     // Seed an election so SubmitBallot can record ciphertexts
     let mut commit_bytes = [0u8; 32];
     let mut root_bytes = [0u8; 32];
@@ -227,7 +215,6 @@ fn verify_then_vendor_submit_ballot_applies() {
     create
         .execute(&authority, &mut stx)
         .expect("create election in WSV");
-
     // 2) Enqueue SubmitBallot via the vendor bridge
     let mut code2 = Vec::new();
     code2.extend_from_slice(
@@ -262,7 +249,6 @@ fn verify_then_vendor_submit_ballot_applies() {
     vm.set_register(10, ptr2);
     vm.load_program(&prog2).expect("load vendor2");
     vm.run().expect("run vendor2");
-
     // 3) Apply queued instructions; should succeed thanks to verify latch
     CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
         .expect("apply queued after verify");

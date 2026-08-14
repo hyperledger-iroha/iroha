@@ -1,11 +1,8 @@
-use std::{fs, path::PathBuf};
-
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::json::Value;
 use sorafs_chunker::{chunk_bytes, fixtures::FixtureProfile};
-
+use std::{fs, path::PathBuf};
 const CANONICAL_PROFILE_HANDLE: &str = "sorafs.sf1@1.0.0";
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -13,53 +10,45 @@ fn repo_root() -> PathBuf {
         .canonicalize()
         .expect("resolve repository root")
 }
-
 fn fixture_path() -> PathBuf {
     repo_root()
         .join("fixtures")
         .join("sorafs_chunker")
         .join("sf1_profile_v1.json")
 }
-
 fn manifest_path() -> PathBuf {
     repo_root()
         .join("fixtures")
         .join("sorafs_chunker")
         .join("manifest_blake3.json")
 }
-
 fn signature_path() -> PathBuf {
     repo_root()
         .join("fixtures")
         .join("sorafs_chunker")
         .join("manifest_signatures.json")
 }
-
 fn typescript_path() -> PathBuf {
     repo_root()
         .join("fixtures")
         .join("sorafs_chunker")
         .join("sf1_profile_v1.ts")
 }
-
 fn go_path() -> PathBuf {
     repo_root()
         .join("fixtures")
         .join("sorafs_chunker")
         .join("sf1_profile_v1.go")
 }
-
 fn load_fixture_json() -> Value {
     let bytes = fs::read(fixture_path()).expect("read fixtures/sorafs_chunker/sf1_profile_v1.json");
     norito::json::from_slice(&bytes).expect("parse chunker fixture json")
 }
-
 fn load_signature_json() -> Value {
     let bytes =
         fs::read(signature_path()).expect("read fixtures/sorafs_chunker/manifest_signatures.json");
     norito::json::from_slice(&bytes).expect("parse manifest signatures json")
 }
-
 fn decode_hex(hex: &str) -> Vec<u8> {
     assert!(
         hex.len().is_multiple_of(2),
@@ -73,7 +62,6 @@ fn decode_hex(hex: &str) -> Vec<u8> {
     }
     bytes
 }
-
 fn extract_delimited(content: &str, needle: &str, open: char, close: char) -> Option<String> {
     let start = content.find(needle)?;
     let after = &content[start..];
@@ -95,13 +83,11 @@ fn extract_delimited(content: &str, needle: &str, open: char, close: char) -> Op
     let inner = &after[(open_pos + 1)..end_rel];
     Some(inner.to_owned())
 }
-
 fn parse_number_list(raw: &str) -> Vec<usize> {
     raw.split(',')
         .filter_map(|token| token.trim().parse::<usize>().ok())
         .collect()
 }
-
 fn parse_string_list(raw: &str) -> Vec<String> {
     raw.split(',')
         .filter_map(|token| {
@@ -114,7 +100,6 @@ fn parse_string_list(raw: &str) -> Vec<String> {
         })
         .collect()
 }
-
 #[test]
 fn generated_vectors_match_expected_constants() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -133,7 +118,6 @@ fn generated_vectors_match_expected_constants() {
         vectors.sha3_digest_hex(),
         "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
     );
-
     let digest_hexes = vectors.blake3_digest_hexes();
     assert_eq!(
         digest_hexes,
@@ -145,21 +129,18 @@ fn generated_vectors_match_expected_constants() {
             "194c8180f4b90e021a86199d17092af3b2bd29792dc028e401258d903616b664"
         ]
     );
-
     let chunks = chunk_bytes(&vectors.input);
     let chunk_lengths: Vec<usize> = chunks.iter().map(|chunk| chunk.length).collect();
     assert_eq!(chunk_lengths, vectors.chunk_lengths);
     let chunk_offsets: Vec<usize> = chunks.iter().map(|chunk| chunk.offset).collect();
     assert_eq!(chunk_offsets, vectors.chunk_offsets);
 }
-
 #[test]
 fn manifest_signature_matches_fixture_manifest() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
     let manifest_bytes =
         fs::read(manifest_path()).expect("read fixtures/sorafs_chunker/manifest_blake3.json");
     let manifest_digest = blake3::hash(&manifest_bytes);
-
     let signatures = load_signature_json();
     assert_eq!(
         signatures
@@ -198,7 +179,6 @@ fn manifest_signature_matches_fixture_manifest() {
             .expect("sha3 digest"),
         vectors.sha3_digest_hex()
     );
-
     let entries = signatures
         .get("signatures")
         .and_then(Value::as_array)
@@ -207,14 +187,12 @@ fn manifest_signature_matches_fixture_manifest() {
         !entries.is_empty(),
         "manifest signatures array must not be empty"
     );
-
     for entry in entries {
         let algorithm = entry
             .get("algorithm")
             .and_then(Value::as_str)
             .expect("algorithm string");
         assert_eq!(algorithm, "ed25519");
-
         let signer_hex = entry
             .get("signer")
             .and_then(Value::as_str)
@@ -223,10 +201,8 @@ fn manifest_signature_matches_fixture_manifest() {
             .get("signature")
             .and_then(Value::as_str)
             .expect("signature hex");
-
         let signer_bytes = decode_hex(signer_hex);
         let signature_bytes = decode_hex(signature_hex);
-
         let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
             .expect("valid signer public key");
         if let Some(multihash) = entry.get("signer_multihash").and_then(Value::as_str) {
@@ -239,7 +215,6 @@ fn manifest_signature_matches_fixture_manifest() {
             .expect("signature verifies");
     }
 }
-
 #[ignore = "utility for regenerating the fixture digest"]
 #[test]
 fn print_fixture_digest() {
@@ -254,7 +229,6 @@ fn print_fixture_digest() {
     let chunk_digests = vectors.blake3_digest_hexes();
     println!("digests={chunk_digests:?}");
 }
-
 #[test]
 fn typescript_fixture_matches_vectors() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -272,23 +246,19 @@ fn typescript_fixture_matches_vectors() {
             .any(|alias| alias == CANONICAL_PROFILE_HANDLE),
         "TypeScript fixture must expose canonical profile alias"
     );
-
     let chunk_lengths_block = extract_delimited(&content, "chunkLengths: [", '[', ']')
         .expect("chunkLengths array present");
     let chunk_lengths = parse_number_list(&chunk_lengths_block);
     assert_eq!(chunk_lengths, vectors.chunk_lengths);
-
     let chunk_offsets_block = extract_delimited(&content, "chunkOffsets: [", '[', ']')
         .expect("chunkOffsets array present");
     let chunk_offsets = parse_number_list(&chunk_offsets_block);
     assert_eq!(chunk_offsets, vectors.chunk_offsets);
-
     let digest_block = extract_delimited(&content, "chunkDigestsBlake3: [", '[', ']')
         .expect("chunk digests array present");
     let chunk_digests = parse_string_list(&digest_block);
     assert_eq!(chunk_digests, vectors.blake3_digest_hexes());
 }
-
 #[test]
 fn go_fixture_matches_vectors() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -306,28 +276,23 @@ fn go_fixture_matches_vectors() {
             .any(|alias| alias == CANONICAL_PROFILE_HANDLE),
         "Go fixture must expose canonical profile alias"
     );
-
     let chunk_lengths_block =
         extract_delimited(&content, "ChunkLengths:", '{', '}').expect("ChunkLengths slice present");
     let chunk_lengths = parse_number_list(&chunk_lengths_block);
     assert_eq!(chunk_lengths, vectors.chunk_lengths);
-
     let chunk_offsets_block =
         extract_delimited(&content, "ChunkOffsets:", '{', '}').expect("ChunkOffsets slice present");
     let chunk_offsets = parse_number_list(&chunk_offsets_block);
     assert_eq!(chunk_offsets, vectors.chunk_offsets);
-
     let digest_block = extract_delimited(&content, "ChunkDigestsBLAKE3:", '{', '}')
         .expect("ChunkDigestsBLAKE3 slice present");
     let chunk_digests = parse_string_list(&digest_block);
     assert_eq!(chunk_digests, vectors.blake3_digest_hexes());
 }
-
 #[test]
 fn json_fixture_in_sync_with_vectors() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
     let json = load_fixture_json();
-
     assert_eq!(
         json.get("profile")
             .and_then(Value::as_str)
@@ -361,7 +326,6 @@ fn json_fixture_in_sync_with_vectors() {
             .expect("chunk count") as usize,
         vectors.chunk_count()
     );
-
     let prng = json
         .get("prng")
         .and_then(Value::as_object)
@@ -378,7 +342,6 @@ fn json_fixture_in_sync_with_vectors() {
             .expect("increment"),
         vectors.prng.increment
     );
-
     let lengths_json = json
         .get("chunk_lengths")
         .and_then(Value::as_array)
@@ -388,7 +351,6 @@ fn json_fixture_in_sync_with_vectors() {
         .map(|value| value.as_u64().expect("chunk length") as usize)
         .collect();
     assert_eq!(lengths, vectors.chunk_lengths);
-
     let offsets_json = json
         .get("chunk_offsets")
         .and_then(Value::as_array)
@@ -398,13 +360,11 @@ fn json_fixture_in_sync_with_vectors() {
         .map(|value| value.as_u64().expect("chunk offset") as usize)
         .collect();
     assert_eq!(offsets, vectors.chunk_offsets);
-
     let digest_hex = json
         .get("chunk_digest_sha3_256")
         .and_then(Value::as_str)
         .expect("digest hex");
     assert_eq!(digest_hex, vectors.sha3_digest_hex());
-
     let digest_values = json
         .get("chunk_digests_blake3")
         .and_then(Value::as_array)

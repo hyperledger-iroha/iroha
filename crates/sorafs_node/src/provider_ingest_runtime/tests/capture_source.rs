@@ -16,7 +16,6 @@ async fn completed_musubi_capture_scanner_pages_and_restarts_at_a_later_head() {
         Arc::clone(&ledger),
     )
     .expect("construct bounded capture scanner");
-
     let first = scanner.next_page().await.expect("first capture page");
     assert_eq!(first.finalized_cursor(), cursor(8));
     assert_eq!(first.candidates().len(), 1);
@@ -26,7 +25,6 @@ async fn completed_musubi_capture_scanner_pages_and_restarts_at_a_later_head() {
             .completed_claim()
             .matches_authorization(first.candidates()[0].authorization())
     );
-
     let second = scanner.next_page().await.expect("second capture page");
     assert_eq!(second.finalized_cursor(), cursor(8));
     assert_eq!(second.candidates().len(), 1);
@@ -35,7 +33,6 @@ async fn completed_musubi_capture_scanner_pages_and_restarts_at_a_later_head() {
         first.candidates()[0].completed_claim().replication_order(),
         second.candidates()[0].completed_claim().replication_order()
     );
-
     let unchanged = scanner
         .next_page()
         .await
@@ -43,14 +40,12 @@ async fn completed_musubi_capture_scanner_pages_and_restarts_at_a_later_head() {
     assert_eq!(unchanged.finalized_cursor(), cursor(8));
     assert!(unchanged.candidates().is_empty());
     assert!(unchanged.scan_complete());
-
     ledger.set_fault(CaptureScannerLedgerFaultV1::SubstitutedArchiveBinding);
     assert!(matches!(
         scanner.next_page().await,
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
     ledger.set_fault(CaptureScannerLedgerFaultV1::None);
-
     ledger.set_finalized_height(9);
     let later = scanner
         .next_page()
@@ -82,7 +77,6 @@ async fn completed_musubi_capture_scanner_pages_and_restarts_at_a_later_head() {
     assert_eq!(ledger.requested_limits(), vec![1; 7]);
     assert_eq!(ledger.requested_generations(), vec![1, 2, 3, 4, 4, 5, 6]);
 }
-
 #[tokio::test]
 async fn completed_musubi_capture_scanner_rejects_malformed_and_substituted_raw_pages() {
     for fault in [
@@ -108,7 +102,6 @@ async fn completed_musubi_capture_scanner_rejects_malformed_and_substituted_raw_
         assert!(scanner.next_page().await.is_err());
     }
 }
-
 #[tokio::test]
 async fn completed_musubi_capture_scanner_retries_an_unavailable_page_without_generation_drift() {
     let ledger = Arc::new(CaptureScannerLedgerV1::new(
@@ -124,7 +117,6 @@ async fn completed_musubi_capture_scanner_retries_an_unavailable_page_without_ge
         Arc::clone(&ledger),
     )
     .expect("construct capture scanner");
-
     assert!(matches!(
         scanner.next_page().await,
         Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)
@@ -140,7 +132,6 @@ async fn completed_musubi_capture_scanner_retries_an_unavailable_page_without_ge
     assert_eq!(ledger.requested_limits(), vec![1, 1]);
     assert_eq!(ledger.requested_generations(), vec![1, 1]);
 }
-
 #[tokio::test]
 async fn completed_musubi_capture_scanner_rejects_a_previous_generation_replay() {
     let ledger = Arc::new(CaptureScannerLedgerV1::new(
@@ -156,7 +147,6 @@ async fn completed_musubi_capture_scanner_rejects_a_previous_generation_replay()
         Arc::clone(&ledger),
     )
     .expect("construct replay-check scanner");
-
     let first = scanner.next_page().await.expect("generation-one page");
     assert!(first.scan_complete());
     let after_first = scanner.progress();
@@ -172,7 +162,6 @@ async fn completed_musubi_capture_scanner_rejects_a_previous_generation_replay()
     assert!(exact_retry.candidates().is_empty());
     assert_eq!(ledger.requested_generations(), vec![1, 2, 2]);
 }
-
 #[test]
 fn completed_musubi_capture_transcript_ignores_ambient_norito_flags() {
     let ledger = CaptureScannerLedgerV1::new(Vec::new(), 8, CaptureScannerLedgerFaultV1::None);
@@ -232,14 +221,12 @@ fn completed_musubi_capture_transcript_ignores_ambient_norito_flags() {
     }
     assert_eq!(norito::core::get_decode_flags(), original_flags);
 }
-
 struct CaptureCoordinatorProbeLedgerV1 {
     binding: ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
     binding_available: AtomicBool,
     binding_calls: AtomicUsize,
     page_reads: AtomicUsize,
 }
-
 impl CaptureCoordinatorProbeLedgerV1 {
     fn new(binding_available: bool, key_seed: u8) -> Self {
         let key_pair = KeyPair::from_seed(vec![key_seed; 32], Algorithm::Ed25519);
@@ -264,7 +251,6 @@ impl CaptureCoordinatorProbeLedgerV1 {
         }
     }
 }
-
 impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorProbeLedgerV1 {
     fn capture_verifier_binding(
         &self,
@@ -279,7 +265,6 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
             Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
         }
     }
-
     fn read_signed_completed_musubi_capture_page(
         &self,
         _request: ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -294,7 +279,6 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
         Box::pin(async { Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable) })
     }
 }
-
 fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
     NodeHandle::try_new(
         StorageConfig::builder()
@@ -306,7 +290,6 @@ fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
     )
     .expect("open capture coordinator test node")
 }
-
 #[test]
 fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() {
     let first_root = tempfile::tempdir().expect("first coordinator root");
@@ -316,7 +299,6 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
     let cloned_handle = handle.clone();
     let retained_reader = Arc::new(CaptureCoordinatorProbeLedgerV1::new(false, 0xC1));
     let substituted_reader = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC2));
-
     let mut coordinator = handle
         .take_provider_ingest_completed_musubi_capture_coordinator(
             test_network_id(),
@@ -340,7 +322,6 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
     ));
     assert_eq!(retained_reader.binding_calls.load(Ordering::SeqCst), 1);
     assert_eq!(retained_reader.page_reads.load(Ordering::SeqCst), 0);
-
     retained_reader
         .binding_available
         .store(true, Ordering::SeqCst);
@@ -359,7 +340,6 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
         Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken)
     ));
     assert_eq!(substituted_reader.binding_calls.load(Ordering::SeqCst), 0);
-
     let restarted_handle = capture_coordinator_test_handle(second_root.path());
     let mut restarted = restarted_handle
         .take_provider_ingest_completed_musubi_capture_coordinator(
@@ -373,7 +353,6 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
         .try_activate()
         .expect("bind reader under independent restarted handle");
     assert_eq!(substituted_reader.binding_calls.load(Ordering::SeqCst), 1);
-
     let failed_handle = capture_coordinator_test_handle(failed_root.path());
     let never_read = Arc::new(CaptureCoordinatorProbeLedgerV1::new(true, 0xC3));
     assert!(matches!(
@@ -399,7 +378,6 @@ fn completed_musubi_capture_coordinator_tenure_is_take_once_and_reader_stable() 
     assert_eq!(never_read.binding_calls.load(Ordering::SeqCst), 0);
     assert_eq!(never_read.page_reads.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_enqueues_once() {
     let fixture = verified_attestation_bundle_fixture(0xEC);
@@ -467,7 +445,6 @@ async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_en
         .expect("active reconciliation scanner");
     let cloned_handle = handle.clone();
     let initial_progress = scanner.progress();
-
     assert_eq!(
         cloned_handle
             .reconcile_provider_ingest_completed_musubi_capture_page(
@@ -485,12 +462,10 @@ async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_en
     );
     assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 0);
-
     let mut payload = fixture.payload.as_slice();
     handle
         .ingest_manifest(&manifest, &fixture.plan, &mut payload)
         .expect("admit completed Musubi payload");
-
     inventory.block_get();
     {
         let reconciliation = cloned_handle.reconcile_provider_ingest_completed_musubi_capture_page(
@@ -515,7 +490,6 @@ async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_en
         initial_progress,
         "dropping a reconciliation future must restore scanner progress"
     );
-
     let inserted = cloned_handle
         .reconcile_provider_ingest_completed_musubi_capture_page(
             &mut *scanner,
@@ -534,7 +508,6 @@ async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_en
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 2);
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
-
     assert_ne!(
         scanner.progress(),
         initial_progress,
@@ -559,7 +532,6 @@ async fn completed_musubi_capture_reconciliation_retries_without_skipping_and_en
     assert_eq!(ledger.requested_limits(), vec![1, 1, 1, 1]);
     assert_eq!(ledger.requested_generations(), vec![1, 1, 1, 1]);
 }
-
 #[tokio::test]
 async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_cancellation() {
     let first_fixture = verified_attestation_bundle_fixture(0xF1);
@@ -628,7 +600,6 @@ async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_
         .active_scanner_mut()
         .expect("active capture prefix replay scanner");
     let initial_progress = scanner.progress();
-
     let first_request = ProviderIngestMusubiAttestationApprovalRequestV1::from_verified_completion(
         &completed_attestation_claim_with_order_id(
             first_fixture.commitment.clone(),
@@ -650,7 +621,6 @@ async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_
         .expect("derive second capture prefix request");
     let second_approval_id = musubi_provider_attestation_approval_id_v1(&second_request)
         .expect("derive second capture prefix approval ID");
-
     {
         let reconciliation = handle.reconcile_provider_ingest_completed_musubi_capture_page(
             &mut *scanner,
@@ -690,7 +660,6 @@ async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_
         "candidate two must remain absent while its inventory read is blocked"
     );
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 2);
-
     inventory.unblock_get();
     let retried = handle
         .reconcile_provider_ingest_completed_musubi_capture_page(
@@ -726,7 +695,6 @@ async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
     assert_eq!(ledger.requested_generations(), vec![1, 1]);
-
     scanner.restore_progress(initial_progress);
     let replayed = handle
         .reconcile_provider_ingest_completed_musubi_capture_page(
@@ -745,7 +713,6 @@ async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 3);
     assert_eq!(ledger.requested_generations(), vec![1, 1, 1]);
 }
-
 #[tokio::test]
 async fn completed_musubi_pre_enqueue_probe_rejects_invalid_request_before_inventory() {
     let fixture = verified_attestation_bundle_fixture(0xEE);
@@ -762,7 +729,6 @@ async fn completed_musubi_pre_enqueue_probe_rejects_invalid_request_before_inven
     )
     .expect("open invalid-request probe journal");
     let inventory = CaptureInventory::new(None);
-
     assert_eq!(
         journal
             .probe_pre_enqueue_with_inventory(&request, &inventory)
@@ -776,7 +742,6 @@ async fn completed_musubi_pre_enqueue_probe_rejects_invalid_request_before_inven
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn completed_musubi_capture_reconciliation_fails_closed_then_inventory_suppresses() {
     let fixture = verified_attestation_bundle_fixture(0xED);
@@ -834,7 +799,6 @@ async fn completed_musubi_capture_reconciliation_fails_closed_then_inventory_sup
         .active_scanner_mut()
         .expect("active inventory reconciliation scanner");
     let initial_progress = scanner.progress();
-
     assert_eq!(
         handle
             .reconcile_provider_ingest_completed_musubi_capture_page(
@@ -853,7 +817,6 @@ async fn completed_musubi_capture_reconciliation_fails_closed_then_inventory_sup
             .expect("capture journal checkpoint lock")
             .is_none()
     );
-
     inventory.set_item(exact_item);
     inventory.set_get_error(Some(MusubiProviderAttestationInventoryErrorV1::Unavailable));
     assert_eq!(
@@ -874,7 +837,6 @@ async fn completed_musubi_capture_reconciliation_fails_closed_then_inventory_sup
             .expect("capture journal checkpoint lock")
             .is_none()
     );
-
     inventory.set_get_error(None);
     let suppressed = handle
         .reconcile_provider_ingest_completed_musubi_capture_page(
@@ -904,7 +866,6 @@ async fn completed_musubi_capture_reconciliation_fails_closed_then_inventory_sup
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
     assert_eq!(ledger.requested_generations(), vec![1, 1, 1]);
 }
-
 #[test]
 fn completed_musubi_capture_ledger_never_receives_claim_minting_capabilities() {
     let source = include_str!("../completed_musubi_capture.rs");
@@ -922,7 +883,6 @@ fn completed_musubi_capture_ledger_never_receives_claim_minting_capabilities() {
     assert!(!trait_source.contains("ProviderIngestFinalizedMusubiCompletionClaimV1"));
     assert!(!trait_source.contains("ProviderIngestFinalizedAssignmentPageV1"));
 }
-
 #[test]
 fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
     let ledger = Arc::new(CaptureScannerLedgerV1::new(
@@ -973,16 +933,13 @@ fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
         }
     }
 }
-
 struct TestFetch {
     result: Mutex<Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>>,
     delay_ms: u64,
     calls: AtomicUsize,
 }
-
 impl ProviderIngestAuthenticatedSourceFetchV1 for TestFetch {
     type Fetched = Vec<u8>;
-
     fn fetch<'a>(
         &'a self,
         request: ProviderIngestSourceRequestV1,
@@ -999,7 +956,6 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for TestFetch {
         })
     }
 }
-
 struct TestProviderSource {
     provider_id: [u8; 32],
     runtime_handle: &'static str,
@@ -1013,14 +969,11 @@ struct TestProviderSource {
     calls: Arc<Mutex<Vec<[u8; 32]>>>,
     musubi_calls: Mutex<Vec<Option<ProviderIngestMusubiArchiveFetchBindingV1>>>,
 }
-
 impl ProviderIngestAuthenticatedProviderSourceV1 for TestProviderSource {
     type Fetched = Vec<u8>;
-
     fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     fn runtime_handle(&self) -> &str {
         if self.drifted.load(Ordering::SeqCst) {
             self.drifted_runtime_handle
@@ -1028,17 +981,14 @@ impl ProviderIngestAuthenticatedProviderSourceV1 for TestProviderSource {
             self.runtime_handle
         }
     }
-
     fn qualification(
         &self,
     ) -> Result<ProviderIngestSourceQualificationV1, ProviderIngestSourceFetchErrorV1> {
         Ok(*self.qualification.lock().unwrap())
     }
-
     fn check_readiness(&self) -> Result<(), ProviderIngestSourceFetchErrorV1> {
         *self.readiness.lock().unwrap()
     }
-
     fn fetch_provider<'a>(
         &'a self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -1058,7 +1008,6 @@ impl ProviderIngestAuthenticatedProviderSourceV1 for TestProviderSource {
         Box::pin(async move { result })
     }
 }
-
 fn test_provider_source(
     provider_id: [u8; 32],
     runtime_handle: &'static str,
@@ -1081,7 +1030,6 @@ fn test_provider_source(
         musubi_calls: Mutex::new(Vec::new()),
     })
 }
-
 fn test_source_binding(
     provider_id: [u8; 32],
     runtime_handle: impl Into<String>,
@@ -1093,7 +1041,6 @@ fn test_source_binding(
         policy_digest: provider_id,
     }
 }
-
 fn test_source_registration(
     source: Arc<TestProviderSource>,
     binding: ProviderIngestAuthenticatedSourceBindingV1,
@@ -1101,7 +1048,6 @@ fn test_source_registration(
     let source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Vec<u8>>> = source;
     ProviderIngestAuthenticatedSourceRegistrationV1::new(binding, source)
 }
-
 fn test_source_pool(
     sources: Vec<Arc<TestProviderSource>>,
 ) -> Result<
@@ -1122,7 +1068,6 @@ fn test_source_pool(
         sources,
     )
 }
-
 fn test_source_request_result(
     source_provider_ids: Vec<[u8; 32]>,
 ) -> Result<ProviderIngestSourceRequestV1, ProviderIngestSourceFetchErrorV1> {
@@ -1130,16 +1075,13 @@ fn test_source_request_result(
     let validated = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).unwrap();
     ProviderIngestSourceRequestV1::new(validated.authorization, source_provider_ids, None)
 }
-
 fn test_source_request(source_provider_ids: Vec<[u8; 32]>) -> ProviderIngestSourceRequestV1 {
     test_source_request_result(source_provider_ids).expect("valid test source request")
 }
-
 #[test]
 fn authenticated_source_qualification_rejects_unsupported_or_zero_pins() {
     let valid = ProviderIngestSourceQualificationV1::new(1, [0x22; 32]);
     assert_eq!(valid.validate(), Ok(()));
-
     let mut unsupported = valid;
     unsupported.version = 2;
     for invalid in [
@@ -1153,14 +1095,12 @@ fn authenticated_source_qualification_rejects_unsupported_or_zero_pins() {
         );
     }
 }
-
 #[test]
 fn runtime_provider_qualification_requires_both_public_pins() {
     assert!(ProviderIngestRuntimeProviderQualificationV1::new(9, [0xA9; 32]).is_valid());
     assert!(!ProviderIngestRuntimeProviderQualificationV1::new(0, [0xA9; 32]).is_valid());
     assert!(!ProviderIngestRuntimeProviderQualificationV1::new(9, [0; 32]).is_valid());
 }
-
 #[test]
 fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_inventory() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1176,7 +1116,6 @@ fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_invent
         test_source_pool(vec![Arc::clone(&source_a)]).unwrap_err(),
         ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceCount
     );
-
     let duplicate_provider = test_provider_source(
         [0x22; 32],
         "https-pinned:provider-b",
@@ -1189,7 +1128,6 @@ fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_invent
         test_source_pool(vec![Arc::clone(&source_a), duplicate_provider]).unwrap_err(),
         ProviderIngestAuthenticatedSourcePoolErrorV1::DuplicateProvider
     );
-
     let duplicate_handle = test_provider_source(
         [0x33; 32],
         "https-pinned:provider-a",
@@ -1202,7 +1140,6 @@ fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_invent
         test_source_pool(vec![Arc::clone(&source_a), duplicate_handle]).unwrap_err(),
         ProviderIngestAuthenticatedSourcePoolErrorV1::DuplicateSourceHandle
     );
-
     let credential_handle = test_provider_source(
         [0x33; 32],
         "https://operator:secret@provider.example",
@@ -1215,7 +1152,6 @@ fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_invent
         test_source_pool(vec![Arc::clone(&source_a), credential_handle]).unwrap_err(),
         ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceHandle
     );
-
     let test_marked = test_provider_source(
         [0x33; 32],
         "https-pinned:provider-test",
@@ -1229,7 +1165,6 @@ fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_invent
         ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceHandle
     );
 }
-
 #[test]
 fn authenticated_source_pool_requires_independent_valid_qualification_pins() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1249,7 +1184,6 @@ fn authenticated_source_pool_requires_independent_valid_qualification_pins() {
         false,
         calls,
     );
-
     for invalid_pool_qualification in [
         ProviderIngestRuntimeProviderQualificationV1::new(0, [0xA9; 32]),
         ProviderIngestRuntimeProviderQualificationV1::new(9, [0; 32]),
@@ -1274,7 +1208,6 @@ fn authenticated_source_pool_requires_independent_valid_qualification_pins() {
             ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidPoolQualification
         );
     }
-
     let mut invalid_binding = test_source_binding(source_b.provider_id, source_b.runtime_handle);
     invalid_binding.revision = 0;
     assert_eq!(
@@ -1293,7 +1226,6 @@ fn authenticated_source_pool_requires_independent_valid_qualification_pins() {
         .unwrap_err(),
         ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceQualification
     );
-
     let mut substituted_binding =
         test_source_binding(source_b.provider_id, source_b.runtime_handle);
     substituted_binding.revision = 2;
@@ -1314,7 +1246,6 @@ fn authenticated_source_pool_requires_independent_valid_qualification_pins() {
         ProviderIngestAuthenticatedSourcePoolErrorV1::SourceBindingMismatch
     );
 }
-
 #[test]
 fn authenticated_source_pool_rejects_qualification_drift_at_readiness() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1337,14 +1268,12 @@ fn authenticated_source_pool_rejects_qualification_drift_at_readiness() {
     let pool = test_source_pool(vec![Arc::clone(&source_a), source_b]).unwrap();
     *source_a.qualification.lock().unwrap() =
         ProviderIngestSourceQualificationV1::new(2, [0x22; 32]);
-
     assert_eq!(
         pool.check_readiness(),
         Err(ProviderIngestSourceFetchErrorV1::Rejected)
     );
     assert!(calls.lock().unwrap().is_empty());
 }
-
 #[test]
 fn authenticated_source_pool_is_ready_when_one_qualified_source_is_available() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1365,10 +1294,8 @@ fn authenticated_source_pool_is_ready_when_one_qualified_source_is_available() {
         calls,
     );
     let pool = test_source_pool(vec![source_a, source_b]).unwrap();
-
     assert_eq!(pool.check_readiness(), Ok(()));
 }
-
 #[tokio::test]
 async fn authenticated_source_pool_fails_over_in_canonical_provider_order() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1389,7 +1316,6 @@ async fn authenticated_source_pool_fails_over_in_canonical_provider_order() {
         Arc::clone(&calls),
     );
     let pool = test_source_pool(vec![source_a, source_b]).unwrap();
-
     assert_eq!(pool.runtime_handle(), "https-pinned-source-pool:region-a");
     assert_eq!(pool.source_provider_ids(), &[[0x22; 32], [0x33; 32]]);
     assert_eq!(pool.max_sources_per_fetch(), 4);
@@ -1401,7 +1327,6 @@ async fn authenticated_source_pool_fails_over_in_canonical_provider_order() {
     );
     assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32], [0x33; 32]]);
 }
-
 #[tokio::test]
 async fn authenticated_source_pool_preserves_exact_musubi_fetch_binding() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1433,7 +1358,6 @@ async fn authenticated_source_pool_preserves_exact_musubi_fetch_binding() {
         Some(musubi_archive.clone()),
     )
     .unwrap();
-
     assert_eq!(pool.fetch(request).await, Ok(vec![0xA5]));
     assert_eq!(*calls.lock().unwrap(), vec![SOURCE_PROVIDER]);
     assert_eq!(
@@ -1441,7 +1365,6 @@ async fn authenticated_source_pool_preserves_exact_musubi_fetch_binding() {
         vec![Some(musubi_archive)]
     );
 }
-
 #[tokio::test]
 async fn authenticated_source_pool_fails_over_after_content_rejection() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1462,7 +1385,6 @@ async fn authenticated_source_pool_fails_over_after_content_rejection() {
         Arc::clone(&calls),
     );
     let pool = test_source_pool(vec![source_a, source_b]).unwrap();
-
     assert_eq!(
         pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
             .await,
@@ -1470,7 +1392,6 @@ async fn authenticated_source_pool_fails_over_after_content_rejection() {
     );
     assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32], [0x33; 32]]);
 }
-
 #[tokio::test]
 async fn authenticated_source_pool_rejects_noncanonical_or_unpinned_requests_before_io() {
     for source_provider_ids in [
@@ -1496,7 +1417,6 @@ async fn authenticated_source_pool_rejects_noncanonical_or_unpinned_requests_bef
             Arc::clone(&calls),
         );
         let pool = test_source_pool(vec![source_a, source_b]).unwrap();
-
         match test_source_request_result(source_provider_ids) {
             Ok(request) => assert_eq!(
                 pool.fetch(request).await,
@@ -1507,7 +1427,6 @@ async fn authenticated_source_pool_rejects_noncanonical_or_unpinned_requests_bef
         assert!(calls.lock().unwrap().is_empty());
     }
 }
-
 #[tokio::test]
 async fn authenticated_source_pool_does_not_mask_identity_drift_with_later_success() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1528,7 +1447,6 @@ async fn authenticated_source_pool_does_not_mask_identity_drift_with_later_succe
         Arc::clone(&calls),
     );
     let pool = test_source_pool(vec![source_a, source_b]).unwrap();
-
     assert_eq!(
         pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
             .await,
@@ -1536,7 +1454,6 @@ async fn authenticated_source_pool_does_not_mask_identity_drift_with_later_succe
     );
     assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32]]);
 }
-
 #[tokio::test]
 async fn authenticated_source_pool_does_not_mask_qualification_drift_with_later_success() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1559,7 +1476,6 @@ async fn authenticated_source_pool_does_not_mask_qualification_drift_with_later_
         Arc::clone(&calls),
     );
     let pool = test_source_pool(vec![source_a, source_b]).unwrap();
-
     assert_eq!(
         pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
             .await,
@@ -1567,7 +1483,6 @@ async fn authenticated_source_pool_does_not_mask_qualification_drift_with_later_
     );
     assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32]]);
 }
-
 #[test]
 fn completed_musubi_effect_pump_orders_handoff_prepare_approval_and_commit() {
     let source = include_str!("../completed_musubi_capture.rs");
@@ -1586,9 +1501,10 @@ fn completed_musubi_effect_pump_orders_handoff_prepare_approval_and_commit() {
         .expect("durable approval effect");
     let commit = source.find("prepared.commit()").expect("progress commit");
     assert!(handoff < prepare && prepare < approve && approve < commit);
-    assert!(source.contains("ProviderIngestCompletedMusubiAttestationDriveErrorV1::ApprovalBlocked"));
+    assert!(
+        source.contains("ProviderIngestCompletedMusubiAttestationDriveErrorV1::ApprovalBlocked")
+    );
 }
-
 #[test]
 fn completed_musubi_effect_error_classes_are_fail_closed() {
     assert!(

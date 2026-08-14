@@ -1,11 +1,9 @@
-use std::{convert::TryInto, error::Error, fs, path::Path};
-
 use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
 use norito::json::{self, Value};
-
+use std::{convert::TryInto, error::Error, fs, path::Path};
 /// Canonical file names within the vote tally bundle directory.
 pub fn bundle_file_names() -> &'static [&'static str] {
     &[
@@ -14,7 +12,6 @@ pub fn bundle_file_names() -> &'static [&'static str] {
         "vote_tally_vk.zk1",
     ]
 }
-
 /// Human-readable summary derived from the vote tally bundle artifacts.
 #[derive(Debug)]
 pub struct BundleSummary {
@@ -27,7 +24,6 @@ pub struct BundleSummary {
     pub vk_len: usize,
     pub proof_len: usize,
 }
-
 impl std::fmt::Display for BundleSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "vote tally summary:")?;
@@ -41,24 +37,20 @@ impl std::fmt::Display for BundleSummary {
         writeln!(f, "  proof_len: {}", self.proof_len)
     }
 }
-
 /// Generate the Halo2 vote tally bundle and write it to `out_dir`.
 #[cfg(feature = "vote-tally")]
 pub fn write_bundle(out_dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
     vote_tally_backend::write_bundle(out_dir)
 }
-
 #[cfg(not(feature = "vote-tally"))]
 pub fn write_bundle(_out_dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
     Err("xtask compiled without the `vote-tally` feature; re-run with `--features vote-tally` to generate bundles".into())
 }
-
 /// Read an on-disk vote tally bundle summary back from `dir`.
 pub fn read_summary(dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
     let meta_path = dir.join("vote_tally_meta.json");
     let meta_text = fs::read_to_string(&meta_path)?;
     let meta: Value = json::from_str(&meta_text)?;
-
     let backend = meta["backend"].as_str().unwrap_or_default().to_string();
     let circuit_id = meta["circuit_id"].as_str().unwrap_or_default().to_string();
     let commit_hex = meta["commit_hex"].as_str().unwrap_or_default().to_string();
@@ -73,7 +65,6 @@ pub fn read_summary(dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
         .to_string();
     let vk_len = fs::metadata(dir.join("vote_tally_vk.zk1"))?.len() as usize;
     let proof_len = fs::metadata(dir.join("vote_tally_proof.zk1"))?.len() as usize;
-
     Ok(BundleSummary {
         backend,
         circuit_id,
@@ -85,7 +76,6 @@ pub fn read_summary(dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
         proof_len,
     })
 }
-
 /// Convert a summary into a JSON representation used for the `--summary-json` flag.
 pub fn summary_to_json(summary: &BundleSummary) -> Value {
     let mut map = norito::json::Map::new();
@@ -105,7 +95,6 @@ pub fn summary_to_json(summary: &BundleSummary) -> Value {
     map.insert("proof_len".into(), Value::from(summary.proof_len as u64));
     Value::Object(map)
 }
-
 /// Build an attestation manifest describing the bundle summary and artifact hashes.
 pub fn attestation_manifest(summary: &BundleSummary, dir: &Path) -> Result<Value, Box<dyn Error>> {
     let mut artifacts = Vec::new();
@@ -127,7 +116,6 @@ pub fn attestation_manifest(summary: &BundleSummary, dir: &Path) -> Result<Value
     manifest.insert("artifacts".into(), Value::Array(artifacts));
     Ok(Value::Object(manifest))
 }
-
 fn deterministic_timestamp(summary: &BundleSummary) -> u64 {
     let mut combined = summary.commit_hex.clone();
     combined.push('@');
@@ -135,9 +123,9 @@ fn deterministic_timestamp(summary: &BundleSummary) -> u64 {
     let hash = iroha_hash(combined.as_bytes());
     u64::from_be_bytes(hash[..8].try_into().expect("slice length"))
 }
-
 #[cfg(feature = "vote-tally")]
 mod vote_tally_backend {
+    use super::*;
     use halo2_proofs as halo2_axiom;
     use halo2_proofs::{
         SerdeFormat,
@@ -162,48 +150,35 @@ mod vote_tally_backend {
     };
     use rand_core_06::{CryptoRng as CryptoRngOld, RngCore as RngCoreOld};
     use sha2::{Digest as ShaDigest, Sha256};
-
-    use super::*;
-
     struct Halo2ProofRng(ChaCha20Rng);
-
     impl Halo2ProofRng {
         fn from_seed(seed: [u8; 32]) -> Self {
             Self(ChaCha20Rng::from_seed(seed))
         }
     }
-
     impl RngCoreOld for Halo2ProofRng {
         fn next_u32(&mut self) -> u32 {
             RngCoreNew::next_u32(&mut self.0)
         }
-
         fn next_u64(&mut self) -> u64 {
             RngCoreNew::next_u64(&mut self.0)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             RngCoreNew::fill_bytes(&mut self.0, destination);
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             RngCoreNew::fill_bytes(&mut self.0, destination);
             Ok(())
         }
     }
-
     impl CryptoRngOld for Halo2ProofRng {}
-
     pub(super) fn write_bundle(out_dir: &Path) -> Result<BundleSummary, Box<dyn Error>> {
         fs::create_dir_all(out_dir)?;
         let bundle = generate_bundle()?;
-
         let vk_path = out_dir.join("vote_tally_vk.zk1");
         fs::write(&vk_path, &bundle.vk_bytes)?;
-
         let proof_path = out_dir.join("vote_tally_proof.zk1");
         fs::write(&proof_path, &bundle.proof_bytes)?;
-
         let summary = BundleSummary {
             backend: bundle.backend.into(),
             circuit_id: bundle.circuit_id.into(),
@@ -214,15 +189,12 @@ mod vote_tally_backend {
             vk_len: bundle.vk_bytes.len(),
             proof_len: bundle.proof_bytes.len(),
         };
-
         let meta_path = out_dir.join("vote_tally_meta.json");
         let mut meta_text = json::to_string_pretty(&summary_to_json(&summary))?;
         meta_text.push('\n');
         fs::write(&meta_path, meta_text)?;
-
         Ok(summary)
     }
-
     struct VoteTallyBundle {
         backend: &'static str,
         circuit_id: &'static str,
@@ -233,21 +205,17 @@ mod vote_tally_backend {
         vk_commitment: [u8; 32],
         public_inputs_schema_hash: [u8; 32],
     }
-
     fn generate_bundle() -> Result<VoteTallyBundle, Box<dyn Error>> {
         const BACKEND: &str = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1";
         const CIRCUIT_ID: &str = "halo2/pasta/vote-bool-commit-merkle8-v1";
         const K: u32 = 6;
         const RNG_SEED: [u8; 32] = *b"iroha_halo2_vote_tally_seed_____";
-
         let params = ParamsIPA::<Curve>::new(K);
         let circuit = VoteBoolCommitMerkle::<8>;
         let vk_h2 = keygen_vk(&params, &circuit)?;
         let pk = keygen_pk(&params, vk_h2.clone(), &circuit)?;
-
         let commit = compute_commit();
         let root = compute_root(commit);
-
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
         let instance_columns = [vec![commit], vec![root]];
         let instances = instance_columns
@@ -270,22 +238,17 @@ mod vote_tally_backend {
             &mut transcript,
         )?;
         let proof_raw = transcript.finalize();
-
         let mut vk_bytes = wrap_start();
         wrap_append_ipa_k(&mut vk_bytes, K);
         wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
-
         let mut proof_bytes = wrap_start();
         wrap_append_proof(&mut proof_bytes, &proof_raw);
         wrap_append_instances_pasta_fp_cols(&instances, &mut proof_bytes);
-
         let mut public_inputs = Vec::with_capacity(64);
         public_inputs.extend_from_slice(commit.to_repr().as_ref());
         public_inputs.extend_from_slice(root.to_repr().as_ref());
         let schema_hash = iroha_hash(&public_inputs);
-
         let vk_commitment = hash_vk_bytes(BACKEND, &vk_bytes);
-
         Ok(VoteTallyBundle {
             backend: BACKEND,
             circuit_id: CIRCUIT_ID,
@@ -297,57 +260,46 @@ mod vote_tally_backend {
             public_inputs_schema_hash: schema_hash,
         })
     }
-
     fn compute_commit() -> Scalar {
         let vote = Scalar::one();
         let rho = Scalar::from(12345u64);
         compress(vote, rho)
     }
-
     fn compute_root(mut acc: Scalar) -> Scalar {
         for i in 0..8u64 {
             acc = compress(acc, Scalar::from(20 + i));
         }
         acc
     }
-
     fn compress(left: Scalar, right: Scalar) -> Scalar {
         let rc0 = Scalar::from(7u64);
         let rc1 = Scalar::from(13u64);
         let two = Scalar::from(2u64);
         let three = Scalar::from(3u64);
-
         let a = left + rc0;
         let b = right + rc1;
-
         let a2 = a * a;
         let a4 = a2 * a2;
         let a5 = a4 * a;
         let b2 = b * b;
         let b4 = b2 * b2;
         let b5 = b4 * b;
-
         two * a5 + three * b5
     }
-
     fn wrap_start() -> Vec<u8> {
         b"ZK1\0".to_vec()
     }
-
     fn wrap_append_proof(buf: &mut Vec<u8>, transcript_bytes: &[u8]) {
         write_tlv(buf, *b"PROF", transcript_bytes);
     }
-
     fn wrap_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
         let bytes = k.to_le_bytes();
         write_tlv(buf, *b"IPAK", &bytes);
     }
-
     fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &halo2_proofs::plonk::VerifyingKey<Curve>) {
         let bytes = vk.to_bytes(SerdeFormat::Processed);
         write_tlv(buf, *b"H2VK", &bytes);
     }
-
     fn wrap_append_instances_pasta_fp_cols(columns: &[&[Scalar]], buf: &mut Vec<u8>) {
         if columns.is_empty() {
             return;
@@ -357,7 +309,6 @@ mod vote_tally_backend {
         if columns.iter().any(|c| c.len() as u32 != rows) {
             return;
         }
-
         let mut payload = Vec::with_capacity(8 + (rows as usize) * (cols as usize) * 32);
         payload.extend_from_slice(&cols.to_le_bytes());
         payload.extend_from_slice(&rows.to_le_bytes());
@@ -368,39 +319,32 @@ mod vote_tally_backend {
         }
         write_tlv(buf, *b"I10P", &payload);
     }
-
     fn write_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
         buf.extend_from_slice(&tag);
         buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         buf.extend_from_slice(payload);
     }
-
     fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
         let mut h = Sha256::new();
         ShaDigest::update(&mut h, backend.as_bytes());
         ShaDigest::update(&mut h, bytes);
         h.finalize().into()
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[test]
         fn halo2_proof_rng_is_seed_deterministic() {
             let mut first_rng = Halo2ProofRng::from_seed([0x5a; 32]);
             let mut second_rng = Halo2ProofRng::from_seed([0x5a; 32]);
             let mut first = [0u8; 64];
             let mut second = [0u8; 64];
-
             RngCoreOld::fill_bytes(&mut first_rng, &mut first);
             RngCoreOld::fill_bytes(&mut second_rng, &mut second);
-
             assert_eq!(first, second);
         }
     }
 }
-
 pub fn iroha_hash(bytes: &[u8]) -> [u8; 32] {
     let vec_hash = Blake2bVar::new(32)
         .expect("failed to construct blake2b-256 hasher")

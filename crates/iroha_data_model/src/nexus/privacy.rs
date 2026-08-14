@@ -2,7 +2,6 @@
 //!
 //! These helpers let transactions attach domain-separated Merkle witnesses
 //! that can be verified against the lane privacy registry at admission time.
-
 use iroha_crypto::{
     Hash, HashOf, MerkleProof,
     privacy::{LaneCommitmentId, MerkleWitness, PrivacyWitness},
@@ -10,10 +9,8 @@ use iroha_crypto::{
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 /// Maximum supported Merkle depth for a first-release lane privacy witness.
 pub const LANE_PRIVACY_MAX_MERKLE_DEPTH_V1: usize = u8::MAX as usize;
-
 /// Proof payload bound to a specific lane commitment identifier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -27,7 +24,6 @@ pub struct LanePrivacyProof {
     /// Witness payload proving membership.
     pub witness: LanePrivacyWitness,
 }
-
 fn validate_merkle_path_shape_v1<T>(
     leaf_index: u32,
     audit_path: &[Option<T>],
@@ -52,20 +48,17 @@ fn validate_merkle_path_shape_v1<T>(
     }
     Ok(())
 }
-
 impl LanePrivacyProof {
     /// Access the commitment identifier referenced by this proof.
     #[must_use]
     pub const fn commitment_id(&self) -> LaneCommitmentId {
         self.commitment_id
     }
-
     /// Convert to the runtime witness representation for verification.
     #[must_use]
     pub fn as_privacy_witness(&self) -> PrivacyWitness {
         self.witness.as_privacy_witness()
     }
-
     /// Size of the encoded proof in bytes (used for attachment budget checks).
     #[must_use]
     pub fn encoded_len(&self) -> usize {
@@ -73,7 +66,6 @@ impl LanePrivacyProof {
             .map(|bytes| bytes.len())
             .unwrap_or(usize::MAX)
     }
-
     /// Validate the complete first-release lane privacy witness shape.
     ///
     /// This is applied after untrusted JSON/Norito decoding as well as by the
@@ -96,7 +88,6 @@ impl LanePrivacyProof {
         }
         Ok(())
     }
-
     /// Construct a Merkle-based lane privacy proof from raw sibling hashes.
     ///
     /// `leaf` is the raw 32-byte lane leaf. Each `audit_path` entry is an
@@ -114,7 +105,6 @@ impl LanePrivacyProof {
         audit_path: Vec<Option<[u8; 32]>>,
     ) -> Result<Self, LanePrivacyProofError> {
         validate_merkle_path_shape_v1(leaf_index, &audit_path)?;
-
         let audit_path = audit_path
             .into_iter()
             .map(|entry| {
@@ -122,7 +112,6 @@ impl LanePrivacyProof {
                     .map(|bytes| HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(bytes)))
             })
             .collect();
-
         let proof = Self {
             commitment_id,
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
@@ -134,7 +123,6 @@ impl LanePrivacyProof {
         Ok(proof)
     }
 }
-
 /// Merkle witness payload for lane privacy proofs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -144,12 +132,17 @@ impl LanePrivacyProof {
 )]
 pub struct LanePrivacyMerkleWitness {
     /// Leaf bytes used to derive the committed hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+        )
+    )]
     pub leaf: [u8; 32],
     /// Inclusion path from the leaf to the committed root.
     pub proof: MerkleProof<[u8; 32]>,
 }
-
 /// Witness payload for a lane privacy proof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -163,7 +156,6 @@ pub enum LanePrivacyWitness {
     #[norito(rename = "merkle")]
     Merkle(LanePrivacyMerkleWitness),
 }
-
 impl LanePrivacyWitness {
     /// Convert the attachment to a runtime witness suitable for verification.
     #[must_use]
@@ -176,7 +168,6 @@ impl LanePrivacyWitness {
         }
     }
 }
-
 /// Errors constructing [`LanePrivacyProof`] instances.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum LanePrivacyProofError {
@@ -212,16 +203,13 @@ pub enum LanePrivacyProofError {
         index: usize,
     },
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{
         MerkleTree,
         privacy::{LanePrivacyCommitment, MerkleCommitment, PrivacyError},
     };
-
-    use super::*;
-
     #[test]
     fn merkle_from_raw_path_sets_prehashed_bits() {
         let mut leaves = Vec::new();
@@ -230,13 +218,11 @@ mod tests {
         let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
         let leaf: [u8; 32] = *tree.leaves().next().expect("merkle leaf present").as_ref();
         let proof = tree.get_proof(0).expect("merkle proof");
-
         let audit_path: Vec<Option<[u8; 32]>> = proof
             .audit_path()
             .iter()
             .map(|entry| entry.map(|hash| *hash.as_ref()))
             .collect();
-
         let built = LanePrivacyProof::merkle_from_raw_path(
             LaneCommitmentId::new(7),
             leaf,
@@ -244,13 +230,11 @@ mod tests {
             audit_path.clone(),
         )
         .expect("builder should succeed");
-
         let LanePrivacyWitness::Merkle(witness) = built.witness;
         assert_eq!(witness.proof.leaf_index(), proof.leaf_index());
         assert_eq!(witness.proof.audit_path().len(), proof.audit_path().len());
         assert_eq!(witness.leaf.len(), 32);
         assert_eq!(witness.leaf, leaf, "raw leaf bytes must be preserved");
-
         for (expected, actual) in audit_path.iter().zip(witness.proof.audit_path().iter()) {
             match (expected, actual) {
                 (None, None) => {}
@@ -273,7 +257,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn merkle_from_raw_path_rejects_empty_path() {
         let err = LanePrivacyProof::merkle_from_raw_path(
@@ -285,7 +268,6 @@ mod tests {
         .expect_err("empty path must be rejected");
         assert_eq!(err, LanePrivacyProofError::EmptyMerklePath);
     }
-
     #[test]
     fn merkle_from_raw_path_rejects_missing_sibling() {
         let err = LanePrivacyProof::merkle_from_raw_path(
@@ -300,7 +282,6 @@ mod tests {
             LanePrivacyProofError::MissingMerkleSibling { index: 0 }
         );
     }
-
     #[test]
     fn merkle_from_raw_path_rejects_oversized_and_impossible_paths() {
         let too_deep = vec![Some([0x22; 32]); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
@@ -331,7 +312,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn decoded_empty_merkle_path_is_rejected_by_runtime_verifier() {
         let wire = LanePrivacyProof {
@@ -356,7 +336,6 @@ mod tests {
             PrivacyError::EmptyMerkleProof
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn removed_snark_witness_is_rejected_by_json_decoder() {

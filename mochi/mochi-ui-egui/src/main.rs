@@ -1,13 +1,10 @@
 //! MOCHI entry point.
-
 #[cfg(feature = "gui")]
 mod gui;
-
 #[cfg(feature = "gui")]
 fn main() -> eframe::Result<()> {
     gui::run()
 }
-
 #[cfg(not(feature = "gui"))]
 fn main() {
     println!(

@@ -6,35 +6,6 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    block::{
-        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
-        consensus::{
-            LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
-            SumeragiLanePayloadOwnership,
-        },
-        consensus_v2 as wire,
-    },
-    events::EventBox,
-    merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
-    transaction::SignedTransaction,
-};
-use iroha_primitives::time::TimeSource;
-use norito::codec::Encode;
-use thiserror::Error;
-
 use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
@@ -101,7 +72,32 @@ use crate::{
         MergeLedgerCommitError, MergeLedgerPublicationMode, State, StateBlockCommitAuthorization,
     },
 };
-
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    block::{
+        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
+        consensus::{
+            LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
+            SumeragiLanePayloadOwnership,
+        },
+        consensus_v2 as wire,
+    },
+    events::EventBox,
+    merge::MergeLedgerEntry,
+    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
+    transaction::SignedTransaction,
+};
+use iroha_primitives::time::TimeSource;
+use norito::codec::Encode;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use thiserror::Error;
 /// Fail-closed error while consuming or recovering durable lane reservations.
 #[derive(Debug, Error)]
 pub(crate) enum V2ReservationLifecycleError {
@@ -375,7 +371,6 @@ pub(crate) enum V2ReservationLifecycleError {
         retirement_hash: Hash,
     },
 }
-
 /// Typed startup disposition counts for durable autonomous reservation owners.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LaneReservationReconciliationSummary {
@@ -398,20 +393,17 @@ pub(crate) struct LaneReservationReconciliationSummary {
     /// Owners whose previously durable retirement/release hand-off was resumed.
     pub(crate) resumed_retirement: usize,
 }
-
 struct AuthenticatedCommittedCanonicalCarrierGroup {
     reservation_group: LaneQueueReservationGroupBindingV1,
     ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
     application: AuthenticatedCarrierApplicationProjection,
 }
-
 struct AuthenticatedCommittedCanonicalCarrier {
     reference: CertifiedMergeLedgerReference,
     carrier_height: NonZeroUsize,
     carrier_block_hash: HashOf<BlockHeader>,
     groups: Vec<AuthenticatedCommittedCanonicalCarrierGroup>,
 }
-
 /// Authenticate a complete merge carrier against authoritative State and Kura
 /// before constructing any Queue mutation authority.
 fn authenticate_committed_canonical_carrier(
@@ -449,7 +441,6 @@ fn authenticate_committed_canonical_carrier(
             "canonical carrier preflight is not the exact State/Kura canonical block",
         ));
     }
-
     let applications = authenticated_autonomous_carrier_application_projections(
         &reference,
         entry,
@@ -462,7 +453,6 @@ fn authenticate_committed_canonical_carrier(
             "canonical carrier preflight application/group cardinality differs",
         ));
     }
-
     let nexus = state.nexus_snapshot();
     let mut seen_transactions = BTreeSet::new();
     let mut groups = Vec::with_capacity(carrier_groups.len());
@@ -533,7 +523,6 @@ fn authenticate_committed_canonical_carrier(
             application,
         });
     }
-
     Ok(AuthenticatedCommittedCanonicalCarrier {
         reference,
         carrier_height,
@@ -541,7 +530,6 @@ fn authenticate_committed_canonical_carrier(
         groups,
     })
 }
-
 fn finalize_certified_merge_reservations(
     state: &State,
     queue: &Queue,
@@ -554,7 +542,6 @@ fn finalize_certified_merge_reservations(
     let carrier_height = authenticated.carrier_height;
     let carrier_block_hash = authenticated.carrier_block_hash;
     let groups = authenticated.groups;
-
     // Persist the complete carrier source-outcome set and consume its
     // canonical-lane-order publication before constructing any Queue input.
     // `None` is valid only for a merge entry with no execution batch, which
@@ -584,7 +571,6 @@ fn finalize_certified_merge_reservations(
             },
         );
     }
-
     let mut authorized_groups = Vec::with_capacity(groups.len());
     for (group, (source_group, source_authorization)) in groups.into_iter().zip(queue_sources) {
         if group.reservation_group != source_group {
@@ -603,7 +589,6 @@ fn finalize_certified_merge_reservations(
             )?;
         authorized_groups.push((source_authorization, authorization));
     }
-
     let cleanup = queue
         .authenticate_autonomous_lifecycle_pending_canonical_queue_terminal_outcomes(
             authorized_groups,
@@ -620,7 +605,6 @@ fn finalize_certified_merge_reservations(
     )?;
     Ok(finalized_reservations)
 }
-
 fn committed_block_merge_entry(
     kura: &Kura,
     block: &SignedBlock,
@@ -645,7 +629,6 @@ fn committed_block_merge_entry(
     }
     Ok(Some(entry))
 }
-
 fn certified_merge_queue_reservation_hashes(
     entry: Option<&MergeLedgerEntry>,
 ) -> Result<BTreeSet<HashOf<SignedTransaction>>, MergeLedgerCommitError> {
@@ -657,7 +640,6 @@ fn certified_merge_queue_reservation_hashes(
         .map(|(transaction_hash, _)| transaction_hash)
         .collect())
 }
-
 fn finalize_committed_block_merge_reservations(
     state: &State,
     queue: &Queue,
@@ -681,7 +663,6 @@ fn finalize_committed_block_merge_reservations(
     }
     finalize_certified_merge_reservations(state, queue, kura, &entry, expected_network_id)
 }
-
 /// Execute or resume the complete crash-safe retirement/release hand-off.
 ///
 /// This is the single production ordering implementation shared by live lane
@@ -735,9 +716,7 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
     kura.complete_autonomous_lifecycle_release_terminal_outcome(terminal_evidence)?;
     Ok(finalized_reservations)
 }
-
 include!("v2_apply/autonomous_recovery_types.rs");
-
 /// Revalidate the exact finalized proposal body before using envelope absence
 /// as terminal-loser evidence. A retained header/hash alone never proves that
 /// the canonical body omitted a reservation group.
@@ -812,7 +791,6 @@ fn canonical_autonomous_carrier_disposition(
     {
         return Err(V2ReservationLifecycleError::CanonicalContextMismatch { height });
     }
-
     let mut exact_autonomous = None;
     let mut exact_ordinary = false;
     let Some(bundle) = block.execution_context() else {
@@ -844,7 +822,6 @@ fn canonical_autonomous_carrier_disposition(
         if !same_slot && !overlaps_group {
             continue;
         }
-
         let payload_matches = match expected_payload {
             Some(expected) => {
                 if let Some(hint) = expected.origin_proposal.payload_block_hint
@@ -932,7 +909,6 @@ fn canonical_autonomous_carrier_disposition(
         if !same_slot && !overlaps_group {
             continue;
         }
-
         let Some(proposal) = proposal_from_canonical_lane_ownership(ownership, block.hash()) else {
             return Err(V2ReservationLifecycleError::InvalidCanonicalOwnership { height });
         };
@@ -986,12 +962,9 @@ fn canonical_autonomous_carrier_disposition(
         },
     ))
 }
-
 include!("v2_apply/historical_autonomous_recovery.rs");
-
 include!("v2_apply/reconciliation_authority.rs");
 include!("v2_apply/committed_carrier_cleanup.rs");
-
 /// Build one immutable Queue/Kura/State reservation reconciliation plan.
 ///
 /// Every Queue group, release barrier, State membership bit, committed merge
@@ -1047,7 +1020,6 @@ pub(crate) fn plan_lane_reservation_ownership(
     }
     let release_barriers = snapshot.release_barriers();
     let commit_barriers = snapshot.commit_barriers.as_slice();
-
     let state_height = u64::try_from(state.committed_height())?;
     if active_context.height < state_height
         || active_context.height > state_height.saturating_add(1)
@@ -1060,7 +1032,6 @@ pub(crate) fn plan_lane_reservation_ownership(
     let network_id = active_context.network_id;
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
-
     let mut inputs = snapshot
         .ordered_groups
         .iter()
@@ -1086,7 +1057,6 @@ pub(crate) fn plan_lane_reservation_ownership(
         .iter()
         .map(|record| record.key.signed_transaction_hash)
         .collect::<BTreeSet<_>>();
-
     // Existing barriers are themselves crash state. Fold each into the same
     // classifier input and authenticate its exact Kura retirement before any
     // Queue operation is resumed.
@@ -1152,7 +1122,6 @@ pub(crate) fn plan_lane_reservation_ownership(
             }
         }
     }
-
     // A crash inside the grouped Commit or ForgetCommit phases can leave an
     // exact prefix/suffix split between live records, Commit barriers, and
     // already-forgotten members. Fold the two remaining owner forms into one
@@ -1194,7 +1163,6 @@ pub(crate) fn plan_lane_reservation_ownership(
             }
         }
     }
-
     for input in &mut inputs {
         if input.group.identity.proposal_height > active_context.height {
             return Err(V2ReservationLifecycleError::FutureReservation {
@@ -1253,7 +1221,6 @@ pub(crate) fn plan_lane_reservation_ownership(
             });
         }
     }
-
     // Reconstruct each committed proposal's complete canonical ordered group
     // from its exact indexed MergeLedger carrier. Queue ownership can be an
     // exact non-empty phase prefix/suffix after a grouped crash, but the
@@ -1504,7 +1471,6 @@ pub(crate) fn plan_lane_reservation_ownership(
         )?);
         input.group = full_group;
     }
-
     // Pending merge evidence is bounded by Kura's configured sidecar budget.
     // Index it once so a partial or split group is rejected before mutations.
     let mut pending_by_transaction = BTreeMap::new();
@@ -1525,7 +1491,6 @@ pub(crate) fn plan_lane_reservation_ownership(
         }
         pending_by_entry.insert(entry_hash, keys);
     }
-
     let evidence_inputs = inputs
         .iter()
         .filter(|input| !input.committed)
@@ -1549,7 +1514,6 @@ pub(crate) fn plan_lane_reservation_ownership(
     // authority once and use exact in-memory indexes for every group and
     // canonical installation considered by this immutable planning pass.
     let historical_inventory = HistoricalAutonomousRecoveryInventory::read(kura)?;
-
     let mut actions = Vec::with_capacity(inputs.len());
     let mut direct_release_groups = BTreeSet::new();
     let mut missing_bodies = BTreeMap::<u64, CanonicalExecutedBlockNeedV1>::new();
@@ -1626,7 +1590,6 @@ pub(crate) fn plan_lane_reservation_ownership(
                 continue;
             }
         };
-
         let action = match group_evidence {
             AutonomousLaneReservationEvidenceV1::StrictlyAbsent => {
                 if pending_merge || input.release_barrier.is_some() {
@@ -1895,7 +1858,6 @@ pub(crate) fn plan_lane_reservation_ownership(
         actions.push(action);
     }
     debug_assert!(evidence.next().is_none());
-
     // Materialize the direct-release vector from Queue's immutable global FIFO
     // snapshot, never from digest or proposal-group order.
     let direct_release = snapshot
@@ -1904,14 +1866,12 @@ pub(crate) fn plan_lane_reservation_ownership(
         .filter(|record| direct_release_groups.contains(&record.group))
         .map(|record| record.key)
         .collect::<Vec<_>>();
-
     // Startup has not constructed lane work yet. Re-observe the complete
     // ownership union atomically and reject any unexpected concurrent owner
     // transition before the first mutation.
     if queue.lane_reservation_reconciliation_snapshot()? != snapshot {
         return Err(V2ReservationLifecycleError::QueueSnapshotChanged);
     }
-
     if !missing_bodies.is_empty() {
         return Ok(
             LaneReservationReconciliationPlanning::RecoverCanonicalBodies(
@@ -1919,7 +1879,6 @@ pub(crate) fn plan_lane_reservation_ownership(
             ),
         );
     }
-
     if !historical_installs.is_empty() {
         return Ok(
             LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(
@@ -1927,14 +1886,12 @@ pub(crate) fn plan_lane_reservation_ownership(
             ),
         );
     }
-
     let replay_receipt = match recovered_receipt {
         Some(receipt) => receipt,
         None => queue
             .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)?
             .ok_or(V2ReservationLifecycleError::QueueSnapshotChanged)?,
     };
-
     Ok(LaneReservationReconciliationPlanning::Ready(
         LaneReservationReconciliationPlan {
             snapshot,
@@ -1947,7 +1904,6 @@ pub(crate) fn plan_lane_reservation_ownership(
         },
     ))
 }
-
 /// Apply one previously completed immutable reconciliation plan.
 ///
 /// The Queue snapshot and every crash-barrier family are rechecked before the
@@ -2011,7 +1967,6 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
     {
         return Err(V2ReservationLifecycleError::QueueSnapshotChanged);
     }
-
     // Mutations are independently idempotent and ordered so committed work is
     // consumed before any release.
     let mut summary = LaneReservationReconciliationSummary {
@@ -2142,7 +2097,6 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
     queue.complete_lane_reservation_startup_reconciliation(replay_receipt)?;
     Ok(summary)
 }
-
 fn application_typed_identity<T>(
     domain: u8,
     kind: u8,
@@ -2150,11 +2104,9 @@ fn application_typed_identity<T>(
 ) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
-
 fn application_hash_identity(domain: u8, kind: u8, hash: Hash) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
-
 fn application_decision_projection(
     decision: wire::QuorumCertificateRef,
 ) -> ProductionDecisionIdentityProjection {
@@ -2196,7 +2148,6 @@ fn application_decision_projection(
         ),
     }
 }
-
 fn application_certificate_projection(
     certificate: &wire::QuorumCertificate,
 ) -> Option<ProductionQuorumCertificateIdentityProjection> {
@@ -2211,7 +2162,6 @@ fn application_certificate_projection(
         aggregate_signature_len: u64::try_from(certificate.aggregate_signature.len()).ok()?,
     })
 }
-
 fn application_body_projection(
     receipt: &ValidatedBodyReceipt,
 ) -> ProductionDurableBodyIdentityProjection {
@@ -2252,7 +2202,6 @@ fn application_body_projection(
         ),
     }
 }
-
 fn prospective_application_refinement_projection(
     context: &wire::HeightContext,
     task: &ApplyTask,
@@ -2342,7 +2291,6 @@ fn prospective_application_refinement_projection(
         completion_work_id: task.id().get(),
     })
 }
-
 /// Complete native identity crossing the durable application boundary.
 ///
 /// The type is process-local and intentionally has no codec implementation.
@@ -2374,173 +2322,139 @@ pub(crate) struct DurableApplicationEvidence {
     completion_work_id: EffectWorkId,
     state_height_after: usize,
 }
-
 impl DurableApplicationEvidence {
     /// Reducer incarnation which created the Apply task.
     pub(crate) const fn task_tag(&self) -> EventTag {
         self.task_tag
     }
-
     /// Reducer incarnation captured by the executor when it authorized Apply.
     pub(crate) const fn owner_tag(&self) -> EventTag {
         self.owner_tag
     }
-
     /// Actor-local task generation, distinct from consensus view.
     pub(crate) const fn task_generation(&self) -> u64 {
         self.task_generation
     }
-
     /// Stable asynchronous work owner assigned to the Apply task.
     pub(crate) const fn task_work_id(&self) -> EffectWorkId {
         self.task_work_id
     }
-
     /// Complete immutable height context governing application.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
     }
-
     /// Complete CommitQC, including canonical signers and aggregate signature.
     pub(crate) const fn commit_qc(&self) -> &wire::QuorumCertificate {
         &self.commit_qc
     }
-
     /// Exact round carried by the CommitQC.
     pub(crate) const fn commit_round(&self) -> wire::ConsensusRound {
         self.commit_qc.round
     }
-
     /// Exact phase carried by the CommitQC.
     pub(crate) const fn commit_phase(&self) -> wire::GlobalPhase {
         self.commit_qc.phase
     }
-
     /// Canonically ordered CommitQC signer indices.
     pub(crate) fn commit_signers(&self) -> &[wire::ValidatorIndex] {
         &self.commit_qc.signers
     }
-
     /// Complete CommitQC aggregate-signature evidence.
     pub(crate) fn commit_aggregate_signature(&self) -> &[u8] {
         &self.commit_qc.aggregate_signature
     }
-
     /// Exact decided subject repeated independently by the Apply task.
     pub(crate) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Exact deterministic execution commitment authenticated by the CommitQC.
     pub(crate) const fn execution_commitment(&self) -> wire::ExecutionCommitment {
         self.execution_commitment
     }
-
     /// Durable validation receipt for the proposal bytes being applied.
     pub(crate) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
         &self.validated_receipt
     }
-
     /// Frozen context carried by the validated durable body receipt.
     pub(crate) const fn validated_context_id(&self) -> wire::HeightContextId {
         self.validated_receipt.durable().context_id()
     }
-
     /// Proposal round carried by the validated durable body receipt.
     pub(crate) const fn validated_round(&self) -> wire::ConsensusRound {
         self.validated_receipt.durable().round()
     }
-
     /// Proposal subject carried by the validated durable body receipt.
     pub(crate) const fn validated_subject(&self) -> wire::BlockSubject {
         self.validated_receipt.durable().subject()
     }
-
     /// Manifest identity carried by the validated durable body receipt.
     pub(crate) const fn validated_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
         self.validated_manifest_hash
     }
-
     /// Hash of the complete checksummed body frame that passed validation.
     pub(crate) const fn validated_body_frame_hash(&self) -> Hash {
         self.validated_body_frame_hash
     }
-
     /// Header identity of the resultless proposal loaded from the body store.
     pub(crate) const fn proposal_block_hash(&self) -> HashOf<BlockHeader> {
         self.proposal_block_hash
     }
-
     /// Hash of the exact canonical resultless proposal wire.
     pub(crate) const fn canonical_proposal_wire_hash(&self) -> Hash {
         self.canonical_proposal_wire_hash
     }
-
     /// Header identity of the canonical result-bearing committed block.
     pub(crate) const fn committed_block_hash(&self) -> HashOf<BlockHeader> {
         self.committed_block_hash
     }
-
     /// Hash of the exact canonical result-bearing committed block wire.
     pub(crate) const fn executed_block_wire_hash(&self) -> Hash {
         self.executed_block_wire_hash
     }
-
     /// Complete non-forgeable Kura finality receipt.
     pub(crate) const fn kura_receipt(&self) -> &KuraV2CommitReceipt {
         &self.kura_receipt
     }
-
     /// Height durably acknowledged by Kura.
     pub(crate) fn kura_height(&self) -> u64 {
         self.kura_receipt.height()
     }
-
     /// Canonical block header hash durably acknowledged by Kura.
     pub(crate) fn kura_block_hash(&self) -> HashOf<BlockHeader> {
         self.kura_receipt.block_hash()
     }
-
     /// Frozen height-context identifier durably acknowledged by Kura.
     pub(crate) fn kura_context_id(&self) -> wire::HeightContextId {
         self.kura_receipt.context_id()
     }
-
     /// Exact subject durably acknowledged by Kura.
     pub(crate) fn kura_subject(&self) -> wire::BlockSubject {
         self.kura_receipt.subject()
     }
-
     /// Exact CommitQC reference durably acknowledged by Kura.
     pub(crate) fn kura_certificate(&self) -> wire::QuorumCertificateRef {
         self.kura_receipt.certificate()
     }
-
     /// Exact finality-artifact identity durably acknowledged by Kura.
     pub(crate) fn kura_artifact_hash(&self) -> HashOf<wire::finality::V2FinalityArtifact> {
         self.kura_receipt.artifact_hash()
     }
-
     /// Complete finality artifact stored beside the committed block.
     pub(crate) const fn artifact(&self) -> &wire::finality::V2FinalityArtifact {
         &self.artifact
     }
-
     /// Native typed hash of the complete finality artifact.
     pub(crate) const fn artifact_hash(&self) -> HashOf<wire::finality::V2FinalityArtifact> {
         self.artifact_hash
     }
-
     /// Work identifier carried by the typed completion.
     pub(crate) const fn completion_work_id(&self) -> EffectWorkId {
         self.completion_work_id
     }
-
     /// Exact committed State height observed after all durable publications.
     pub(crate) const fn state_height_after(&self) -> usize {
         self.state_height_after
     }
-
     /// Project each independently retained application identity into the pure
     /// production/Verus kernel. Cardinalities fail closed if they cannot be
     /// represented by the shared fixed-width surface.
@@ -2627,7 +2541,6 @@ impl DurableApplicationEvidence {
             completion_work_id: self.completion_work_id().get(),
         })
     }
-
     /// Check every redundant task, wire, durability, and completion identity.
     pub(crate) fn is_exact(&self) -> bool {
         let context = self.context();
@@ -2683,13 +2596,11 @@ impl DurableApplicationEvidence {
             && self.state_height_after() == context_height
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AuthenticatedCarrierApplicationProjection {
     reservation_group: LaneQueueReservationGroupBindingV1,
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 }
-
 impl AuthenticatedCarrierApplicationProjection {
     fn checked_transition(
         self,
@@ -2701,14 +2612,12 @@ impl AuthenticatedCarrierApplicationProjection {
             "autonomous carrier failed the composed first-release transition gate".to_owned()
         })
     }
-
     fn queue_cleanup_authorization(
         self,
     ) -> Result<AutonomousLaneQueueCarrierCleanupAuthorization, String> {
         AutonomousLaneQueueCarrierCleanupAuthorization::from_authenticated(self)
     }
 }
-
 /// Move-only authority for one idempotent post-carrier evidence repair.
 ///
 /// Construction starts from the exact finality-bound autonomous source bundle
@@ -2723,7 +2632,6 @@ pub(crate) struct PostCarrierEvidenceRepairAuthorization {
     reservation_group: LaneQueueReservationGroupBindingV1,
     checked_repair: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
 }
-
 impl PostCarrierEvidenceRepairAuthorization {
     fn from_authenticated(
         application: AuthenticatedCarrierApplicationProjection,
@@ -2760,7 +2668,6 @@ impl PostCarrierEvidenceRepairAuthorization {
             checked_repair,
         })
     }
-
     /// Consume this authority against Kura's exact committed carrier identity.
     pub(crate) fn consume_for_kura(
         self,
@@ -2791,7 +2698,6 @@ impl PostCarrierEvidenceRepairAuthorization {
             .then_some(projection)
     }
 }
-
 /// Authenticate one post-carrier repair token per autonomous lane in a
 /// committed execution entry.
 ///
@@ -2821,7 +2727,6 @@ pub(crate) fn post_carrier_evidence_repair_authorizations(
         })
         .collect()
 }
-
 /// Move-only authority for Queue's complete post-carrier reservation cleanup.
 ///
 /// Only this module can construct the production form, after decoding and
@@ -2834,7 +2739,6 @@ pub(crate) struct AutonomousLaneQueueCarrierCleanupAuthorization {
     checked_apply_carrier:
         CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
 }
-
 impl AutonomousLaneQueueCarrierCleanupAuthorization {
     fn from_authenticated(
         application: AuthenticatedCarrierApplicationProjection,
@@ -2844,7 +2748,6 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
             checked_apply_carrier: application.checked_transition()?,
         })
     }
-
     fn validated_projection_for_group(
         &self,
         expected_group: &LaneQueueReservationGroupBindingV1,
@@ -2878,7 +2781,6 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
             && projection.after.decision.applied_by == projection.actor)
             .then_some(projection)
     }
-
     /// Lend the exact authenticated post-`ApplyCarrier` state to the immutable startup planner.
     ///
     /// The move-only cleanup proof remains owned by the plan and must still be consumed at Queue
@@ -2891,7 +2793,6 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
         self.validated_projection_for_group(expected_group)
             .map(|projection| projection.after)
     }
-
     /// Consume this proof for Queue's exact ordered group and return the
     /// accepted ApplyCarrier projection whose `after` state seeds cleanup.
     pub(crate) fn consume_for_queue(
@@ -2903,7 +2804,6 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
         (projection == expected_projection).then_some(projection)
     }
 }
-
 fn authenticated_autonomous_carrier_application_projections(
     reference: &CertifiedMergeLedgerReference,
     entry: &MergeLedgerEntry,
@@ -2923,7 +2823,6 @@ fn authenticated_autonomous_carrier_application_projections(
     {
         return Err("autonomous merge execution batch identity or lane set is invalid".to_owned());
     }
-
     let mut applications = Vec::with_capacity(execution_batch.lanes.len());
     for lane in &execution_batch.lanes {
         let authenticated_bundle = Kura::decode_autonomous_lane_merge_bundle(
@@ -2967,7 +2866,6 @@ fn authenticated_autonomous_carrier_application_projections(
                 "autonomous merge lane differs from its authenticated source bundle".to_owned(),
             );
         }
-
         let descriptor = &authenticated_bundle.certified.proposal.descriptor;
         let validator_count = u8::try_from(descriptor.validator_set.len())
             .map_err(|_| "autonomous carrier committee exceeds the refinement width".to_owned())?;
@@ -3129,13 +3027,11 @@ fn authenticated_autonomous_carrier_application_projections(
     }
     Ok(applications)
 }
-
 #[derive(Debug)]
 struct CheckedCarrierApplication {
     checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 }
-
 /// Move-only authorization for every autonomous lane carried by one canonical block.
 ///
 /// The complete compact merge reference and proposal identity are retained with the
@@ -3148,7 +3044,6 @@ struct CheckedCarrierApplications {
     expected_lane_count: usize,
     applications: Vec<CheckedCarrierApplication>,
 }
-
 impl CheckedCarrierApplications {
     fn for_block(block: &SignedBlock) -> Self {
         Self {
@@ -3158,7 +3053,6 @@ impl CheckedCarrierApplications {
             applications: Vec::new(),
         }
     }
-
     fn bind_execution_batch(
         &mut self,
         reference: &CertifiedMergeLedgerReference,
@@ -3177,7 +3071,6 @@ impl CheckedCarrierApplications {
         self.expected_lane_count = lane_count;
         Ok(())
     }
-
     fn push(
         &mut self,
         checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
@@ -3195,7 +3088,6 @@ impl CheckedCarrierApplications {
         });
         Ok(())
     }
-
     fn consume_for_state_commit(
         self,
         carrier_block_hash: HashOf<BlockHeader>,
@@ -3240,7 +3132,6 @@ impl CheckedCarrierApplications {
         Ok(())
     }
 }
-
 impl StateBlockCommitAuthorization for CheckedCarrierApplications {
     fn consume_for_state_commit(
         self: Box<Self>,
@@ -3255,7 +3146,6 @@ impl StateBlockCommitAuthorization for CheckedCarrierApplications {
         .map_err(str::to_owned)
     }
 }
-
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -3273,7 +3163,6 @@ pub(crate) struct V2ApplyService {
     #[cfg(test)]
     test_failures: tests::FailureInjection,
 }
-
 /// Exact recovered Decision Apply material admitted by the lifecycle registry.
 ///
 /// This move-only task is deliberately unrelated to reducer [`ApplyTask`]
@@ -3287,7 +3176,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyTaskV1 {
     certificate: wire::QuorumCertificate,
     validated_receipt: ValidatedBodyReceipt,
 }
-
 impl RecoveredDecisionApplyTaskV1 {
     /// Bind the sole registry-minted dispatch identity to its closed carrier material.
     pub(in crate::sumeragi) fn from_registry_projection(
@@ -3303,28 +3191,23 @@ impl RecoveredDecisionApplyTaskV1 {
             validated_receipt,
         }
     }
-
     /// Return the closed queue key without exposing dispatch authority.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
         self.dispatch_identity.key()
     }
-
     /// Return the exact decided subject.
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Return the complete CommitQC authorizing application.
     pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
         &self.certificate
     }
-
     /// Return the exact durable validation receipt selected by the carrier.
     pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
         &self.validated_receipt
     }
 }
-
 /// Durable recovered Decision Apply result routed only to the lifecycle owner.
 #[must_use = "a recovered Decision Apply completion must be settled by its lifecycle owner"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionV1 {
@@ -3335,39 +3218,32 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionV1 {
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
 }
-
 impl RecoveredDecisionApplyCompletionV1 {
     /// Return the immutable queue key retained from dispatch.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
         self.dispatch_identity.key()
     }
-
     /// Return the exact decided subject retained from the registry carrier.
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Return the complete CommitQC retained from the registry carrier.
     pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
         &self.certificate
     }
-
     /// Return the exact durable validated body selected by the registry carrier.
     pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
         &self.validated_receipt
     }
-
     /// Return Kura's exact durable finality receipt.
     pub(in crate::sumeragi) const fn receipt(&self) -> &KuraV2CommitReceipt {
         &self.receipt
     }
-
     /// Return the complete canonical finality artifact.
     pub(in crate::sumeragi) const fn artifact(&self) -> &wire::finality::V2FinalityArtifact {
         &self.artifact
     }
 }
-
 /// Dedicated worker result for one recovered Decision Apply dispatch.
 ///
 /// A missing merge sidecar remains a typed owner retry. Neither branch enters
@@ -3384,7 +3260,6 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyWorkerResultV1 {
         reference: CertifiedMergeLedgerReference,
     },
 }
-
 impl RecoveredDecisionApplyWorkerResultV1 {
     /// Return the immutable queue key common to both terminal and retry outcomes.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
@@ -3393,38 +3268,12 @@ impl RecoveredDecisionApplyWorkerResultV1 {
             Self::Deferred { task, .. } => task.dispatch_key(),
         }
     }
-
-    /// Return the exact decided subject retained by either result branch.
-    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
-        match self {
-            Self::Applied(completion) => completion.subject(),
-            Self::Deferred { task, .. } => task.subject(),
-        }
-    }
-
-    /// Return the complete CommitQC retained by either result branch.
-    pub(in crate::sumeragi) const fn certificate(&self) -> &wire::QuorumCertificate {
-        match self {
-            Self::Applied(completion) => completion.certificate(),
-            Self::Deferred { task, .. } => task.certificate(),
-        }
-    }
-
-    /// Return the exact durable validated body retained by either result branch.
-    pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
-        match self {
-            Self::Applied(completion) => completion.validated_receipt(),
-            Self::Deferred { task, .. } => task.validated_receipt(),
-        }
-    }
 }
-
 #[derive(Clone, Copy)]
 enum ExactApplyTaskRef<'task> {
     Ordinary(&'task ApplyTask),
     Recovered(&'task RecoveredDecisionApplyTaskV1),
 }
-
 impl<'task> ExactApplyTaskRef<'task> {
     const fn subject(self) -> wire::BlockSubject {
         match self {
@@ -3432,14 +3281,12 @@ impl<'task> ExactApplyTaskRef<'task> {
             Self::Recovered(task) => task.subject(),
         }
     }
-
     const fn certificate(self) -> &'task wire::QuorumCertificate {
         match self {
             Self::Ordinary(task) => task.certificate(),
             Self::Recovered(task) => task.certificate(),
         }
     }
-
     const fn validated_receipt(self) -> &'task ValidatedBodyReceipt {
         match self {
             Self::Ordinary(task) => task.validated_receipt(),
@@ -3447,7 +3294,6 @@ impl<'task> ExactApplyTaskRef<'task> {
         }
     }
 }
-
 struct ExactApplyExecutionMaterial {
     context: wire::HeightContext,
     commit_qc: wire::QuorumCertificate,
@@ -3466,7 +3312,6 @@ struct ExactApplyExecutionMaterial {
     state_height_after: usize,
     ordinary_projection: Option<ProductionApplicationTraceProjection>,
 }
-
 impl ExactApplyExecutionMaterial {
     fn exactly_matches_recovered_task(&self, task: &RecoveredDecisionApplyTaskV1) -> bool {
         let certificate = task.certificate();
@@ -3512,7 +3357,6 @@ impl ExactApplyExecutionMaterial {
             && self.state_height_after == context_height
     }
 }
-
 /// Opaque proof that Kura authenticated the sole finalized subject for recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedRecoveredFinalitySubject {
@@ -3520,18 +3364,15 @@ pub(crate) struct VerifiedRecoveredFinalitySubject {
     height: wire::Height,
     subject: wire::BlockSubject,
 }
-
 impl VerifiedRecoveredFinalitySubject {
     /// Return the cryptographically authenticated finalized subject.
     pub(crate) const fn subject(self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Return whether this proof belongs to the exact body-store context.
     pub(crate) fn authorizes_context(self, context: &wire::HeightContext) -> bool {
         self.context_id == context.id() && self.height == context.height
     }
-
     #[cfg(test)]
     pub(crate) fn for_test(context: &wire::HeightContext, subject: wire::BlockSubject) -> Self {
         Self {
@@ -3541,7 +3382,6 @@ impl VerifiedRecoveredFinalitySubject {
         }
     }
 }
-
 impl V2ApplyService {
     /// Reconstruct compact relay authority from immutable block/finality data.
     ///
@@ -3622,7 +3462,6 @@ impl V2ApplyService {
         }
         Ok(())
     }
-
     fn classify_native_amx_evidence_byte_budget_error(
         error: NativeAmxParticipantApplicationEvidenceByteBudgetError,
     ) -> V2ApplyError {
@@ -3636,7 +3475,6 @@ impl V2ApplyService {
             }
         }
     }
-
     fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
@@ -3672,7 +3510,6 @@ impl V2ApplyService {
             ))
         }
     }
-
     fn validate_lane_payload_plan(
         &self,
         context: &wire::HeightContext,
@@ -3765,7 +3602,6 @@ impl V2ApplyService {
             recovered.unavailable_indices.len(),
         )))
     }
-
     /// Construct the serialized state/Kura application adapter.
     pub(crate) fn new(
         state: Arc<State>,
@@ -3798,7 +3634,6 @@ impl V2ApplyService {
             test_failures: tests::FailureInjection::default(),
         }
     }
-
     /// Compare this exact immutable service owner with one lifecycle launch.
     ///
     /// This fixed oracle exposes none of the retained execution dependencies.
@@ -3817,7 +3652,6 @@ impl V2ApplyService {
             && self.network_id == context.network_id
             && self.validator_set_pops == validator_set_pops
     }
-
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
     pub(crate) fn execute(
         &self,
@@ -3854,7 +3688,6 @@ impl V2ApplyService {
         };
         self.finish_durable_apply_completion_against(evidence, prospective_application)
     }
-
     /// Execute one registry-owned recovered Decision Apply task.
     ///
     /// The task and its dispatch identity are consumed together. A retryable
@@ -3898,7 +3731,6 @@ impl V2ApplyService {
             },
         ))
     }
-
     fn execute_exact_apply(
         &self,
         context: &wire::HeightContext,
@@ -3975,7 +3807,6 @@ impl V2ApplyService {
             }
             ExactApplyTaskRef::Recovered(_) => None,
         };
-
         let height = usize::try_from(context.height).map_err(|_| V2ApplyError::HeightOverflow)?;
         let height = NonZeroUsize::new(height).ok_or(V2ApplyError::HeightOverflow)?;
         let state_height = self.state.committed_height();
@@ -3989,7 +3820,6 @@ impl V2ApplyService {
         if durable_hash.is_some_and(|hash| hash != task.subject().block_hash) {
             return Err(V2ApplyError::KuraConflict);
         }
-
         if state_height < height.get() {
             if state_height.saturating_add(1) != height.get() {
                 return Err(V2ApplyError::StateGap {
@@ -4002,7 +3832,6 @@ impl V2ApplyService {
             // would manufacture a sidecar for state that Kura cannot identify.
             return Err(V2ApplyError::StateAheadOfKura);
         }
-
         // The durable CommitQC and exact validated body now identify the only
         // carrier that can ever apply at this height. Keep its immutable
         // compact reference (including an earlier lock origin view) and
@@ -4011,7 +3840,6 @@ impl V2ApplyService {
         // decided reference survives, while no losing carrier can become
         // canonical.
         self.retain_decided_merge_sidecar(context, &body)?;
-
         // For a fresh autonomous carrier, extract one checked ApplyCarrier
         // transition per independently certified lane. The compact merge
         // reference is part of the finality-authenticated proposal; its exact
@@ -4095,7 +3923,6 @@ impl V2ApplyService {
         let executed_block_wire_hash = committed_block
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-
         // Repair or confirm the durable finality boundary before any derived
         // publication. Fresh application already crossed this boundary inside
         // `validate_and_apply`; these calls are deliberately idempotent so
@@ -4106,9 +3933,7 @@ impl V2ApplyService {
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
             })?;
-
         self.publish_finalized_lane_relays(committed_block.as_ref(), &artifact)?;
-
         // The strict restart-repair path authenticates Native AMX evidence
         // against both finality and the post-WSV Kura metadata join. Publish
         // that join first on every fresh or recovery attempt, then repair or
@@ -4137,9 +3962,7 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
-
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
-
         self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
             .map_err(|error| {
@@ -4148,7 +3971,6 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
-
         // Queue ownership is the final durable boundary after Kura, WSV, and
         // every post-carrier evidence repair. An exact retry reaches this point
         // even when State already crossed its commit boundary, so a crash
@@ -4196,7 +4018,6 @@ impl V2ApplyService {
             ordinary_projection,
         })
     }
-
     fn finish_durable_apply_completion_against(
         &self,
         evidence: DurableApplicationEvidence,
@@ -4228,7 +4049,6 @@ impl V2ApplyService {
             evidence.artifact,
         ))
     }
-
     fn publish_committed_block_merge_entry(
         &self,
         committed_block: &SignedBlock,
@@ -4295,7 +4115,6 @@ impl V2ApplyService {
         }
         Ok(())
     }
-
     fn retain_decided_merge_sidecar(
         &self,
         context: &wire::HeightContext,
@@ -4308,7 +4127,6 @@ impl V2ApplyService {
             .retain_pending_certified_merge_entry_for_locked_carrier(context.height, reference)?;
         Ok(())
     }
-
     fn validate_prospective_autoscale_retirement_queue(
         &self,
         block: &SignedBlock,
@@ -4329,7 +4147,6 @@ impl V2ApplyService {
             lane_incarnation,
         )
     }
-
     fn validate_autoscale_retirement_queue_binding(
         queue_retirement_observer: &QueueLaneRetirementObserver<'_>,
         lane_id: LaneId,
@@ -4347,7 +4164,6 @@ impl V2ApplyService {
         }
         Ok(())
     }
-
     /// Run the exact production proposal validator without applying its state
     /// overlay.
     ///
@@ -4417,7 +4233,6 @@ impl V2ApplyService {
             .map_err(Self::classify_native_amx_evidence_byte_budget_error)?;
         Ok(execution_commitment)
     }
-
     /// Revalidate one checksummed restart marker before it can restore vote authority.
     ///
     /// An unfinished height re-executes the ordinary deterministic candidate
@@ -4454,7 +4269,6 @@ impl V2ApplyService {
         }
         self.validate_candidate(context, body)
     }
-
     /// Return the sole subject allowed to recover marker authority after finality.
     pub(crate) fn recovered_finality_subject(
         &self,
@@ -4474,7 +4288,6 @@ impl V2ApplyService {
             subject: artifact.subject,
         }))
     }
-
     fn validate_and_apply(
         &self,
         context: &wire::HeightContext,
@@ -4564,7 +4377,6 @@ impl V2ApplyService {
             .commit_with_verified_v2_artifact(artifact, actual_execution_commitment)
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(_, error)| V2ApplyError::Commit(error.to_string()))?;
-
         // Kura owns the first irreversible commit point. This call is also the
         // idempotent repair boundary for a durable block whose merge
         // association was interrupted after its block fsync.
@@ -4635,7 +4447,6 @@ impl V2ApplyService {
                 &"read-back token differs from the exact State frontier projection",
             ));
         }
-
         // `apply_without_execution_with_verified_v2_finality` stages the
         // Native participant frontiers in the State overlay. Do not construct
         // that overlay until every canonical manifest leaf has a durable,
@@ -4653,7 +4464,6 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
-
         // Generic block cleanup must not consume QueuePlan or reservation
         // ownership for autonomous entrypoints. The exact full merge entry has
         // now been deterministically staged, re-executed, and authorized in
@@ -4668,7 +4478,6 @@ impl V2ApplyService {
                 &error,
             )
         })?;
-
         // Stage the exact would-be committed WSV hash while the validated
         // `StateBlock` overlay is still available. Kura is already durable at
         // this point, so the checkpoint must cross its own fsync boundary
@@ -4800,7 +4609,6 @@ impl V2ApplyService {
                 );
             }
         }
-
         self.queue.remove_committed_hashes(
             committed_block
                 .as_ref()
@@ -4826,7 +4634,6 @@ impl V2ApplyService {
                 "autonomous carrier completed Queue Nexus revalidation"
             );
         }
-
         for event in pipeline_events {
             let _ = self.events_sender.send(EventBox::Pipeline(event));
         }
@@ -4835,7 +4642,6 @@ impl V2ApplyService {
         }
         Ok(())
     }
-
     fn persist_post_apply_metadata(
         &self,
         context: &wire::HeightContext,
@@ -4853,9 +4659,7 @@ impl V2ApplyService {
         Ok(())
     }
 }
-
 include!("v2_apply/error_recovery.rs");
-
 #[cfg(test)]
 #[path = "v2_apply_tests.rs"]
 mod tests;

@@ -2,11 +2,9 @@ impl MergeLedgerLog {
     fn snapshot(&self) -> Vec<MergeLedgerEntry> {
         self.entries.clone()
     }
-
     fn latest_snapshot(&self, limit: usize) -> Vec<MergeLedgerEntry> {
         self.entries.iter().rev().take(limit).cloned().collect()
     }
-
     fn contains_hash(&mut self, hash: HashOf<MergeLedgerEntry>) -> bool {
         #[cfg(test)]
         {
@@ -14,7 +12,6 @@ impl MergeLedgerLog {
         }
         self.frames_by_hash.contains_key(&hash)
     }
-
     /// Provisional snapshot authentication must not open, create, or repair the
     /// unauthenticated durable merge log.
     fn startup(path: &Path, cache_capacity: usize, provisional: bool) -> Result<Self> {
@@ -24,7 +21,6 @@ impl MergeLedgerLog {
             Self::open_at(path, cache_capacity)
         }
     }
-
     fn validate_execution_entry_index_update(
         entries: &BTreeMap<(LaneId, DataSpaceId, Hash), (u64, HashOf<MergeLedgerEntry>)>,
         entry: &MergeLedgerEntry,
@@ -57,7 +53,6 @@ impl MergeLedgerLog {
         }
         Ok(())
     }
-
     fn record_execution_entry_unchecked(
         entries: &mut BTreeMap<(LaneId, DataSpaceId, Hash), (u64, HashOf<MergeLedgerEntry>)>,
         entry: &MergeLedgerEntry,
@@ -79,7 +74,6 @@ impl MergeLedgerLog {
             );
         }
     }
-
     /// Source-bound reconstruction guard shared by durable log load and in-memory
     /// truncation. `preflight_append` invokes the same validator before any frame
     /// bytes are written, so an equal-height fork can never be silently selected.
@@ -91,7 +85,6 @@ impl MergeLedgerLog {
         Self::record_execution_entry_unchecked(entries, entry);
         Ok(())
     }
-
     fn execution_index_for_entries(
         ordered_entries: &[MergeLedgerEntry],
     ) -> Result<BTreeMap<(LaneId, DataSpaceId, Hash), (u64, HashOf<MergeLedgerEntry>)>> {
@@ -101,7 +94,6 @@ impl MergeLedgerLog {
         }
         Ok(index)
     }
-
     #[cfg(test)]
     fn latest_execution_heights(&self) -> BTreeMap<(LaneId, DataSpaceId, Hash), u64> {
         self.latest_execution_entries
@@ -109,7 +101,6 @@ impl MergeLedgerLog {
             .map(|(route, (height, _))| (*route, *height))
             .collect()
     }
-
     fn latest_execution_height(
         &self,
         lane_id: LaneId,
@@ -120,7 +111,6 @@ impl MergeLedgerLog {
             .get(&(lane_id, dataspace_id, lane_incarnation))
             .map(|(height, _)| *height)
     }
-
     fn latest_execution_entry(
         &self,
         lane_id: LaneId,
@@ -131,7 +121,6 @@ impl MergeLedgerLog {
             .get(&(lane_id, dataspace_id, lane_incarnation))
             .copied()
     }
-
     /// Reconstruct a bounded exact identity-to-carrier map in chronological order.
     ///
     /// The route-latest index remains the constant-time tip path. Startup calls
@@ -203,7 +192,6 @@ impl MergeLedgerLog {
         }
         Ok(found)
     }
-
     fn has_execution_for_route(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
         self.latest_execution_entries
             .keys()
@@ -211,14 +199,12 @@ impl MergeLedgerLog {
                 *candidate_lane == lane_id && *candidate_dataspace == dataspace_id
             })
     }
-
     fn entry_by_hash(
         &mut self,
         hash: HashOf<MergeLedgerEntry>,
     ) -> Result<Option<MergeLedgerEntry>> {
         self.entry_by_hash_with_append_repair_policy(hash, true)
     }
-
     fn entry_by_hash_with_append_repair_policy(
         &mut self,
         hash: HashOf<MergeLedgerEntry>,

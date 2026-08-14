@@ -1,20 +1,16 @@
 //! Adversarial signature, key, numeric, and confidential-input admission tests.
-
+use super::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
     Python,
     types::{PyBytes, PyDict},
 };
-
-use super::*;
-
 fn ensure_python() {
     static INIT: OnceCell<()> = OnceCell::new();
     INIT.get_or_init(|| {
         Python::initialize();
     });
 }
-
 #[test]
 fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
     ensure_python();
@@ -29,12 +25,10 @@ fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
         .is_err()
     );
 }
-
 fn py_err_message(err: pyo3::PyErr) -> String {
     ensure_python();
     Python::attach(|py| err.value(py).to_string())
 }
-
 #[test]
 fn asset_numeric_scale_adapter_rejects_values_outside_numeric_v1() {
     assert_eq!(
@@ -55,7 +49,6 @@ fn asset_numeric_scale_adapter_rejects_values_outside_numeric_v1() {
         None
     );
 }
-
 const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
     ("all-zero", [0u8; 32], "all zero"),
     (
@@ -76,7 +69,6 @@ const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
         "non-canonical",
     ),
 ];
-
 #[test]
 fn checked_fallback_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
     let empty = py_err_message(
@@ -88,7 +80,6 @@ fn checked_fallback_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
             && empty.contains("signature payload must not be empty"),
         "unexpected empty-signature error: {empty}"
     );
-
     let all_zero = py_err_message(
         checked_signature_from_bytes_for_algorithm(&[0u8; 64], Algorithm::BlsNormal, "signature")
             .expect_err("all-zero signature must fail"),
@@ -98,13 +89,11 @@ fn checked_fallback_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
             && all_zero.contains("signature payload must not be all zero"),
         "unexpected all-zero signature error: {all_zero}"
     );
-
     let accepted =
         checked_signature_from_bytes_for_algorithm(&[0x42; 64], Algorithm::BlsNormal, "signature")
             .expect("nonzero opaque signature material is admitted for backend verification");
     assert_eq!(accepted.payload(), &[0x42; 64]);
 }
-
 #[test]
 fn checked_ed25519_signature_from_bytes_rejects_malformed_r_before_backend() {
     const SMALL_ORDER_R: [u8; 32] = [
@@ -116,7 +105,6 @@ fn checked_ed25519_signature_from_bytes_rejects_malformed_r_before_backend() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let key_pair = KeyPair::try_from_seed(
         b"python-wallet-ed25519-signature-r-admission".to_vec(),
         Algorithm::Ed25519,
@@ -133,7 +121,6 @@ fn checked_ed25519_signature_from_bytes_rejects_malformed_r_before_backend() {
         "signature",
     )
     .expect("valid Ed25519 signature material is admitted");
-
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_R),
         ("noncanonical", NONCANONICAL_R),
@@ -150,7 +137,6 @@ fn checked_ed25519_signature_from_bytes_rejects_malformed_r_before_backend() {
         );
     }
 }
-
 #[test]
 fn checked_mldsa_signature_from_bytes_rejects_malformed_lengths_before_backend() {
     let key_pair = KeyPair::try_from_seed(
@@ -169,7 +155,6 @@ fn checked_mldsa_signature_from_bytes_rejects_malformed_lengths_before_backend()
     short.pop();
     let mut overlong = signature.payload().to_vec();
     overlong.push(0x42);
-
     for (label, malformed) in [
         ("short", short),
         ("overlong", overlong),
@@ -185,7 +170,6 @@ fn checked_mldsa_signature_from_bytes_rejects_malformed_lengths_before_backend()
         );
     }
 }
-
 #[test]
 fn parse_wallet_signature_rejects_malformed_ed25519_r_before_storage() {
     const SMALL_ORDER_R: [u8; 32] = [
@@ -197,7 +181,6 @@ fn parse_wallet_signature_rejects_malformed_ed25519_r_before_storage() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let key_pair = KeyPair::try_from_seed(
         b"python-connect-wallet-ed25519-r-admission".to_vec(),
         Algorithm::Ed25519,
@@ -208,7 +191,6 @@ fn parse_wallet_signature_rejects_malformed_ed25519_r_before_storage() {
         b"connect wallet signature admission",
     )
     .expect("checked Connect wallet fixture signature");
-
     ensure_python();
     Python::attach(|py| {
         let fields = PyDict::new(py);
@@ -216,7 +198,6 @@ fn parse_wallet_signature_rejects_malformed_ed25519_r_before_storage() {
             .set_item("signature", PyBytes::new(py, signature.payload()))
             .expect("set valid wallet signature");
         parse_wallet_signature(&fields).expect("valid wallet signature parses");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -238,7 +219,6 @@ fn parse_wallet_signature_rejects_malformed_ed25519_r_before_storage() {
         }
     });
 }
-
 #[test]
 fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
     const SMALL_ORDER_R: [u8; 32] = [
@@ -250,7 +230,6 @@ fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let key_pair = KeyPair::try_from_seed(
         b"python-native-ed25519-signature-r-admission".to_vec(),
         Algorithm::Ed25519,
@@ -261,7 +240,6 @@ fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
     let message = b"python native Ed25519 signature admission";
     let signature =
         Signature::try_new(key_pair.private_key(), message).expect("checked fixture signature");
-
     assert!(
         verify_py(
             Algorithm::Ed25519.as_static_str(),
@@ -277,7 +255,6 @@ fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
             .expect("Ed25519 verification returns a bool"),
         "valid Ed25519 signature must verify through Ed25519 wrapper"
     );
-
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_R),
         ("noncanonical", NONCANONICAL_R),
@@ -301,7 +278,6 @@ fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_malformed_mldsa_signature_lengths_before_backend() {
     let key_pair = KeyPair::try_from_seed(
@@ -314,7 +290,6 @@ fn verify_rejects_malformed_mldsa_signature_lengths_before_backend() {
     let message = b"python native ML-DSA signature admission";
     let signature = Signature::try_new(key_pair.private_key(), message)
         .expect("checked ML-DSA fixture signature");
-
     assert!(
         verify_py(
             Algorithm::MlDsa.as_static_str(),
@@ -329,7 +304,6 @@ fn verify_rejects_malformed_mldsa_signature_lengths_before_backend() {
     short.pop();
     let mut overlong = signature.payload().to_vec();
     overlong.push(0x42);
-
     for (label, malformed) in [
         ("short", short),
         ("overlong", overlong),
@@ -347,7 +321,6 @@ fn verify_rejects_malformed_mldsa_signature_lengths_before_backend() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_malformed_ed25519_public_key_material_before_backend() {
     let key_pair = KeyPair::try_from_seed(
@@ -358,7 +331,6 @@ fn verify_rejects_malformed_ed25519_public_key_material_before_backend() {
     let message = b"python native Ed25519 public key admission";
     let signature =
         Signature::try_new(key_pair.private_key(), message).expect("checked fixture signature");
-
     for (label, public_key, expected_error) in MALFORMED_ED25519_PUBLIC_KEYS {
         let generic = py_err_message(
             verify_py(
@@ -377,7 +349,6 @@ fn verify_rejects_malformed_ed25519_public_key_material_before_backend() {
             generic.contains(expected_error),
             "generic verifier {label} public-key error lost parser detail: {generic}"
         );
-
         let ed25519 = py_err_message(
             verify_ed25519_py(&public_key, message, signature.payload())
                 .expect_err("Ed25519 verifier must reject malformed public keys"),
@@ -392,7 +363,6 @@ fn verify_rejects_malformed_ed25519_public_key_material_before_backend() {
         );
     }
 }
-
 #[test]
 fn python_confidential_transfer_input_requires_canonical_diversifier() {
     ensure_python();
@@ -410,14 +380,12 @@ fn python_confidential_transfer_input_requires_canonical_diversifier() {
             }
             input
         };
-
         let parsed = parse_confidential_transfer_input_py(
             input_with_diversifier(Some("diversifier")).as_any(),
             0,
         )
         .expect("canonical diversifier accepted");
         assert_eq!(parsed.diversifier, [0x52; 32]);
-
         let missing =
             parse_confidential_transfer_input_py(input_with_diversifier(None).as_any(), 0)
                 .expect_err("missing diversifier rejected");
@@ -429,7 +397,6 @@ fn python_confidential_transfer_input_requires_canonical_diversifier() {
             "unexpected missing-diversifier error: {}",
             missing.value(py)
         );
-
         for alias in ["diversifier_hex", "diversifierHex"] {
             let err = parse_confidential_transfer_input_py(
                 input_with_diversifier(Some(alias)).as_any(),

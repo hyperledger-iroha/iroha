@@ -1,23 +1,19 @@
 //! Synchronization helpers for integration tests.
-
+use eyre::{Result, WrapErr};
+use iroha::client::{Client, Status};
+use iroha_test_network::{BlockHeight, Network};
 use std::{
     env,
     thread::sleep,
     time::{Duration, Instant},
 };
-
-use eyre::{Result, WrapErr};
-use iroha::client::{Client, Status};
-use iroha_test_network::{BlockHeight, Network};
 use tokio::runtime::Runtime;
 use tokio::task::spawn_blocking;
-
 // Integration submissions occasionally need more time to commit under DA-enabled consensus;
 // give the network a bounded window before failing. Keep bounded to avoid long hangs when
 // Torii is unreachable, but allow env overrides for slower hosts.
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
-
 /// Poll `/status` with a bounded retry budget to tolerate startup jitter.
 ///
 /// # Errors
@@ -50,7 +46,6 @@ pub fn get_status_with_retry(client: &Client) -> Result<Status> {
         },
     )
 }
-
 /// Poll `/status` with a bounded retry budget, falling back to storage-derived
 /// heights when Torii stalls.
 ///
@@ -66,7 +61,6 @@ pub fn get_status_with_retry_or_storage(
     let fallback = best_effort_status_from_network(network);
     apply_storage_fallback(get_status_with_retry(client), fallback, client, context)
 }
-
 fn apply_storage_fallback(
     status_result: Result<Status>,
     fallback: Option<Status>,
@@ -90,7 +84,6 @@ fn apply_storage_fallback(
         }
     }
 }
-
 /// Async wrapper around [`get_status_with_retry`] to avoid blocking async runtimes.
 ///
 /// # Errors
@@ -104,7 +97,6 @@ pub async fn get_status_with_retry_async(client: &Client) -> Result<Status> {
         .wrap_err("status retry task panicked")??;
     Ok(status)
 }
-
 /// Wait for the next non-empty block and return the refreshed status, tolerating timeouts.
 ///
 /// # Errors
@@ -136,7 +128,6 @@ pub fn sync_after_submission(
         )
     })
 }
-
 fn best_effort_status_from_network(network: &Network) -> Option<Status> {
     let peers = network
         .peers()
@@ -145,7 +136,6 @@ fn best_effort_status_from_network(network: &Network) -> Option<Status> {
         .unwrap_or_else(|| network.peers().len().saturating_sub(1) as u64);
     status_from_storage_snapshot(best_effort_block_height(network), peers)
 }
-
 fn best_effort_block_height(network: &Network) -> Option<BlockHeight> {
     let mut best: Option<BlockHeight> = None;
     for peer in network.peers() {
@@ -158,7 +148,6 @@ fn best_effort_block_height(network: &Network) -> Option<BlockHeight> {
     }
     best
 }
-
 fn status_from_storage_snapshot(height: Option<BlockHeight>, peers: u64) -> Option<Status> {
     let height = height?;
     Some(Status {
@@ -168,11 +157,9 @@ fn status_from_storage_snapshot(height: Option<BlockHeight>, peers: u64) -> Opti
         ..Status::default()
     })
 }
-
 fn status_retry_budget_env() -> Duration {
     read_env_duration("IROHA_TEST_STATUS_RETRY_BUDGET_MS", STATUS_RETRY_DEFAULT)
 }
-
 fn read_env_duration(var: &str, default: Duration) -> Duration {
     if let Ok(raw) = env::var(var) {
         let trimmed = raw.trim();
@@ -187,23 +174,19 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
     }
     default
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::{Mutex, MutexGuard, OnceLock},
-    };
-
     use super::*;
     use iroha::client::Client;
     use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
     use iroha::data_model::ChainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
-
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, MutexGuard, OnceLock},
+    };
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
     #[allow(unsafe_code)]
     fn remove_env_var(key: &str) {
         // Safety: tests serialize env mutation with ENV_LOCK.
@@ -211,7 +194,6 @@ mod tests {
             std::env::remove_var(key);
         }
     }
-
     #[allow(unsafe_code)]
     fn set_env_var(key: &str, value: &str) {
         // Safety: tests serialize env mutation with ENV_LOCK.
@@ -219,12 +201,10 @@ mod tests {
             std::env::set_var(key, value);
         }
     }
-
     struct EnvRestore {
         key: &'static str,
         value: Option<String>,
     }
-
     impl EnvRestore {
         fn remove(key: &'static str) -> Self {
             let value = std::env::var(key).ok();
@@ -232,7 +212,6 @@ mod tests {
             Self { key, value }
         }
     }
-
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             if let Some(value) = &self.value {
@@ -242,14 +221,12 @@ mod tests {
             }
         }
     }
-
     fn lock_env_guard() -> MutexGuard<'static, ()> {
         ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .expect("env lock")
     }
-
     fn dummy_client() -> Client {
         let ttl = Duration::from_secs(1);
         let config = Config {
@@ -274,56 +251,45 @@ mod tests {
         client.headers = HashMap::new();
         client
     }
-
     #[test]
     fn status_retry_budget_env_parses_ms_suffix() {
         let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
-
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "250ms");
         assert_eq!(status_retry_budget_env(), Duration::from_millis(250));
     }
-
     #[test]
     fn status_retry_budget_env_parses_seconds() {
         let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
-
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "2");
         assert_eq!(status_retry_budget_env(), Duration::from_secs(2));
     }
-
     #[test]
     fn status_retry_budget_env_uses_default_when_unset() {
         let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
-
         assert_eq!(status_retry_budget_env(), STATUS_RETRY_DEFAULT);
     }
-
     #[tokio::test]
     async fn status_retry_async_returns_error_for_unreachable_host() {
         let env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
-
         let client = dummy_client();
         drop(env_guard);
         let result = get_status_with_retry_async(&client).await;
         assert!(result.is_err());
     }
-
     #[test]
     fn best_effort_status_is_none_without_storage_heights() {
         assert!(status_from_storage_snapshot(None, 0).is_none());
     }
-
     #[test]
     fn status_retry_or_storage_errors_without_snapshot() {
         let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
-
         let client = dummy_client();
         let err = apply_storage_fallback(
             Err(eyre::eyre!("status retry budget exhausted")),

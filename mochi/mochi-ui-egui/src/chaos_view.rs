@@ -1,7 +1,5 @@
 //! Chaos lab UI and background scheduling.
-
 use super::*;
-
 impl MochiApp {
     pub(super) fn poll_chaos_updates(&mut self, supervisor_slot: &mut Option<Supervisor>) {
         loop {
@@ -38,7 +36,6 @@ impl MochiApp {
             }
         }
     }
-
     pub(super) fn schedule_pending_chaos(&mut self, supervisor_slot: &mut Option<Supervisor>) {
         if self.chaos_inflight {
             return;
@@ -50,7 +47,6 @@ impl MochiApp {
             self.chaos_pending_request = Some(request);
             return;
         };
-
         let tx = self.chaos_tx.clone();
         let handle = self.runtime.handle().clone();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -58,7 +54,6 @@ impl MochiApp {
         self.chaos_inflight = true;
         self.chaos_log.clear();
         self.chaos_report = None;
-
         self.runtime.spawn_blocking(move || {
             let run = run_chaos_preset(supervisor, &handle, request, &cancel, |event| {
                 let _ = tx.send(ChaosUpdate::Event {
@@ -72,7 +67,6 @@ impl MochiApp {
             });
         });
     }
-
     pub(super) fn render_chaos_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -84,7 +78,6 @@ impl MochiApp {
             "Run guided Izanami-backed drills against the current Mochi sandbox. Control returns when the scenario finishes.",
         );
         ui.add_space(8.0);
-
         ui.horizontal(|ui| {
             ui.label("Target peer");
             ComboBox::from_id_salt("mochi_chaos_peer")
@@ -110,7 +103,6 @@ impl MochiApp {
             );
         });
         ui.add_space(10.0);
-
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
             for preset in ChaosPreset::all() {
@@ -138,7 +130,6 @@ impl MochiApp {
                     });
             }
         });
-
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             if ui
@@ -168,7 +159,6 @@ impl MochiApp {
                 cancel.store(true, Ordering::Relaxed);
             }
         });
-
         if self.chaos_inflight {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -176,7 +166,6 @@ impl MochiApp {
                 ui.add(egui::Spinner::new());
             });
         }
-
         if let Some(report) = &self.chaos_report {
             ui.add_space(8.0);
             ui.label(RichText::new("Last report").strong());
@@ -187,7 +176,6 @@ impl MochiApp {
                 report.cancelled
             ));
         }
-
         ui.add_space(8.0);
         ui.label(RichText::new("Run log").strong());
         ScrollArea::vertical().max_height(260.0).show(ui, |ui| {

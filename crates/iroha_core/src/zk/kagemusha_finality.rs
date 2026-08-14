@@ -9,15 +9,10 @@
 //! [`iroha_data_model::block::consensus_v2::HeightContext`], recomputes its identifier, and
 //! authenticates the exact
 //! [`Vote::signature_preimage`]; no retired consensus vote format is accepted.
-
-use std::{
-    collections::VecDeque,
-    sync::{
-        OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+use crate::sumeragi::smt::{
+    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
+    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
 };
-
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
@@ -34,13 +29,14 @@ use iroha_data_model::{
 };
 use parking_lot::Mutex;
 use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-
-use crate::sumeragi::smt::{
-    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
-    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
+use std::{
+    collections::VecDeque,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
-
+use thiserror::Error;
 /// Consensus execution-commitment material for a block containing one
 /// finalized Kagemusha top-up anchor and no unrelated writes.
 ///
@@ -60,7 +56,6 @@ pub struct KagemushaSingleTopUpExecutionCommitmentV2 {
     /// Inclusion path consumed by [`KagemushaTopUpFinalityProofV2`].
     pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
 }
-
 /// Build the exact consensus commitment for one finalized top-up anchor.
 ///
 /// # Errors
@@ -95,11 +90,9 @@ pub fn build_single_kagemusha_topup_execution_commitment_v2(
         },
     })
 }
-
 /// Number of exact authenticated roster archives whose successful full PoP
 /// validation is retained by one verifier instance.
 const ROSTER_VERIFICATION_CACHE_CAPACITY: usize = 16;
-
 /// Failure returned by the native top-up finality verifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum KagemushaTopUpFinalityVerifyError {
@@ -152,7 +145,6 @@ pub enum KagemushaTopUpFinalityVerifyError {
     #[error("invalid Kagemusha top-up anchor inclusion proof")]
     InvalidAnchorInclusion,
 }
-
 /// Typed result proving which anchor, release, context, and block were checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedKagemushaTopUpFinalityV2 {
@@ -163,45 +155,38 @@ pub struct VerifiedKagemushaTopUpFinalityV2 {
     manifest_sha256: [u8; 32],
     roster_sha256: [u8; 32],
 }
-
 impl VerifiedKagemushaTopUpFinalityV2 {
     /// Return the exact compact anchor identity authenticated by the proof.
     #[must_use]
     pub const fn anchor(self) -> KagemushaRecursiveSpendTopUpAnchorRefV2 {
         self.anchor
     }
-
     /// Return the finalized block height.
     #[must_use]
     pub const fn height(self) -> u64 {
         self.height
     }
-
     /// Return the exact finalized block-header hash.
     #[must_use]
     pub const fn block_hash(self) -> HashOf<BlockHeader> {
         self.block_hash
     }
-
     /// Return the recomputed complete Sumeragi-v2 height-context identifier.
     #[must_use]
     pub const fn context_id(self) -> HeightContextId {
         self.context_id
     }
-
     /// Return the trusted release-manifest SHA-256.
     #[must_use]
     pub const fn manifest_sha256(self) -> [u8; 32] {
         self.manifest_sha256
     }
-
     /// Return the exact roster-artifact SHA-256 selected by that manifest.
     #[must_use]
     pub const fn roster_sha256(self) -> [u8; 32] {
         self.roster_sha256
     }
 }
-
 /// Stateful verifier with a bounded exact-roster PoP-validation cache.
 ///
 /// Cache entries are inserted only after the canonical roster bytes match an
@@ -214,14 +199,12 @@ pub struct KagemushaTopUpFinalityVerifier {
     roster_cache: Mutex<VecDeque<([u8; 32], bool)>>,
     roster_crypto_verifications: AtomicUsize,
 }
-
 impl KagemushaTopUpFinalityVerifier {
     /// Construct an empty verifier cache.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Verify one proof against a complete ABI-21 anchor and its exact
     /// authenticated V4 release. The V4 receipt and manifest are validated in
     /// place; this path never projects either value into an older release carrier.
@@ -242,7 +225,6 @@ impl KagemushaTopUpFinalityVerifier {
             true,
         )
     }
-
     /// Verify the same live finality proof against a clean, unsigned ABI-21
     /// candidate in an explicitly selected non-shipping evidence-lab build.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -263,7 +245,6 @@ impl KagemushaTopUpFinalityVerifier {
             false,
         )
     }
-
     fn verify_v4_with_manifest_state(
         &self,
         proof: &KagemushaTopUpFinalityProofV2,
@@ -296,14 +277,12 @@ impl KagemushaTopUpFinalityVerifier {
         {
             return Err(KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch);
         }
-
         let expected_anchor_ref = expected_anchor
             .compact_ref()
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
         if proof.anchor != expected_anchor_ref {
             return Err(KagemushaTopUpFinalityVerifyError::AnchorMismatch);
         }
-
         let context = &proof.commit_qc.height_context;
         let certificate = &proof.commit_qc.certificate;
         if expected_anchor.network_id != manifest.network_id
@@ -338,7 +317,6 @@ impl KagemushaTopUpFinalityVerifier {
         {
             return Err(KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch);
         }
-
         let roster_reference = &manifest.topup_finality_roster_artifact;
         let roster_bytes = norito::encode_canonical(roster_artifact)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
@@ -365,14 +343,12 @@ impl KagemushaTopUpFinalityVerifier {
             .validate_for_roster_window(window)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
         verify_anchor_inclusion(proof)?;
-
         self.validate_roster_cryptography(roster_artifact, roster_reference.sha256)?;
         verify_commit_aggregate(proof, window)?;
         if let Some(snapshot) = &complete_context.next_epoch_snapshot {
             verify_validator_power_roster_pops(&snapshot.roster, &snapshot.validator_set_pops)
                 .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidNextEpochCryptography)?;
         }
-
         Ok(VerifiedKagemushaTopUpFinalityV2 {
             anchor: expected_anchor_ref,
             height: context.height,
@@ -382,7 +358,6 @@ impl KagemushaTopUpFinalityVerifier {
             roster_sha256: roster_reference.sha256,
         })
     }
-
     fn validate_roster_cryptography(
         &self,
         roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
@@ -401,7 +376,6 @@ impl KagemushaTopUpFinalityVerifier {
                 Err(KagemushaTopUpFinalityVerifyError::InvalidRosterCryptography)
             };
         }
-
         self.roster_crypto_verifications
             .fetch_add(1, Ordering::Relaxed);
         let valid = roster_artifact.validate().is_ok();
@@ -412,7 +386,6 @@ impl KagemushaTopUpFinalityVerifier {
             Err(KagemushaTopUpFinalityVerifyError::InvalidRosterCryptography)
         }
     }
-
     fn remember_roster_result(
         cache: &mut VecDeque<([u8; 32], bool)>,
         digest: [u8; 32],
@@ -424,18 +397,15 @@ impl KagemushaTopUpFinalityVerifier {
         }
         cache.push_back((digest, valid));
     }
-
     #[cfg(test)]
     fn roster_crypto_verification_count(&self) -> usize {
         self.roster_crypto_verifications.load(Ordering::Relaxed)
     }
-
     #[cfg(test)]
     fn cached_roster_count(&self) -> usize {
         self.roster_cache.lock().len()
     }
 }
-
 /// Verify one ABI-21 top-up proof using a process-wide bounded exact-roster
 /// cache and the complete V4 anchor/manifest types.
 pub fn verify_kagemusha_topup_finality_v4(
@@ -456,7 +426,6 @@ pub fn verify_kagemusha_topup_finality_v4(
             expected_manifest_sha256,
         )
 }
-
 /// Verify one ABI-21 top-up proof against a clean candidate using the same
 /// cryptographic verifier and bounded roster cache as production.
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -478,7 +447,6 @@ pub fn verify_kagemusha_topup_finality_candidate_evidence_lab_v4(
             expected_manifest_sha256,
         )
 }
-
 fn canonical_sha256<T: norito::codec::Encode>(
     value: &T,
 ) -> Result<[u8; 32], KagemushaTopUpFinalityVerifyError> {
@@ -486,7 +454,6 @@ fn canonical_sha256<T: norito::codec::Encode>(
         .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
     Ok(Sha256::digest(bytes).into())
 }
-
 fn verify_commit_aggregate(
     proof: &KagemushaTopUpFinalityProofV2,
     window: &KagemushaTopUpFinalityRosterWindowV2,
@@ -531,7 +498,6 @@ fn verify_commit_aggregate(
     )
     .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature)
 }
-
 fn verify_anchor_inclusion(
     proof: &KagemushaTopUpFinalityProofV2,
 ) -> Result<(), KagemushaTopUpFinalityVerifyError> {
@@ -561,7 +527,6 @@ fn verify_anchor_inclusion(
     }
     Ok(())
 }
-
 fn canonical_hash(bytes: [u8; Hash::LENGTH]) -> Result<Hash, KagemushaTopUpFinalityVerifyError> {
     // `Hash::prehashed` sets this marker bit. Reject first so attacker input is
     // never normalized into a different Merkle-authenticated value.
@@ -570,10 +535,11 @@ fn canonical_hash(bytes: [u8; Hash::LENGTH]) -> Result<Hash, KagemushaTopUpFinal
     }
     Ok(Hash::prehashed(bytes))
 }
-
 #[cfg(test)]
 mod tests {
     // Adversarial coverage is kept in this module because it needs direct
+    use super::*;
+    use crate::sumeragi::smt::{KvPair, build_kagemusha_topup_block_commitment};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, NetworkId,
@@ -628,10 +594,6 @@ mod tests {
         peer::PeerId,
         proof::VerifyingKeyId,
     };
-
-    use super::*;
-    use crate::sumeragi::smt::{KvPair, build_kagemusha_topup_block_commitment};
-
     struct Fixture {
         proof: KagemushaTopUpFinalityProofV2,
         roster: KagemushaTopUpFinalityRosterArtifactV2,
@@ -641,7 +603,6 @@ mod tests {
         finality_artifact: V2FinalityArtifact,
         signing_keys: Vec<KeyPair>,
     }
-
     fn reviewed_source_closure(
         source_commit: &str,
         source_tree_sha256: [u8; 32],
@@ -673,7 +634,6 @@ mod tests {
             .expect("finality reviewed source closure fixture");
         (closure, descriptor_sha256)
     }
-
     fn artifact(
         kind: KagemushaPastaCycleArtifactKindV4,
         file_name: &str,
@@ -688,7 +648,6 @@ mod tests {
             payload_sha256: [tag.wrapping_add(1); 32],
         }
     }
-
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout =
@@ -706,7 +665,6 @@ mod tests {
             max_parent_proof_bytes: 4_096,
         }
     }
-
     fn profile(parity: KagemushaPastaCycleParityV1, tag: u8) -> KagemushaPastaCycleProofProfileV4 {
         let (circuit_id, names) = match parity {
             KagemushaPastaCycleParityV1::StepEq => (
@@ -754,21 +712,17 @@ mod tests {
             artifacts,
         }
     }
-
     fn fixture() -> Fixture {
         fixture_with_release_window(1, 100)
     }
-
     fn fixture_with_release_window(activation_height: u64, withdrawal_height: u64) -> Fixture {
         fixture_with_release_window_and_roster(activation_height, withdrawal_height, |_| {})
     }
-
     fn fixture_with_roster(
         mutate_roster: impl FnOnce(&mut KagemushaTopUpFinalityRosterArtifactV2),
     ) -> Fixture {
         fixture_with_release_window_and_roster(1, 100, mutate_roster)
     }
-
     fn fixture_with_release_window_and_roster(
         activation_height: u64,
         withdrawal_height: u64,
@@ -1096,7 +1050,6 @@ mod tests {
             signing_keys: keys,
         }
     }
-
     fn verify(
         verifier: &KagemushaTopUpFinalityVerifier,
         fixture: &Fixture,
@@ -1109,7 +1062,6 @@ mod tests {
             fixture.manifest_digest,
         )
     }
-
     fn epoch_boundary_proof(
         fixture: &Fixture,
         mutate_next_epoch_pop: bool,
@@ -1172,7 +1124,6 @@ mod tests {
         context
             .validate()
             .expect("epoch-boundary context is structurally valid");
-
         let mut proof = fixture.proof.clone();
         proof.commit_qc.height_context = KagemushaTopUpFinalityHeightContextV2 {
             context_id: context.id(),
@@ -1220,7 +1171,6 @@ mod tests {
         .expect("epoch-boundary aggregate signature");
         proof
     }
-
     #[test]
     fn finality_manifest_and_roster_identities_ignore_ambient_norito_layout() {
         let fixture = fixture();
@@ -1244,7 +1194,6 @@ mod tests {
             expected_manifest
         );
     }
-
     #[test]
     fn accepts_projection_of_real_live_finality_artifact() {
         let fixture = fixture();
@@ -1258,7 +1207,6 @@ mod tests {
         );
         assert_eq!(verified.block_hash(), fixture.finality_artifact.block_hash);
     }
-
     #[test]
     fn aggregate_signature_authenticates_proposal_origin() {
         let fixture = fixture();
@@ -1269,7 +1217,6 @@ mod tests {
             .proposal_round
             .view
             .saturating_sub(1);
-
         assert_eq!(
             KagemushaTopUpFinalityVerifier::new()
                 .verify_v4(
@@ -1283,12 +1230,10 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
     }
-
     #[test]
     fn rejects_anchor_chain_asset_scale_generation_height_and_release_substitution() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let fixture = fixture();
-
         let mut other_anchor = fixture.anchor.clone();
         other_anchor.topup_operation_id[0] ^= 1;
         other_anchor = other_anchor.finalize_digest().expect("alternate anchor");
@@ -1304,7 +1249,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::AnchorMismatch
         );
-
         let mut manifest = fixture.manifest.clone();
         manifest.network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1323,7 +1267,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::NetworkMismatch
         );
-
         let mut manifest = fixture.manifest.clone();
         manifest.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
@@ -1342,7 +1285,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::AssetMismatch
         );
-
         let mut manifest = fixture.manifest.clone();
         manifest.asset_scale += 1;
         let digest = canonical_sha256(&manifest).expect("digest");
@@ -1358,7 +1300,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ScaleMismatch
         );
-
         let mut anchor = fixture.anchor.clone();
         anchor.artifact_binding.generation = "other-generation".to_owned();
         anchor = anchor
@@ -1378,7 +1319,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ArtifactGenerationMismatch
         );
-
         let mut anchor = fixture.anchor.clone();
         anchor.artifact_binding.manifest_sha256[0] ^= 1;
         anchor = anchor
@@ -1398,7 +1338,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch
         );
-
         let mut anchor = fixture.anchor.clone();
         anchor.finalized_height += 1;
         anchor = anchor.finalize_digest().expect("alternate height anchor");
@@ -1417,12 +1356,10 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::HeightMismatch
         );
     }
-
     #[test]
     fn rejects_context_roster_power_signature_and_path_substitution_before_cache_fill() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let fixture = fixture();
-
         let mut network = fixture.proof.clone();
         network.commit_qc.height_context.network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1440,7 +1377,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::RosterContextMismatch
         );
-
         let mut context = fixture.proof.clone();
         context.commit_qc.height_context.leader_seed[0] ^= 1;
         assert_eq!(
@@ -1455,7 +1391,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::RosterContextMismatch
         );
-
         let swapped_roster = fixture_with_roster(|roster| {
             roster.windows[0].validator_set.swap(0, 1);
         });
@@ -1471,7 +1406,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
-
         let changed_power = fixture_with_roster(|roster| {
             roster.windows[0].consensus_mode = ConsensusMode::Npos;
             roster.windows[0].validator_set[0].power = 2;
@@ -1493,7 +1427,6 @@ mod tests {
             0,
             "context/roster substitutions must fail before any PoP pairing"
         );
-
         let mut signature = fixture.proof.clone();
         signature.commit_qc.certificate.aggregate_signature[0] ^= 1;
         assert_eq!(
@@ -1509,7 +1442,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature
         );
         assert_eq!(verifier.roster_crypto_verification_count(), 1);
-
         let mut path = fixture.proof.clone();
         path.anchor_path.siblings[0][0] ^= 1;
         assert_eq!(
@@ -1525,7 +1457,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::InvalidAnchorInclusion
         );
     }
-
     #[test]
     fn content_addresses_and_roster_pops_fail_closed_before_commit_verification() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
@@ -1543,7 +1474,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch
         );
         assert_eq!(verifier.roster_crypto_verification_count(), 0);
-
         let mut roster = fixture.roster.clone();
         roster.windows[0].validator_set_pops[0][0] ^= 1;
         assert_eq!(
@@ -1559,7 +1489,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch
         );
         assert_eq!(verifier.roster_crypto_verification_count(), 0);
-
         let invalid_roster = fixture_with_roster(|roster| {
             roster.windows[0].validator_set_pops[0][0] ^= 1;
         });
@@ -1594,44 +1523,35 @@ mod tests {
             "an immutable invalid roster digest must receive one PoP pass total"
         );
     }
-
     #[test]
     fn every_non_roster_context_identity_field_is_bound_by_the_signed_context_id() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let fixture = fixture();
         let mut mutations = Vec::new();
-
         let mut epoch = fixture.proof.clone();
         epoch.commit_qc.height_context.epoch += 1;
         mutations.push(("epoch", epoch));
-
         let mut epoch_end = fixture.proof.clone();
         epoch_end.commit_qc.height_context.epoch_end_height += 1;
         mutations.push(("epoch end", epoch_end));
-
         let mut mode = fixture.proof.clone();
         mode.commit_qc.height_context.mode = ConsensusMode::Npos;
         mutations.push(("consensus mode", mode));
-
         let mut nexus = fixture.proof.clone();
         nexus.commit_qc.height_context.nexus_amx_context_hash = Hash::new(b"other nexus");
         mutations.push(("nexus", nexus));
-
         let mut execution_policy = fixture.proof.clone();
         execution_policy
             .commit_qc
             .height_context
             .execution_policy_hash = Hash::new(b"other execution policy");
         mutations.push(("execution policy", execution_policy));
-
         let mut da = fixture.proof.clone();
         da.commit_qc.height_context.da_layout.chunk_size_bytes *= 2;
         mutations.push(("data availability", da));
-
         let mut leader = fixture.proof.clone();
         leader.commit_qc.height_context.leader_seed[0] ^= 1;
         mutations.push(("leader seed", leader));
-
         let mut parent = fixture.proof.clone();
         parent
             .commit_qc
@@ -1642,7 +1562,6 @@ mod tests {
             .subject
             .payload_hash = Hash::new(b"other parent payload");
         mutations.push(("parent commit", parent));
-
         for (field, proof) in mutations {
             assert_eq!(
                 verifier
@@ -1663,7 +1582,6 @@ mod tests {
             0,
             "context substitutions must all fail before PoP verification"
         );
-
         let mut protocol = fixture.proof.clone();
         protocol.commit_qc.height_context.protocol_version += 1;
         assert_eq!(
@@ -1679,7 +1597,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
     }
-
     #[test]
     fn noncanonical_merkle_hash_is_distinct_from_a_canonical_wrong_path() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
@@ -1699,7 +1616,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::NonCanonicalHash
         );
-
         let mut canonical_wrong = fixture.proof.clone();
         canonical_wrong.anchor_path.siblings[0][0] ^= 1;
         assert_eq!(
@@ -1715,7 +1631,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::InvalidAnchorInclusion
         );
     }
-
     #[test]
     fn release_window_is_inclusive_at_activation_and_exclusive_at_withdrawal() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
@@ -1729,7 +1644,6 @@ mod tests {
                 boundary.manifest_digest,
             )
             .expect("activation height and withdrawal minus one are accepted");
-
         let before_activation = fixture_with_release_window(43, 100);
         assert_eq!(
             verifier
@@ -1743,7 +1657,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch
         );
-
         let at_withdrawal = fixture_with_release_window(1, 42);
         assert_eq!(
             verifier
@@ -1758,7 +1671,6 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch
         );
     }
-
     #[test]
     fn epoch_boundary_verifies_qc_authenticated_next_roster_pops() {
         let fixture = fixture();
@@ -1773,7 +1685,6 @@ mod tests {
                 fixture.manifest_digest,
             )
             .expect("valid epoch-boundary next-roster PoPs");
-
         let invalid = epoch_boundary_proof(&fixture, true);
         assert_eq!(
             verifier
@@ -1787,7 +1698,6 @@ mod tests {
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::InvalidNextEpochCryptography
         );
-
         let mut invalid_qc_and_pop = epoch_boundary_proof(&fixture, true);
         invalid_qc_and_pop.commit_qc.certificate.aggregate_signature[0] ^= 1;
         assert_eq!(
@@ -1804,7 +1714,6 @@ mod tests {
             "the current Commit QC must authenticate the next-epoch snapshot before its PoPs are trusted"
         );
     }
-
     #[test]
     fn exact_roster_cache_is_bounded_and_bad_proofs_do_not_repeat_full_pop_validation() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
@@ -1813,7 +1722,6 @@ mod tests {
         let repeated = verify(&verifier, &fixture).expect("same-anchor idempotent verification");
         assert_eq!(repeated, first);
         assert_eq!(verifier.roster_crypto_verification_count(), 1);
-
         for bit in 0_u8..8 {
             let mut bad = fixture.proof.clone();
             bad.commit_qc.certificate.aggregate_signature[0] ^= 1 << bit;
@@ -1832,7 +1740,6 @@ mod tests {
         }
         assert_eq!(verifier.roster_crypto_verification_count(), 1);
         assert_eq!(verifier.cached_roster_count(), 1);
-
         // Exercise exact LRU eviction without incurring unrelated pairings.
         let mut cache = VecDeque::new();
         for value in 0..ROSTER_VERIFICATION_CACHE_CAPACITY + 5 {

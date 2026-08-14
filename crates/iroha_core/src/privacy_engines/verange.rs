@@ -5,19 +5,16 @@
 //! to `N = 32, J = K = 6` and `N = 64, J = K = 8`.  It proves an existing
 //! Pedersen commitment `C = G·value + Q·blinding` opens to a value in
 //! `[0, 2^N)`.
-
-use once_cell::sync::Lazy;
-use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
-
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
     random_nonzero_scalar, validate_generator_independence,
 };
-
+use once_cell::sync::Lazy;
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
 /// Closed suite identifier committed by every VeRange transcript.
 pub const VERANGE_TYPE1_SUITE_V1: &[u8] = b"iroha.verange.type1.p256.sha256.v1";
 /// Proof wire version.
@@ -35,7 +32,6 @@ pub const MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1: usize = 8;
 /// Tight decoder bound for an eight-proof independent Type-1 batch.
 pub const MAX_VERANGE_TYPE1_BATCH_PROOF_BYTES_V1: usize =
     MAX_VERANGE_TYPE1_PROOF_BYTES_V1 * MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1 + 4096;
-
 const VERANGE_G_DST_V1: &[u8] = b"IROHA-VERANGE-V1-G-P256_XMD:SHA-256_SSWU_RO_";
 const VERANGE_Q_DST_V1: &[u8] = b"IROHA-VERANGE-V1-Q-P256_XMD:SHA-256_SSWU_RO_";
 const VERANGE_H_DST_V1: &[u8] = b"IROHA-VERANGE-V1-H-P256_XMD:SHA-256_SSWU_RO_";
@@ -46,7 +42,6 @@ const MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1: usize = 64;
 const MAX_VERANGE_TYPE1_TOTAL_ELEMENTS_V1: usize = 8 + 8 + 64;
 const MAX_VERANGE_TYPE1_BATCH_TOTAL_ELEMENTS_V1: usize =
     MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1 * (1 + MAX_VERANGE_TYPE1_TOTAL_ELEMENTS_V1);
-
 fn verange_proof_decode_limits(payload_len: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1,
@@ -56,7 +51,6 @@ fn verange_proof_decode_limits(payload_len: usize) -> norito::DecodeLimits {
         16,
     )
 }
-
 fn verange_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1,
@@ -66,7 +60,6 @@ fn verange_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
         24,
     )
 }
-
 /// Admitted VeRange bit widths and their exact matrix geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VeRangeBitLengthV1 {
@@ -75,7 +68,6 @@ pub enum VeRangeBitLengthV1 {
     /// `N = 64`, `J = K = 8`.
     Bits64,
 }
-
 /// Deterministic descriptor frozen into governed VeRange activation material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VeRangeProfileDescriptorV1 {
@@ -102,7 +94,6 @@ pub struct VeRangeProfileDescriptorV1 {
     /// Tight maximum canonical bytes for an independent batch.
     pub max_batch_proof_bytes: u32,
 }
-
 impl VeRangeBitLengthV1 {
     /// Return `N`.
     #[must_use]
@@ -112,7 +103,6 @@ impl VeRangeBitLengthV1 {
             Self::Bits64 => 64,
         }
     }
-
     /// Return `J`.
     #[must_use]
     pub const fn rows(self) -> usize {
@@ -121,13 +111,11 @@ impl VeRangeBitLengthV1 {
             Self::Bits64 => 8,
         }
     }
-
     /// Return `K`.
     #[must_use]
     pub const fn columns(self) -> usize {
         self.rows()
     }
-
     fn from_bits(bits: u16) -> Result<Self, VeRangeError> {
         match bits {
             32 => Ok(Self::Bits32),
@@ -135,7 +123,6 @@ impl VeRangeBitLengthV1 {
             _ => Err(VeRangeError::UnsupportedBitLength { bits }),
         }
     }
-
     fn value_is_admitted(self, value: u64) -> bool {
         match self {
             Self::Bits32 => value < (1_u64 << 32),
@@ -143,7 +130,6 @@ impl VeRangeBitLengthV1 {
         }
     }
 }
-
 /// Deterministic transparent parameter basis for one VeRange profile.
 #[derive(Clone)]
 pub struct VeRangeParametersV1 {
@@ -154,7 +140,6 @@ pub struct VeRangeParametersV1 {
     generator_digest: [u8; 32],
     parameter_digest: [u8; 32],
 }
-
 impl VeRangeParametersV1 {
     /// Return cached parameters for a closed first-release profile.
     ///
@@ -169,39 +154,33 @@ impl VeRangeParametersV1 {
             VeRangeBitLengthV1::Bits64 => &parameter_set.bits_64,
         })
     }
-
     /// Return the profile.
     #[must_use]
     pub const fn profile(&self) -> VeRangeBitLengthV1 {
         self.profile
     }
-
     /// Return the canonical generator-basis digest.
     #[must_use]
     pub const fn generator_digest(&self) -> [u8; 32] {
         self.generator_digest
     }
-
     /// Return the canonical closed-profile digest.
     #[must_use]
     pub const fn parameter_digest(&self) -> [u8; 32] {
         self.parameter_digest
     }
-
     /// Return `G` as canonical compressed SEC1.
     #[must_use]
     pub fn value_generator(&self) -> CompressedPointV1 {
         CompressedPointV1::from_projective(self.g)
             .expect("derived VeRange value generator is non-identity")
     }
-
     /// Return `Q` as canonical compressed SEC1.
     #[must_use]
     pub fn blinding_generator(&self) -> CompressedPointV1 {
         CompressedPointV1::from_projective(self.q)
             .expect("derived VeRange blinding generator is non-identity")
     }
-
     /// Return the `H_j` basis as canonical compressed SEC1.
     #[must_use]
     pub fn row_generators(&self) -> Vec<CompressedPointV1> {
@@ -214,7 +193,6 @@ impl VeRangeParametersV1 {
             })
             .collect()
     }
-
     /// Return every deterministic input needed to govern this compiled profile.
     #[must_use]
     pub fn descriptor(&self) -> VeRangeProfileDescriptorV1 {
@@ -235,7 +213,6 @@ impl VeRangeParametersV1 {
                 .expect("batch proof cap fits u32"),
         }
     }
-
     fn derive_subprofile(profile: VeRangeBitLengthV1) -> Result<Self, VeRangeError> {
         let profile_bytes = profile.bits().to_be_bytes();
         let g = hash_to_curve_rfc9380(VERANGE_G_DST_V1, &profile_bytes)?;
@@ -248,7 +225,6 @@ impl VeRangeParametersV1 {
             message[2..].copy_from_slice(&row.to_be_bytes());
             h.push(hash_to_curve_rfc9380(VERANGE_H_DST_V1, &message)?);
         }
-
         let mut encoded = Vec::with_capacity(2 + h.len());
         encoded.push(CompressedPointV1::from_projective(g)?);
         encoded.push(CompressedPointV1::from_projective(q)?);
@@ -257,7 +233,6 @@ impl VeRangeParametersV1 {
         }
         validate_generator_independence(&encoded)?;
         let generator_digest = generator_digest(VERANGE_TYPE1_SUITE_V1, &encoded)?;
-
         Ok(Self {
             profile,
             g,
@@ -268,17 +243,14 @@ impl VeRangeParametersV1 {
         })
     }
 }
-
 struct VeRangeParameterSetV1 {
     bits_32: VeRangeParametersV1,
     bits_64: VeRangeParametersV1,
 }
-
 impl VeRangeParameterSetV1 {
     fn derive() -> Result<Self, VeRangeError> {
         let mut bits_32 = VeRangeParametersV1::derive_subprofile(VeRangeBitLengthV1::Bits32)?;
         let mut bits_64 = VeRangeParametersV1::derive_subprofile(VeRangeBitLengthV1::Bits64)?;
-
         let mut parameter_hash = Sha256::new();
         parameter_hash.update(PARAMETER_DIGEST_DOMAIN_V1);
         parameter_hash.update(
@@ -315,10 +287,8 @@ impl VeRangeParameterSetV1 {
         Ok(Self { bits_32, bits_64 })
     }
 }
-
 static VERANGE_PARAMETER_SET: Lazy<Result<VeRangeParameterSetV1, VeRangeError>> =
     Lazy::new(VeRangeParameterSetV1::derive);
-
 /// Fully bound public input to one VeRange Type-1 proof.
 #[derive(Clone, Copy, Debug)]
 pub struct VeRangeType1StatementV1<'a> {
@@ -329,7 +299,6 @@ pub struct VeRangeType1StatementV1<'a> {
     batch_count: u32,
     batch_commitment_digest: [u8; 32],
 }
-
 impl<'a> VeRangeType1StatementV1<'a> {
     /// Construct and validate a statement.
     ///
@@ -365,19 +334,16 @@ impl<'a> VeRangeType1StatementV1<'a> {
             batch_commitment_digest,
         })
     }
-
     /// Return the selected profile.
     #[must_use]
     pub const fn profile(&self) -> VeRangeBitLengthV1 {
         self.profile
     }
-
     /// Return the externally supplied Pedersen commitment.
     #[must_use]
     pub const fn commitment(&self) -> CompressedPointV1 {
         self.commitment
     }
-
     fn for_batch(
         profile: VeRangeBitLengthV1,
         commitment: CompressedPointV1,
@@ -396,7 +362,6 @@ impl<'a> VeRangeType1StatementV1<'a> {
         }
     }
 }
-
 /// Ordered public input to an independently transcript-separated Type-1 batch.
 #[derive(Clone, Debug)]
 pub struct VeRangeType1BatchStatementV1<'a> {
@@ -405,7 +370,6 @@ pub struct VeRangeType1BatchStatementV1<'a> {
     transcript_binding: TranscriptBindingV1<'a>,
     commitment_digest: [u8; 32],
 }
-
 impl<'a> VeRangeType1BatchStatementV1<'a> {
     /// Construct a batch for one to eight ordered, distinct commitments.
     ///
@@ -452,19 +416,16 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
             commitment_digest,
         })
     }
-
     /// Return the ordered commitments.
     #[must_use]
     pub fn commitments(&self) -> &[CompressedPointV1] {
         &self.commitments
     }
-
     /// Return the exact batch count.
     #[must_use]
     pub fn len(&self) -> usize {
         self.commitments.len()
     }
-
     /// Return whether this batch is empty.
     ///
     /// A constructed batch is never empty; this method exists to accompany
@@ -473,7 +434,6 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
     pub fn is_empty(&self) -> bool {
         self.commitments.is_empty()
     }
-
     fn child(&self, index: usize) -> VeRangeType1StatementV1<'a> {
         VeRangeType1StatementV1::for_batch(
             self.profile,
@@ -485,7 +445,6 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
         )
     }
 }
-
 /// Canonical opaque payload for a VeRange Type-1 proof.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -502,14 +461,12 @@ pub struct VeRangeType1ProofV1 {
     eta_1: CanonicalScalarV1,
     eta_2: CanonicalScalarV1,
 }
-
 impl VeRangeType1ProofV1 {
     /// Encode this closed proof as canonical Norito bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         norito::codec::encode_adaptive(self)
     }
-
     /// Decode exactly one canonical Norito proof.
     ///
     /// # Errors
@@ -535,17 +492,14 @@ impl VeRangeType1ProofV1 {
         proof.validate_wire()?;
         Ok(proof)
     }
-
     /// Return the encoded bit length.
     #[must_use]
     pub const fn bit_length(&self) -> u16 {
         self.bit_length
     }
-
     fn profile(&self) -> Result<VeRangeBitLengthV1, VeRangeError> {
         VeRangeBitLengthV1::from_bits(self.bit_length)
     }
-
     fn validate_wire(&self) -> Result<(), VeRangeError> {
         if self.version != VERANGE_TYPE1_PROOF_VERSION_V1 {
             return Err(VeRangeError::UnsupportedProofVersion {
@@ -584,7 +538,6 @@ impl VeRangeType1ProofV1 {
         Ok(())
     }
 }
-
 /// Canonical ordered wrapper of independent Type-1 proofs.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -595,14 +548,12 @@ pub struct VeRangeType1BatchProofV1 {
     bit_length: u16,
     proofs: Vec<VeRangeType1ProofV1>,
 }
-
 impl VeRangeType1BatchProofV1 {
     /// Encode this ordered batch as canonical Norito.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         norito::codec::encode_adaptive(self)
     }
-
     /// Decode exactly one bounded canonical batch.
     ///
     /// # Errors
@@ -628,13 +579,11 @@ impl VeRangeType1BatchProofV1 {
         proof.validate_wire()?;
         Ok(proof)
     }
-
     /// Return the number of child proofs.
     #[must_use]
     pub fn len(&self) -> usize {
         self.proofs.len()
     }
-
     /// Return whether no child proof is present.
     ///
     /// A decoded or constructed batch is never empty.
@@ -642,7 +591,6 @@ impl VeRangeType1BatchProofV1 {
     pub fn is_empty(&self) -> bool {
         self.proofs.is_empty()
     }
-
     fn validate_wire(&self) -> Result<(), VeRangeError> {
         if self.version != VERANGE_TYPE1_PROOF_VERSION_V1 {
             return Err(VeRangeError::UnsupportedProofVersion {
@@ -665,7 +613,6 @@ impl VeRangeType1BatchProofV1 {
         Ok(())
     }
 }
-
 /// VeRange proof construction or verification failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum VeRangeError {
@@ -764,7 +711,6 @@ pub enum VeRangeError {
     #[error("VeRange prover self-check failed")]
     ProverSelfCheckFailed,
 }
-
 /// Commit to a value under the exact generator basis for `profile`.
 ///
 /// # Errors
@@ -785,7 +731,6 @@ pub fn commit(
     let point = parameters.g * Scalar::from(value) + parameters.q * blinding.expose_scalar();
     Ok(CompressedPointV1::from_projective(point)?)
 }
-
 /// Create a non-interactive VeRange Type-1 proof.
 ///
 /// All masks are sampled independently and uniformly from non-zero canonical
@@ -809,7 +754,6 @@ where
     let mut checked_rng = health_checked_p256_rng_v1(rng)?;
     prove_validated(statement, value, blinding, &mut checked_rng)
 }
-
 fn validate_prover_witness(
     statement: &VeRangeType1StatementV1<'_>,
     value: u64,
@@ -826,7 +770,6 @@ fn validate_prover_witness(
     }
     Ok(())
 }
-
 fn prove_validated<R>(
     statement: &VeRangeType1StatementV1<'_>,
     value: u64,
@@ -850,7 +793,6 @@ where
     }
     Err(VeRangeError::ProverRestartExhausted)
 }
-
 fn prove_once<R>(
     statement: &VeRangeType1StatementV1<'_>,
     value: u64,
@@ -864,7 +806,6 @@ where
     let rows = statement.profile.rows();
     let columns = statement.profile.columns();
     let matrix_len = rows * columns;
-
     let mut weights = Vec::with_capacity(matrix_len);
     for row in 0..rows {
         for column in 0..columns {
@@ -879,12 +820,10 @@ where
             weights.push(weight);
         }
     }
-
     let mut r_jk = Vec::with_capacity(matrix_len);
     for _ in 0..matrix_len {
         r_jk.push(random_nonzero_scalar(rng)?);
     }
-
     let mut r_w = Vec::with_capacity(columns);
     let mut r_w_sum = Scalar::ZERO;
     for _ in 0..columns - 1 {
@@ -897,14 +836,12 @@ where
         return Err(P256EngineError::ZeroScalar.into());
     }
     r_w.push(last_r_w);
-
     let mut r_t = Vec::with_capacity(columns);
     for _ in 0..columns {
         r_t.push(random_nonzero_scalar(rng)?);
     }
     let r_r = random_nonzero_scalar(rng)?;
     let r_s = random_nonzero_scalar(rng)?;
-
     let mut w_commitments = Vec::with_capacity(columns);
     let mut t_commitments = Vec::with_capacity(columns);
     for column in 0..columns {
@@ -923,11 +860,9 @@ where
         w_commitments.push(CompressedPointV1::from_projective(w_point)?);
         t_commitments.push(CompressedPointV1::from_projective(t_point)?);
     }
-
     let sum_r_jk = r_jk.iter().copied().fold(Scalar::ZERO, |sum, r| sum + r);
     let r_commitment =
         CompressedPointV1::from_projective(parameters.g * sum_r_jk + parameters.q * r_r)?;
-
     let mut s_point = ProjectivePoint::IDENTITY;
     for row in 0..rows {
         let row_square_sum = (0..columns).fold(Scalar::ZERO, |sum, column| {
@@ -938,7 +873,6 @@ where
     }
     s_point += parameters.q * r_s;
     let s_commitment = CompressedPointV1::from_projective(s_point)?;
-
     let mut transcript = proof_transcript(
         statement,
         &w_commitments,
@@ -957,7 +891,6 @@ where
                 .to_scalar()?,
         );
     }
-
     let mut responses = Vec::with_capacity(matrix_len);
     for row in 0..rows {
         for column in 0..columns {
@@ -975,7 +908,6 @@ where
         .iter()
         .zip(&epsilon)
         .fold(r_r, |sum, (mask, challenge)| sum + *mask * *challenge);
-
     let proof = VeRangeType1ProofV1 {
         version: VERANGE_TYPE1_PROOF_VERSION_V1,
         bit_length: statement.profile.bits(),
@@ -990,7 +922,6 @@ where
     proof.validate_wire()?;
     Ok(proof)
 }
-
 /// Verify a VeRange Type-1 proof against its externally supplied commitment.
 ///
 /// # Errors
@@ -1012,7 +943,6 @@ pub fn verify(
     if statement.transcript_binding.generator_digest != parameters.generator_digest {
         return Err(VeRangeError::GeneratorDigestMismatch);
     }
-
     let w = proof
         .w_commitments
         .iter()
@@ -1035,7 +965,6 @@ pub fn verify(
         .collect::<Result<Vec<_>, _>>()?;
     let eta_1 = proof.eta_1.to_scalar()?;
     let eta_2 = proof.eta_2.to_scalar()?;
-
     let mut transcript = proof_transcript(
         statement,
         &proof.w_commitments,
@@ -1056,7 +985,6 @@ pub fn verify(
                 .to_scalar()?,
         );
     }
-
     let mut left_range = parameters.q * eta_1;
     for row in 0..rows {
         let exponent = (0..columns).fold(Scalar::ZERO, |sum, column| {
@@ -1075,7 +1003,6 @@ pub fn verify(
     if left_range != right_range {
         return Err(VeRangeError::RangeEquationFailed);
     }
-
     let response_sum = responses
         .iter()
         .copied()
@@ -1088,7 +1015,6 @@ pub fn verify(
     if left_response != right_response {
         return Err(VeRangeError::ResponseEquationFailed);
     }
-
     let external = statement.commitment.to_projective()?;
     let column_sum = w
         .iter()
@@ -1099,7 +1025,6 @@ pub fn verify(
     }
     Ok(())
 }
-
 /// Decode and verify canonical opaque proof bytes in one bounded operation.
 ///
 /// # Errors
@@ -1113,7 +1038,6 @@ pub fn verify_encoded(
     let proof = VeRangeType1ProofV1::decode_exact(proof_bytes)?;
     verify(statement, &proof)
 }
-
 /// Prove every commitment in an ordered Type-1 batch independently.
 ///
 /// This is a conservative composition, not the aggregated protocol in §3.3 of
@@ -1163,7 +1087,6 @@ where
     verify_batch(statement, &batch).map_err(|_| VeRangeError::ProverSelfCheckFailed)?;
     Ok(batch)
 }
-
 /// Verify every ordered child of an independent Type-1 batch.
 ///
 /// # Errors
@@ -1191,7 +1114,6 @@ pub fn verify_batch(
     }
     Ok(())
 }
-
 /// Decode and verify exact opaque batch bytes.
 ///
 /// # Errors
@@ -1205,7 +1127,6 @@ pub fn verify_batch_encoded(
     let proof = VeRangeType1BatchProofV1::decode_exact(proof_bytes)?;
     verify_batch(statement, &proof)
 }
-
 fn proof_transcript(
     statement: &VeRangeType1StatementV1<'_>,
     w: &[CompressedPointV1],
@@ -1238,7 +1159,6 @@ fn proof_transcript(
     transcript.append_point(b"S", s)?;
     Ok(transcript)
 }
-
 fn ordered_commitment_digest(commitments: &[CompressedPointV1]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(BATCH_COMMITMENT_DIGEST_DOMAIN_V1);
@@ -1252,11 +1172,9 @@ fn ordered_commitment_digest(commitments: &[CompressedPointV1]) -> [u8; 32] {
     }
     hash.finalize().into()
 }
-
 fn matrix_index(row: usize, column: usize, columns: usize) -> usize {
     row * columns + column
 }
-
 fn scalar_power_or_zero(bit_index: usize, bit_length: u16) -> Scalar {
     if bit_index < usize::from(bit_length) {
         scalar_power_of_two(bit_index)
@@ -1264,7 +1182,6 @@ fn scalar_power_or_zero(bit_index: usize, bit_length: u16) -> Scalar {
         Scalar::ZERO
     }
 }
-
 fn scalar_power_of_two(exponent: usize) -> Scalar {
     let mut value = Scalar::ONE;
     for _ in 0..exponent {
@@ -1272,37 +1189,30 @@ fn scalar_power_of_two(exponent: usize) -> Scalar {
     }
     value
 }
-
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
-
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl KatRng {
         fn new(seed: [u8; 32]) -> Self {
             Self { seed, counter: 0 }
         }
     }
-
     impl RngCore for KatRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_be_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_be_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, dest: &mut [u8]) {
             let mut offset = 0;
             while offset < dest.len() {
@@ -1317,37 +1227,29 @@ mod tests {
                 offset += take;
             }
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), RngError> {
             self.fill_bytes(dest);
             Ok(())
         }
     }
-
     impl CryptoRng for KatRng {}
-
     #[derive(Clone, Copy)]
     enum AdversarialRngMode {
         Periodic,
         PartialFailure,
         Panic,
     }
-
     struct AdversarialRng(AdversarialRngMode);
-
     impl RngCore for AdversarialRng {
         fn next_u32(&mut self) -> u32 {
             panic!("VeRange must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("VeRange must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("VeRange must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             match self.0 {
                 AdversarialRngMode::Periodic => {
@@ -1368,15 +1270,12 @@ mod tests {
             }
         }
     }
-
     impl CryptoRng for AdversarialRng {}
-
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[31] = value;
         SecretScalarV1::from_bytes(bytes).expect("test scalar")
     }
-
     fn binding(profile: VeRangeBitLengthV1) -> TranscriptBindingV1<'static> {
         let parameters = VeRangeParametersV1::for_profile(profile).expect("parameters");
         TranscriptBindingV1 {
@@ -1392,7 +1291,6 @@ mod tests {
             generator_digest: parameters.generator_digest(),
         }
     }
-
     fn fixture(
         profile: VeRangeBitLengthV1,
         value: u64,
@@ -1409,7 +1307,6 @@ mod tests {
         let proof = prove(&statement, value, &blinding, &mut rng).expect("proof");
         (statement, blinding, proof)
     }
-
     #[test]
     fn both_closed_profiles_roundtrip_and_verify() {
         for (profile, values) in [
@@ -1423,7 +1320,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn ordered_batch_proves_every_commitment_without_shared_challenges() {
         let profile = VeRangeBitLengthV1::Bits32;
@@ -1441,22 +1337,18 @@ mod tests {
         assert_eq!(proof.len(), values.len());
         verify_batch(&statement, &proof).expect("batch verify");
         verify_batch_encoded(&statement, &proof.encode()).expect("encoded batch");
-
         let mut reordered = proof.clone();
         reordered.proofs.swap(0, 1);
         assert!(verify_batch(&statement, &reordered).is_err());
-
         let mut duplicated = proof.clone();
         duplicated.proofs[1] = duplicated.proofs[0].clone();
         assert!(verify_batch(&statement, &duplicated).is_err());
-
         let mut reordered_commitments = statement.commitments().to_vec();
         reordered_commitments.swap(0, 1);
         let reordered_statement =
             VeRangeType1BatchStatementV1::new(profile, reordered_commitments, binding(profile))
                 .expect("reordered statement");
         assert!(verify_batch(&reordered_statement, &proof).is_err());
-
         let other_blindings = [scalar(13), scalar(17), scalar(19), scalar(23)];
         let other_commitments = values
             .iter()
@@ -1472,7 +1364,6 @@ mod tests {
         let mut transplanted = proof.clone();
         transplanted.proofs[2] = other_proof.proofs[2].clone();
         assert!(verify_batch(&statement, &transplanted).is_err());
-
         let mut missing = proof.clone();
         missing.proofs.pop();
         assert!(matches!(
@@ -1480,7 +1371,6 @@ mod tests {
             Err(VeRangeError::BatchLengthMismatch { .. })
         ));
     }
-
     #[test]
     fn batch_rejects_empty_over_cap_duplicate_and_witness_count_mismatch() {
         let profile = VeRangeBitLengthV1::Bits32;
@@ -1488,7 +1378,6 @@ mod tests {
             VeRangeType1BatchStatementV1::new(profile, Vec::new(), binding(profile)),
             Err(VeRangeError::InvalidBatchCount { count: 0, .. })
         ));
-
         let blinding = scalar(3);
         let commitment = commit(profile, 1, &blinding).expect("commitment");
         assert!(matches!(
@@ -1507,7 +1396,6 @@ mod tests {
             ),
             Err(VeRangeError::DuplicateBatchCommitment { index: 1 })
         ));
-
         let statement =
             VeRangeType1BatchStatementV1::new(profile, vec![commitment], binding(profile))
                 .expect("statement");
@@ -1517,7 +1405,6 @@ mod tests {
             Err(VeRangeError::BatchLengthMismatch { .. })
         ));
     }
-
     #[test]
     fn batch_accepts_exact_first_release_maximum() {
         let profile = VeRangeBitLengthV1::Bits32;
@@ -1546,7 +1433,6 @@ mod tests {
         assert_eq!(proof.len(), MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1);
         verify_batch_encoded(&statement, &proof.encode()).expect("max batch verify");
     }
-
     #[test]
     fn batch_decoder_rejects_truncation_trailing_and_mixed_profiles() {
         let profile = VeRangeBitLengthV1::Bits32;
@@ -1568,7 +1454,6 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(VeRangeType1BatchProofV1::decode_exact(&trailing).is_err());
-
         let (_, _, proof64) = fixture(VeRangeBitLengthV1::Bits64, 3);
         let mut mixed = proof;
         mixed.proofs[1] = proof64;
@@ -1576,7 +1461,6 @@ mod tests {
             VeRangeType1BatchProofV1::decode_exact(&mixed.encode()),
             Err(VeRangeError::ProfileMismatch)
         ));
-
         let empty = VeRangeType1BatchProofV1 {
             version: VERANGE_TYPE1_PROOF_VERSION_V1,
             bit_length: 32,
@@ -1586,7 +1470,6 @@ mod tests {
             VeRangeType1BatchProofV1::decode_exact(&empty.encode()),
             Err(VeRangeError::InvalidBatchCount { count: 0, .. })
         ));
-
         let child = mixed.proofs[0].clone();
         let over_cap = VeRangeType1BatchProofV1 {
             version: VERANGE_TYPE1_PROOF_VERSION_V1,
@@ -1597,21 +1480,18 @@ mod tests {
             VeRangeType1BatchProofV1::decode_exact(&over_cap.encode()),
             Err(VeRangeError::InvalidBatchCount { .. })
         ));
-
         let mut unknown_version = mixed.clone();
         unknown_version.version += 1;
         assert!(matches!(
             VeRangeType1BatchProofV1::decode_exact(&unknown_version.encode()),
             Err(VeRangeError::UnsupportedProofVersion { .. })
         ));
-
         let mut unsupported_profile = mixed;
         unsupported_profile.bit_length = 63;
         assert!(matches!(
             VeRangeType1BatchProofV1::decode_exact(&unsupported_profile.encode()),
             Err(VeRangeError::UnsupportedBitLength { bits: 63 })
         ));
-
         assert!(matches!(
             VeRangeType1BatchProofV1::decode_exact(&vec![
                 0;
@@ -1620,7 +1500,6 @@ mod tests {
             Err(VeRangeError::P256(P256EngineError::ProofTooLarge { .. }))
         ));
     }
-
     #[test]
     fn closed_parameter_set_initializes_with_a_shared_digest() {
         let bits_32 =
@@ -1631,13 +1510,11 @@ mod tests {
             VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits64).unwrap_or_else(|error| {
                 panic!("64-bit VeRange parameter initialization failed: {error:?}")
             });
-
         assert_eq!(bits_32.profile(), VeRangeBitLengthV1::Bits32);
         assert_eq!(bits_64.profile(), VeRangeBitLengthV1::Bits64);
         assert_eq!(bits_32.parameter_digest(), bits_64.parameter_digest());
         assert_ne!(bits_32.generator_digest(), bits_64.generator_digest());
     }
-
     #[test]
     fn deterministic_known_answer_vector_is_stable() {
         let (statement, _, proof) = fixture(VeRangeBitLengthV1::Bits32, 0xdead_beef);
@@ -1676,7 +1553,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn rejects_32_bit_boundary_and_false_opening() {
         let blinding = scalar(5);
@@ -1684,7 +1560,6 @@ mod tests {
             commit(VeRangeBitLengthV1::Bits32, 1_u64 << 32, &blinding),
             Err(VeRangeError::WitnessOutOfRange { .. })
         ));
-
         let profile = VeRangeBitLengthV1::Bits32;
         let commitment = commit(profile, 9, &blinding).expect("commitment");
         let statement =
@@ -1695,7 +1570,6 @@ mod tests {
             Err(VeRangeError::CommitmentOpeningMismatch)
         ));
     }
-
     #[test]
     fn prover_entropy_is_health_checked_after_witness_validation() {
         let profile = VeRangeBitLengthV1::Bits32;
@@ -1704,7 +1578,6 @@ mod tests {
         let commitment = commit(profile, value, &blinding).expect("commitment");
         let statement =
             VeRangeType1StatementV1::new(profile, commitment, binding(profile)).expect("statement");
-
         assert!(matches!(
             prove(
                 &statement,
@@ -1735,7 +1608,6 @@ mod tests {
             Err(VeRangeError::CommitmentOpeningMismatch)
         ));
     }
-
     #[test]
     fn exact_decoder_rejects_every_truncation_and_trailing_data() {
         let (_, _, proof) = fixture(VeRangeBitLengthV1::Bits32, 17);
@@ -1754,7 +1626,6 @@ mod tests {
             Err(VeRangeError::P256(P256EngineError::ProofTooLarge { .. }))
         ));
     }
-
     #[test]
     fn decoder_preflights_oversized_and_forged_vector_counts() {
         let (_, _, mut proof) = fixture(VeRangeBitLengthV1::Bits32, 19);
@@ -1767,7 +1638,6 @@ mod tests {
             VeRangeType1ProofV1::decode_exact(&encoded),
             Err(VeRangeError::P256(P256EngineError::InvalidProofEncoding))
         ));
-
         let encoded_count = 65_u64.to_le_bytes();
         let count_offset = encoded
             .windows(encoded_count.len())
@@ -1780,18 +1650,15 @@ mod tests {
             Err(VeRangeError::P256(P256EngineError::InvalidProofEncoding))
         ));
     }
-
     #[test]
     fn decoder_rejects_unknown_version_shape_noncanonical_scalar_and_identity() {
         let (_, _, proof) = fixture(VeRangeBitLengthV1::Bits32, 23);
-
         let mut unknown = proof.clone();
         unknown.version = 2;
         assert!(matches!(
             VeRangeType1ProofV1::decode_exact(&unknown.encode()),
             Err(VeRangeError::UnsupportedProofVersion { version: 2 })
         ));
-
         let mut malformed_shapes = Vec::new();
         let mut changed = proof.clone();
         changed.w_commitments.pop();
@@ -1817,14 +1684,12 @@ mod tests {
                 Err(VeRangeError::InvalidProofShape { .. })
             ));
         }
-
         let mut unsupported_profile = proof.clone();
         unsupported_profile.bit_length = 31;
         assert!(matches!(
             VeRangeType1ProofV1::decode_exact(&unsupported_profile.encode()),
             Err(VeRangeError::UnsupportedBitLength { bits: 31 })
         ));
-
         let mut noncanonical = proof.clone();
         noncanonical.eta_1 = CanonicalScalarV1::from_unchecked_bytes(
             hex::decode("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
@@ -1836,16 +1701,13 @@ mod tests {
             VeRangeType1ProofV1::decode_exact(&noncanonical.encode()),
             Err(VeRangeError::P256(P256EngineError::InvalidScalarEncoding))
         ));
-
         let mut identity_form = proof;
         identity_form.r_commitment = CompressedPointV1::from_unchecked_bytes([0; 33]);
         assert!(VeRangeType1ProofV1::decode_exact(&identity_form.encode()).is_err());
     }
-
     #[test]
     fn every_bound_statement_field_changes_verification() {
         let (statement, _, proof) = fixture(VeRangeBitLengthV1::Bits32, 41);
-
         let different_commitment =
             commit(VeRangeBitLengthV1::Bits32, 42, &scalar(9)).expect("different commitment");
         let changed_commitment = VeRangeType1StatementV1::new(
@@ -1855,7 +1717,6 @@ mod tests {
         )
         .expect("statement");
         assert!(verify(&changed_commitment, &proof).is_err());
-
         let mut changed_bindings = Vec::new();
         let mut changed = statement.transcript_binding;
         changed.network_id = &[0x12; 32];
@@ -1888,7 +1749,6 @@ mod tests {
                     .expect("bound statement");
             assert!(verify(&changed, &proof).is_err());
         }
-
         let mut wrong_parameter = statement.transcript_binding;
         wrong_parameter.parameter_digest[0] ^= 1;
         assert!(matches!(
@@ -1902,11 +1762,9 @@ mod tests {
             Err(VeRangeError::GeneratorDigestMismatch)
         ));
     }
-
     #[test]
     fn mutations_of_each_proof_component_are_rejected() {
         let (statement, _, proof) = fixture(VeRangeBitLengthV1::Bits64, 0x1234_5678_9abc_def0);
-
         for index in 0..proof.w_commitments.len() {
             let mut changed = proof.clone();
             changed.w_commitments[index] = proof.t_commitments[index];
@@ -1923,7 +1781,6 @@ mod tests {
             changed.responses[index] = CanonicalScalarV1::from_scalar(scalar);
             assert!(verify(&statement, &changed).is_err());
         }
-
         let mut changed = proof.clone();
         changed.r_commitment = proof.s_commitment;
         assert!(verify(&statement, &changed).is_err());
@@ -1939,7 +1796,6 @@ mod tests {
             CanonicalScalarV1::from_scalar(changed.eta_2.to_scalar().expect("eta 2") + Scalar::ONE);
         assert!(verify(&statement, &changed).is_err());
     }
-
     #[test]
     fn proof_profile_mismatch_and_generator_relation_substitution_fail() {
         let (_, _, proof32) = fixture(VeRangeBitLengthV1::Bits32, 5);
@@ -1957,7 +1813,6 @@ mod tests {
             parameters64.generator_digest(),
             "subprofiles retain independently bound bases"
         );
-
         let blinding = scalar(7);
         let commitment64 = commit(VeRangeBitLengthV1::Bits64, 5, &blinding).expect("commitment64");
         let statement64 = VeRangeType1StatementV1::new(
@@ -1970,7 +1825,6 @@ mod tests {
             verify(&statement64, &proof32),
             Err(VeRangeError::ProfileMismatch)
         ));
-
         let mut cross_profile_binding = binding(VeRangeBitLengthV1::Bits32);
         cross_profile_binding.generator_digest = parameters64.generator_digest();
         assert!(matches!(
@@ -1981,7 +1835,6 @@ mod tests {
             ),
             Err(VeRangeError::GeneratorDigestMismatch)
         ));
-
         let mut encodings = parameters32.row_generators();
         encodings.push(parameters32.value_generator());
         encodings.push(parameters32.value_generator());
@@ -1989,7 +1842,6 @@ mod tests {
             validate_generator_independence(&encodings),
             Err(P256EngineError::GeneratorCollision)
         ));
-
         let mut inverse_encodings = parameters32.row_generators();
         inverse_encodings.push(parameters32.value_generator());
         inverse_encodings.push(

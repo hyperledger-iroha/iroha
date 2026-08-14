@@ -3,29 +3,49 @@
 //! Provides offline helpers to validate JDG attestations and their Secret Data
 //! Node (SDN) commitments against a local registry/policy before submitting
 //! them on-chain.
-
-use std::{
-    fs,
-    io::{self, Cursor, Read},
-    path::PathBuf,
-};
-
+use std::{fs::File, io, path::PathBuf};
 use eyre::{Context, Result, eyre};
 use iroha_core::jurisdiction::JdgSdnEnforcer;
 use iroha_data_model::jurisdiction::{
     JdgAttestation, JdgBlockRange, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRotationPolicy,
 };
 use iroha_data_model::nexus::DataSpaceId;
-use norito::json::{self, JsonDeserialize, JsonSerialize};
-
+use norito::{
+    DecodeLimits, decode_from_bytes_with_limits,
+    json::{self, JsonDeserialize, JsonPreflightLimits, JsonSerialize},
+};
 use crate::{Run, RunContext};
-
+// V1 attestations and registries may carry proof/signature material, but one
+// offline verification input must not grow without bound before its semantic
+// policy is reached. The sequence maximum follows the u16 committee threshold;
+// the smaller registry ceiling keeps map construction finite.
+const JDG_INPUT_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
+const JDG_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = u16::MAX as usize;
+const JDG_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * JDG_JSON_MAX_SEQUENCE_ELEMENTS_V1;
+const JDG_INPUT_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 64 * 1024 * 1024;
+const JDG_INPUT_MAX_NESTING_DEPTH_V1: usize = 32;
+const JDG_SDN_REGISTRY_MAX_RECORDS_V1: usize = 4_096;
+// Binary byte vectors consume sequence elements, so their ceiling follows the
+// complete input corridor. JSON containers retain the committee-derived limit.
+const JDG_BINARY_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    JDG_INPUT_MAX_BYTES_V1,
+    JDG_INPUT_MAX_BYTES_V1,
+    JDG_INPUT_MAX_BYTES_V1,
+    JDG_INPUT_MAX_DECODE_ALLOCATION_BYTES_V1,
+    JDG_INPUT_MAX_NESTING_DEPTH_V1,
+);
+const JDG_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    JDG_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+    JDG_INPUT_MAX_BYTES_V1,
+    JDG_JSON_MAX_TOTAL_ELEMENTS_V1,
+    JDG_INPUT_MAX_DECODE_ALLOCATION_BYTES_V1,
+    JDG_INPUT_MAX_NESTING_DEPTH_V1,
+);
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Validate a JDG attestation (structural + SDN commitments).
     Verify(VerifyArgs),
 }
-
 #[derive(clap::Args, Debug, Default)]
 pub struct VerifyArgs {
     /// Path to the JDG attestation payload (Norito JSON or binary). Reads stdin when omitted.
@@ -47,7 +67,6 @@ pub struct VerifyArgs {
     #[arg(long, value_name = "ID")]
     pub expect_dataspace: Option<u64>,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -55,7 +74,6 @@ impl Run for Command {
         }
     }
 }
-
 fn verify_attestation<C: RunContext>(args: &VerifyArgs, context: &mut C) -> Result<()> {
     let attestation = load_attestation(args.attestation.as_ref())
         .wrap_err("failed to load JDG attestation payload")?;
@@ -65,13 +83,11 @@ fn verify_attestation<C: RunContext>(args: &VerifyArgs, context: &mut C) -> Resu
             dual_publish_blocks: args.dual_publish_blocks,
         },
     };
-
     let enforcer = if let Some(path) = args.sdn_registry.as_ref() {
         Some(load_sdn_enforcer(path, policy).wrap_err("failed to load SDN registry payload")?)
     } else {
         None
     };
-
     let summary = validate_attestation(
         &attestation,
         policy,
@@ -79,11 +95,9 @@ fn verify_attestation<C: RunContext>(args: &VerifyArgs, context: &mut C) -> Resu
         args.current_height,
         args.expect_dataspace.map(DataSpaceId::new),
     )?;
-
     context.println("JDG attestation verified successfully")?;
     context.print_data(&summary)
 }
-
 fn validate_attestation(
     attestation: &JdgAttestation,
     policy: JdgSdnPolicy,
@@ -100,7 +114,6 @@ fn validate_attestation(
             expected
         ));
     }
-
     if let Some(height) = current_height {
         if height < attestation.scope.block_range.start_height
             || height > attestation.scope.block_range.end_height
@@ -118,7 +131,6 @@ fn validate_attestation(
             ));
         }
     }
-
     if let Some(enforcer) = enforcer {
         enforcer
             .validate(attestation)
@@ -128,46 +140,93 @@ fn validate_attestation(
             .validate_with_sdn(policy.require_commitments)
             .wrap_err("attestation failed structural validation")?;
     }
-
     Ok(VerificationSummary::from_attestation(
         attestation,
         policy,
         enforcer.is_some(),
     ))
 }
-
 fn load_attestation(path: Option<&PathBuf>) -> Result<JdgAttestation> {
-    let bytes = read_input_bytes(path)?;
-    if let Ok(attestation) = json::from_slice::<JdgAttestation>(&bytes) {
-        return Ok(attestation);
+    let bytes = read_input_bytes(path, "JDG attestation")?;
+    if first_non_whitespace_byte(&bytes) == Some(b'{') {
+        admit_jdg_json(&bytes, "JDG attestation")?;
+        return norito::with_decode_limits_scope(JDG_JSON_DECODE_LIMITS_V1, || {
+            json::from_slice::<JdgAttestation>(&bytes)
+        })
+        .map_err(|error| eyre!("decode JDG attestation JSON: {error}"));
     }
-    let mut cursor = Cursor::new(bytes);
-    norito::decode_from_reader(&mut cursor).map_err(|err| eyre!("decode attestation: {err}"))
+    decode_from_bytes_with_limits(&bytes, JDG_BINARY_DECODE_LIMITS_V1)
+        .map_err(|error| eyre!("decode JDG attestation Norito: {error}"))
 }
-
 fn load_sdn_enforcer(path: &PathBuf, policy: JdgSdnPolicy) -> Result<JdgSdnEnforcer> {
-    let bytes = read_input_bytes(Some(path))?;
-    if let Ok(records) = json::from_slice::<Vec<JdgSdnKeyRecord>>(&bytes) {
-        return JdgSdnEnforcer::from_records(policy, records)
-            .map_err(|err| eyre!("SDN registry violates rotation policy: {err}"));
-    }
-    let mut cursor = Cursor::new(bytes);
-    JdgSdnEnforcer::from_reader(&mut cursor, policy)
-        .map_err(|err| eyre!("decode SDN registry: {err}"))
-}
-
-fn read_input_bytes(path: Option<&PathBuf>) -> Result<Vec<u8>> {
-    if let Some(path) = path {
-        fs::read(path).with_context(|| format!("failed to read payload from {}", path.display()))
+    let bytes = read_input_bytes(Some(path), "JDG SDN registry")?;
+    let records: Vec<JdgSdnKeyRecord> = if first_non_whitespace_byte(&bytes) == Some(b'[') {
+        admit_jdg_json(&bytes, "JDG SDN registry")?;
+        norito::with_decode_limits_scope(JDG_JSON_DECODE_LIMITS_V1, || json::from_slice(&bytes))
+            .map_err(|error| eyre!("decode JDG SDN registry JSON: {error}"))?
     } else {
-        let mut buf = Vec::new();
-        io::stdin()
-            .read_to_end(&mut buf)
-            .wrap_err("failed to read stdin")?;
-        Ok(buf)
+        decode_from_bytes_with_limits(&bytes, JDG_BINARY_DECODE_LIMITS_V1)
+            .map_err(|error| eyre!("decode JDG SDN registry Norito: {error}"))?
+    };
+    enforce_sdn_registry_record_count(records.len())?;
+    JdgSdnEnforcer::from_records(policy, records)
+        .map_err(|error| eyre!("SDN registry violates rotation policy: {error}"))
+}
+fn enforce_sdn_registry_record_count(records: usize) -> Result<()> {
+    if records > JDG_SDN_REGISTRY_MAX_RECORDS_V1 {
+        return Err(eyre!(
+            "JDG SDN registry contains {} records; the first-release limit is {}",
+            records,
+            JDG_SDN_REGISTRY_MAX_RECORDS_V1
+        ));
+    }
+    Ok(())
+}
+fn first_non_whitespace_byte(bytes: &[u8]) -> Option<u8> {
+    bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+}
+fn admit_jdg_json(bytes: &[u8], label: &str) -> Result<()> {
+    json::preflight_slice(
+        bytes,
+        JsonPreflightLimits::from_decode_limits(JDG_INPUT_MAX_BYTES_V1, JDG_JSON_DECODE_LIMITS_V1),
+    )
+    .map(|_| ())
+    .map_err(|error| eyre!("{label} JSON exceeds its lexical resource bounds: {error}"))
+}
+fn read_input_bytes(path: Option<&PathBuf>, label: &str) -> Result<Vec<u8>> {
+    if let Some(path) = path {
+        let mut file = File::open(path)
+            .with_context(|| format!("failed to open {label} from {}", path.display()))?;
+        let before = file
+            .metadata()
+            .with_context(|| format!("failed to inspect {label} at {}", path.display()))?;
+        if !before.is_file() {
+            return Err(eyre!("{label} must be a regular file: {}", path.display()));
+        }
+        if before.len() > JDG_INPUT_MAX_BYTES_V1 as u64 {
+            return Err(eyre!(
+                "{label} at {} exceeds the first-release limit of {} bytes",
+                path.display(),
+                JDG_INPUT_MAX_BYTES_V1
+            ));
+        }
+        let bytes = super::read_cli_input_bounded(&mut file, JDG_INPUT_MAX_BYTES_V1, label)
+            .with_context(|| format!("failed to read {label} from {}", path.display()))?;
+        let after = file
+            .metadata()
+            .with_context(|| format!("failed to reinspect {label} at {}", path.display()))?;
+        if before.len() != after.len() || after.len() != bytes.len() as u64 {
+            return Err(eyre!("{label} changed while reading: {}", path.display()));
+        }
+        Ok(bytes)
+    } else {
+        super::read_cli_input_bounded(&mut io::stdin().lock(), JDG_INPUT_MAX_BYTES_V1, label)
+            .wrap_err("failed to read JDG payload from stdin")
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct VerificationSummary {
     jurisdiction_id_hex: String,
@@ -183,7 +242,6 @@ struct VerificationSummary {
     sdn_dual_publish_blocks: u64,
     registry_loaded: bool,
 }
-
 impl VerificationSummary {
     fn from_attestation(
         attestation: &JdgAttestation,
@@ -206,12 +264,10 @@ impl VerificationSummary {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
-
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::jurisdiction::{
         JDG_ATTESTATION_VERSION_V1, JDG_SDN_COMMITMENT_VERSION_V1, JdgAttestationScope,
@@ -221,18 +277,15 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use std::str::FromStr;
     use url::Url;
-
     use crate::config_utils::{
         default_alias_cache_policy, default_anonymity_policy, default_rollout_phase,
     };
-
     struct TestContext {
         cfg: iroha::config::Config,
         printed: Vec<String>,
         json_outputs: Vec<String>,
         i18n: Localizer,
     }
-
     impl TestContext {
         fn new() -> Self {
             let key_pair = checked_jurisdiction_ed25519_key_fixture();
@@ -268,12 +321,10 @@ mod tests {
             }
         }
     }
-
     fn checked_jurisdiction_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked jurisdiction fixture key")
     }
-
     #[test]
     fn jurisdiction_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_jurisdiction_ed25519_key_fixture();
@@ -281,31 +332,24 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("jurisdiction fixture key advertises a valid algorithm");
-
         assert_eq!(actual, Algorithm::Ed25519);
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &iroha::config::Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&iroha_data_model::metadata::Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
@@ -315,13 +359,11 @@ mod tests {
             self.json_outputs.push(rendered);
             Ok(())
         }
-
         fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
             self.printed.push(data.to_string());
             Ok(())
         }
     }
-
     fn sample_scope() -> JdgAttestationScope {
         JdgAttestationScope {
             jurisdiction_id: iroha_data_model::jurisdiction::JurisdictionId::new(b"JUR1".to_vec())
@@ -330,7 +372,6 @@ mod tests {
             block_range: JdgBlockRange::new(10, 15).expect("valid range"),
         }
     }
-
     fn sample_attestation(
         scope: &JdgAttestationScope,
         signer: &KeyPair,
@@ -354,7 +395,6 @@ mod tests {
                     .wrap_err("failed to sign test JDG SDN commitment seal")?;
             sdn_commitments.push(commitment);
         }
-
         Ok(JdgAttestation {
             version: JDG_ATTESTATION_VERSION_V1,
             scope: scope.clone(),
@@ -380,16 +420,13 @@ mod tests {
             },
         })
     }
-
     fn write_json_payload<T: JsonSerialize>(value: &T) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         let rendered = norito::json::to_json_pretty(value).expect("serialize");
         file.write_all(rendered.as_bytes()).expect("write payload");
         file
     }
-
     use std::io::Write;
-
     #[test]
     fn verifies_attestation_with_registry() -> Result<()> {
         let scope = sample_scope();
@@ -402,10 +439,8 @@ mod tests {
             retired_at: None,
             rotation_parent: None,
         }];
-
         let attestation_file = write_json_payload(&attestation);
         let registry_file = write_json_payload(&registry);
-
         let mut ctx = TestContext::new();
         let args = VerifyArgs {
             attestation: Some(attestation_file.path().to_path_buf()),
@@ -415,7 +450,6 @@ mod tests {
             current_height: Some(12),
             expect_dataspace: Some(scope.dataspace.as_u64()),
         };
-
         verify_attestation(&args, &mut ctx).expect("validation succeeds");
         assert!(
             ctx.printed
@@ -430,7 +464,6 @@ mod tests {
         assert_eq!(summary.signer_count, 1);
         Ok(())
     }
-
     #[test]
     fn rejects_missing_sdn_commitments_when_required() -> Result<()> {
         let scope = sample_scope();
@@ -443,10 +476,8 @@ mod tests {
             retired_at: None,
             rotation_parent: None,
         }];
-
         let attestation_file = write_json_payload(&attestation);
         let registry_file = write_json_payload(&registry);
-
         let mut ctx = TestContext::new();
         let args = VerifyArgs {
             attestation: Some(attestation_file.path().to_path_buf()),
@@ -456,7 +487,6 @@ mod tests {
             current_height: Some(12),
             expect_dataspace: None,
         };
-
         let err = verify_attestation(&args, &mut ctx).expect_err("validation must fail");
         let msg = format!("{err:?}");
         assert!(
@@ -465,5 +495,38 @@ mod tests {
             "unexpected error: {msg}"
         );
         Ok(())
+    }
+    #[test]
+    fn jdg_json_depth_and_registry_count_bounds_fail_at_first_overflow() {
+        enforce_sdn_registry_record_count(JDG_SDN_REGISTRY_MAX_RECORDS_V1)
+            .expect("exact registry count is admitted");
+        let error = enforce_sdn_registry_record_count(JDG_SDN_REGISTRY_MAX_RECORDS_V1 + 1)
+            .expect_err("first over-limit registry record must fail");
+        assert!(error.to_string().contains("first-release limit"));
+        let exact = format!(
+            "{}0{}",
+            "[".repeat(JDG_INPUT_MAX_NESTING_DEPTH_V1 - 1),
+            "]".repeat(JDG_INPUT_MAX_NESTING_DEPTH_V1 - 1)
+        );
+        admit_jdg_json(exact.as_bytes(), "fixture").expect("exact JSON depth is admitted");
+        let over = format!(
+            "{}0{}",
+            "[".repeat(JDG_INPUT_MAX_NESTING_DEPTH_V1),
+            "]".repeat(JDG_INPUT_MAX_NESTING_DEPTH_V1)
+        );
+        let error = admit_jdg_json(over.as_bytes(), "fixture")
+            .expect_err("first over-limit JSON depth must fail");
+        assert!(error.to_string().contains("lexical resource bounds"));
+    }
+    #[test]
+    fn jdg_file_size_is_rejected_before_decode() {
+        let directory = tempfile::tempdir().expect("create JDG input directory");
+        let path = directory.path().join("attestation.bin");
+        let file = File::create(&path).expect("create sparse JDG input");
+        file.set_len((JDG_INPUT_MAX_BYTES_V1 + 1) as u64)
+            .expect("extend sparse JDG input");
+        let error = read_input_bytes(Some(&path), "fixture")
+            .expect_err("oversized JDG input must fail before decode");
+        assert!(error.to_string().contains("first-release limit"));
     }
 }

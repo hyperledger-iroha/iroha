@@ -1,9 +1,7 @@
-use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::{fs, path::Path};
 use tempfile::tempdir;
-
 #[test]
 fn soranet_gateway_m1_bundle_is_emitted() {
     let temp = tempdir().expect("tempdir");
@@ -16,7 +14,6 @@ fn soranet_gateway_m1_bundle_is_emitted() {
         .join("soranet")
         .join("gateway_m1")
         .join("alpha_config.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .current_dir(workspace_root)
@@ -37,11 +34,9 @@ fn soranet_gateway_m1_bundle_is_emitted() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let summary_path = out_dir.join("gateway_m1_summary.json");
     let summary_bytes = fs::read(&summary_path).expect("summary JSON exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("summary parses");
-
     let pops = summary["pops"].as_array().expect("pops array");
     assert_eq!(pops.len(), 3, "alpha bundle should include three pops");
     for pop in pops {
@@ -66,7 +61,6 @@ fn soranet_gateway_m1_bundle_is_emitted() {
             "ops summary missing for {name}"
         );
     }
-
     let billing_total = summary["billing"]["totals_micros"]
         .as_u64()
         .expect("billing totals_micros");
@@ -81,7 +75,6 @@ fn soranet_gateway_m1_bundle_is_emitted() {
         out_dir.join(invoice_path).is_file(),
         "billing invoice missing"
     );
-
     let fed_summary = summary["federated_ops"]["summary"]
         .as_str()
         .expect("federated summary path");

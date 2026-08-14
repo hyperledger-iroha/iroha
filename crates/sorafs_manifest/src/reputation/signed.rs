@@ -1,17 +1,13 @@
 //! Externally governed signatures and freshness policy for reputation snapshots.
-
-use std::cmp::Ordering;
-
-use blake3::Hasher;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-
 use super::{
     MAX_REPUTATION_PROVIDERS, MAX_REPUTATION_TRUST_EDGES, ReputationProviderInputV1,
     ReputationSnapshotV1, ReputationTrustEdgeV1, ReputationValidationError,
     build_reputation_snapshot_with_trust_edges,
 };
-
+use blake3::Hasher;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::cmp::Ordering;
+use thiserror::Error;
 /// Schema version for [`ReputationSnapshotTrustPolicyV1`].
 pub const REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1: u8 = 1;
 /// Schema version for [`ReputationTrustedSignerV1`].
@@ -36,7 +32,6 @@ pub const MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES: usize = 64 * 1024;
 pub const MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum cumulative allocation allowed while decoding a signed snapshot.
 pub const MAX_SIGNED_REPUTATION_SNAPSHOT_DECODE_ALLOCATED_BYTES: usize = 256 * 1024 * 1024;
-
 /// Canonical scoring inputs required to independently replay a snapshot.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -49,7 +44,6 @@ pub struct ReputationScoringEvidenceV1 {
     /// Trust edges in canonical source/destination order.
     pub trust_edges: Vec<ReputationTrustEdgeV1>,
 }
-
 impl ReputationScoringEvidenceV1 {
     /// Validate canonical ordering, uniqueness, and input bounds.
     pub fn validate(&self) -> Result<(), SignedReputationSnapshotError> {
@@ -85,7 +79,6 @@ impl ReputationScoringEvidenceV1 {
         super::validate_trust_edges(&self.trust_edges)?;
         Ok(())
     }
-
     /// Return the domain-separated canonical evidence digest.
     pub fn canonical_digest(&self) -> Result<[u8; 32], SignedReputationSnapshotError> {
         self.validate()?;
@@ -96,7 +89,6 @@ impl ReputationScoringEvidenceV1 {
             MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES,
         )
     }
-
     /// Return canonical bytes after exact preflight against the envelope cap.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedReputationSnapshotError> {
         self.validate()?;
@@ -106,7 +98,6 @@ impl ReputationScoringEvidenceV1 {
             MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES,
         )
     }
-
     /// Replay all fixed-point scoring and require an exact snapshot match.
     pub fn verify_snapshot(
         &self,
@@ -128,7 +119,6 @@ impl ReputationScoringEvidenceV1 {
         Ok(())
     }
 }
-
 /// One externally governed Ed25519 signer authorized by a trust policy.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -141,7 +131,6 @@ pub struct ReputationTrustedSignerV1 {
     /// Strong canonical Ed25519 public key.
     pub public_key: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 }
-
 impl ReputationTrustedSignerV1 {
     /// Validate the signer identifier and public key.
     pub fn validate(&self) -> Result<(), SignedReputationSnapshotError> {
@@ -160,7 +149,6 @@ impl ReputationTrustedSignerV1 {
         Ok(())
     }
 }
-
 /// External trust and freshness policy used to admit reputation snapshots.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -188,7 +176,6 @@ pub struct ReputationSnapshotTrustPolicyV1 {
     /// auditable while preventing those keys from contributing to quorum.
     pub revoked_signer_ids: Vec<String>,
 }
-
 impl ReputationSnapshotTrustPolicyV1 {
     /// Validate all policy bounds and canonical signer ordering.
     pub fn validate(&self) -> Result<(), SignedReputationSnapshotError> {
@@ -254,7 +241,6 @@ impl ReputationSnapshotTrustPolicyV1 {
             previous_keys.push(signer.public_key);
             previous_id = Some(&signer.signer_id);
         }
-
         if self.revoked_signer_ids.len() > self.signers.len() {
             return Err(SignedReputationSnapshotError::TooManyRevocations {
                 count: self.revoked_signer_ids.len(),
@@ -301,7 +287,6 @@ impl ReputationSnapshotTrustPolicyV1 {
         }
         Ok(())
     }
-
     /// Return the domain-separated canonical digest of this policy.
     pub fn canonical_digest(&self) -> Result<[u8; 32], SignedReputationSnapshotError> {
         self.validate()?;
@@ -312,7 +297,6 @@ impl ReputationSnapshotTrustPolicyV1 {
             MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES,
         )
     }
-
     /// Return canonical policy bytes after exact size preflight.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedReputationSnapshotError> {
         self.validate()?;
@@ -322,21 +306,18 @@ impl ReputationSnapshotTrustPolicyV1 {
             MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES,
         )
     }
-
     fn signer(&self, signer_id: &str) -> Option<&ReputationTrustedSignerV1> {
         self.signers
             .binary_search_by(|signer| signer.signer_id.as_str().cmp(signer_id))
             .ok()
             .map(|index| &self.signers[index])
     }
-
     fn is_revoked(&self, signer_id: &str) -> bool {
         self.revoked_signer_ids
             .binary_search_by(|revoked| revoked.as_str().cmp(signer_id))
             .is_ok()
     }
 }
-
 /// One signature over a reputation snapshot and external policy digest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -347,7 +328,6 @@ pub struct ReputationSnapshotSignatureV1 {
     /// Canonical fixed-width Ed25519 signature.
     pub signature: [u8; ed25519_dalek::SIGNATURE_LENGTH],
 }
-
 /// Reputation snapshot plus externally authorized threshold signatures.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -366,7 +346,6 @@ pub struct SignedReputationSnapshotV1 {
     /// Distinct signatures in strictly increasing signer-id order.
     pub signatures: Vec<ReputationSnapshotSignatureV1>,
 }
-
 impl SignedReputationSnapshotV1 {
     /// Validate all policy-independent structure and embedded scoring evidence.
     pub fn validate_structure(&self) -> Result<(), SignedReputationSnapshotError> {
@@ -394,7 +373,6 @@ impl SignedReputationSnapshotV1 {
             return Err(SignedReputationSnapshotError::ScoringEvidenceDigestMismatch);
         }
         self.scoring_evidence.verify_snapshot(&self.snapshot)?;
-
         if self.signatures.is_empty() {
             return Err(SignedReputationSnapshotError::EmptySnapshotSignatures);
         }
@@ -430,7 +408,6 @@ impl SignedReputationSnapshotV1 {
         }
         Ok(())
     }
-
     /// Return the exact digest trusted signers must sign.
     pub fn signing_digest(&self) -> Result<[u8; 32], SignedReputationSnapshotError> {
         snapshot_signing_digest(
@@ -439,7 +416,6 @@ impl SignedReputationSnapshotV1 {
             self.scoring_evidence_digest,
         )
     }
-
     /// Return canonical envelope bytes after structural validation and exact size preflight.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedReputationSnapshotError> {
         self.validate_structure()?;
@@ -449,7 +425,6 @@ impl SignedReputationSnapshotV1 {
             MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES,
         )
     }
-
     /// Verify structure, external policy, time bounds, and every signature.
     pub fn verify(
         &self,
@@ -463,7 +438,6 @@ impl SignedReputationSnapshotV1 {
             return Err(SignedReputationSnapshotError::PolicyDigestMismatch);
         }
         validate_admission_time(policy, &self.snapshot, admitted_at_unix)?;
-
         if self.signatures.len() > policy.signers.len() {
             return Err(SignedReputationSnapshotError::TooManySnapshotSignatures {
                 count: self.signatures.len(),
@@ -476,7 +450,6 @@ impl SignedReputationSnapshotV1 {
                 required: policy.min_signatures,
             });
         }
-
         let digest = self.signing_digest()?;
         for signature in &self.signatures {
             let trusted = policy.signer(&signature.signer_id).ok_or_else(|| {
@@ -513,7 +486,6 @@ impl SignedReputationSnapshotV1 {
         Ok(())
     }
 }
-
 /// Decode and validate one canonical external reputation trust policy.
 pub fn decode_reputation_trust_policy(
     bytes: &[u8],
@@ -533,7 +505,6 @@ pub fn decode_reputation_trust_policy(
     policy.validate()?;
     Ok(policy)
 }
-
 /// Decode one canonical signed snapshot and validate policy-independent structure.
 pub fn decode_signed_reputation_snapshot(
     bytes: &[u8],
@@ -553,7 +524,6 @@ pub fn decode_signed_reputation_snapshot(
     envelope.validate_structure()?;
     Ok(envelope)
 }
-
 /// Decode a canonical signed snapshot and perform complete external-policy admission.
 pub fn decode_and_verify_signed_reputation_snapshot(
     bytes: &[u8],
@@ -564,7 +534,6 @@ pub fn decode_and_verify_signed_reputation_snapshot(
     envelope.verify(policy, admitted_at_unix)?;
     Ok(envelope)
 }
-
 fn decode_canonical<T>(
     payload: &'static str,
     bytes: &[u8],
@@ -593,7 +562,6 @@ where
     }
     Ok(decoded)
 }
-
 /// Compute the domain-separated snapshot digest bound to an external policy.
 pub fn snapshot_signing_digest(
     snapshot: &ReputationSnapshotV1,
@@ -622,7 +590,6 @@ pub fn snapshot_signing_digest(
     hasher.update(&snapshot_bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Validate exact predecessor linkage and strictly increasing generation time.
 pub fn validate_reputation_snapshot_transition(
     previous: Option<&ReputationSnapshotV1>,
@@ -646,7 +613,6 @@ pub fn validate_reputation_snapshot_transition(
     }
     Ok(())
 }
-
 fn validate_admission_time(
     policy: &ReputationSnapshotTrustPolicyV1,
     snapshot: &ReputationSnapshotV1,
@@ -676,7 +642,6 @@ fn validate_admission_time(
     }
     Ok(())
 }
-
 fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &[u8],
     payload: &'static str,
@@ -692,7 +657,6 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     payload: &'static str,
     value: &T,
@@ -710,7 +674,6 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     }
     Ok(bytes)
 }
-
 fn preflight_canonical_encoded_len<T: norito::NoritoSerialize>(
     payload: &'static str,
     value: &T,
@@ -736,7 +699,6 @@ fn preflight_canonical_encoded_len<T: norito::NoritoSerialize>(
     }
     Ok(exact_payload_len)
 }
-
 fn validate_signer_id(signer_id: &str) -> Result<(), SignedReputationSnapshotError> {
     if signer_id.is_empty()
         || signer_id.len() > MAX_REPUTATION_SIGNER_ID_LEN
@@ -750,7 +712,6 @@ fn validate_signer_id(signer_id: &str) -> Result<(), SignedReputationSnapshotErr
     }
     Ok(())
 }
-
 /// Signed reputation snapshot policy and verification failures.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SignedReputationSnapshotError {
@@ -1021,11 +982,8 @@ pub enum SignedReputationSnapshotError {
     #[error(transparent)]
     Snapshot(#[from] ReputationValidationError),
 }
-
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
-
     use super::*;
     use crate::reputation::{
         MAX_REPUTATION_DEGRADATION_FLAGS, REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -1033,9 +991,8 @@ mod tests {
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, build_reputation_snapshot,
     };
-
+    use ed25519_dalek::{Signer, SigningKey};
     const GENERATED_AT: u64 = 1_800_000_000;
-
     fn input(provider_id: &str) -> ReputationProviderInputV1 {
         ReputationProviderInputV1 {
             version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -1056,7 +1013,6 @@ mod tests {
             slashing_event: false,
         }
     }
-
     fn signing_keys() -> [SigningKey; 3] {
         [
             SigningKey::from_bytes(&[1; 32]),
@@ -1064,7 +1020,6 @@ mod tests {
             SigningKey::from_bytes(&[3; 32]),
         ]
     }
-
     fn policy() -> ReputationSnapshotTrustPolicyV1 {
         let keys = signing_keys();
         ReputationSnapshotTrustPolicyV1 {
@@ -1087,7 +1042,6 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn snapshot(
         snapshot_id: [u8; 16],
         generated_at_unix: u64,
@@ -1103,11 +1057,9 @@ mod tests {
         )
         .expect("valid snapshot")
     }
-
     fn provider_inputs() -> Vec<ReputationProviderInputV1> {
         vec![input("provider-a"), input("provider-b")]
     }
-
     fn scoring_evidence() -> ReputationScoringEvidenceV1 {
         ReputationScoringEvidenceV1 {
             version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
@@ -1115,7 +1067,6 @@ mod tests {
             trust_edges: Vec::new(),
         }
     }
-
     fn signed_snapshot() -> (ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1) {
         let policy = policy();
         let scoring_evidence = scoring_evidence();
@@ -1140,7 +1091,6 @@ mod tests {
             .collect();
         (policy, envelope)
     }
-
     #[test]
     fn threshold_snapshot_verifies_against_external_policy() {
         let (policy, envelope) = signed_snapshot();
@@ -1151,25 +1101,21 @@ mod tests {
             .verify(&policy, GENERATED_AT + 10)
             .expect("threshold signatures must verify");
     }
-
     #[test]
     fn intrinsic_validation_rejects_inert_policy_empty_and_malformed_signatures() {
         let (_, envelope) = signed_snapshot();
-
         let mut inert_policy = envelope.clone();
         inert_policy.policy_digest = [0; 32];
         assert_eq!(
             inert_policy.validate_structure(),
             Err(SignedReputationSnapshotError::InvalidPolicyDigest)
         );
-
         let mut empty = envelope.clone();
         empty.signatures.clear();
         assert_eq!(
             empty.validate_structure(),
             Err(SignedReputationSnapshotError::EmptySnapshotSignatures)
         );
-
         let mut malformed = envelope;
         malformed.signatures[0].signature = [0; ed25519_dalek::SIGNATURE_LENGTH];
         assert!(matches!(
@@ -1177,13 +1123,11 @@ mod tests {
             Err(SignedReputationSnapshotError::InvalidSignature { .. })
         ));
     }
-
     #[test]
     fn bounded_canonical_decoders_accept_verified_policy_and_envelope() {
         let (policy, envelope) = signed_snapshot();
         let policy_bytes = policy.canonical_bytes().expect("encode policy");
         let envelope_bytes = envelope.canonical_bytes().expect("encode signed snapshot");
-
         assert_eq!(
             decode_reputation_trust_policy(&policy_bytes).expect("decode canonical policy"),
             policy
@@ -1203,7 +1147,6 @@ mod tests {
             envelope
         );
     }
-
     #[test]
     fn signed_structure_and_decoder_reject_too_many_degradation_flags() {
         let (_, mut envelope) = signed_snapshot();
@@ -1225,7 +1168,6 @@ mod tests {
                 },
             )
         };
-
         assert_eq!(envelope.validate_structure(), Err(expected_error()));
         let bytes = norito::to_bytes(&envelope).expect("encode structurally invalid envelope");
         assert_eq!(
@@ -1233,7 +1175,6 @@ mod tests {
             Err(expected_error())
         );
     }
-
     #[test]
     fn bounded_canonical_decoders_reject_oversize_trailing_and_compressed_inputs() {
         let policy = policy();
@@ -1243,7 +1184,6 @@ mod tests {
             decode_reputation_trust_policy(&trailing),
             Err(SignedReputationSnapshotError::Decoding { .. })
         ));
-
         let compressed =
             norito::to_compressed_bytes(&policy, Some(norito::CompressionConfig::default()))
                 .expect("compress policy");
@@ -1251,7 +1191,6 @@ mod tests {
             decode_reputation_trust_policy(&compressed),
             Err(SignedReputationSnapshotError::NonCanonicalEncoding { .. })
         ));
-
         let oversized = vec![0_u8; MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES + 1];
         assert_eq!(
             decode_reputation_trust_policy(&oversized),
@@ -1262,11 +1201,9 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn bounded_encoder_rejects_exact_oversize_before_serialization() {
         struct MustNotSerialize;
-
         impl norito::NoritoSerialize for MustNotSerialize {
             fn serialize(
                 &self,
@@ -1274,12 +1211,10 @@ mod tests {
             ) -> Result<(), norito::core::Error> {
                 panic!("oversized value must be rejected before serialization")
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 Some(17)
             }
         }
-
         assert_eq!(
             encode_canonical_bounded("test payload", &MustNotSerialize, 16),
             Err(SignedReputationSnapshotError::EncodedPayloadTooLarge {
@@ -1289,13 +1224,11 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn signed_snapshot_size_preflight_accepts_boundary_and_rejects_one_over() {
         let (_, envelope) = signed_snapshot();
         let exact = norito::core::encoded_payload_len(&envelope)
             .expect("signed snapshot canonical length must be countable");
-
         assert_eq!(
             preflight_canonical_encoded_len("signed reputation snapshot", &envelope, exact),
             Ok(exact)
@@ -1313,18 +1246,15 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn snapshot_tampering_and_policy_substitution_fail() {
         let (policy, envelope) = signed_snapshot();
-
         let mut tampered = envelope.clone();
         tampered.snapshot.providers[0].score_bps -= 1;
         assert!(matches!(
             tampered.verify(&policy, GENERATED_AT + 10),
             Err(SignedReputationSnapshotError::Snapshot(_))
         ));
-
         let mut substituted_policy = policy.clone();
         substituted_policy.policy_id[0] ^= 1;
         assert_eq!(
@@ -1332,11 +1262,9 @@ mod tests {
             Err(SignedReputationSnapshotError::PolicyDigestMismatch)
         );
     }
-
     #[test]
     fn scoring_evidence_digest_and_exact_replay_are_mandatory() {
         let (policy, envelope) = signed_snapshot();
-
         let mut digest_tampered = envelope.clone();
         digest_tampered.scoring_evidence.provider_inputs[0]
             .metrics
@@ -1345,7 +1273,6 @@ mod tests {
             digest_tampered.verify(&policy, GENERATED_AT + 10),
             Err(SignedReputationSnapshotError::ScoringEvidenceDigestMismatch)
         );
-
         let mut replay_tampered = digest_tampered;
         replay_tampered.scoring_evidence_digest = replay_tampered
             .scoring_evidence
@@ -1356,7 +1283,6 @@ mod tests {
             Err(SignedReputationSnapshotError::ScoringReplayMismatch)
         );
     }
-
     #[test]
     fn scoring_evidence_rejects_duplicate_and_unsorted_providers() {
         let mut duplicate = scoring_evidence();
@@ -1367,7 +1293,6 @@ mod tests {
                 provider_id: "provider-a".to_string(),
             })
         );
-
         let mut unsorted = scoring_evidence();
         unsorted.provider_inputs.swap(0, 1);
         assert_eq!(
@@ -1375,11 +1300,9 @@ mod tests {
             Err(SignedReputationSnapshotError::ScoringProvidersNotSorted)
         );
     }
-
     #[test]
     fn signature_quorum_duplicates_order_and_unknown_signers_fail_closed() {
         let (policy, envelope) = signed_snapshot();
-
         let mut below_quorum = envelope.clone();
         below_quorum.signatures.pop();
         assert_eq!(
@@ -1389,7 +1312,6 @@ mod tests {
                 required: 2,
             })
         );
-
         let mut duplicate = envelope.clone();
         duplicate.signatures[1] = duplicate.signatures[0].clone();
         assert_eq!(
@@ -1398,14 +1320,12 @@ mod tests {
                 signer_id: "council-1".to_string(),
             })
         );
-
         let mut out_of_order = envelope.clone();
         out_of_order.signatures.swap(0, 1);
         assert_eq!(
             out_of_order.verify(&policy, GENERATED_AT + 10),
             Err(SignedReputationSnapshotError::SnapshotSignaturesNotSorted)
         );
-
         let mut unknown = envelope;
         unknown.signatures[1].signer_id = "council-9".to_string();
         assert_eq!(
@@ -1415,18 +1335,15 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn malformed_and_wrong_signatures_fail_closed() {
         let (policy, envelope) = signed_snapshot();
-
         let mut inert = envelope.clone();
         inert.signatures[0].signature = [0; ed25519_dalek::SIGNATURE_LENGTH];
         assert!(matches!(
             inert.verify(&policy, GENERATED_AT + 10),
             Err(SignedReputationSnapshotError::InvalidSignature { .. })
         ));
-
         let mut wrong = envelope;
         wrong.signatures[0].signature[63] ^= 1;
         assert!(matches!(
@@ -1435,7 +1352,6 @@ mod tests {
                 | Err(SignedReputationSnapshotError::InvalidSignature { .. })
         ));
     }
-
     #[test]
     fn freshness_and_policy_windows_fail_closed_at_boundaries() {
         let (policy, envelope) = signed_snapshot();
@@ -1447,7 +1363,6 @@ mod tests {
             envelope.verify(&policy, policy.valid_until_unix),
             Err(SignedReputationSnapshotError::PolicyInactiveAtAdmission)
         );
-
         let mut future = envelope;
         future.snapshot = snapshot([0x12; 16], GENERATED_AT + 31, None);
         let digest = future.signing_digest().expect("future signing digest");
@@ -1460,7 +1375,6 @@ mod tests {
             Err(SignedReputationSnapshotError::SnapshotFromFuture)
         );
     }
-
     #[test]
     fn policy_rejects_weak_duplicate_and_noncanonical_signers() {
         let mut weak = policy();
@@ -1469,14 +1383,12 @@ mod tests {
             weak.validate(),
             Err(SignedReputationSnapshotError::InvalidPublicKey { .. })
         ));
-
         let mut duplicate_key = policy();
         duplicate_key.signers[1].public_key = duplicate_key.signers[0].public_key;
         assert_eq!(
             duplicate_key.validate(),
             Err(SignedReputationSnapshotError::DuplicateTrustedPublicKey)
         );
-
         let mut duplicate_id = policy();
         duplicate_id.signers[1].signer_id = duplicate_id.signers[0].signer_id.clone();
         assert_eq!(
@@ -1485,7 +1397,6 @@ mod tests {
                 signer_id: "council-1".to_string(),
             })
         );
-
         let mut unsorted = policy();
         unsorted.signers.swap(0, 1);
         assert_eq!(
@@ -1493,7 +1404,6 @@ mod tests {
             Err(SignedReputationSnapshotError::TrustedSignersNotSorted)
         );
     }
-
     #[test]
     fn policy_rejects_invalid_threshold_and_freshness_limits() {
         let mut zero_threshold = policy();
@@ -1505,7 +1415,6 @@ mod tests {
                 signer_count: 3,
             })
         );
-
         let mut excessive_threshold = policy();
         excessive_threshold.min_signatures = 4;
         assert_eq!(
@@ -1515,14 +1424,12 @@ mod tests {
                 signer_count: 3,
             })
         );
-
         let mut age = policy();
         age.max_snapshot_age_secs = 0;
         assert!(matches!(
             age.validate(),
             Err(SignedReputationSnapshotError::InvalidMaximumSnapshotAge { .. })
         ));
-
         let mut skew = policy();
         skew.max_future_skew_secs = MAX_REPUTATION_FUTURE_SKEW_SECS + 1;
         assert!(matches!(
@@ -1530,7 +1437,6 @@ mod tests {
             Err(SignedReputationSnapshotError::InvalidMaximumFutureSkew { .. })
         ));
     }
-
     #[test]
     fn revoked_signers_cannot_contribute_to_threshold() {
         let (mut revoked_policy, envelope) = signed_snapshot();
@@ -1546,14 +1452,12 @@ mod tests {
         for (index, signature) in resigned.signatures.iter_mut().enumerate() {
             signature.signature = keys[index].sign(&digest).to_bytes();
         }
-
         assert_eq!(
             resigned.verify(&revoked_policy, GENERATED_AT + 10),
             Err(SignedReputationSnapshotError::RevokedSnapshotSigner {
                 signer_id: "council-2".to_string(),
             })
         );
-
         let mut unknown = policy();
         unknown.revoked_signer_ids = vec!["council-9".to_string()];
         assert_eq!(
@@ -1563,27 +1467,22 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn snapshot_transition_requires_exact_head_and_monotonic_time() {
         let first = snapshot([0x21; 16], GENERATED_AT, None);
         validate_reputation_snapshot_transition(None, &first).expect("initial head");
-
         let second = snapshot([0x22; 16], GENERATED_AT + 1, Some(first.snapshot_id));
         validate_reputation_snapshot_transition(Some(&first), &second).expect("next head");
-
         let wrong_head = snapshot([0x23; 16], GENERATED_AT + 2, Some([0x99; 16]));
         assert_eq!(
             validate_reputation_snapshot_transition(Some(&first), &wrong_head),
             Err(SignedReputationSnapshotError::SnapshotPredecessorMismatch)
         );
-
         let stale = snapshot([0x24; 16], GENERATED_AT, Some(first.snapshot_id));
         assert_eq!(
             validate_reputation_snapshot_transition(Some(&first), &stale),
             Err(SignedReputationSnapshotError::SnapshotTimeDidNotAdvance)
         );
-
         assert_eq!(
             validate_reputation_snapshot_transition(None, &second),
             Err(SignedReputationSnapshotError::UnexpectedInitialPredecessor)

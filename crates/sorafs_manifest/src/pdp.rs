@@ -5,28 +5,21 @@
 //! commitment contains its own hot-leaf Merkle root. A valid proof therefore
 //! demonstrates possession of the challenged bytes against both advertised
 //! roots rather than merely replaying precomputed leaf hashes.
-
-use std::collections::BTreeSet;
-
-use ed25519_dalek::{Signer as _, SigningKey};
-use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-
 use super::{BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId};
 use crate::AdmissionRecord;
-
+use ed25519_dalek::{Signer as _, SigningKey};
+use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::collections::BTreeSet;
+use thiserror::Error;
 mod merkle;
-
 pub use merkle::{
     PdpMerklePathError, PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError,
     PdpMerkleTreeV1, estimated_heap_bytes,
 };
-
 use merkle::{
     fold_global_hot_path_v1, fold_segment_hot_path_v1, fold_segment_path_v1, hash_hot_leaf_v1,
     hash_segment_leaf_v1, merkle_path_depth, wrap_hot_root_v1, wrap_segment_root_v1,
 };
-
 /// PDP commitment schema version (v1).
 pub const PDP_COMMITMENT_VERSION_V1: u8 = 1;
 /// PDP challenge schema version (v1).
@@ -66,14 +59,12 @@ pub const PDP_CHUNK_PROFILE_COMPONENT_MAX_BYTES_V1: usize = 64;
 pub const PDP_CHUNK_PROFILE_SEMVER_MAX_BYTES_V1: usize = 32;
 /// Maximum bytes in one chunk-profile alias.
 pub const PDP_CHUNK_PROFILE_ALIAS_MAX_BYTES_V1: usize = 128;
-
 const PDP_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.commitment.digest.v1\0";
 const PDP_CHALLENGE_ID_DOMAIN_V1: &[u8] = b"sorafs.pdp.challenge.id.v1\0";
 const PDP_PROOF_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.digest.v1\0";
 const PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.governance-archive.v1\0";
 /// Domain under which providers sign canonical PDP proof digests.
 pub const PDP_PROOF_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.signature.v1\0";
-
 /// Supported hash algorithms for PDP commitments.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -82,7 +73,6 @@ pub enum HashAlgorithmV1 {
     /// BLAKE3-256 commitment.
     Blake3_256 = 1,
 }
-
 impl HashAlgorithmV1 {
     /// Canonical lowercase label for display purposes.
     #[must_use]
@@ -91,14 +81,12 @@ impl HashAlgorithmV1 {
             Self::Blake3_256 => "blake3-256",
         }
     }
-
     /// Returns true if the algorithm is currently supported.
     #[must_use]
     pub fn is_supported(self) -> bool {
         matches!(self, Self::Blake3_256)
     }
 }
-
 /// PDP commitment metadata embedded alongside manifests.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpCommitmentV1 {
@@ -133,7 +121,6 @@ pub struct PdpCommitmentV1 {
     /// Unix timestamp (seconds) when the commitment was sealed.
     pub sealed_at: u64,
 }
-
 impl PdpCommitmentV1 {
     /// Construct a commitment from a canonical in-memory PDP tree.
     pub fn from_tree(
@@ -163,7 +150,6 @@ impl PdpCommitmentV1 {
         commitment.validate()?;
         Ok(commitment)
     }
-
     /// Validates structural and exact-geometry invariants for the commitment.
     pub fn validate(&self) -> Result<(), PdpCommitmentValidationError> {
         if self.version != PDP_COMMITMENT_VERSION_V1 {
@@ -242,13 +228,11 @@ impl PdpCommitmentV1 {
             .map_err(|_| PdpCommitmentValidationError::CanonicalEncoding)?;
         Ok(())
     }
-
     /// Compute the domain-separated digest that challenges bind to.
     pub fn commitment_digest(&self) -> Result<[u8; 32], norito::core::Error> {
         domain_separated_norito_digest(PDP_COMMITMENT_DIGEST_DOMAIN_V1, self)
     }
 }
-
 /// Validation failures for [`PdpCommitmentV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpCommitmentValidationError {
@@ -304,7 +288,6 @@ pub enum PdpCommitmentValidationError {
     #[error("PDP commitment canonical encoding is unavailable or over limit")]
     CanonicalEncoding,
 }
-
 /// PDP sample selecting one segment and segment-local hot leaves.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpSampleV1 {
@@ -313,7 +296,6 @@ pub struct PdpSampleV1 {
     /// Strictly increasing hot-leaf indices within the segment.
     pub hot_leaf_indices: Vec<u16>,
 }
-
 impl PdpSampleV1 {
     fn validate(&self) -> Result<(), PdpChallengeValidationError> {
         if self.hot_leaf_indices.is_empty() {
@@ -345,7 +327,6 @@ impl PdpSampleV1 {
         Ok(())
     }
 }
-
 /// PDP challenge describing the exact sample set for an epoch.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpChallengeV1 {
@@ -374,7 +355,6 @@ pub struct PdpChallengeV1 {
     /// Strictly ordered samples requested for this challenge.
     pub samples: Vec<PdpSampleV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PdpChallengeIdPayloadV1 {
     version: u8,
@@ -389,7 +369,6 @@ struct PdpChallengeIdPayloadV1 {
     response_deadline_unix: u64,
     samples: Vec<PdpSampleV1>,
 }
-
 impl From<&PdpChallengeV1> for PdpChallengeIdPayloadV1 {
     fn from(challenge: &PdpChallengeV1) -> Self {
         Self {
@@ -407,7 +386,6 @@ impl From<&PdpChallengeV1> for PdpChallengeIdPayloadV1 {
         }
     }
 }
-
 impl PdpChallengeV1 {
     /// Build a challenge and derive its identifier from the complete body.
     #[allow(clippy::too_many_arguments)]
@@ -443,7 +421,6 @@ impl PdpChallengeV1 {
         challenge.validate()?;
         Ok(challenge)
     }
-
     /// Derive the identifier bound to every canonical challenge field.
     pub fn derived_challenge_id(&self) -> Result<[u8; 32], norito::core::Error> {
         domain_separated_norito_digest(
@@ -451,7 +428,6 @@ impl PdpChallengeV1 {
             &PdpChallengeIdPayloadV1::from(self),
         )
     }
-
     /// Validates the bounded canonical challenge payload.
     pub fn validate(&self) -> Result<(), PdpChallengeValidationError> {
         if self.version != PDP_CHALLENGE_VERSION_V1 {
@@ -524,7 +500,6 @@ impl PdpChallengeV1 {
         Ok(())
     }
 }
-
 /// Validation failures for [`PdpChallengeV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpChallengeValidationError {
@@ -591,7 +566,6 @@ pub enum PdpChallengeValidationError {
     #[error("PDP challenge canonical encoding is unavailable or over limit")]
     CanonicalEncoding,
 }
-
 /// Inclusion proof for one sampled hot leaf.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpHotLeafProofV1 {
@@ -608,7 +582,6 @@ pub struct PdpHotLeafProofV1 {
     /// Path from this leaf to the global hot root.
     pub global_hot_merkle_path: Vec<[u8; 32]>,
 }
-
 impl PdpHotLeafProofV1 {
     fn validate(&self, segment_index: u64) -> Result<(), PdpProofValidationError> {
         if self.leaf_index >= PDP_HOT_LEAVES_PER_SEGMENT_V1 {
@@ -648,7 +621,6 @@ impl PdpHotLeafProofV1 {
         Ok(())
     }
 }
-
 /// Inclusion proof for one challenged PDP segment.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpProofLeafV1 {
@@ -663,7 +635,6 @@ pub struct PdpProofLeafV1 {
     /// Strictly ordered sampled hot leaves associated with this segment.
     pub hot_leaves: Vec<PdpHotLeafProofV1>,
 }
-
 impl PdpProofLeafV1 {
     fn validate(&self) -> Result<(), PdpProofValidationError> {
         if self.segment_length == 0 || self.segment_length > PDP_SEGMENT_SIZE_V1 {
@@ -727,7 +698,6 @@ impl PdpProofLeafV1 {
         Ok(())
     }
 }
-
 /// Fixed-size Ed25519 signature attached to a PDP proof.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpEd25519SignatureV1 {
@@ -736,7 +706,6 @@ pub struct PdpEd25519SignatureV1 {
     /// Canonical Ed25519 signature bytes.
     pub signature: [u8; ed25519_dalek::SIGNATURE_LENGTH],
 }
-
 impl PdpEd25519SignatureV1 {
     fn validate(&self) -> Result<(), PdpSignatureVerificationError> {
         crate::checked_ed25519_verifying_key_from_bytes(&self.public_key)
@@ -746,7 +715,6 @@ impl PdpEd25519SignatureV1 {
         Ok(())
     }
 }
-
 /// Provider response to a PDP challenge.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpProofV1 {
@@ -769,7 +737,6 @@ pub struct PdpProofV1 {
     /// Provider Ed25519 signature over the canonical proof digest.
     pub signature: PdpEd25519SignatureV1,
 }
-
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PdpProofSigningPayloadV1 {
     version: u8,
@@ -782,7 +749,6 @@ struct PdpProofSigningPayloadV1 {
     issued_at_unix: u64,
     signer_public_key: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 }
-
 impl From<&PdpProofV1> for PdpProofSigningPayloadV1 {
     fn from(proof: &PdpProofV1) -> Self {
         Self {
@@ -798,7 +764,6 @@ impl From<&PdpProofV1> for PdpProofSigningPayloadV1 {
         }
     }
 }
-
 impl PdpProofV1 {
     /// Validates bounded proof structure and canonical signature material.
     pub fn validate(&self) -> Result<(), PdpProofValidationError> {
@@ -810,7 +775,6 @@ impl PdpProofV1 {
             .map_err(|_| PdpProofValidationError::CanonicalEncoding)?;
         Ok(())
     }
-
     fn validate_unsigned_fields(&self) -> Result<(), PdpProofValidationError> {
         if self.version != PDP_PROOF_VERSION_V1 {
             return Err(PdpProofValidationError::UnsupportedVersion {
@@ -862,7 +826,6 @@ impl PdpProofV1 {
         }
         Ok(())
     }
-
     /// Compute the canonical domain-separated digest signed by the provider.
     pub fn proof_digest(&self) -> Result<[u8; 32], norito::core::Error> {
         domain_separated_norito_digest(
@@ -870,7 +833,6 @@ impl PdpProofV1 {
             &PdpProofSigningPayloadV1::from(self),
         )
     }
-
     /// Verify the strict Ed25519 signature without establishing signer admission.
     pub fn verify_signature(&self) -> Result<(), PdpSignatureVerificationError> {
         self.signature.validate()?;
@@ -894,7 +856,6 @@ impl PdpProofV1 {
             })
     }
 }
-
 /// Sign a complete unsigned PDP proof with a deterministic Ed25519 key.
 pub fn sign_pdp_proof_ed25519_v1(
     mut proof: PdpProofV1,
@@ -915,7 +876,6 @@ pub fn sign_pdp_proof_ed25519_v1(
     proof.validate()?;
     Ok(proof)
 }
-
 /// Errors while producing a provider PDP signature.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpProofSigningError {
@@ -926,7 +886,6 @@ pub enum PdpProofSigningError {
     #[error("failed to encode PDP signing payload: {reason}")]
     PayloadEncoding { reason: String },
 }
-
 /// Strict PDP signature verification errors.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpSignatureVerificationError {
@@ -943,7 +902,6 @@ pub enum PdpSignatureVerificationError {
     #[error("PDP Ed25519 signature verification failed: {reason}")]
     Verification { reason: String },
 }
-
 /// Validation errors for [`PdpProofV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpProofValidationError {
@@ -1049,7 +1007,6 @@ pub enum PdpProofValidationError {
     #[error("PDP proof canonical encoding is unavailable or over limit")]
     CanonicalEncoding,
 }
-
 /// Stable rejection reason recorded for a terminal PDP challenge.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(tag = "reason", content = "details")]
@@ -1069,7 +1026,6 @@ pub enum PdpRejectionReasonV1 {
     /// Safe local proof generation failed because retained storage was unavailable.
     StorageUnavailable,
 }
-
 /// Accepted or rejected terminal result for one PDP challenge.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(tag = "decision", content = "details")]
@@ -1079,7 +1035,6 @@ pub enum PdpTerminalDecisionV1 {
     /// The challenge failed with a stable repair category.
     Rejected(PdpRejectionReasonV1),
 }
-
 /// Canonical Governance DAG archive payload for one terminal PDP decision.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PdpGovernanceArchiveV1 {
@@ -1126,7 +1081,6 @@ pub struct PdpGovernanceArchiveV1 {
     #[norito(default)]
     pub canonical_proof: Option<Vec<u8>>,
 }
-
 impl PdpGovernanceArchiveV1 {
     /// Validate the archive's bounded canonical payloads and terminal invariants.
     pub fn validate(&self) -> Result<(), PdpGovernanceArchiveValidationError> {
@@ -1186,7 +1140,6 @@ impl PdpGovernanceArchiveV1 {
                 }
             }
         }
-
         let challenge = decode_canonical_archive_challenge(&self.canonical_challenge)?;
         let sampled_segments = u16::try_from(challenge.samples.len())
             .map_err(|_| PdpGovernanceArchiveValidationError::SampleCountMismatch)?;
@@ -1215,7 +1168,6 @@ impl PdpGovernanceArchiveV1 {
         {
             return Err(PdpGovernanceArchiveValidationError::SampleCountMismatch);
         }
-
         if let Some(bytes) = self.canonical_proof.as_ref() {
             let proof = decode_canonical_archive_proof(bytes)?;
             proof.verify_signature().map_err(|error| {
@@ -1240,7 +1192,6 @@ impl PdpGovernanceArchiveV1 {
                 return Err(PdpGovernanceArchiveValidationError::ProofBindingMismatch);
             }
         }
-
         ensure_canonical_size(self, PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1).map_err(
             |error| PdpGovernanceArchiveValidationError::CanonicalEncoding {
                 reason: error.to_string(),
@@ -1248,13 +1199,11 @@ impl PdpGovernanceArchiveV1 {
         )?;
         Ok(())
     }
-
     /// Return the canonical domain-separated archive digest.
     pub fn digest(&self) -> Result<[u8; 32], norito::core::Error> {
         domain_separated_norito_digest(PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1, self)
     }
 }
-
 fn decode_canonical_archive_challenge(
     bytes: &[u8],
 ) -> Result<PdpChallengeV1, PdpGovernanceArchiveValidationError> {
@@ -1273,7 +1222,6 @@ fn decode_canonical_archive_challenge(
     }
     Ok(challenge)
 }
-
 fn decode_canonical_archive_proof(
     bytes: &[u8],
 ) -> Result<PdpProofV1, PdpGovernanceArchiveValidationError> {
@@ -1292,7 +1240,6 @@ fn decode_canonical_archive_proof(
     }
     Ok(proof)
 }
-
 /// Validation errors for [`PdpGovernanceArchiveV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpGovernanceArchiveValidationError {
@@ -1333,7 +1280,6 @@ pub enum PdpGovernanceArchiveValidationError {
     #[error("PDP governance archive canonical encoding failed: {reason}")]
     CanonicalEncoding { reason: String },
 }
-
 /// Opaque result returned only after exhaustive PDP verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedPdpProofV1 {
@@ -1345,51 +1291,43 @@ pub struct VerifiedPdpProofV1 {
     sampled_hot_leaves: u16,
     sampled_bytes: u64,
 }
-
 impl VerifiedPdpProofV1 {
     /// Commitment digest established by verification.
     #[must_use]
     pub fn commitment_digest(&self) -> &[u8; 32] {
         &self.commitment_digest
     }
-
     /// Challenge identifier established by verification.
     #[must_use]
     pub fn challenge_id(&self) -> &[u8; 32] {
         &self.challenge_id
     }
-
     /// Canonical signed proof digest.
     #[must_use]
     pub fn proof_digest(&self) -> &[u8; 32] {
         &self.proof_digest
     }
-
     /// Admitted provider identifier.
     #[must_use]
     pub fn provider_id(&self) -> &[u8; 32] {
         &self.provider_id
     }
-
     /// Number of segments proven.
     #[must_use]
     pub fn sampled_segments(&self) -> u16 {
         self.sampled_segments
     }
-
     /// Number of hot leaves proven.
     #[must_use]
     pub fn sampled_hot_leaves(&self) -> u16 {
         self.sampled_hot_leaves
     }
-
     /// Number of raw payload bytes proven.
     #[must_use]
     pub fn sampled_bytes(&self) -> u64 {
         self.sampled_bytes
     }
 }
-
 /// Failures emitted by the single production PDP verifier.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpVerificationError {
@@ -1562,7 +1500,6 @@ pub enum PdpVerificationError {
     #[error("PDP verified coverage counters overflowed")]
     CoverageOverflow,
 }
-
 /// Exhaustively verify the PDP witness bytes, signature, geometry, coverage,
 /// and both Merkle roots without authorizing production acceptance.
 ///
@@ -1579,7 +1516,6 @@ pub fn verify_pdp_witnesses_v1(
     verify_pdp_witnesses_after_binding_v1(commitment, challenge, proof, commitment_digest)?;
     Ok(())
 }
-
 /// Exhaustively verify a PDP proof against its commitment, exact challenge,
 /// and an admission record sourced from the active council-verified registry.
 ///
@@ -1597,7 +1533,6 @@ pub fn verify_pdp_bundle_v1(
     validate_pdp_admission_v1(challenge, proof, admission)?;
     verify_pdp_witnesses_after_binding_v1(commitment, challenge, proof, commitment_digest)
 }
-
 fn validate_pdp_binding_v1(
     commitment: &PdpCommitmentV1,
     challenge: &PdpChallengeV1,
@@ -1606,7 +1541,6 @@ fn validate_pdp_binding_v1(
     commitment.validate()?;
     challenge.validate()?;
     proof.validate()?;
-
     let commitment_digest = commitment.commitment_digest().map_err(|error| {
         PdpVerificationError::CommitmentDigestEncoding {
             reason: error.to_string(),
@@ -1650,7 +1584,6 @@ fn validate_pdp_binding_v1(
     }
     Ok(commitment_digest)
 }
-
 fn validate_pdp_admission_v1(
     challenge: &PdpChallengeV1,
     proof: &PdpProofV1,
@@ -1686,7 +1619,6 @@ fn validate_pdp_admission_v1(
     }
     Ok(())
 }
-
 fn verify_pdp_witnesses_after_binding_v1(
     commitment: &PdpCommitmentV1,
     challenge: &PdpChallengeV1,
@@ -1706,7 +1638,6 @@ fn verify_pdp_witnesses_after_binding_v1(
     proof
         .verify_signature()
         .map_err(PdpVerificationError::Signature)?;
-
     let mut sampled_bytes = 0u64;
     let mut sampled_hot_leaves = 0usize;
     for (sample, segment_proof) in challenge.samples.iter().zip(&proof.proof_leaves) {
@@ -1743,7 +1674,6 @@ fn verify_pdp_witnesses_after_binding_v1(
             .checked_mul(u64::from(PDP_HOT_LEAVES_PER_SEGMENT_V1))
             .ok_or(PdpVerificationError::GeometryOverflow)?;
         let mut established_segment_commitment = None;
-
         for hot in &segment_proof.hot_leaves {
             if hot.leaf_index >= segment_hot_leaf_count {
                 return Err(PdpVerificationError::HotLeafOutOfRange {
@@ -1818,7 +1748,6 @@ fn verify_pdp_witnesses_after_binding_v1(
                 });
             }
             established_segment_commitment = Some(segment_commitment);
-
             let hot_top = fold_global_hot_path_v1(
                 global_hot_index,
                 commitment.hot_leaf_count,
@@ -1845,7 +1774,6 @@ fn verify_pdp_witnesses_after_binding_v1(
                 .checked_add(1)
                 .ok_or(PdpVerificationError::CoverageOverflow)?;
         }
-
         let segment_commitment = established_segment_commitment.ok_or(
             PdpVerificationError::HotLeafCoverageCountMismatch {
                 segment_index: sample.segment_index,
@@ -1874,7 +1802,6 @@ fn verify_pdp_witnesses_after_binding_v1(
             });
         }
     }
-
     let proof_digest =
         proof
             .proof_digest()
@@ -1893,7 +1820,6 @@ fn verify_pdp_witnesses_after_binding_v1(
         sampled_bytes,
     })
 }
-
 fn validate_exact_coverage(
     challenge: &PdpChallengeV1,
     proof: &PdpProofV1,
@@ -1930,7 +1856,6 @@ fn validate_exact_coverage(
     }
     Ok(())
 }
-
 /// Bounded canonical chunk-profile failures shared by commitment/challenge validation.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PdpChunkProfileValidationError {
@@ -1962,7 +1887,6 @@ pub enum PdpChunkProfileValidationError {
     #[error("chunk profile field {field} does not match its registry descriptor")]
     DescriptorMismatch { field: &'static str },
 }
-
 fn validate_chunk_profile_v1(
     profile: &ChunkingProfileV1,
 ) -> Result<(), PdpChunkProfileValidationError> {
@@ -2014,7 +1938,6 @@ fn validate_chunk_profile_v1(
     if profile.multihash_code != BLAKE3_256_MULTIHASH_CODE {
         return Err(PdpChunkProfileValidationError::InvalidMultihash);
     }
-
     if profile.profile_id == ProfileId(0) {
         if profile.namespace != "inline" {
             return Err(PdpChunkProfileValidationError::DescriptorMismatch { field: "namespace" });
@@ -2032,7 +1955,6 @@ fn validate_chunk_profile_v1(
         }
         return Ok(());
     }
-
     let descriptor = crate::chunker_registry::lookup(profile.profile_id).ok_or(
         PdpChunkProfileValidationError::UnknownProfile {
             profile_id: profile.profile_id.0,
@@ -2079,7 +2001,6 @@ fn validate_chunk_profile_v1(
     }
     Ok(())
 }
-
 fn validate_profile_text(
     field: &'static str,
     value: &str,
@@ -2095,7 +2016,6 @@ fn validate_profile_text(
     }
     Ok(())
 }
-
 fn domain_separated_norito_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -2106,7 +2026,6 @@ fn domain_separated_norito_digest<T: norito::core::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(hasher.finalize().into())
 }
-
 fn ensure_canonical_size<T: norito::core::NoritoSerialize>(
     value: &T,
     maximum: usize,
@@ -2120,14 +2039,12 @@ fn ensure_canonical_size<T: norito::core::NoritoSerialize>(
     }
     Ok(())
 }
-
 fn div_ceil_u64(value: u64, divisor: u64) -> Option<u64> {
     if divisor == 0 {
         return None;
     }
     (value / divisor).checked_add(u64::from(!value.is_multiple_of(divisor)))
 }
-
 fn tree_height(count: u64) -> Result<u16, PdpCommitmentValidationError> {
     if count == 0 {
         return Err(PdpCommitmentValidationError::GeometryOverflow);
@@ -2135,7 +2052,6 @@ fn tree_height(count: u64) -> Result<u16, PdpCommitmentValidationError> {
     u16::try_from(merkle_path_depth(count) + 1)
         .map_err(|_| PdpCommitmentValidationError::GeometryOverflow)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2147,10 +2063,8 @@ mod tests {
         StakePointer, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
     };
-
     const PROVIDER_ID: [u8; 32] = [0x31; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x42; 32];
-
     struct Fixture {
         payload: Vec<u8>,
         commitment: PdpCommitmentV1,
@@ -2159,23 +2073,19 @@ mod tests {
         signing_key: SigningKey,
         admission: AdmissionRecord,
     }
-
     fn canonical_profile() -> ChunkingProfileV1 {
         ChunkingProfileV1::from_descriptor(
             crate::chunker_registry::lookup(ProfileId(1)).expect("SF1 profile exists"),
         )
     }
-
     fn deterministic_payload(length: usize) -> Vec<u8> {
         (0..length)
             .map(|index| ((index.wrapping_mul(131).wrapping_add(17)) % 251) as u8)
             .collect()
     }
-
     fn synthetic_admission(provider_id: [u8; 32], advert_key: [u8; 32]) -> AdmissionRecord {
         synthetic_admission_with_window(provider_id, advert_key, 1, 1_000)
     }
-
     fn synthetic_admission_with_window(
         provider_id: [u8; 32],
         advert_key: [u8; 32],
@@ -2287,7 +2197,6 @@ mod tests {
                 .expect("council policy");
         AdmissionRecord::new(envelope, &policy).expect("council-verified admission")
     }
-
     fn fixture() -> Fixture {
         let payload = deterministic_payload(
             PDP_SEGMENT_SIZE_V1 as usize + PDP_HOT_LEAF_SIZE_V1 as usize + 37,
@@ -2349,15 +2258,12 @@ mod tests {
             admission,
         }
     }
-
     fn resign(proof: &mut PdpProofV1, key: &SigningKey) {
         *proof = sign_pdp_proof_ed25519_v1(proof.clone(), key).expect("re-sign proof");
     }
-
     fn rebind_challenge(challenge: &mut PdpChallengeV1) {
         challenge.challenge_id = challenge.derived_challenge_id().expect("challenge id");
     }
-
     fn rebind_bundle(fixture: &mut Fixture) {
         fixture.challenge.commitment_digest = fixture
             .commitment
@@ -2368,7 +2274,6 @@ mod tests {
         fixture.proof.challenge_id = fixture.challenge.challenge_id;
         resign(&mut fixture.proof, &fixture.signing_key);
     }
-
     fn accepted_archive(fixture: &Fixture) -> PdpGovernanceArchiveV1 {
         let verified = verify_pdp_bundle_v1(
             &fixture.commitment,
@@ -2398,7 +2303,6 @@ mod tests {
             canonical_proof: Some(norito::to_bytes(&fixture.proof).expect("proof bytes")),
         }
     }
-
     #[test]
     fn governance_archive_is_typed_canonical_and_roundtrips() {
         let archive = accepted_archive(&fixture());
@@ -2412,7 +2316,6 @@ mod tests {
         assert_eq!(decoded.digest().expect("decoded digest"), digest);
         decoded.validate().expect("decoded archive validates");
     }
-
     #[test]
     fn governance_archive_rejects_identity_timeline_binding_and_payload_attacks() {
         for mutation in 0..10 {
@@ -2436,7 +2339,6 @@ mod tests {
             assert!(archive.validate().is_err(), "mutation {mutation} must fail");
         }
     }
-
     #[test]
     fn governance_archive_preserves_authenticated_invalid_proof_and_no_show_evidence() {
         let fixture = fixture();
@@ -2452,14 +2354,12 @@ mod tests {
         rejected
             .validate()
             .expect("authenticated invalid proof remains archivable");
-
         let mut malformed_submission = rejected;
         malformed_submission.proof_digest = None;
         malformed_submission.canonical_proof = None;
         malformed_submission
             .validate()
             .expect("invalid submission without canonical proof remains archivable");
-
         let mut expired = accepted_archive(&fixture);
         expired.decision = PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired);
         expired.proof_digest = None;
@@ -2468,7 +2368,6 @@ mod tests {
         expired.decided_at_unix = expired.response_deadline_unix + 1;
         expired.validate().expect("no-show archive");
     }
-
     #[test]
     fn exhaustive_verifier_accepts_real_bytes_both_roots_and_admission_key() {
         let fixture = fixture();
@@ -2479,7 +2378,6 @@ mod tests {
             &fixture.admission,
         )
         .expect("real PDP proof");
-
         assert_eq!(
             verified.commitment_digest(),
             &fixture.challenge.commitment_digest
@@ -2497,13 +2395,11 @@ mod tests {
             &fixture.proof.proof_digest().expect("proof digest")
         );
     }
-
     #[test]
     fn diagnostic_witness_verifier_checks_both_roots_without_authorizing_admission() {
         let mut fixture = fixture();
         verify_pdp_witnesses_v1(&fixture.commitment, &fixture.challenge, &fixture.proof)
             .expect("valid witness set");
-
         fixture.proof.proof_leaves[0].segment_merkle_path[0][0] ^= 1;
         resign(&mut fixture.proof, &fixture.signing_key);
         assert!(matches!(
@@ -2511,7 +2407,6 @@ mod tests {
             Err(PdpVerificationError::SegmentRootMismatch { .. })
         ));
     }
-
     #[test]
     fn reference_production_verifier_emits_acceptance_only_with_governed_admission() {
         let fixture = fixture();
@@ -2526,7 +2421,6 @@ mod tests {
                 &fixture.admission,
                 301,
             );
-
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert!(
@@ -2539,7 +2433,6 @@ mod tests {
             field.key == "verification_scope" && field.value == "exhaustive_production"
         }));
     }
-
     #[test]
     fn tree_geometry_and_roots_cover_boundary_and_partial_payloads() {
         let cases = [
@@ -2570,7 +2463,6 @@ mod tests {
             Err(PdpMerkleTreeError::EmptyPayload)
         );
     }
-
     #[test]
     fn commitment_rejects_every_geometry_drift() {
         for mutation in 0..8 {
@@ -2592,7 +2484,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn commitment_and_challenge_digests_bind_every_mutation() {
         let fixture = fixture();
@@ -2606,7 +2497,6 @@ mod tests {
             digest,
             commitment.commitment_digest().expect("mutated digest")
         );
-
         for mutation in 0..5 {
             let mut challenge = fixture.challenge.clone();
             match mutation {
@@ -2627,7 +2517,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn challenge_rejects_duplicate_unordered_and_excess_coverage() {
         let fixture = fixture();
@@ -2638,7 +2527,6 @@ mod tests {
             duplicate_segment.validate(),
             Err(PdpChallengeValidationError::NonCanonicalSegmentOrder)
         );
-
         let mut duplicate_leaf = fixture.challenge.clone();
         duplicate_leaf.samples[0].hot_leaf_indices = vec![1, 1];
         rebind_challenge(&mut duplicate_leaf);
@@ -2646,7 +2534,6 @@ mod tests {
             duplicate_leaf.validate(),
             Err(PdpChallengeValidationError::NonCanonicalHotLeafOrder { segment_index: 0 })
         );
-
         let mut excessive = fixture.challenge.clone();
         excessive.samples = (0..=PDP_MAX_SEGMENT_SAMPLES_V1)
             .map(|index| PdpSampleV1 {
@@ -2660,7 +2547,6 @@ mod tests {
             Err(PdpChallengeValidationError::TooManySegments { .. })
         ));
     }
-
     #[test]
     fn signature_is_typed_strict_domain_separated_and_admission_bound() {
         let mut tampered = fixture();
@@ -2674,7 +2560,6 @@ mod tests {
             ),
             Err(PdpVerificationError::Signature(_))
         ));
-
         let fixture = fixture();
         let wrong_key = SigningKey::from_bytes(&[0x22; 32]);
         let wrong_admission =
@@ -2688,7 +2573,6 @@ mod tests {
             ),
             Err(PdpVerificationError::AdmissionKeyMismatch)
         );
-
         let wrong_provider = synthetic_admission([0x99; 32], fixture.proof.signature.public_key);
         assert_eq!(
             verify_pdp_bundle_v1(
@@ -2699,7 +2583,6 @@ mod tests {
             ),
             Err(PdpVerificationError::AdmissionProviderMismatch)
         );
-
         let mut inert = fixture.proof;
         inert.signature.public_key = [0; 32];
         assert!(matches!(
@@ -2709,7 +2592,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn verifier_rejects_untrusted_and_inactive_admission_records() {
         let fixture = fixture();
@@ -2726,7 +2608,6 @@ mod tests {
             ),
             Err(PdpVerificationError::AdmissionNotCouncilVerified)
         ));
-
         let future = synthetic_admission_with_window(
             PROVIDER_ID,
             fixture.proof.signature.public_key,
@@ -2742,7 +2623,6 @@ mod tests {
             ),
             Err(PdpVerificationError::AdmissionNotActiveAtChallenge { .. })
         ));
-
         let deadline_expired = synthetic_admission_with_window(
             PROVIDER_ID,
             fixture.proof.signature.public_key,
@@ -2758,7 +2638,6 @@ mod tests {
             ),
             Err(PdpVerificationError::ChallengeBeyondAdmission { .. })
         ));
-
         let proof_expired = synthetic_admission_with_window(
             PROVIDER_ID,
             fixture.proof.signature.public_key,
@@ -2778,7 +2657,6 @@ mod tests {
             Err(PdpVerificationError::AdmissionExpiredAtProof { .. })
         ));
     }
-
     #[test]
     fn verifier_rejects_unsigned_and_resigned_sample_byte_mutation() {
         let mut fixture = fixture();
@@ -2792,7 +2670,6 @@ mod tests {
             ),
             Err(PdpVerificationError::Signature(_))
         ));
-
         resign(&mut fixture.proof, &fixture.signing_key);
         assert!(matches!(
             verify_pdp_bundle_v1(
@@ -2805,7 +2682,6 @@ mod tests {
                 | Err(PdpVerificationError::InconsistentSegmentCommitment { .. })
         ));
     }
-
     #[test]
     fn verifier_rejects_geometry_and_exact_coverage_mutations() {
         for mutation in 0..6 {
@@ -2846,7 +2722,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verifier_rejects_each_path_class_and_cross_segment_substitution() {
         for mutation in 0..4 {
@@ -2884,7 +2759,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verifier_rejects_noncanonical_odd_padding_sibling() {
         let mut fixture = fixture();
@@ -2906,7 +2780,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn verifier_rejects_rebound_hot_and_segment_root_mutations() {
         for mutate_hot in [true, false] {
@@ -2931,7 +2804,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn verifier_enforces_both_deadline_boundaries_and_seal_order() {
         for proof_at in [199, 200, 300, 301] {
@@ -2946,7 +2818,6 @@ mod tests {
             );
             assert_eq!(result.is_ok(), matches!(proof_at, 200 | 300));
         }
-
         let mut fixture = fixture();
         fixture.commitment.sealed_at = fixture.challenge.issued_at_unix + 1;
         rebind_bundle(&mut fixture);
@@ -2960,7 +2831,6 @@ mod tests {
             Err(PdpVerificationError::CommitmentSealedAfterChallenge { .. })
         ));
     }
-
     #[test]
     fn proof_digest_binds_bytes_paths_geometry_time_and_signer() {
         let fixture = fixture();
@@ -2979,7 +2849,6 @@ mod tests {
             assert_ne!(original, proof.proof_digest().expect("mutated digest"));
         }
     }
-
     #[test]
     fn tree_proof_constructor_rejects_wrong_payload_and_out_of_range_samples() {
         let fixture = fixture();
@@ -3011,7 +2880,6 @@ mod tests {
             Err(PdpMerkleTreeError::HotLeafOutOfRange { .. })
         ));
     }
-
     #[test]
     fn profile_validation_rejects_unknown_drift_duplicate_alias_and_unbounded_text() {
         for mutation in 0..5 {

@@ -10,7 +10,6 @@ fn lane_consensus_domains_reject_blank_base_mode_tag() {
         Err(LaneConsensusDomainError::BlankBaseModeTag)
     );
 }
-
 #[test]
 fn lane_consensus_domains_reject_action_index_out_of_bounds() {
     assert_eq!(
@@ -26,7 +25,6 @@ fn lane_consensus_domains_reject_action_index_out_of_bounds() {
         })
     );
 }
-
 #[test]
 fn lane_consensus_domains_reject_inconsistent_accepted_lane_dataspace() {
     assert_eq!(
@@ -43,7 +41,6 @@ fn lane_consensus_domains_reject_inconsistent_accepted_lane_dataspace() {
         })
     );
 }
-
 #[test]
 fn lane_consensus_domains_reject_duplicate_committee() {
     assert_eq!(
@@ -61,7 +58,6 @@ fn lane_consensus_domains_reject_duplicate_committee() {
         })
     );
 }
-
 #[test]
 fn lane_consensus_domains_reject_missing_committee_for_accepted_lane() {
     assert_eq!(
@@ -76,7 +72,6 @@ fn lane_consensus_domains_reject_missing_committee_for_accepted_lane() {
         })
     );
 }
-
 #[test]
 fn lane_consensus_domains_reject_committee_dataspace_mismatch() {
     assert_eq!(
@@ -93,7 +88,6 @@ fn lane_consensus_domains_reject_committee_dataspace_mismatch() {
         })
     );
 }
-
 #[test]
 fn lane_consensus_domains_reject_empty_duplicate_and_invalid_quorum_committees() {
     let routing = routing_for_lane_dataspaces(&[(1, 11)]);
@@ -108,7 +102,6 @@ fn lane_consensus_domains_reject_empty_duplicate_and_invalid_quorum_committees()
             lane_id: LaneId::new(1)
         })
     );
-
     let duplicate = test_peer(1);
     assert_eq!(
         plan_lane_consensus_domains(
@@ -121,7 +114,6 @@ fn lane_consensus_domains_reject_empty_duplicate_and_invalid_quorum_committees()
             lane_id: LaneId::new(1)
         })
     );
-
     assert_eq!(
         plan_lane_consensus_domains(
             &routing,

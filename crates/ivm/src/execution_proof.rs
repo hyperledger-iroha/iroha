@@ -1,8 +1,6 @@
 //! Deterministic execution-proof summaries returned by the IVM proof syscall.
-
 /// Version emitted by the first-release execution-proof summary format.
 pub const EXECUTION_PROOF_VERSION_V1: u16 = 1;
-
 /// Deterministic commitment to an IVM execution.
 ///
 /// This is not a SNARK/STARK proof. It is a byte-stable proof summary built
@@ -66,7 +64,6 @@ pub struct ExecutionProof {
     /// Whether a constraint failure had been observed when the summary was created.
     pub constraint_failed: bool,
 }
-
 impl ExecutionProof {
     /// Return the exact framed Norito length of a v1 proof summary.
     ///
@@ -77,11 +74,9 @@ impl ExecutionProof {
         norito::encode_canonical(&Self::default()).map(|bytes| bytes.len())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn v1_encoded_length_is_value_independent_and_exact() {
         let empty = ExecutionProof::default();
@@ -113,7 +108,6 @@ mod tests {
             halted: true,
             constraint_failed: true,
         };
-
         let expected = ExecutionProof::encoded_len_v1().expect("fixed proof schema encodes");
         assert_eq!(
             norito::encode_canonical(&empty)
@@ -127,7 +121,6 @@ mod tests {
                 .len(),
             expected
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);

@@ -1,5 +1,4 @@
 // Bootstrap geometry path validation and synchronization helpers.
-
 fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> Result<()> {
     let relative = directory.strip_prefix(store_root).map_err(|_| {
         lane_geometry_journal_structure_error(
@@ -55,7 +54,6 @@ fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> R
     }
     Ok(())
 }
-
 fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool) -> Result<()> {
     let before =
         fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -100,7 +98,6 @@ fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool)
     }
     Ok(())
 }
-
 fn bootstrap_open_geometry_parent(store_root: &Path, parent: &Path) -> Result<File> {
     if !bootstrap_validate_path_kind(store_root, parent, true)? {
         return Err(Error::IO(

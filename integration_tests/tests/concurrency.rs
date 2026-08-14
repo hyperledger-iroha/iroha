@@ -1,11 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Concurrency integration tests: verify that configured scheduler limits are applied.
-
-use std::fs;
-
 use integration_tests::sandbox;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-
+use std::fs;
 #[test]
 fn config_layer_overrides_concurrency_settings() {
     let Some(network) = sandbox::build_network_or_skip(
@@ -18,16 +15,13 @@ fn config_layer_overrides_concurrency_settings() {
     ) else {
         return;
     };
-
     let mut layers = network.config_layers();
-
     // Trusted peers list is injected automatically as the first layer.
     let trusted = layers
         .next()
         .expect("trusted peers layer must be present")
         .into_owned();
     assert!(trusted.contains_key("trusted_peers"));
-
     // Base configuration built by the harness should retain default logger level.
     let base = layers
         .next()
@@ -40,7 +34,6 @@ fn config_layer_overrides_concurrency_settings() {
             .and_then(toml::Value::as_str),
         Some("INFO")
     );
-
     // User layer should override concurrency and logger settings, even if intermediate
     // defaults (e.g., Nexus toggles) are present.
     let overrides = layers
@@ -84,10 +77,8 @@ fn config_layer_overrides_concurrency_settings() {
             .and_then(toml::Value::as_str),
         Some("TRACE")
     );
-
     // Additional defaults may follow, but they must not override the user layer.
 }
-
 #[test]
 fn scheduler_limits_reflected_in_banner() -> eyre::Result<()> {
     init_instruction_registry();
@@ -105,7 +96,6 @@ fn scheduler_limits_reflected_in_banner() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     // Read the peer stdout log and assert the IVM banner reports the configured cores.
     let peer = network.peer();
     let log_path = peer
@@ -116,10 +106,8 @@ fn scheduler_limits_reflected_in_banner() -> eyre::Result<()> {
         stdout.contains("Using 2 cores"),
         "IVM banner should reflect configured scheduler cores"
     );
-
     Ok(())
 }
-
 #[test]
 fn scheduler_limits_one_core_reflected_in_banner() -> eyre::Result<()> {
     init_instruction_registry();
@@ -136,7 +124,6 @@ fn scheduler_limits_one_core_reflected_in_banner() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     let peer = network.peer();
     let log_path = peer
         .latest_stdout_log_path()
@@ -146,6 +133,5 @@ fn scheduler_limits_one_core_reflected_in_banner() -> eyre::Result<()> {
         stdout.contains("Using 1 core"),
         "IVM banner should reflect configured single-core scheduler"
     );
-
     Ok(())
 }

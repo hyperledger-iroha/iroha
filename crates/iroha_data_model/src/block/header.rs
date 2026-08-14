@@ -1,10 +1,4 @@
-use std::{fmt, num::NonZeroU64, time::Duration};
-
-use iroha_crypto::{Hash, HashOf, MerkleTree, Signature, SignatureOf};
-use iroha_data_model_derive::model;
-use iroha_schema::IntoSchema;
-use norito::{codec::Encode, core as ncore};
-
+use super::execution_context::BlockExecutionContextBundle;
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
     consensus::{NposConsensusEffects, PreviousRosterEvidence},
@@ -14,17 +8,17 @@ use crate::{
     },
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-
-use super::execution_context::BlockExecutionContextBundle;
-
+use iroha_crypto::{Hash, HashOf, MerkleTree, Signature, SignatureOf};
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::{codec::Encode, core as ncore};
+use std::{fmt, num::NonZeroU64, time::Duration};
 #[model]
 mod model {
-    use getset::{CopyGetters, Getters, Setters};
-    use norito::codec::{Decode, Encode};
-
     use super::*;
     use crate::{confidential::ConfidentialFeatureDigest, da::commitment::DaProofPolicyBundle};
-
+    use getset::{CopyGetters, Getters, Setters};
+    use norito::codec::{Decode, Encode};
     /// Essential metadata for a block in the chain.
     #[derive(
         Debug,
@@ -97,7 +91,6 @@ mod model {
         #[norito(skip_serializing_if = "Option::is_none")]
         pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     }
-
     /// The validator index and its corresponding signature on the block header.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Getters, IntoSchema)]
     #[cfg_attr(
@@ -113,15 +106,11 @@ mod model {
         pub(super) signature: SignatureOf<BlockHeader>,
     }
 }
-
 pub use self::model::{BlockHeader, BlockSignature};
-
 /// Internal wire helper with a stable Norito tuple layout used by codecs and tests.
 pub mod wire {
-    use norito::core as ncore;
-
     use super::*;
-
+    use norito::core as ncore;
     /// Stable transport for `BlockHeader` mapping typed hashes to raw bytes.
     #[derive(Clone, Copy)]
     pub struct BlockHeaderWire(
@@ -152,7 +141,6 @@ pub mod wire {
         /// Optional confidential feature digest committed in the header.
         pub Option<ConfidentialFeatureDigestWire>,
     );
-
     impl ncore::NoritoSerialize for BlockHeaderWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let tuple = (
@@ -315,7 +303,6 @@ pub mod wire {
         pub Option<u32>,
         pub Option<[u8; 32]>,
     );
-
     type ConfidentialFeatureDigestTuple = (
         Option<[u8; 32]>,
         Option<u32>,
@@ -323,7 +310,6 @@ pub mod wire {
         Option<u32>,
         Option<[u8; 32]>,
     );
-
     impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::serialize(
@@ -331,20 +317,17 @@ pub mod wire {
                 writer,
             )
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::encoded_len_hint(&(
                 self.0, self.1, self.2, self.3, self.4,
             ))
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             <ConfidentialFeatureDigestTuple as ncore::NoritoSerialize>::encoded_len_exact(&(
                 self.0, self.1, self.2, self.3, self.4,
             ))
         }
     }
-
     impl<'de> ncore::NoritoDeserialize<'de> for ConfidentialFeatureDigestWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
             let (vk, poseidon, pedersen, rules, policy): ConfidentialFeatureDigestTuple =
@@ -353,7 +336,6 @@ pub mod wire {
                 );
             Self(vk, poseidon, pedersen, rules, policy)
         }
-
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
             let (vk, poseidon, pedersen, rules, policy) =
                 <ConfidentialFeatureDigestTuple as ncore::NoritoDeserialize>::try_deserialize(
@@ -362,13 +344,11 @@ pub mod wire {
             Ok(Self(vk, poseidon, pedersen, rules, policy))
         }
     }
-
     impl<'a> ncore::DecodeFromSlice<'a> for ConfidentialFeatureDigestWire {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
             ncore::decode_field_canonical(bytes)
         }
     }
-
     impl From<ConfidentialFeatureDigest> for ConfidentialFeatureDigestWire {
         fn from(digest: ConfidentialFeatureDigest) -> Self {
             Self(
@@ -380,7 +360,6 @@ pub mod wire {
             )
         }
     }
-
     impl From<ConfidentialFeatureDigestWire> for ConfidentialFeatureDigest {
         fn from(wire: ConfidentialFeatureDigestWire) -> Self {
             Self {
@@ -403,28 +382,98 @@ pub mod wire {
         /// Validator signature bytes encoded as Norito payload.
         pub Vec<u8>,
     );
-
-    impl ncore::NoritoSerialize for BlockSignatureWire {
-        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            <(u64, Vec<u8>) as ncore::NoritoSerialize>::serialize(&(self.0, self.1.clone()), writer)
+    /// Borrowed view of [`BlockSignatureWire`] used to stream the tuple wire
+    /// layout without cloning or staging the signature payload.
+    #[derive(Clone, Copy)]
+    pub(super) struct BlockSignatureWireRef<'a> {
+        index: u64,
+        payload: &'a [u8],
+    }
+    impl<'a> BlockSignatureWireRef<'a> {
+        pub(super) const fn new(index: u64, payload: &'a [u8]) -> Self {
+            Self { index, payload }
         }
-
-        fn encoded_len_hint(&self) -> Option<usize> {
-            <(u64, Vec<u8>) as ncore::NoritoSerialize>::encoded_len_hint(&(self.0, self.1.clone()))
+        fn tuple_flags() -> u8 {
+            let defaults = ncore::default_encode_flags();
+            let dynamic_mask = ncore::header_flags::PACKED_SEQ;
+            let static_defaults = defaults & !dynamic_mask;
+            match ncore::effective_decode_flags() {
+                None => defaults,
+                Some(0) => 0,
+                Some(current) => {
+                    let current_dynamic = current & dynamic_mask;
+                    let current_static = current & !dynamic_mask;
+                    let effective_static = if current_static == 0 {
+                        static_defaults
+                    } else {
+                        current_static | static_defaults
+                    };
+                    current_dynamic | effective_static
+                }
+            }
         }
-
-        fn encoded_len_exact(&self) -> Option<usize> {
-            <(u64, Vec<u8>) as ncore::NoritoSerialize>::encoded_len_exact(&(self.0, self.1.clone()))
+        fn payload_wire_len(&self) -> Option<usize> {
+            ncore::seq_len_prefix_len(self.payload.len()).checked_add(self.payload.len())
         }
     }
-
+    impl ncore::NoritoSerialize for BlockSignatureWireRef<'_> {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
+            let flags = Self::tuple_flags();
+            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            ncore::write_len_with_flags(
+                writer,
+                u64::try_from(index_len).map_err(|_| ncore::Error::LengthMismatch)?,
+                flags,
+            )?;
+            <u64 as ncore::NoritoSerialize>::serialize(&self.index, writer)?;
+            let payload_wire_len = self
+                .payload_wire_len()
+                .ok_or(ncore::Error::LengthMismatch)?;
+            ncore::write_len_with_flags(
+                writer,
+                u64::try_from(payload_wire_len).map_err(|_| ncore::Error::LengthMismatch)?,
+                flags,
+            )?;
+            ncore::write_seq_len(
+                writer,
+                u64::try_from(self.payload.len()).map_err(|_| ncore::Error::LengthMismatch)?,
+            )?;
+            writer.write_all(self.payload)?;
+            Ok(())
+        }
+        fn encoded_len_hint(&self) -> Option<usize> {
+            ncore::NoritoSerialize::encoded_len_exact(self)
+        }
+        fn encoded_len_exact(&self) -> Option<usize> {
+            let flags = Self::tuple_flags();
+            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)?;
+            let payload_wire_len = self.payload_wire_len()?;
+            ncore::len_prefix_len_with_flags(index_len, flags)
+                .checked_add(index_len)?
+                .checked_add(ncore::len_prefix_len_with_flags(payload_wire_len, flags))?
+                .checked_add(payload_wire_len)
+        }
+    }
+    impl ncore::NoritoSerialize for BlockSignatureWire {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
+            ncore::NoritoSerialize::serialize(&BlockSignatureWireRef::new(self.0, &self.1), writer)
+        }
+        fn encoded_len_hint(&self) -> Option<usize> {
+            ncore::NoritoSerialize::encoded_len_hint(&BlockSignatureWireRef::new(self.0, &self.1))
+        }
+        fn encoded_len_exact(&self) -> Option<usize> {
+            ncore::NoritoSerialize::encoded_len_exact(&BlockSignatureWireRef::new(self.0, &self.1))
+        }
+    }
     impl<'de> ncore::NoritoDeserialize<'de> for BlockSignatureWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
             let (index, payload): (u64, Vec<u8>) =
                 <(u64, Vec<u8>) as ncore::NoritoDeserialize>::deserialize(archived.cast());
             Self(index, payload)
         }
-
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
             let (index, payload) =
                 <(u64, Vec<u8>) as ncore::NoritoDeserialize>::try_deserialize(archived.cast())?;
@@ -432,7 +481,6 @@ pub mod wire {
         }
     }
 }
-
 // Conversions between BlockHeader and its wire mapping for tests and explicit transports.
 impl From<BlockHeader> for wire::BlockHeaderWire {
     fn from(b: BlockHeader) -> Self {
@@ -461,7 +509,6 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
         )
     }
 }
-
 impl From<wire::BlockHeaderWire> for BlockHeader {
     fn from(w: wire::BlockHeaderWire) -> Self {
         fn opt_hash_from_bytes<T>(b: Option<[u8; 32]>) -> Option<HashOf<T>> {
@@ -490,27 +537,22 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header
     }
 }
-
 impl From<&BlockSignature> for wire::BlockSignatureWire {
     fn from(value: &BlockSignature) -> Self {
         wire::BlockSignatureWire(value.index, value.signature.payload().to_vec())
     }
 }
-
 impl From<BlockSignature> for wire::BlockSignatureWire {
     fn from(value: BlockSignature) -> Self {
         (&value).into()
     }
 }
-
 impl TryFrom<wire::BlockSignatureWire> for BlockSignature {
     type Error = ncore::Error;
-
     fn try_from(value: wire::BlockSignatureWire) -> Result<Self, Self::Error> {
         checked_block_signature_from_wire(&value)
     }
 }
-
 fn checked_block_signature_from_wire(
     value: &wire::BlockSignatureWire,
 ) -> Result<BlockSignature, ncore::Error> {
@@ -521,7 +563,6 @@ fn checked_block_signature_from_wire(
         SignatureOf::from_signature(signature),
     ))
 }
-
 #[derive(Encode)]
 struct BlockHeaderForConsensusLegacy {
     height: NonZeroU64,
@@ -536,7 +577,6 @@ struct BlockHeaderForConsensusLegacy {
     view_change_index: u64,
     confidential_features: Option<ConfidentialFeatureDigest>,
 }
-
 #[derive(Encode)]
 struct BlockHeaderForConsensus {
     height: NonZeroU64,
@@ -552,7 +592,6 @@ struct BlockHeaderForConsensus {
     view_change_index: u64,
     confidential_features: Option<ConfidentialFeatureDigest>,
 }
-
 #[derive(Encode)]
 struct BlockHeaderForConsensusWithNposEffects {
     height: NonZeroU64,
@@ -569,7 +608,6 @@ struct BlockHeaderForConsensusWithNposEffects {
     view_change_index: u64,
     confidential_features: Option<ConfidentialFeatureDigest>,
 }
-
 impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
     fn from(value: &BlockHeader) -> Self {
         let BlockHeader {
@@ -588,7 +626,6 @@ impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
             view_change_index,
             confidential_features,
         } = *value;
-
         Self {
             height,
             prev_block_hash,
@@ -604,7 +641,6 @@ impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
         }
     }
 }
-
 impl BlockHeader {
     /// Create a new [`BlockHeader`].
     #[allow(clippy::too_many_arguments)]
@@ -633,18 +669,15 @@ impl BlockHeader {
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
         }
     }
-
     /// Checks if it's a header of a genesis block.
     #[inline]
     pub const fn is_genesis(&self) -> bool {
         self.height.get() == 1
     }
-
     /// Creation timestamp.
     pub const fn creation_time(&self) -> Duration {
         Duration::from_millis(self.creation_time_ms)
     }
-
     /// Returns the consensus-level hash of the block header.
     ///
     /// `result_merkle_root` is validated after execution and remains outside
@@ -654,7 +687,6 @@ impl BlockHeader {
     pub fn hash(&self) -> HashOf<BlockHeader> {
         self.hash_without_execution_results()
     }
-
     /// Computes the header hash used by consensus signatures.
     #[inline]
     fn hash_without_execution_results(&self) -> HashOf<BlockHeader> {
@@ -677,11 +709,9 @@ impl BlockHeader {
             };
             return HashOf::from_untyped_unchecked(HashOf::new(&header).into());
         }
-
         let Some(execution_context_hash) = self.execution_context_hash else {
             return HashOf::from_untyped_unchecked(HashOf::new(&legacy).into());
         };
-
         let header = BlockHeaderForConsensus {
             height: legacy.height,
             prev_block_hash: legacy.prev_block_hash,
@@ -696,70 +726,63 @@ impl BlockHeader {
             view_change_index: legacy.view_change_index,
             confidential_features: legacy.confidential_features,
         };
-
         HashOf::from_untyped_unchecked(HashOf::new(&header).into())
     }
 }
-
 impl fmt::Display for BlockHeader {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} (№{})", self.hash(), self.height)
     }
 }
-
 impl BlockSignature {
     /// Create a new [`BlockSignature`].
     pub fn new(index: u64, signature: SignatureOf<BlockHeader>) -> Self {
         Self { index, signature }
     }
 }
-
 impl ncore::NoritoSerialize for BlockSignature {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let wire_repr = wire::BlockSignatureWire::from(self);
-        ncore::NoritoSerialize::serialize(&wire_repr, writer)
+        ncore::NoritoSerialize::serialize(
+            &wire::BlockSignatureWireRef::new(self.index, self.signature.payload()),
+            writer,
+        )
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
-        let wire_repr = wire::BlockSignatureWire::from(self);
-        ncore::NoritoSerialize::encoded_len_hint(&wire_repr)
+        ncore::NoritoSerialize::encoded_len_hint(&wire::BlockSignatureWireRef::new(
+            self.index,
+            self.signature.payload(),
+        ))
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
-        let wire_repr = wire::BlockSignatureWire::from(self);
-        ncore::NoritoSerialize::encoded_len_exact(&wire_repr)
+        ncore::NoritoSerialize::encoded_len_exact(&wire::BlockSignatureWireRef::new(
+            self.index,
+            self.signature.payload(),
+        ))
     }
 }
-
 impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("BlockSignature decode")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let wire_repr = wire::BlockSignatureWire::try_deserialize(archived.cast())?;
         checked_block_signature_from_wire(&wire_repr)
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::block::ExternalExecutionContext;
-
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
         codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
-
-    use super::*;
-
     struct SamplePayload {
         payload: Vec<u8>,
         flags: u8,
     }
-
     fn sample_block_signature_set() -> std::collections::BTreeSet<BlockSignature> {
         let mut set = std::collections::BTreeSet::new();
         for (idx, fill) in [0x11_u8, 0x7f_u8, 0xe3_u8].into_iter().enumerate() {
@@ -772,25 +795,20 @@ mod tests {
         }
         set
     }
-
     fn encode_sample<T: NoritoSerialize>(value: &T) -> SamplePayload {
         let (payload, flags) = encode_with_header_flags(value);
         SamplePayload { payload, flags }
     }
-
     fn sample_block_signature_vec() -> Vec<BlockSignature> {
         sample_block_signature_set().into_iter().collect()
     }
-
     fn sample_block_signature_payload() -> SamplePayload {
         let set = sample_block_signature_set();
         encode_sample(&set)
     }
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked block-header fixture keypair")
     }
-
     fn sample_execution_context_hash() -> HashOf<BlockExecutionContextBundle> {
         let context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
             HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
@@ -801,17 +819,14 @@ mod tests {
         )]);
         HashOf::new(&context)
     }
-
     fn assert_sccp_commitment_root_captured_by_hash(mut header: BlockHeader) {
         let base = header.hash();
-
         header.set_sccp_commitment_root(Some([0x42; 32]));
         let first_root_hash = header.hash();
         assert_ne!(
             base, first_root_hash,
             "SCCP commitment root must affect the consensus hash"
         );
-
         header.set_sccp_commitment_root(Some([0x7A; 32]));
         let second_root_hash = header.hash();
         assert_ne!(
@@ -823,7 +838,6 @@ mod tests {
             "different SCCP commitment roots must produce different consensus hashes"
         );
     }
-
     #[test]
     fn block_signature_getters_and_roundtrip() {
         let keypair = checked_random_keypair();
@@ -838,34 +852,27 @@ mod tests {
             BlockSignature::try_from(wire_repr.clone()).expect("checked block signature wire"),
             block_signature
         );
-
         let encoded = norito::to_bytes(&block_signature).expect("encode block signature");
         let payload = &encoded[norito::core::Header::SIZE..];
-
         let archived_sig = norito::from_bytes::<BlockSignature>(&encoded).expect("archived sig");
         let decoded_sig = norito::core::NoritoDeserialize::deserialize(archived_sig);
         assert_eq!(decoded_sig, block_signature);
-
         let decoded_try = norito::core::NoritoDeserialize::try_deserialize(archived_sig)
             .expect("try_deserialize BlockSignature");
         assert_eq!(decoded_try, block_signature);
-
         let decoded_adaptive =
             decode_adaptive::<BlockSignature>(payload).expect("decode BlockSignature payload");
         assert_eq!(decoded_adaptive, block_signature);
-
         let bare_bytes = block_signature.encode();
         let mut bare_cursor = bare_bytes.as_slice();
         let decoded_bare =
             BlockSignature::decode_all(&mut bare_cursor).expect("decode bare BlockSignature");
         assert_eq!(decoded_bare, block_signature);
-
         let ok = decoded_sig
             .signature()
             .verify_hash(keypair.public_key(), header.hash());
         assert!(ok.is_ok(), "decoded signature must verify the header hash");
     }
-
     #[test]
     fn block_signature_try_deserialize_rejects_all_zero_payload() {
         let invalid_wire = wire::BlockSignatureWire(0, vec![0_u8; 64]);
@@ -878,7 +885,6 @@ mod tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid block signature fixture");
         let archived =
             norito::from_bytes::<BlockSignature>(&encoded).expect("archive block signature");
-
         let err =
             <BlockSignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
                 .expect_err("all-zero block signature payload must fail closed");
@@ -892,7 +898,6 @@ mod tests {
             other => panic!("unexpected block signature decode error: {other:?}"),
         }
     }
-
     #[test]
     fn block_header_setters_work() {
         let mut header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -901,7 +906,6 @@ mod tests {
         assert_eq!(header.height(), nonzero!(2_u64));
         assert_eq!(header.view_change_index(), 10);
     }
-
     #[test]
     fn block_header_defaults_confidential_digest() {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
@@ -910,7 +914,6 @@ mod tests {
             Some(crate::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST)
         );
     }
-
     #[test]
     fn block_signature_roundtrip_diagnostics() {
         // Diagnostic helper to print byte layouts and decoded indices for bare and header-framed paths.
@@ -927,18 +930,15 @@ mod tests {
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header diagnostic fixture signature");
         let bs = BlockSignature::new(42, signature.clone());
-
         // Bare codec bytes and decode
         let bare = bs.encode();
         let decoded_bare = BlockSignature::decode_all(&mut bare.as_slice()).expect("bare decode");
-
         // Header-framed bytes and decode via the Norito archive for inspection
         let header_bytes = norito::to_bytes(&bs).expect("encode block signature");
         let archived_sig = norito::from_bytes::<BlockSignature>(&header_bytes).expect("from_bytes");
         let decoded_hdr = norito::core::NoritoDeserialize::deserialize(archived_sig);
         let decoded_try =
             norito::core::NoritoDeserialize::try_deserialize(archived_sig).expect("fallible");
-
         eprintln!("BS bare len={} hdr len={}", bare.len(), header_bytes.len());
         eprintln!("bare[0..32] = {}", hex_prefix(&bare, 32));
         eprintln!("hdr[0..32]  = {}", hex_prefix(&header_bytes, 32));
@@ -951,7 +951,6 @@ mod tests {
         // Don't assert equality here; this test is for diagnostics under --nocapture.
         // The actual equality is checked in block_signature_getters_and_roundtrip.
     }
-
     #[test]
     fn block_signature_btreeset_roundtrip() {
         let keypair = checked_random_keypair();
@@ -959,10 +958,8 @@ mod tests {
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header btreeset fixture signature");
         let block_signature = BlockSignature::new(7, signature);
-
         let mut set = std::collections::BTreeSet::new();
         set.insert(block_signature.clone());
-
         let encoded = norito::to_bytes(&set).expect("encode btreeset");
         let payload = &encoded[norito::core::Header::SIZE..];
         let decoded = decode_adaptive::<std::collections::BTreeSet<BlockSignature>>(payload)
@@ -970,7 +967,6 @@ mod tests {
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded.iter().next().unwrap(), &block_signature);
     }
-
     #[test]
     fn block_signature_packed_decode_repro() {
         let sample = sample_block_signature_payload();
@@ -980,12 +976,10 @@ mod tests {
                 .expect("decode packed BTreeSet<BlockSignature>");
         assert_eq!(decoded, sample_block_signature_set());
     }
-
     #[test]
     fn block_signature_vec_decode_vec_ptr_repro() {
         let vec = sample_block_signature_vec();
         let SamplePayload { payload, flags } = encode_sample(&vec);
-
         let _flags_guard = norito::core::DecodeFlagsGuard::enter(flags);
         let archived = norito::core::archived_from_slice::<Vec<BlockSignature>>(&payload)
             .expect("archived signature vector");
@@ -997,7 +991,6 @@ mod tests {
             .expect("decode packed Vec<BlockSignature>");
         assert_eq!(decoded, vec);
     }
-
     #[test]
     fn block_header_da_commitments_roundtrip() {
         let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
@@ -1009,7 +1002,6 @@ mod tests {
         let decoded = BlockHeader::decode_all(&mut cursor).expect("decode header");
         assert_eq!(decoded.da_commitments_hash(), Some(da_hash));
     }
-
     #[test]
     fn block_header_da_proof_policies_roundtrip() {
         let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
@@ -1021,7 +1013,6 @@ mod tests {
         let decoded = BlockHeader::decode_all(&mut cursor).expect("decode header");
         assert_eq!(decoded.da_proof_policies_hash(), Some(da_hash));
     }
-
     #[test]
     fn block_header_da_pin_intents_roundtrip() {
         let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
@@ -1033,7 +1024,6 @@ mod tests {
         let decoded = BlockHeader::decode_all(&mut cursor).expect("decode header");
         assert_eq!(decoded.da_pin_intents_hash(), Some(da_hash));
     }
-
     #[test]
     fn block_header_prev_roster_evidence_hash_roundtrip() {
         let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
@@ -1046,7 +1036,6 @@ mod tests {
         let decoded = BlockHeader::decode_all(&mut cursor).expect("decode header");
         assert_eq!(decoded.prev_roster_evidence_hash(), Some(evidence_hash));
     }
-
     #[test]
     fn header_hash_captures_da_commitment_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
@@ -1060,7 +1049,6 @@ mod tests {
             "DA commitment hash must influence header hash"
         );
     }
-
     #[test]
     fn header_hash_captures_da_proof_policy_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
@@ -1074,7 +1062,6 @@ mod tests {
             "DA proof policy hash must influence header hash"
         );
     }
-
     #[test]
     fn header_hash_captures_da_pin_intents_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
@@ -1088,7 +1075,6 @@ mod tests {
             "DA pin intent hash must influence header hash"
         );
     }
-
     #[test]
     fn block_header_hash_captures_prev_roster_evidence_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
@@ -1103,7 +1089,6 @@ mod tests {
             "previous roster evidence hash must influence header hash"
         );
     }
-
     #[test]
     fn header_hash_captures_execution_context_hash_and_preserves_legacy_none_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
@@ -1114,7 +1099,6 @@ mod tests {
             base, with_context,
             "execution context hash must influence header hash"
         );
-
         header.set_execution_context_hash(None);
         assert_eq!(
             base,
@@ -1122,7 +1106,6 @@ mod tests {
             "omitting execution context must preserve the legacy header hash"
         );
     }
-
     #[test]
     fn header_hash_captures_sccp_commitment_root_for_all_consensus_hash_branches() {
         assert_sccp_commitment_root_captured_by_hash(BlockHeader::new(
@@ -1133,17 +1116,14 @@ mod tests {
             123,
             0,
         ));
-
         let mut with_context = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
         with_context.set_execution_context_hash(Some(sample_execution_context_hash()));
         assert_sccp_commitment_root_captured_by_hash(with_context);
-
         let mut with_npos = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
         with_npos.set_execution_context_hash(Some(sample_execution_context_hash()));
         with_npos.set_npos_effects_hash(Some(HashOf::new(&NposConsensusEffects::default())));
         assert_sccp_commitment_root_captured_by_hash(with_npos);
     }
-
     #[test]
     fn header_decodes_legacy_payload_without_execution_context_hash() {
         #[derive(norito::codec::Encode)]
@@ -1162,7 +1142,6 @@ mod tests {
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
         }
-
         let legacy = LegacyBlockHeader {
             height: nonzero!(7_u64),
             prev_block_hash: None,
@@ -1182,7 +1161,6 @@ mod tests {
         let mut cursor = bytes.as_slice();
         let decoded =
             BlockHeader::decode_all(&mut cursor).expect("decode legacy BlockHeader payload");
-
         assert_eq!(decoded.height(), nonzero!(7_u64));
         assert_eq!(decoded.execution_context_hash(), None);
         assert_eq!(decoded.sccp_commitment_root(), Some([0x42; 32]));
@@ -1193,21 +1171,18 @@ mod tests {
             Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
         );
     }
-
     #[test]
     fn header_hash_ignores_result_merkle_root_and_roundtrips() {
         // Build a header without result_merkle_root
         let header1 = BlockHeader::new(nonzero!(5_u64), None, None, None, 12345, 0);
         // Compute its consensus hash
         let h1 = header1.hash();
-
         // Same header but with a result_merkle_root set must have the same consensus hash
         // Use Hash::new (safe) to avoid relying on prehashed layout in tests
         let fake_root = HashOf::from_untyped_unchecked(Hash::new([9_u8; Hash::LENGTH]));
         let header2 = BlockHeader::new(nonzero!(5_u64), None, None, Some(fake_root), 12345, 0);
         let h2 = header2.hash();
         assert_eq!(h1, h2, "consensus hash must ignore result_merkle_root");
-
         // NOTE: Norito roundtrip for header2 is validated in integration tests.
         // Keep this unit test focused on consensus hashing behavior.
     }

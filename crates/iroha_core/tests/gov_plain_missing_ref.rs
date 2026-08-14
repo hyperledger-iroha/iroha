@@ -1,6 +1,5 @@
 //! Plain ballot must fail when referendum is missing or closed.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,7 +17,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[test]
 fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     let kura = Kura::blank_kura_for_testing();
@@ -43,7 +41,6 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
     Grant::account_permission(ballot_perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
-
     // No referendum exists
     let ballot = CastPlainBallot {
         referendum_id: "missing".to_string(),
@@ -60,7 +57,6 @@ fn plain_ballot_rejected_when_referendum_absent_or_closed() {
         err.to_string().contains("referendum"),
         "unexpected error: {err}"
     );
-
     // Insert a closed referendum and ensure rejection
     stx.world.governance_referenda_mut().insert(
         "closed".to_string(),

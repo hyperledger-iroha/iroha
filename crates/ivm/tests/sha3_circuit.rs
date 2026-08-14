@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::Sha3BlockCircuit;
-
 fn sha3_compress_ref(state: [u64; 25], block: &[u8; 136]) -> [u64; 25] {
     let mut st = state;
     for i in 0..17 {
@@ -12,7 +11,6 @@ fn sha3_compress_ref(state: [u64; 25], block: &[u8; 136]) -> [u64; 25] {
     tiny_keccak::keccakf(&mut st);
     st
 }
-
 #[test]
 fn test_sha3block_known_vector() {
     let block = [0u8; 136];
@@ -25,7 +23,6 @@ fn test_sha3block_known_vector() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_sha3block_bad_witness() {
     let block = [0u8; 136];

@@ -1,17 +1,14 @@
 #![no_main]
-
 use arbitrary::{Arbitrary, Unstructured};
 use fastpq_prover::{OperationKind, StateTransition, TransitionBatch, build_trace};
 use libfuzzer_sys::fuzz_target;
 use std::collections::BTreeMap;
-
 const MAX_TRANSITIONS: usize = 32;
 const MAX_KEY_BYTES: usize = 64;
 const MAX_VALUE_BYTES: usize = 16;
 const MAX_METADATA_ENTRIES: usize = 8;
 const MAX_METADATA_KEY_LEN: usize = 32;
 const MAX_METADATA_VALUE_LEN: usize = 64;
-
 #[derive(Debug)]
 struct BatchSeed {
     parameter: String,
@@ -20,7 +17,6 @@ struct BatchSeed {
     dsid: Option<Vec<u8>>,
     slot: Option<Vec<u8>>,
 }
-
 #[derive(Debug)]
 struct TransitionSeed {
     key: Vec<u8>,
@@ -28,7 +24,6 @@ struct TransitionSeed {
     post_value: Vec<u8>,
     operation: OperationSeed,
 }
-
 #[derive(Debug)]
 enum OperationSeed {
     Transfer,
@@ -46,31 +41,26 @@ enum OperationSeed {
     },
     MetaSet,
 }
-
 #[derive(Debug)]
 struct MetadataSeed {
     key: String,
     value: Vec<u8>,
 }
-
 impl<'a> Arbitrary<'a> for BatchSeed {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         let parameter = ascii_string(u, MAX_METADATA_KEY_LEN)?;
-
         let transition_len =
             usize::try_from(u.int_in_range(0..=MAX_TRANSITIONS as u32)?).expect("len fits usize");
         let mut transitions = Vec::with_capacity(transition_len);
         for _ in 0..transition_len {
             transitions.push(TransitionSeed::arbitrary(u)?);
         }
-
         let metadata_len =
             usize::try_from(u.int_in_range(0..=MAX_METADATA_ENTRIES as u32)?).expect("len fits");
         let mut metadata = Vec::with_capacity(metadata_len);
         for _ in 0..metadata_len {
             metadata.push(MetadataSeed::arbitrary(u)?);
         }
-
         let dsid = if u.arbitrary()? {
             Some(bounded_vec(u, MAX_METADATA_VALUE_LEN)?)
         } else {
@@ -81,7 +71,6 @@ impl<'a> Arbitrary<'a> for BatchSeed {
         } else {
             None
         };
-
         Ok(Self {
             parameter,
             transitions,
@@ -91,7 +80,6 @@ impl<'a> Arbitrary<'a> for BatchSeed {
         })
     }
 }
-
 impl<'a> Arbitrary<'a> for TransitionSeed {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         Ok(Self {
@@ -102,7 +90,6 @@ impl<'a> Arbitrary<'a> for TransitionSeed {
         })
     }
 }
-
 impl<'a> Arbitrary<'a> for OperationSeed {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         match u.int_in_range(0..=5)? {
@@ -123,7 +110,6 @@ impl<'a> Arbitrary<'a> for OperationSeed {
         }
     }
 }
-
 impl<'a> Arbitrary<'a> for MetadataSeed {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         Ok(Self {
@@ -132,10 +118,10 @@ impl<'a> Arbitrary<'a> for MetadataSeed {
         })
     }
 }
-
 impl BatchSeed {
     fn into_batch(self) -> TransitionBatch {
-        let mut batch = TransitionBatch::new(self.parameter, fastpq_prover::PublicInputs::default());
+        let mut batch =
+            TransitionBatch::new(self.parameter, fastpq_prover::PublicInputs::default());
         let mut metadata = BTreeMap::new();
         for entry in self.metadata {
             metadata.insert(entry.key, entry.value);
@@ -153,14 +139,12 @@ impl BatchSeed {
             batch.public_inputs.slot = u64::from_le_bytes(buf);
         }
         batch.metadata = metadata;
-
         for transition in self.transitions {
             batch.push(transition.into_transition());
         }
         batch
     }
 }
-
 impl TransitionSeed {
     fn into_transition(self) -> StateTransition {
         StateTransition::new(
@@ -171,7 +155,6 @@ impl TransitionSeed {
         )
     }
 }
-
 impl OperationSeed {
     fn into_kind(self) -> OperationKind {
         match self {
@@ -200,7 +183,6 @@ impl OperationSeed {
         }
     }
 }
-
 fn ascii_string(u: &mut Unstructured<'_>, max_len: usize) -> arbitrary::Result<String> {
     let len = usize::try_from(u.int_in_range(0..=max_len as u32)?).expect("len fits usize");
     let bytes = u.bytes(len)?;
@@ -210,12 +192,10 @@ fn ascii_string(u: &mut Unstructured<'_>, max_len: usize) -> arbitrary::Result<S
         .collect();
     Ok(string)
 }
-
 fn bounded_vec(u: &mut Unstructured<'_>, max_len: usize) -> arbitrary::Result<Vec<u8>> {
     let len = usize::try_from(u.int_in_range(0..=max_len as u32)?).expect("len fits usize");
     Ok(u.bytes(len)?.to_vec())
 }
-
 fn process_seed(seed: BatchSeed) {
     let batch = seed.into_batch();
     if let Ok(trace) = build_trace(&batch) {
@@ -229,15 +209,12 @@ fn process_seed(seed: BatchSeed) {
         }
     }
 }
-
 fuzz_target!(|seed: BatchSeed| {
     process_seed(seed);
 });
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn stable_smoke_runs_without_fuzzer() {
         // Deterministic seeds keep this harness stable on non-fuzzer, stable toolchains.

@@ -9,7 +9,6 @@
 //!   cargo run -p `iroha_torii_shared` --example `connect_app` -- \
 //!     --node <http://127.0.0.1:8080> --network-id <hash:...#....> \
 //!     [--action ok|reject|close]
-
 #[cfg(feature = "connect")]
 use base64::Engine;
 #[cfg(feature = "connect")]
@@ -42,7 +41,6 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 #[cfg(feature = "connect")]
 use tokio_tungstenite::tungstenite::{Bytes, Message};
-
 #[cfg(feature = "connect")]
 #[derive(JsonDeserialize)]
 struct SessionResp {
@@ -57,17 +55,14 @@ struct SessionResp {
     token_management: String,
     token_relay: String,
 }
-
 #[cfg(feature = "connect")]
 type AppWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
 #[cfg(feature = "connect")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     run_connect_app().await
 }
-
 #[cfg(feature = "connect")]
 #[allow(clippy::future_not_send)]
 async fn run_connect_app() -> anyhow::Result<()> {
@@ -89,7 +84,6 @@ async fn run_connect_app() -> anyhow::Result<()> {
         anyhow::bail!("unexpected trailing argument `{other}`");
     }
     let client = Client::new();
-
     let x = X25519Sha256::new();
     let (app_pk, app_sk) = x.try_keypair(KeyGenOption::Random)?;
     let app_pk_bytes: [u8; 32] = *app_pk.as_bytes();
@@ -98,7 +92,6 @@ async fn run_connect_app() -> anyhow::Result<()> {
     if nonce.iter().all(|byte| *byte == 0) {
         anyhow::bail!("operating-system RNG returned an invalid all-zero Connect nonce");
     }
-
     let SessionResp {
         sid,
         network_id: response_network_id,
@@ -111,7 +104,6 @@ async fn run_connect_app() -> anyhow::Result<()> {
         token_management: _token_management,
         token_relay,
     } = request_session(&client, &node, network_id, &app_pk_bytes, &nonce).await?;
-
     let sid_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(sid.as_bytes())
         .map_err(|_| anyhow::anyhow!("Torii returned a noncanonical Connect SID"))?;
@@ -131,7 +123,6 @@ async fn run_connect_app() -> anyhow::Result<()> {
     println!(
         "session created for {response_network_id}; deliver this wallet URI securely: {wallet_uri}"
     );
-
     let ws_url = format!(
         "{}/v1/connect/ws?sid={sid}&role=app",
         node.replace("http", "ws")
@@ -142,7 +133,6 @@ async fn run_connect_app() -> anyhow::Result<()> {
         .insert(AUTHORIZATION, format!("Bearer {token_app}").parse()?);
     let (mut ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     println!("WS connected");
-
     let constraints = proto::Constraints { network_id };
     let open = proto::ConnectFrameV1 {
         sid: sid_arr,
@@ -156,7 +146,6 @@ async fn run_connect_app() -> anyhow::Result<()> {
         }),
     };
     ws.send(Message::Binary(Bytes::from(open.encode()))).await?;
-
     let approval = ws
         .next()
         .await
@@ -203,9 +192,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     let wallet_pk_bytes: [u8; 32] = wallet_pk;
     let (k_app, k_wallet) = sdk::x25519_derive_keys(&app_sk.to_bytes(), &wallet_pk_bytes, &sid_arr)
         .expect("x25519 derive keys");
-
     send_app_action(&mut ws, &k_app, &sid_arr, action.as_str()).await?;
-
     if let Some(Ok(Message::Binary(bin))) = ws.next().await {
         let mut cursor = bin.as_ref();
         if let Ok(frame) = proto::ConnectFrameV1::decode_all(&mut cursor)
@@ -214,10 +201,8 @@ async fn run_connect_app() -> anyhow::Result<()> {
             log_app_response(&env);
         }
     }
-
     Ok(())
 }
-
 #[cfg(feature = "connect")]
 fn required_arg(
     args: &mut impl Iterator<Item = String>,
@@ -232,7 +217,6 @@ fn required_arg(
     args.next()
         .ok_or_else(|| anyhow::anyhow!("{expected_flag} requires a value"))
 }
-
 #[cfg(feature = "connect")]
 async fn request_session(
     client: &Client,
@@ -263,7 +247,6 @@ async fn request_session(
     let resp = json::from_slice(body.as_ref())?;
     Ok(resp)
 }
-
 #[cfg(feature = "connect")]
 async fn send_app_action(
     ws: &mut AppWebSocket,
@@ -321,7 +304,6 @@ async fn send_app_action(
     }
     Ok(())
 }
-
 #[cfg(feature = "connect")]
 fn log_app_response(env: &proto::EnvelopeV1) {
     match &env.payload {
@@ -354,7 +336,6 @@ fn log_app_response(env: &proto::EnvelopeV1) {
         }
     }
 }
-
 // Fallback stub when `tokio-tungstenite` `connect` feature is not enabled.
 #[cfg(not(feature = "connect"))]
 fn main() {

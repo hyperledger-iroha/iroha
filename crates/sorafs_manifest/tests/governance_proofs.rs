@@ -1,11 +1,9 @@
 use sorafs_manifest::{CouncilSignature, GovernanceProofs};
-
 #[test]
 fn governance_proofs_default_is_empty() {
     let proofs = GovernanceProofs::default();
     assert!(proofs.council_signatures.is_empty());
 }
-
 #[test]
 fn governance_proofs_roundtrip() {
     let proofs = GovernanceProofs {

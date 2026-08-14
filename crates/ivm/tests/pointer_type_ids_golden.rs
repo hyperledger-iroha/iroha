@@ -1,9 +1,7 @@
 //! Golden tests for pointer‑ABI type IDs and policy allow lists.
-
 #[test]
 fn pointer_type_ids_match_golden() {
     use ivm::PointerType as P;
-
     // BEGIN GENERATED ABI V1 POINTER TYPE IDS
     let expected: &[(P, u16)] = &[
         (P::AccountId, 0x0001),
@@ -26,7 +24,6 @@ fn pointer_type_ids_match_golden() {
         (P::Decimal, 0x0012),
     ];
     // END GENERATED ABI V1 POINTER TYPE IDS
-
     let expected_types = expected
         .iter()
         .map(|(pointer_type, _)| *pointer_type)
@@ -36,7 +33,6 @@ fn pointer_type_ids_match_golden() {
         expected_types.as_slice(),
         "the ABI-v1 pointer type surface changed; update numeric ID and policy goldens together"
     );
-
     for &(pointer_type, id) in expected {
         assert_eq!(
             pointer_type as u16, id,
@@ -50,7 +46,6 @@ fn pointer_type_ids_match_golden() {
     }
     assert_eq!(P::from_u16(0x0013), None);
 }
-
 #[test]
 fn pointer_policy_allows_expected_types_for_v1() {
     use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
@@ -77,11 +72,9 @@ fn pointer_policy_allows_expected_types_for_v1() {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
     }
 }
-
 #[test]
 fn unassigned_numeric_pointer_id_is_unknown_and_never_allowed() {
     use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
-
     assert_eq!(P::from_u16(0x0013), None);
     assert!(
         !ivm::pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1)

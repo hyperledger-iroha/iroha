@@ -1,11 +1,4 @@
 //! Generates deterministic SoraFS hedging and billing fixtures.
-
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
-
 use hex::encode;
 use norito::{
     core::NoritoSerialize,
@@ -18,13 +11,16 @@ use sorafs_manifest::{
     build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
     reference_price_decision_id_v1,
 };
-
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/hedging");
     let negative_dir = fixture_dir.join("negative");
     fs::create_dir_all(&fixture_dir)?;
     fs::create_dir_all(&negative_dir)?;
-
     let primary_feed = feed(
         "xor-usd-primary",
         "governance-primary",
@@ -43,14 +39,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     primary_feed.validate()?;
     secondary_feed.validate()?;
-
     let decision = derive_reference_price_decision_v1(
         1_700_604_800,
         vec![secondary_feed.clone(), primary_feed.clone()],
         300,
         500,
     )?;
-
     let storage_line = build_billing_line_item_v1(
         BillingLineItemKindV1::Storage,
         BillingLineDirectionV1::Debit,
@@ -78,7 +72,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         1,
         None,
     )?;
-
     let statement = build_billing_statement_v1(
         b"provider-a".to_vec(),
         1_700_000_000,
@@ -92,7 +85,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         ],
         Some(digest("sorafs.billing.previous.statement")),
     )?;
-
     write_norito_pair(
         &fixture_dir.join("price_feed_primary_v1"),
         &primary_feed,
@@ -128,7 +120,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &statement,
         billing_statement_json(&statement),
     )?;
-
     let mut stale_decision = decision.clone();
     stale_decision.feeds[0].observed_at_unix = 1_700_000_000;
     stale_decision.decision_id = reference_price_decision_id_v1(&stale_decision)?;
@@ -138,7 +129,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &stale_decision,
         reference_price_decision_json(&stale_decision),
     )?;
-
     let mut tampered_line = storage_line.clone();
     tampered_line.usd_amount = tampered_line
         .usd_amount
@@ -164,7 +154,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &tampered_statement,
         billing_statement_json(&tampered_statement),
     )?;
-
     let mut tampered_totals = statement;
     tampered_totals.total_debit_usd = tampered_totals
         .total_debit_usd
@@ -175,10 +164,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         &tampered_totals,
         billing_statement_json(&tampered_totals),
     )?;
-
     Ok(())
 }
-
 fn feed(
     feed_id: &str,
     source: &str,
@@ -198,11 +185,9 @@ fn feed(
         status,
     }
 }
-
 fn digest(label: &str) -> [u8; 32] {
     *blake3::hash(label.as_bytes()).as_bytes()
 }
-
 fn write_norito_pair<T>(
     base_path: &Path,
     value: &T,
@@ -220,7 +205,6 @@ where
     fs::write(base_path.with_extension("json"), json)?;
     Ok(())
 }
-
 fn price_feed_json(feed: &HedgingPriceFeedV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(feed.version));
@@ -242,7 +226,6 @@ fn price_feed_json(feed: &HedgingPriceFeedV1) -> Value {
     map.insert("status".into(), Value::from(feed_status(feed.status)));
     Value::Object(map)
 }
-
 fn reference_price_decision_json(decision: &HedgingReferencePriceDecisionV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(decision.version));
@@ -284,7 +267,6 @@ fn reference_price_decision_json(decision: &HedgingReferencePriceDecisionV1) -> 
     );
     Value::Object(map)
 }
-
 fn billing_line_json(line: &BillingLineItemV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(line.version));
@@ -313,7 +295,6 @@ fn billing_line_json(line: &BillingLineItemV1) -> Value {
     };
     Value::Object(map)
 }
-
 fn billing_statement_json(statement: &BillingStatementV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(statement.version));
@@ -379,7 +360,6 @@ fn billing_statement_json(statement: &BillingStatementV1) -> Value {
     };
     Value::Object(map)
 }
-
 fn feed_status(status: HedgingFeedStatusV1) -> &'static str {
     match status {
         HedgingFeedStatusV1::Ok => "ok",
@@ -387,14 +367,12 @@ fn feed_status(status: HedgingFeedStatusV1) -> &'static str {
         HedgingFeedStatusV1::Rejected => "rejected",
     }
 }
-
 fn line_direction(direction: BillingLineDirectionV1) -> &'static str {
     match direction {
         BillingLineDirectionV1::Debit => "debit",
         BillingLineDirectionV1::Credit => "credit",
     }
 }
-
 fn line_kind(kind: BillingLineItemKindV1) -> &'static str {
     match kind {
         BillingLineItemKindV1::Storage => "storage",

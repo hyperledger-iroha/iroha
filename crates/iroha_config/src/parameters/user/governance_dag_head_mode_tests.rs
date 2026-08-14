@@ -14,7 +14,6 @@ fn ipns_mode_rejects_every_signed_head_authenticator_field() {
     valid_emitter
         .into_result()
         .expect("IPNS mode without a signed-head authenticator must parse");
-
     service.signed_head_url = Some("https://governance-head.example/v1/head".to_owned());
     let mut endpoint_emitter = Emitter::new();
     let _ = service.clone().parse(false, &mut endpoint_emitter);
@@ -23,7 +22,6 @@ fn ipns_mode_rejects_every_signed_head_authenticator_field() {
             .into_result()
             .expect_err("a signed-head endpoint must fail in IPNS mode"),
     );
-
     service.signed_head_url = None;
     service.head_request_auth_public_key_hex = Some(ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX.to_owned());
     let mut invalid_emitter = Emitter::new();
@@ -34,7 +32,6 @@ fn ipns_mode_rejects_every_signed_head_authenticator_field() {
             .expect_err("even a lone signed-head verifier key must fail in IPNS mode"),
     );
 }
-
 #[test]
 fn signed_http_mode_rejects_every_ipns_selector() {
     let selectors: [fn(&mut SorafsGovernanceDagService); 2] = [

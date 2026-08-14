@@ -4,7 +4,6 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let install_lock = |adapter: &mut SumeragiV2Adapter, marker: u8| {
         let locked_subject = subject(marker);
         let locked_execution_commitment = execution_commitment(marker);
@@ -108,7 +107,6 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             adapter.record_ingress_delivery(admission);
         }
     };
-
     let first_lock = install_lock(&mut adapter, 0xDB);
     let ordinary_round = first_lock.0;
     let ingress_context = adapter.wire_context.clone();
@@ -172,7 +170,6 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
     adapter.prune_ingress_records();
     assert_eq!(adapter.ingress_equivocations, same_view_equivocations);
     assert_eq!(adapter.ingress_deliveries, same_view_deliveries);
-
     // The following lock-replacement half isolates durable-lock retention;
     // view-advance retirement for these TimeoutVote owners is exercised by
     // `full_normal_deferred_lane_cannot_drop_absolute_timeout`.
@@ -186,7 +183,6 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
         adapter.ingress_equivocations.len(),
         MAX_INGRESS_SEMANTIC_KEYS + roster_len
     );
-
     let second_lock = install_lock(&mut adapter, 0xDC);
     adapter.prune_ingress_records();
     assert_eq!(
@@ -200,7 +196,6 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             .all(|record| !record.capacity_bypass)
     );
     assert!(adapter.ingress_deliveries.is_empty());
-
     admit_locked_roster(&mut adapter, second_lock.0, second_lock.1, second_lock.2);
     assert_eq!(
         adapter.ingress_equivocations.len(),
@@ -222,13 +217,11 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
         .expect("ingress queue status after lock advance");
     assert!(ingress.depth <= ingress.capacity);
 }
-
 #[test]
 fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let wire_round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
         height: adapter.wire_context.height,
@@ -264,7 +257,6 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
     let carried_reference = carried_lock.reference();
     let durable_reference = durable_lock.reference();
     assert_ne!(carried_reference, durable_reference);
-
     let core_context = adapter.reducer.context().clone();
     let local_validator = adapter
         .registry
@@ -300,7 +292,6 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
             .map(reducer::QuorumCertificate::reference),
         Some(durable_reference)
     );
-
     let timeout = wire::TimeoutCertificate {
         round: wire_round,
         groups: vec![wire::TimeoutVoteGroup {
@@ -313,7 +304,6 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
         .registry
         .tc_to_core(&timeout, &wire_context)
         .expect("register the timeout certificate");
-
     adapter.registry.certificates.remove(&carried_reference);
     assert!(
         !adapter
@@ -329,7 +319,6 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
             protected_lock: Some(carried_lock),
         })
         .expect("convert the effect-carried lock");
-
     let AdapterEffect::EnterView {
         tag: converted_tag,
         certificate,
@@ -345,7 +334,6 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
         adapter.active_subject,
         Some((carried_reference.round(), carried_reference.subject()))
     );
-
     let converted_lock = adapter
         .registry
         .certificates
@@ -371,7 +359,6 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
         "conversion must neither re-read nor replace the reducer's different durable lock"
     );
 }
-
 #[test]
 fn persisted_enter_view_clears_unlocked_subject_and_records_tc_progress() {
     let directory = TempDir::new().expect("temporary directory");
@@ -389,7 +376,6 @@ fn persisted_enter_view_clears_unlocked_subject_and_records_tc_progress() {
         adapter.serviced_candidate_views_for_test(),
         BTreeSet::from([0]),
     );
-
     let stale_subject = adapter
         .registry
         .register_subject(subject(0xD5))
@@ -410,13 +396,11 @@ fn persisted_enter_view_clears_unlocked_subject_and_records_tc_progress() {
             aggregate_signature: vec![0xC5; 96],
         }],
     };
-
     let installed = adapter
         .receive_verified(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
         ))
         .expect("install an unlocked timeout certificate");
-
     assert_eq!(installed.disposition(), reducer::StepDisposition::Applied);
     assert_eq!(adapter.reducer.durable_state().current_view(), 1);
     assert!(
@@ -437,14 +421,12 @@ fn persisted_enter_view_clears_unlocked_subject_and_records_tc_progress() {
         )) if generation == adapter.current_tag().generation()
     ));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let timed_out_round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
         height: adapter.wire_context.height,
@@ -470,7 +452,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
         reducer::StepDisposition::Applied
     );
     assert_eq!(adapter.current_tag().view(), 1);
-
     let current_round = wire::ConsensusRound {
         view: 1,
         ..timed_out_round
@@ -498,7 +479,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
             },
         ))
     };
-
     let preserved_vote = timeout_vote(1, 0xD1);
     let first_consumed = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(
@@ -531,7 +511,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
         vec![preserved_signer, second_preserved_signer]
     );
     assert!(!preserved_pool.certificate_formed);
-
     let promoted_prepare = wire::QuorumCertificate {
         round: timed_out_round,
         proposal_round: timed_out_round,
@@ -572,7 +551,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
         [reducer::Effect::Persist { entry, .. }]
             if matches!(entry.record(), reducer::WalRecord::InstallTimeout(_))
     ));
-
     let deferred_vote = timeout_vote(2, 0xD4);
     let busy = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(
@@ -606,7 +584,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
     assert_eq!(adapter.deferred_progress_inputs.len(), 1);
-
     let install_effects = adapter
         .drive_effects(pending_install_effects)
         .expect("append and acknowledge the real strict same-round InstallTimeout");
@@ -618,7 +595,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
         AdapterEffect::EnterView { tag, certificate, .. }
             if *tag == post_upgrade_tag && certificate.round == timed_out_round
     )));
-
     let pool_after_upgrade = adapter
         .reducer
         .timeout_pool_snapshots()
@@ -649,7 +625,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
             .signers,
         vec![preserved_signer, second_preserved_signer]
     );
-
     let wal_records_before_service = adapter.wal.recovered_records().len();
     let (service_effects, evidence) = adapter
         .drain_deferred_with_evidence()
@@ -711,7 +686,6 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
             .expect("a consumed capability cannot receive a second service turn")
             .is_none()
     );
-
     assert!(
         adapter.reducer.timeout_pool_snapshots().is_empty(),
         "the view-advancing InstallTimeout retires the completed old-view pool"
@@ -728,14 +702,12 @@ fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
         "an old-view replay cannot resurrect the retired quorum"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let locked_subject = subject(0xD8);
     let locked_execution_commitment = execution_commitment(0xD8);
     let wire_round = wire::ConsensusRound {
@@ -807,7 +779,6 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
             ..
         }] if vote.phase() == reducer::Phase::Commit
     ));
-
     let locked_vote =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
@@ -827,7 +798,6 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
     );
     assert_eq!(adapter.deferred_progress_inputs.len(), 1);
     assert!(adapter.deferred_progress_inputs[0].admission.is_some());
-
     let duplicate_while_deferred = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote.clone()))
         .expect("suppress an exact duplicate while the first delivery is deferred");
@@ -840,7 +810,6 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
         1,
         "a same-generation duplicate cannot replace deferred ownership"
     );
-
     let tag_before_tc = adapter.current_tag();
     let timeout = wire::TimeoutCertificate {
         round: wire_round,
@@ -924,7 +893,6 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
         quorum.round == wire_round && quorum.subject == locked_subject && quorum.signer_count == 2
     }));
     assert_eq!(adapter.active_subject, Some((round, core_subject)));
-
     let key = IngressSemanticKey::Vote {
         round: wire_round,
         phase: wire::GlobalPhase::Commit,

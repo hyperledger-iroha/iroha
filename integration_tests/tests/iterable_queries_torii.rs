@@ -1,18 +1,15 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Additional Torii iterable query checks exercising server-side batching and
 //! multiple item types (blocks, transactions).
-
-use std::{thread::sleep, time::Duration};
-
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use std::{thread::sleep, time::Duration};
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_test_network::NetworkBuilder;
 use nonzero_ext::nonzero;
 use sandbox::start_network_blocking_or_skip as start_network_or_skip;
-
 fn is_permission_grant_repetition(
     err: &eyre::Report,
     expected: &iroha::data_model::permission::Permission,
@@ -21,13 +18,11 @@ fn is_permission_grant_repetition(
         IdBox, ValidationFail,
         isi::{InstructionType, error::InstructionExecutionError},
     };
-
     err.chain().any(|cause| {
         let matches = |repetition: &iroha::data_model::isi::error::RepetitionError| {
             *repetition.instruction() == InstructionType::Grant
                 && matches!(&repetition.id, IdBox::Permission(permission) if permission == expected)
         };
-
         if let Some(InstructionExecutionError::Repetition(repetition)) =
             cause.downcast_ref::<InstructionExecutionError>()
         {
@@ -42,7 +37,6 @@ fn is_permission_grant_repetition(
         false
     })
 }
-
 #[test]
 fn blocks_iterable_start_and_continue() -> Result<()> {
     use iroha::data_model::query::{
@@ -51,7 +45,6 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         dsl::CompoundPredicate,
         parameters::{FetchSize, QueryParams, Sorting},
     };
-
     let Some((network, rt)) = start_network_or_skip(
         NetworkBuilder::new().with_config_layer(|layer| {
             layer.write(["pipeline", "query_default_cursor_mode"], "stored");
@@ -62,7 +55,6 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // Submit two transactions so the first fetch-size=1 page has a real
     // continuation even if genesis is not included in the block-header query.
     for name in ["blkcheck_a", "blkcheck_b"] {
@@ -88,7 +80,6 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         headers.len() >= 2,
         "expected at least two block headers before testing cursor continuation"
     );
-
     // Build an iterable query over block headers with fetch_size = 1
     let with_filter: QueryWithFilter<BlockHeader> =
         QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
@@ -101,7 +92,6 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
             FetchSize::new(Some(nonzero!(1_u64))),
         ),
     );
-
     let (first_batch, remaining, cursor) = client.start_query(qwp)?;
     let v = match first_batch.into_iter().next().expect("slice") {
         QueryOutputBatchBox::BlockHeader(v) => v,
@@ -114,7 +104,6 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         assert!(remaining >= 1);
     }
     assert!(cursor.is_some(), "expected continuation cursor");
-
     if let Some(cur) = cursor {
         let (next_batch, _rem2, _next) = <iroha::client::Client as iroha::data_model::query::builder::QueryExecutor>::continue_query(cur)?;
         let v2 = match next_batch.into_iter().next().expect("slice") {
@@ -123,19 +112,15 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         };
         assert!(!v2.is_empty(), "expected another header in second batch");
     }
-
     Ok(())
 }
-
 #[test]
 fn transactions_iterable_non_empty() -> Result<()> {
+    use iroha::data_model::query::transaction::prelude::FindTransactions;
     use std::{
         thread,
         time::{Duration, Instant},
     };
-
-    use iroha::data_model::query::transaction::prelude::FindTransactions;
-
     let Some((network, _rt)) = start_network_or_skip(
         NetworkBuilder::new(),
         stringify!(transactions_iterable_non_empty),
@@ -144,7 +129,6 @@ fn transactions_iterable_non_empty() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // At minimum, genesis should exist. Poll briefly to allow any background commits
     // to surface before asserting on the iterable query results.
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -156,7 +140,6 @@ fn transactions_iterable_non_empty() -> Result<()> {
         if !snapshot.is_empty() {
             break;
         }
-
         assert!(
             Instant::now() <= deadline,
             "expected at least one committed transaction, found none"
@@ -165,7 +148,6 @@ fn transactions_iterable_non_empty() -> Result<()> {
     }
     Ok(())
 }
-
 #[test]
 fn find_block_headers_descending() -> Result<()> {
     let Some((network, rt)) = start_network_or_skip(
@@ -176,7 +158,6 @@ fn find_block_headers_descending() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // Submit a couple of extra transactions so we have more than one header
     // even if the block builder batches them together.
     client.submit_blocking(
@@ -210,7 +191,6 @@ fn find_block_headers_descending() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     rt.block_on(async { network.ensure_blocks(3).await })?;
-
     let headers = retry_block_headers(&client)?;
     assert!(headers.len() >= 2, "expected multiple block headers");
     assert!(headers.windows(2).all(|w| {
@@ -222,11 +202,9 @@ fn find_block_headers_descending() -> Result<()> {
     }));
     Ok(())
 }
-
 fn retry_block_headers(client: &iroha::client::Client) -> Result<Vec<BlockHeader>> {
     const RETRIES: usize = 5;
     const DELAY: Duration = Duration::from_millis(200);
-
     for attempt in 0..RETRIES {
         match client.query(FindBlockHeaders).execute_all() {
             Ok(headers) => return Ok(headers),
@@ -236,12 +214,10 @@ fn retry_block_headers(client: &iroha::client::Client) -> Result<Vec<BlockHeader
     }
     unreachable!()
 }
-
 #[test]
 fn find_triggers_includes_registered() -> Result<()> {
     use iroha::data_model::events::time::{ExecutionTime, TimeEventFilter};
     use iroha_test_samples::ALICE_ID;
-
     let Some((network, rt)) = start_network_or_skip(
         NetworkBuilder::new(),
         stringify!(find_triggers_includes_registered),
@@ -250,7 +226,6 @@ fn find_triggers_includes_registered() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // Register a simple pre-commit time trigger
     let trig_id: TriggerId = "qtrig_iterable".parse()?;
     let key: Name = "iterable_flag".parse()?;
@@ -270,7 +245,6 @@ fn find_triggers_includes_registered() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
-
     // Query triggers and ensure the registered one is present
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let snapshot = loop {
@@ -294,11 +268,9 @@ fn find_triggers_includes_registered() -> Result<()> {
     );
     Ok(())
 }
-
 #[test]
 fn find_active_trigger_ids_includes_registered() -> Result<()> {
     use iroha_test_samples::ALICE_ID;
-
     let Some((network, rt)) = start_network_or_skip(
         NetworkBuilder::new(),
         stringify!(find_active_trigger_ids_includes_registered),
@@ -320,7 +292,6 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
             return Err(err);
         }
     }
-
     // Register a by-call trigger that won't fire automatically; keep it active.
     let trig_id: TriggerId = "qtrig_active_ids".parse()?;
     let trig = Trigger::new(
@@ -338,7 +309,6 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
-
     // Query active trigger IDs and ensure the one we registered is present.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -357,11 +327,9 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
     }
     Ok(())
 }
-
 #[test]
 fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
     use iroha_test_samples::ALICE_ID;
-
     let Some((network, rt)) = start_network_or_skip(
         NetworkBuilder::new(),
         stringify!(burn_trigger_repetitions_removes_from_active_ids),
@@ -370,7 +338,6 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // Register a by-call trigger with Exactly(1) repeat so it stays active until we burn it.
     let trig_id: TriggerId = "qtrig_disable_via_burn".parse()?;
     let trig = Trigger::new(
@@ -388,18 +355,15 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
-
     // Sanity: trigger id is present among active trigger IDs
     let ids = client.query(FindActiveTriggerIds).execute_all()?;
     assert!(ids.iter().any(|id| id == &trig_id));
-
     // Burn 1 repetition -> reaches zero, core prunes trigger immediately in the burn executor
     client.submit_blocking(
         Burn::trigger_repetitions(1, trig_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     rt.block_on(async { network.ensure_blocks(3).await })?;
-
     // Poll until the trigger is removed from the active set; on slower environments
     // the removal happens asynchronously.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -414,14 +378,11 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-
     Ok(())
 }
-
 #[test]
 fn burn_then_execute_trigger_is_rejected() -> Result<()> {
     use iroha_test_samples::ALICE_ID;
-
     let Some((network, rt)) = start_network_or_skip(
         NetworkBuilder::new(),
         stringify!(burn_then_execute_trigger_is_rejected),
@@ -432,7 +393,6 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
     let client = network.client();
     let torii = client.torii_url.clone();
     let env_dir = network.env_dir().to_path_buf();
-
     // Register a by-call trigger with Exactly(1) repeat
     let trig_id: TriggerId = "qtrig_burn_then_exec".parse()?;
     let trig = Trigger::new(
@@ -459,7 +419,6 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
             "ensure_blocks(2) after trigger registration; torii={torii}, env_dir={}",
             env_dir.display()
         ))?;
-
     // Burn to zero
     client
         .submit_blocking(
@@ -480,7 +439,6 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         "ensure_blocks_with(total>=3) after burn; torii={torii}, env_dir={}",
         env_dir.display()
     ))?;
-
     // Wait until the trigger disappears from the active set; on slower CI
     // pipelines the removal is observed asynchronously.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -501,7 +459,6 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-
     // Attempt to execute; expect rejection referencing FindError::Trigger(trig_id)
     let err = client
         .submit_blocking(
@@ -519,7 +476,6 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         matches!(downcasted, Some(iroha::data_model::query::error::FindError::Trigger(id)) if *id == trig_id),
         "Unexpected error: {err:?}"
     );
-
     // And confirm it's not among active IDs
     let snapshot = client
         .query(FindActiveTriggerIds)
@@ -529,6 +485,5 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
             env_dir.display()
         ))?;
     assert!(snapshot.iter().all(|id| id != &trig_id));
-
     Ok(())
 }

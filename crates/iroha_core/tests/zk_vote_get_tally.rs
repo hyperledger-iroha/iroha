@@ -1,7 +1,6 @@
 //! `CoreHost` test for `ZK_VOTE_GET_TALLY`: ensure it returns finalized and tally from snapshot.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-
 use iroha_core::smartcontracts::Execute;
 use iroha_core::{
     kura::Kura,
@@ -16,7 +15,6 @@ use iroha_primitives::json::Json;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -28,21 +26,17 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn checked_random_zk_vote_tally_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked zk vote tally keypair")
 }
-
 fn checked_random_zk_vote_tally_account_id() -> AccountId {
     AccountId::new(checked_random_zk_vote_tally_keypair().public_key().clone())
 }
-
 #[test]
 fn zk_vote_tally_fixture_uses_checked_randomness() {
     let key_pair = checked_random_zk_vote_tally_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn zk_vote_get_tally_roundtrip_from_snapshot() {
@@ -54,13 +48,11 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-
     // Begin block and transaction
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let owner = checked_random_zk_vote_tally_account_id();
-
     // Register verifying key and create a simple election via ISIs
     let election_id = "e1".to_string();
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
@@ -127,7 +119,6 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
         .execute_instruction(&mut stx, &owner, InstructionBox::from(finalize))
         .expect("finalize election");
     stx.apply();
-
     // Snapshot elections into CoreHost and query via syscall
     let mut vm = ivm::IVM::new(1_000_000);
     let mut host = CoreHost::new(owner.clone());
@@ -144,7 +135,6 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
             .expect("valid election snapshot");
     }
     let mut host = host;
-
     // Build request TLV and call syscall
     let req = zk_verify::VoteGetTallyRequest { election_id };
     let payload = norito::to_bytes(&req).expect("encode req");

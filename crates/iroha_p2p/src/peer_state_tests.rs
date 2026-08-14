@@ -1,7 +1,5 @@
 // Handshake-state admission tests included from `peer::run::state::tests`.
-
 use super::*;
-
 fn consensus_caps(fingerprint: [u8; 32]) -> ConsensusConfigCaps {
     ConsensusConfigCaps {
         execution_policy_hash: [0xB0; 32],
@@ -10,7 +8,6 @@ fn consensus_caps(fingerprint: [u8; 32]) -> ConsensusConfigCaps {
         ivm_gas_schedule_hash: [0xD2; 32],
     }
 }
-
 #[test]
 fn v2_peer_admission_compares_canonical_shared_config_fingerprint() {
     let expected = consensus_caps([0xA5; 32]);
@@ -19,7 +16,6 @@ fn v2_peer_admission_compares_canonical_shared_config_fingerprint() {
         None,
         "identical canonical admission digests must be accepted",
     );
-
     let changed = consensus_caps([0x5A; 32]);
     let mismatch = consensus_config_mismatch(&expected, &changed)
         .expect("different shared v2 config hashes must be rejected");

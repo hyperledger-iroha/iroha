@@ -5,21 +5,17 @@
 //! planner validates catalogue metadata, exposes parallel FFT/IFFT helpers,
 //! and evaluates coefficient columns onto the canonical low-degree extension
 //! coset.
-
-use core::convert::TryFrom;
-use std::{sync::MutexGuard, thread};
-
-use fastpq_isi::StarkParameterSet;
-use rayon::prelude::*;
-use tracing::{debug, info, warn};
-
 use crate::{
     backend,
     cyclotomic::{self, Domain},
     gpu,
     poseidon::FIELD_MODULUS,
 };
-
+use core::convert::TryFrom;
+use fastpq_isi::StarkParameterSet;
+use rayon::prelude::*;
+use std::{sync::MutexGuard, thread};
+use tracing::{debug, info, warn};
 /// Column-oriented FFT planner.
 #[derive(Clone)]
 pub struct Planner {
@@ -28,13 +24,11 @@ pub struct Planner {
     trace_domains: Vec<Domain>,
     lde_domains: Vec<Domain>,
 }
-
 /// Handle that tracks an in-flight GPU FFT/IFFT dispatch.
 pub struct GpuColumnDispatch<'a> {
     dispatch: gpu::ColumnDispatch<'a>,
     lane_guard: Option<MutexGuard<'static, ()>>,
 }
-
 impl<'a> GpuColumnDispatch<'a> {
     fn new(dispatch: gpu::ColumnDispatch<'a>, lane_guard: MutexGuard<'static, ()>) -> Self {
         Self {
@@ -42,7 +36,6 @@ impl<'a> GpuColumnDispatch<'a> {
             lane_guard: Some(lane_guard),
         }
     }
-
     /// Wait for the GPU kernel to complete and release the GPU lane.
     pub fn wait(self) -> Result<(), gpu::GpuError> {
         let Self {
@@ -53,7 +46,6 @@ impl<'a> GpuColumnDispatch<'a> {
         drop(lane_guard);
         result
     }
-
     #[cfg(test)]
     pub(crate) fn from_ready(dispatch: gpu::ColumnDispatch<'a>) -> Self {
         Self {
@@ -62,13 +54,11 @@ impl<'a> GpuColumnDispatch<'a> {
         }
     }
 }
-
 /// Handle that tracks an in-flight GPU LDE dispatch.
 pub struct GpuLdeDispatch {
     dispatch: gpu::LdeDispatch,
     lane_guard: Option<MutexGuard<'static, ()>>,
 }
-
 impl GpuLdeDispatch {
     fn new(dispatch: gpu::LdeDispatch, lane_guard: MutexGuard<'static, ()>) -> Self {
         Self {
@@ -76,7 +66,6 @@ impl GpuLdeDispatch {
             lane_guard: Some(lane_guard),
         }
     }
-
     /// Wait for the GPU LDE to finish and release the GPU lane.
     pub fn wait(self) -> Result<Option<Vec<Vec<u64>>>, gpu::GpuError> {
         let Self {
@@ -87,7 +76,6 @@ impl GpuLdeDispatch {
         drop(lane_guard);
         result
     }
-
     #[cfg(test)]
     pub(crate) fn from_ready(dispatch: gpu::LdeDispatch) -> Self {
         Self {
@@ -96,7 +84,6 @@ impl GpuLdeDispatch {
         }
     }
 }
-
 impl Planner {
     /// Construct a planner from a canonical parameter set.
     ///
@@ -113,10 +100,8 @@ impl Planner {
             "lde domain exceeds supported two-adicity ({} > 32)",
             params.lde_log_size
         );
-
         verify_root(params.trace_root, params.trace_log_size, "trace_root");
         verify_root(params.lde_root, params.lde_log_size, "lde_root");
-
         let blowup = params.fri.blowup_factor;
         assert!(
             blowup.is_power_of_two(),
@@ -128,17 +113,14 @@ impl Planner {
             params.lde_log_size,
             "lde log size must equal trace log size plus log2(blowup)"
         );
-
         let trace_domains = build_domain_cache(params.trace_root, params.trace_log_size);
         let lde_domains = build_domain_cache(params.lde_root, params.lde_log_size);
-
         let planner = Self {
             params: *params,
             blowup_log,
             trace_domains,
             lde_domains,
         };
-
         debug!(
             target: "fastpq::planner",
             parameter = params.name,
@@ -147,20 +129,16 @@ impl Planner {
             blowup,
             "initialised planner"
         );
-
         planner
     }
-
     /// Returns the canonical parameters backing the planner.
     pub fn params(&self) -> &StarkParameterSet {
         &self.params
     }
-
     /// Log₂ of the configured blowup factor.
     pub fn blowup_log(&self) -> u32 {
         self.blowup_log
     }
-
     /// Perform an in-place FFT over every column.
     ///
     /// The supplied columns must share a power-of-two length not exceeding the
@@ -169,13 +147,11 @@ impl Planner {
         let (trace_len, trace_log) = self.validate_columns(columns);
         self.fft_columns_cpu(columns, trace_len, trace_log);
     }
-
     fn fft_columns_cpu(&self, columns: &mut [Vec<u64>], trace_len: usize, trace_log: u32) {
         if trace_len == 0 {
             return;
         }
         let domain = self.trace_domain(trace_log);
-
         debug!(
             target: "fastpq::planner",
             parameter = self.params.name,
@@ -184,13 +160,11 @@ impl Planner {
             trace_log,
             "fft columns"
         );
-
         columns.par_iter_mut().for_each(|column| {
             assert_eq!(column.len(), trace_len, "column length mismatch during FFT");
             cyclotomic::fft(column, domain);
         });
     }
-
     /// Attempt a GPU-accelerated FFT over the provided columns.
     pub fn fft_gpu(&self, columns: &mut [Vec<u64>]) {
         let (trace_len, trace_log) = self.validate_columns(columns);
@@ -198,7 +172,6 @@ impl Planner {
             return;
         }
         let column_count = columns.len();
-
         if let Some(backend) = backend::current_gpu_backend() {
             if let Some(permit) = backend::try_acquire_gpu_lane() {
                 match self.start_fft_gpu_dispatch(columns, trace_log, backend, permit) {
@@ -266,7 +239,6 @@ impl Planner {
         }
         self.fft_columns_cpu(columns, trace_len, trace_log);
     }
-
     /// Stage a GPU FFT and return a pending dispatch if available.
     pub fn fft_gpu_pending<'a>(
         &self,
@@ -296,7 +268,6 @@ impl Planner {
             }
         }
     }
-
     fn split_fft_gpu_cpu(
         &self,
         columns: &mut [Vec<u64>],
@@ -348,19 +319,16 @@ impl Planner {
             self.fft_columns_cpu(gpu_slice, trace_len, trace_log);
         }
     }
-
     /// Perform an in-place inverse FFT over every column.
     pub fn ifft_columns(&self, columns: &mut [Vec<u64>]) {
         let (trace_len, trace_log) = self.validate_columns(columns);
         self.ifft_columns_cpu(columns, trace_len, trace_log);
     }
-
     fn ifft_columns_cpu(&self, columns: &mut [Vec<u64>], trace_len: usize, trace_log: u32) {
         if trace_len == 0 {
             return;
         }
         let domain = self.trace_domain(trace_log);
-
         debug!(
             target: "fastpq::planner",
             parameter = self.params.name,
@@ -369,7 +337,6 @@ impl Planner {
             trace_log,
             "ifft columns"
         );
-
         columns.par_iter_mut().for_each(|column| {
             assert_eq!(
                 column.len(),
@@ -379,7 +346,6 @@ impl Planner {
             cyclotomic::ifft(column, domain);
         });
     }
-
     /// Attempt a GPU-accelerated inverse FFT over the provided columns.
     pub fn ifft_gpu(&self, columns: &mut [Vec<u64>]) {
         let (trace_len, trace_log) = self.validate_columns(columns);
@@ -387,7 +353,6 @@ impl Planner {
             return;
         }
         let column_count = columns.len();
-
         if let Some(backend) = backend::current_gpu_backend() {
             if let Some(permit) = backend::try_acquire_gpu_lane() {
                 match self.start_ifft_gpu_dispatch(columns, trace_log, backend, permit) {
@@ -455,7 +420,6 @@ impl Planner {
         }
         self.ifft_columns_cpu(columns, trace_len, trace_log);
     }
-
     /// Stage a GPU inverse FFT and return a pending dispatch if available.
     pub fn ifft_gpu_pending<'a>(
         &self,
@@ -485,7 +449,6 @@ impl Planner {
             }
         }
     }
-
     fn split_ifft_gpu_cpu(
         &self,
         columns: &mut [Vec<u64>],
@@ -537,7 +500,6 @@ impl Planner {
             self.ifft_columns_cpu(gpu_slice, trace_len, trace_log);
         }
     }
-
     fn split_lde_gpu_cpu(
         &self,
         coeffs: &[Vec<u64>],
@@ -609,7 +571,6 @@ impl Planner {
         combined.extend(gpu_part);
         combined
     }
-
     fn lde_metadata(&self, coeffs: &[Vec<u64>]) -> (usize, u32, u32, usize) {
         let trace_len = coeffs[0].len();
         assert!(
@@ -633,7 +594,6 @@ impl Planner {
         let lde_len = self.lde_domain(lde_log).size();
         (trace_len, trace_log, lde_log, lde_len)
     }
-
     /// Evaluate coefficient columns on the canonical low-degree extension coset.
     ///
     /// Coefficient vectors must already be padded to the trace domain size; the
@@ -644,7 +604,6 @@ impl Planner {
         }
         let (trace_len, trace_log, lde_log, lde_len) = self.lde_metadata(coeffs);
         let lde_domain = self.lde_domain(lde_log);
-
         debug!(
             target: "fastpq::planner",
             parameter = self.params.name,
@@ -655,7 +614,6 @@ impl Planner {
             coset = self.params.omega_coset,
             "lde columns"
         );
-
         let coset_table = coset_powers(self.params.omega_coset, trace_len);
         coeffs
             .par_iter()
@@ -674,7 +632,6 @@ impl Planner {
             })
             .collect()
     }
-
     /// Attempt a GPU-accelerated low-degree extension evaluation.
     pub fn lde_gpu(&self, coeffs: &[Vec<u64>]) -> Vec<Vec<u64>> {
         if coeffs.is_empty() {
@@ -752,10 +709,8 @@ impl Planner {
                 "no gpu backend detected; falling back to cpu lde"
             );
         }
-
         self.lde_columns(coeffs)
     }
-
     /// Stage a GPU LDE dispatch and return a pending handle when available.
     pub fn lde_gpu_pending(&self, coeffs: &[Vec<u64>]) -> Option<GpuLdeDispatch> {
         if coeffs.is_empty() {
@@ -780,7 +735,6 @@ impl Planner {
             }
         }
     }
-
     fn validate_columns(&self, columns: &[Vec<u64>]) -> (usize, u32) {
         if columns.is_empty() {
             return (0, 0);
@@ -807,7 +761,6 @@ impl Planner {
         }
         (len, log_len)
     }
-
     pub(crate) fn trace_domain(&self, log_size: u32) -> Domain {
         assert!(
             log_size <= self.params.trace_log_size,
@@ -817,7 +770,6 @@ impl Planner {
         );
         self.trace_domains[usize::try_from(log_size).expect("log size fits usize")]
     }
-
     pub(crate) fn lde_domain(&self, log_size: u32) -> Domain {
         assert!(
             log_size <= self.params.lde_log_size,
@@ -827,7 +779,6 @@ impl Planner {
         );
         self.lde_domains[usize::try_from(log_size).expect("log size fits usize")]
     }
-
     fn start_fft_gpu_dispatch<'a>(
         &self,
         columns: &'a mut [Vec<u64>],
@@ -844,7 +795,6 @@ impl Planner {
             }
         }
     }
-
     fn start_ifft_gpu_dispatch<'a>(
         &self,
         columns: &'a mut [Vec<u64>],
@@ -861,7 +811,6 @@ impl Planner {
             }
         }
     }
-
     fn start_lde_gpu_dispatch(
         &self,
         coeffs: &[Vec<u64>],
@@ -886,11 +835,9 @@ impl Planner {
         }
     }
 }
-
 fn log_from_length(len: usize) -> u32 {
     len.trailing_zeros()
 }
-
 fn subset_generator(root: u64, source_log: u32, target_log: u32) -> u64 {
     if target_log == 0 {
         return 1;
@@ -902,7 +849,6 @@ fn subset_generator(root: u64, source_log: u32, target_log: u32) -> u64 {
     let stride = 1u64 << (source_log - target_log);
     mod_pow(root, stride)
 }
-
 fn coset_powers(coset: u64, len: usize) -> Vec<u64> {
     let mut powers = Vec::with_capacity(len);
     let mut current = 1u64;
@@ -912,12 +858,10 @@ fn coset_powers(coset: u64, len: usize) -> Vec<u64> {
     }
     powers
 }
-
 fn verify_root(root: u64, log_size: u32, label: &str) {
     let order = 1u64 << log_size;
     let pow = mod_pow(root, order);
     assert_eq!(pow, 1, "{label}^2^{log_size} != 1");
-
     if log_size > 0 {
         let half_order = order >> 1;
         let half_pow = mod_pow(root, half_order);
@@ -927,7 +871,6 @@ fn verify_root(root: u64, log_size: u32, label: &str) {
         );
     }
 }
-
 fn mod_pow(mut base: u64, mut exp: u64) -> u64 {
     let mut result = 1u64;
     while exp > 0 {
@@ -939,12 +882,10 @@ fn mod_pow(mut base: u64, mut exp: u64) -> u64 {
     }
     result
 }
-
 fn mul_mod(a: u64, b: u64) -> u64 {
     let product = u128::from(a) * u128::from(b);
     u64::try_from(product % u128::from(FIELD_MODULUS)).expect("modulus reduction fits in u64")
 }
-
 fn build_domain_cache(root: u64, max_log: u32) -> Vec<Domain> {
     let size = usize::try_from(max_log).expect("log size fits usize") + 1;
     let mut cache = Vec::with_capacity(size);
@@ -956,25 +897,20 @@ fn build_domain_cache(root: u64, max_log: u32) -> Vec<Domain> {
     }
     cache
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::backend;
+    #[cfg(feature = "fastpq-gpu")]
+    use crate::gpu::{self, GpuError};
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use std::panic::catch_unwind;
     #[cfg(feature = "fastpq-gpu")]
     use std::{
         sync::{Arc, Barrier},
         thread,
     };
-
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
-
-    use super::*;
-    use crate::backend;
-    #[cfg(feature = "fastpq-gpu")]
-    use crate::gpu::{self, GpuError};
-
     const MAX_TRACE_LOG: u32 = 4;
-
     fn deterministic_column_sets() -> Vec<(u32, Vec<Vec<u64>>)> {
         let mut cases = Vec::new();
         for trace_log in 0..=MAX_TRACE_LOG {
@@ -997,7 +933,6 @@ mod tests {
         }
         cases
     }
-
     #[cfg(feature = "fastpq-gpu")]
     fn try_cuda_fft(columns: &mut [Vec<u64>], trace_log: u32, root: u64) -> Result<(), String> {
         match gpu::fft_columns(columns, trace_log, root, backend::GpuBackend::Cuda) {
@@ -1010,7 +945,6 @@ mod tests {
             Err(err) => panic!("CUDA FFT failed: {err}"),
         }
     }
-
     #[cfg(feature = "fastpq-gpu")]
     fn try_cuda_ifft(columns: &mut [Vec<u64>], trace_log: u32, root: u64) -> Result<(), String> {
         match gpu::ifft_columns(columns, trace_log, root, backend::GpuBackend::Cuda) {
@@ -1023,7 +957,6 @@ mod tests {
             Err(err) => panic!("CUDA IFFT failed: {err}"),
         }
     }
-
     #[cfg(feature = "fastpq-gpu")]
     fn try_cuda_lde(
         coeffs: &[Vec<u64>],
@@ -1050,14 +983,12 @@ mod tests {
             Err(err) => panic!("CUDA LDE failed: {err}"),
         }
     }
-
     #[test]
     fn gpu_column_dispatch_waits_ready_variant() {
         let dispatch = gpu::ColumnDispatch::ready();
         let guard = GpuColumnDispatch::from_ready(dispatch);
         assert!(guard.wait().is_ok());
     }
-
     #[test]
     fn gpu_lde_dispatch_waits_ready_variant() {
         let dispatch = gpu::LdeDispatch::ready(Some(vec![vec![5u64, 9u64]]));
@@ -1065,30 +996,24 @@ mod tests {
         let result = guard.wait().expect("wait succeeds").expect("result");
         assert_eq!(result[0], vec![5u64, 9u64]);
     }
-
     #[test]
     fn planner_domains_match_catalogue() {
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-
         let full_trace = planner.trace_domain(params.trace_log_size);
         assert_eq!(full_trace.generator, params.trace_root);
-
         let trivial_trace = planner.trace_domain(0);
         assert_eq!(trivial_trace.generator, 1);
         assert_eq!(trivial_trace.log_size, 0);
-
         let reduced_trace = planner.trace_domain(params.trace_log_size - 3);
         let expected = super::mod_pow(params.trace_root, 1 << 3);
         assert_eq!(reduced_trace.generator, expected);
-
         let lde_domain = planner.lde_domain(params.lde_log_size);
         assert_eq!(lde_domain.generator, params.lde_root);
         let trivial_lde = planner.lde_domain(0);
         assert_eq!(trivial_lde.generator, 1);
         assert_eq!(trivial_lde.log_size, 0);
     }
-
     #[test]
     fn planner_rejects_non_primitive_trace_root() {
         let mut params = CANONICAL_PARAMETER_SETS[0];
@@ -1099,7 +1024,6 @@ mod tests {
             "planner accepted trace root that is not a primitive 2-adic generator"
         );
     }
-
     #[test]
     fn planner_rejects_non_primitive_lde_root() {
         let mut params = CANONICAL_PARAMETER_SETS[0];
@@ -1110,7 +1034,6 @@ mod tests {
             "planner accepted LDE root that is not a primitive 2-adic generator"
         );
     }
-
     #[test]
     fn fft_round_trip_matches_input() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1121,18 +1044,15 @@ mod tests {
             .map(|idx| (idx as u64).wrapping_mul(17).wrapping_add(3) % FIELD_MODULUS)
             .collect();
         let mut columns = vec![values.clone()];
-
         let domain = planner.trace_domain(trace_log);
         let mut direct = values.clone();
         cyclotomic::fft(&mut direct, domain);
         cyclotomic::ifft(&mut direct, domain);
         assert_eq!(direct, values);
-
         planner.fft_columns(&mut columns);
         planner.ifft_columns(&mut columns);
         assert_eq!(columns[0], values);
     }
-
     #[test]
     fn gpu_fft_matches_cpu_output() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1148,7 +1068,6 @@ mod tests {
                 .collect::<Vec<u64>>(),
         ];
         let mut gpu_columns = cpu_columns.clone();
-
         planner.fft_columns(&mut cpu_columns);
         #[cfg(feature = "fastpq-gpu")]
         {
@@ -1166,10 +1085,8 @@ mod tests {
         }
         #[cfg(not(feature = "fastpq-gpu"))]
         planner.fft_columns(&mut gpu_columns);
-
         assert_eq!(cpu_columns, gpu_columns);
     }
-
     #[test]
     fn gpu_fft_matches_cpu_output_for_latency_parameters() {
         let params = CANONICAL_PARAMETER_SETS[1];
@@ -1182,7 +1099,6 @@ mod tests {
                 .collect::<Vec<u64>>(),
         ];
         let mut gpu_columns = cpu_columns.clone();
-
         planner.fft_columns(&mut cpu_columns);
         #[cfg(feature = "fastpq-gpu")]
         {
@@ -1200,10 +1116,8 @@ mod tests {
         }
         #[cfg(not(feature = "fastpq-gpu"))]
         planner.fft_columns(&mut gpu_columns);
-
         assert_eq!(cpu_columns, gpu_columns);
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn concurrent_cuda_ffts_match_cpu_output_across_parameter_sets() {
@@ -1211,7 +1125,6 @@ mod tests {
         let params_latency = CANONICAL_PARAMETER_SETS[1];
         let planner_balanced = Planner::new(&params_balanced);
         let planner_latency = Planner::new(&params_latency);
-
         let trace_log_balanced = params_balanced.trace_log_size - 2;
         let trace_len_balanced = 1usize << trace_log_balanced;
         let balanced_input = vec![
@@ -1225,7 +1138,6 @@ mod tests {
         let mut cpu_balanced = balanced_input.clone();
         planner_balanced.fft_columns(&mut cpu_balanced);
         let gpu_balanced = balanced_input;
-
         let trace_log_latency = params_latency.trace_log_size - 3;
         let trace_len_latency = 1usize << trace_log_latency;
         let mut cpu_latency = vec![
@@ -1239,7 +1151,6 @@ mod tests {
                 .map(|idx| (idx as u64).wrapping_mul(37).wrapping_add(11) % FIELD_MODULUS)
                 .collect::<Vec<u64>>(),
         ];
-
         let barrier = Arc::new(Barrier::new(2));
         let balanced_root = planner_balanced.trace_domain(trace_log_balanced).generator;
         let latency_root = planner_latency.trace_domain(trace_log_latency).generator;
@@ -1265,7 +1176,6 @@ mod tests {
                     .expect("latency CUDA FFT thread should not panic"),
             )
         });
-
         let balanced_gpu = match balanced_gpu {
             Ok(columns) => columns,
             Err(reason) => {
@@ -1280,11 +1190,9 @@ mod tests {
                 return;
             }
         };
-
         assert_eq!(cpu_balanced, balanced_gpu);
         assert_eq!(cpu_latency, latency_gpu);
     }
-
     #[test]
     fn gpu_fft_split_matches_cpu_output_without_gpu() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1306,13 +1214,10 @@ mod tests {
                 .collect::<Vec<u64>>(),
         ];
         let mut split = baseline.clone();
-
         planner.fft_columns(&mut baseline);
         planner.split_fft_gpu_cpu(&mut split, trace_len, trace_log, backend::GpuBackend::Cuda);
-
         assert_eq!(baseline, split);
     }
-
     #[test]
     fn gpu_ifft_matches_cpu_output() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1329,7 +1234,6 @@ mod tests {
         ];
         planner.fft_columns(&mut cpu_columns);
         let mut gpu_columns = cpu_columns.clone();
-
         planner.ifft_columns(&mut cpu_columns);
         #[cfg(feature = "fastpq-gpu")]
         {
@@ -1347,10 +1251,8 @@ mod tests {
         }
         #[cfg(not(feature = "fastpq-gpu"))]
         planner.ifft_columns(&mut gpu_columns);
-
         assert_eq!(cpu_columns, gpu_columns);
     }
-
     #[test]
     fn gpu_ifft_split_matches_cpu_output_without_gpu() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1375,12 +1277,9 @@ mod tests {
         let mut baseline = spectral.clone();
         planner.ifft_columns(&mut baseline);
         let mut split = spectral;
-
         planner.split_ifft_gpu_cpu(&mut split, trace_len, trace_log, backend::GpuBackend::Cuda);
-
         assert_eq!(baseline, split);
     }
-
     #[test]
     fn lde_coset_matches_manual_linear_polynomial() {
         let params = CANONICAL_PARAMETER_SETS[1];
@@ -1388,7 +1287,6 @@ mod tests {
         let trace_len = 1usize << params.trace_log_size;
         let mut coeff_column = vec![0u64; trace_len];
         coeff_column[1] = 1; // polynomial f(x) = x
-
         let evaluations = planner.lde_columns(&[coeff_column]).pop().unwrap();
         let lde_domain = planner.lde_domain(params.trace_log_size + planner.blowup_log());
         let mut expected = Vec::with_capacity(evaluations.len());
@@ -1397,10 +1295,8 @@ mod tests {
             expected.push(point);
             point = mul_mod(point, lde_domain.generator);
         }
-
         assert_eq!(evaluations, expected);
     }
-
     #[test]
     fn gpu_lde_matches_cpu_output() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1417,7 +1313,6 @@ mod tests {
         ];
         let mut coeff_columns = value_columns.clone();
         planner.ifft_columns(&mut coeff_columns);
-
         let cpu = planner.lde_columns(&coeff_columns);
         #[cfg(feature = "fastpq-gpu")]
         let gpu = match try_cuda_lde(
@@ -1437,10 +1332,8 @@ mod tests {
         };
         #[cfg(not(feature = "fastpq-gpu"))]
         let gpu = planner.lde_columns(&coeff_columns);
-
         assert_eq!(cpu, gpu);
     }
-
     #[test]
     fn gpu_lde_matches_cpu_output_for_latency_parameters() {
         let params = CANONICAL_PARAMETER_SETS[1];
@@ -1454,7 +1347,6 @@ mod tests {
         ];
         let mut coeff_columns = value_columns.clone();
         planner.ifft_columns(&mut coeff_columns);
-
         let cpu = planner.lde_columns(&coeff_columns);
         #[cfg(feature = "fastpq-gpu")]
         let gpu = match try_cuda_lde(
@@ -1474,10 +1366,8 @@ mod tests {
         };
         #[cfg(not(feature = "fastpq-gpu"))]
         let gpu = planner.lde_columns(&coeff_columns);
-
         assert_eq!(cpu, gpu);
     }
-
     #[cfg(feature = "fastpq-gpu")]
     #[test]
     fn concurrent_cuda_ldes_match_cpu_output_across_parameter_sets() {
@@ -1485,7 +1375,6 @@ mod tests {
         let params_latency = CANONICAL_PARAMETER_SETS[1];
         let planner_balanced = Planner::new(&params_balanced);
         let planner_latency = Planner::new(&params_latency);
-
         let trace_log_balanced = params_balanced.trace_log_size - 1;
         let trace_len_balanced = 1usize << trace_log_balanced;
         let value_columns_balanced = vec![
@@ -1499,7 +1388,6 @@ mod tests {
         let mut coeff_columns_balanced = value_columns_balanced.clone();
         planner_balanced.ifft_columns(&mut coeff_columns_balanced);
         let cpu_balanced = planner_balanced.lde_columns(&coeff_columns_balanced);
-
         let trace_log_latency = params_latency.trace_log_size - 3;
         let trace_len_latency = 1usize << trace_log_latency;
         let value_columns_latency = vec![
@@ -1510,7 +1398,6 @@ mod tests {
         let mut coeff_columns_latency = value_columns_latency.clone();
         planner_latency.ifft_columns(&mut coeff_columns_latency);
         let cpu_latency = planner_latency.lde_columns(&coeff_columns_latency);
-
         let barrier = Arc::new(Barrier::new(2));
         let balanced_lde_root = planner_balanced
             .lde_domain(trace_log_balanced + planner_balanced.blowup_log())
@@ -1550,7 +1437,6 @@ mod tests {
                     .expect("latency CUDA LDE thread should not panic"),
             )
         });
-
         let balanced_gpu = match balanced_gpu {
             Ok(columns) => columns,
             Err(reason) => {
@@ -1565,11 +1451,9 @@ mod tests {
                 return;
             }
         };
-
         assert_eq!(cpu_balanced, balanced_gpu);
         assert_eq!(cpu_latency, latency_gpu);
     }
-
     #[test]
     fn gpu_lde_split_matches_cpu_output_without_gpu() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1591,7 +1475,6 @@ mod tests {
                 .collect::<Vec<u64>>(),
         ];
         planner.ifft_columns(&mut coeff_columns);
-
         let cpu = planner.lde_columns(&coeff_columns);
         let split = planner.split_lde_gpu_cpu(
             &coeff_columns,
@@ -1600,10 +1483,8 @@ mod tests {
             trace_log + planner.blowup_log(),
             backend::GpuBackend::Cuda,
         );
-
         assert_eq!(cpu, split);
     }
-
     #[test]
     fn lde_is_deterministic() {
         let params = CANONICAL_PARAMETER_SETS[0];
@@ -1612,37 +1493,29 @@ mod tests {
         let coeff_column: Vec<u64> = (0..trace_len)
             .map(|idx| (idx as u64).wrapping_mul(31).wrapping_add(7))
             .collect();
-
         let first = planner.lde_columns(std::slice::from_ref(&coeff_column));
         let second = planner.lde_columns(std::slice::from_ref(&coeff_column));
         assert_eq!(first, second);
     }
-
     #[test]
     fn fft_roundtrip_over_deterministic_columns_is_deterministic() {
         for (_trace_log, columns) in deterministic_column_sets() {
             let params = CANONICAL_PARAMETER_SETS[0];
             let planner = Planner::new(&params);
-
             let original = columns.clone();
-
             let mut fft_first = original.clone();
             planner.fft_columns(&mut fft_first);
-
             let mut fft_second = original.clone();
             planner.fft_columns(&mut fft_second);
             assert_eq!(&fft_first, &fft_second);
-
             let mut fft_roundtrip = fft_second.clone();
             planner.ifft_columns(&mut fft_roundtrip);
             assert_eq!(&fft_roundtrip, &original);
-
             let mut fft_gpu = original.clone();
             planner.fft_gpu(&mut fft_gpu);
             assert_eq!(&fft_gpu, &fft_second);
         }
     }
-
     #[test]
     fn lde_columns_over_deterministic_polynomials_are_deterministic() {
         for (trace_log, columns) in deterministic_column_sets() {
@@ -1651,7 +1524,6 @@ mod tests {
             let evaluations_a = planner.lde_columns(&columns);
             let evaluations_b = planner.lde_columns(&columns);
             assert_eq!(&evaluations_a, &evaluations_b);
-
             let trace_len = 1usize << trace_log;
             let expected_len = trace_len << planner.blowup_log();
             assert!(

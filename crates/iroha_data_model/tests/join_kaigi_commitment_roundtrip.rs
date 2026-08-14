@@ -1,6 +1,4 @@
 //! Verifies `JoinKaigi` Norito encoding supports canonical hash literals.
-use std::str::FromStr;
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -13,13 +11,12 @@ use norito::{
     core::NoritoDeserialize,
     json::{self, JsonDeserialize},
 };
-
+use std::str::FromStr;
 fn parse_hash_literal(literal: &str) -> Hash {
     let raw = format!("\"{literal}\"");
     let mut parser = json::Parser::new(raw.as_str());
     Hash::json_deserialize(&mut parser).expect("parse hash literal")
 }
-
 #[test]
 fn join_kaigi_accepts_canonical_commitment_literal() {
     let call = KaigiId::new(

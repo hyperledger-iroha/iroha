@@ -166,6 +166,10 @@ def _peers() -> tuple[controller.PeerEndpoint, ...]:
     )
 
 
+def _operator_context() -> controller.OperatorSigningContext:
+    return controller.OperatorSigningContext(network_id=object(), key_pair=object())
+
+
 def test_release_issuance_barrier_requires_real_controller_cases_not_constructors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -819,6 +823,7 @@ def test_case_rejects_a_substituted_driver_digest_before_network_use(
             restarted_supervisor=Supervisor(),  # type: ignore[arg-type]
             primary_request=primary_request,
             successor_request=successor_request,
+            operator_signing_context=_operator_context(),
             timeout_seconds=5,
         )
 
@@ -881,6 +886,7 @@ def test_generic_verange_finality_diagnostic_emits_non_authoritative_records(
         *,
         body: bytes | None,
         timeout_seconds: float,
+        operator_signing_context: controller.OperatorSigningContext | None = None,
     ) -> controller.HttpObservation:
         nonlocal status_calls
         assert timeout_seconds > 0
@@ -892,6 +898,7 @@ def test_generic_verange_finality_diagnostic_emits_non_authoritative_records(
             status_calls += 1
             return _json_response({"blocks": fleet_rounds[round_index][0]})
         if path == "/v1/sumeragi/status":
+            assert operator_signing_context is not None
             height, block_hash = fleet_rounds[peer_round[peer.label]]
             return _json_response(
                 {
@@ -931,6 +938,7 @@ def test_generic_verange_finality_diagnostic_emits_non_authoritative_records(
         restarted_supervisor=Supervisor(),  # type: ignore[arg-type]
         primary_request=primary_request,
         successor_request=successor_request,
+        operator_signing_context=_operator_context(),
         timeout_seconds=5,
     )
     transcript = json.loads(records.transcript)
@@ -1011,6 +1019,7 @@ def test_exact_restart_sentinel_rejects_a_higher_or_changed_common_sample(
             _peers(),
             controller.FleetSample(11, "bb" * 32),
             float("inf"),
+            _operator_context(),
         )
 
 

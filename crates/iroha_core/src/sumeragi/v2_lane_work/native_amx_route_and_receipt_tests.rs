@@ -18,7 +18,6 @@ fn native_amx_request_rejects_inactive_reply_route_before_signing() {
     let mut routes = NetworkReplyRouteTestFixture::new(relay);
     let route = routes.mint(leader.clone());
     assert!(routes.retire(&route));
-
     assert_eq!(
         adapter.accept_native_amx(
             leader,
@@ -39,7 +38,6 @@ fn native_amx_request_rejects_inactive_reply_route_before_signing() {
         0
     );
 }
-
 #[test]
 fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -66,7 +64,6 @@ fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_has
     );
     let predecessor = store_canonical_anchor(&adapter, &predecessor, &keys[0]);
     let exact_predecessor_hash = predecessor.descriptor.descriptor_hash;
-
     let exact = native_request_with_distinct_participant(
         &adapter,
         &keys,
@@ -78,7 +75,6 @@ fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_has
     assert_eq!(exact.validate_plan_binding(), Ok(()));
     assert!(adapter.native_body_matches_context(&exact.body, 0));
     assert!(adapter.native_request_matches_context(&exact, 0));
-
     let forged = native_request_with_distinct_participant(
         &adapter,
         &keys,
@@ -109,7 +105,6 @@ fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_has
         adapter.sign_native_request_once(&forged, 0).is_none(),
         "the production signing boundary must retain and reject the forged proposal"
     );
-
     let leader = usize::try_from(adapter.context.leader(forged.body.round.view))
         .ok()
         .and_then(|index| adapter.context.roster.get(index))
@@ -146,7 +141,6 @@ fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_has
         "a forged predecessor must be rejected before durable authority is recorded"
     );
 }
-
 #[test]
 fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
     let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -173,7 +167,6 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
             .is_some_and(|artifact| artifact.ownership.lane_block_height == 100),
         "fixture must first install a reachable high lane-local artifact"
     );
-
     let recreated_catalog = LaneCatalog::new(
         NonZeroU32::new(1).expect("non-zero lane count"),
         vec![LaneConfig {
@@ -200,7 +193,6 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
         adapter.kura.latest_lane_block_artifact(lane_id).is_none(),
         "the active Kura marker must hide the retired high artifact"
     );
-
     let body = native_body(&adapter);
     assert!(
         adapter.native_coordinator_height_is_current(&body),
@@ -208,7 +200,6 @@ fn native_coordinator_height_ignores_retired_incarnation_artifacts() {
     );
     assert!(adapter.native_body_matches_context(&body, 0));
 }
-
 #[test]
 fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal() {
     let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -224,10 +215,7 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
         .expect("canonical coordinator proposal builds a full receipt");
     assert_eq!(receipt.version, 2);
     assert_eq!(receipt.source_id, source_id);
-    assert_eq!(
-        receipt.network_id,
-        adapter.context.network_id
-    );
+    assert_eq!(receipt.network_id, adapter.context.network_id);
     assert_eq!(receipt.plan_digest, plan_digest);
     assert_eq!(receipt.lane_id, proposal.descriptor.lane_id);
     assert_eq!(receipt.dataspace_id, proposal.descriptor.dataspace_id);
@@ -245,7 +233,6 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
     );
     assert_eq!(receipt.lane_block_view, proposal.descriptor.lane_block_view);
     assert_eq!(receipt.coordinator_proposal_hash, proposal.proposal_hash);
-
     let mut wrong_height = proposal;
     wrong_height.descriptor.proposal_height = adapter.context.height.saturating_add(1);
     wrong_height.descriptor.descriptor_hash = wrong_height.descriptor.computed_descriptor_hash();
@@ -263,7 +250,6 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
         "receipt assembly must reject a proposal outside the frozen authority height"
     );
 }
-
 #[test]
 fn lane_signing_boundary_requires_exact_descriptor_membership() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);

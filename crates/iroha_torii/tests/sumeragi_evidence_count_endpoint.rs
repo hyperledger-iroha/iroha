@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/evidence/count
 #![cfg(feature = "telemetry")]
-
-use std::sync::Arc;
-
 use axum::{Router, extract::State, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -21,8 +18,8 @@ use iroha_data_model::{
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
 };
 use iroha_torii::handle_v1_sumeragi_evidence_count;
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-
 fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
     let certificate = Qc {
@@ -53,7 +50,6 @@ fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
         },
     }
 }
-
 #[tokio::test]
 async fn evidence_count_endpoint_reports_increase() {
     let kura = Arc::new(Kura::blank_kura_for_testing());
@@ -64,7 +60,6 @@ async fn evidence_count_endpoint_reports_increase() {
         query,
         StateTelemetry::default(),
     ));
-
     {
         let app = Router::new()
             .route(
@@ -77,7 +72,6 @@ async fn evidence_count_endpoint_reports_increase() {
                 ),
             )
             .with_state(state.clone());
-
         let req0 = http::Request::builder()
             .method("GET")
             .uri("/v1/sumeragi/evidence/count")
@@ -94,9 +88,7 @@ async fn evidence_count_endpoint_reports_increase() {
             .unwrap_or(0);
         assert_eq!(c0, 0);
     }
-
     let state_mut = Arc::get_mut(&mut state).expect("state Arc should be uniquely owned here");
-
     // Insert two WSV-backed evidence records
     for (idx, seed) in [0x11u8, 0x22].iter().enumerate() {
         let ev = make_invalid_commit_qc_evidence((idx + 1) as u64, *seed);
@@ -113,7 +105,6 @@ async fn evidence_count_endpoint_reports_increase() {
         };
         insert_evidence_record_for_test(state_mut, record);
     }
-
     let app = Router::new()
         .route(
             "/v1/sumeragi/evidence/count",
@@ -125,7 +116,6 @@ async fn evidence_count_endpoint_reports_increase() {
             ),
         )
         .with_state(state.clone());
-
     let req1 = http::Request::builder()
         .method("GET")
         .uri("/v1/sumeragi/evidence/count")
@@ -140,6 +130,5 @@ async fn evidence_count_endpoint_reports_increase() {
         .get("count")
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
-
     assert_eq!(c1, 2);
 }

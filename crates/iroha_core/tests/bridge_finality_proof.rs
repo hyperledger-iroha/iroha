@@ -1,7 +1,4 @@
 //! Exact Sumeragi-v2 bridge finality proof construction and verification tests.
-
-use std::{num::NonZeroU64, sync::Arc};
-
 use iroha_core::bridge::{
     BridgeFinalityError, BridgeStateReadOnly, FinalityProofVerificationConfig,
     VerifiedV2FinalityArtifact, build_finality_proof, verify_finality_proof,
@@ -19,25 +16,22 @@ use iroha_data_model::{
     },
     peer::PeerId,
 };
-
+use std::{num::NonZeroU64, sync::Arc};
 struct Fixture {
     network_id: NetworkId,
     block: Arc<SignedBlock>,
     artifact: V2FinalityArtifact,
     pops: Vec<Vec<u8>>,
 }
-
 fn checked_bls_validator_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked bridge finality BLS validator fixture keypair")
 }
-
 fn fixture_network_id(seed: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         seed,
     )))
 }
-
 #[test]
 fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
     let key_pair = checked_bls_validator_fixture();
@@ -45,10 +39,8 @@ fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture validator public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::BlsNormal);
 }
-
 fn fixture() -> Fixture {
     let network_id = fixture_network_id(b"bridge-v2-core-test genesis");
     let mut keys = (0..4)
@@ -66,7 +58,6 @@ fn fixture() -> Fixture {
             power,
         })
         .collect::<Vec<_>>();
-
     let block_key = KeyPair::try_random().expect("block fixture key");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
@@ -175,18 +166,15 @@ fn fixture() -> Fixture {
         pops,
     }
 }
-
 struct TestState {
     network_id: NetworkId,
     retained_header: Option<BlockHeader>,
     artifact: Result<Option<V2FinalityArtifact>, String>,
 }
-
 impl BridgeStateReadOnly for TestState {
     fn bridge_network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     fn bridge_verified_v2_finality_artifact(
         &self,
         _height: u64,
@@ -200,7 +188,6 @@ impl BridgeStateReadOnly for TestState {
             .transpose()
             .map_err(|error| format!("test storage rejected finality artifact: {error}"))
     }
-
     fn bridge_verified_v2_finality_with_sccp_archive(
         &self,
         height: u64,
@@ -216,7 +203,6 @@ impl BridgeStateReadOnly for TestState {
             .map(|verified| (verified, Vec::new())))
     }
 }
-
 fn state_from_fixture(fixture: &Fixture) -> TestState {
     TestState {
         network_id: fixture.network_id,
@@ -224,14 +210,11 @@ fn state_from_fixture(fixture: &Fixture) -> TestState {
         artifact: Ok(Some(fixture.artifact.clone())),
     }
 }
-
 #[test]
 fn builder_returns_only_the_exact_self_contained_v2_artifact() {
     let fixture = fixture();
     let state = state_from_fixture(&fixture);
-
     let proof = build_finality_proof(&state, 1).expect("build exact proof");
-
     assert_eq!(proof.block_header, fixture.block.header());
     assert_eq!(proof.finality_artifact, fixture.artifact);
     assert_eq!(proof.finality_artifact.validator_set_pops, fixture.pops);
@@ -240,7 +223,6 @@ fn builder_returns_only_the_exact_self_contained_v2_artifact() {
         .verify()
         .expect("builder output verifies");
 }
-
 #[test]
 fn builder_fails_closed_for_absent_or_unreadable_v2_artifact() {
     let fixture = fixture();
@@ -250,14 +232,12 @@ fn builder_fails_closed_for_absent_or_unreadable_v2_artifact() {
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactNotFound(1))
     );
-
     state.artifact = Err("corrupt durable sidecar".to_owned());
     assert!(matches!(
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
 }
-
 #[test]
 fn builder_rejects_artifact_block_network_and_durable_pop_attacks() {
     let fixture = fixture();
@@ -269,14 +249,12 @@ fn builder_rejects_artifact_block_network_and_durable_pop_attacks() {
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
-
     let mut state = state_from_fixture(&fixture);
     state.network_id = fixture_network_id(b"wrong bridge network genesis");
     assert_eq!(
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactMismatch { height: 1 })
     );
-
     let mut state = state_from_fixture(&fixture);
     let mut missing_pop = fixture.artifact.clone();
     missing_pop.validator_set_pops.pop();
@@ -285,7 +263,6 @@ fn builder_rejects_artifact_block_network_and_durable_pop_attacks() {
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
-
     let mut state = state_from_fixture(&fixture);
     let mut forged_pop = fixture.artifact.clone();
     forged_pop.validator_set_pops[0][0] ^= 0x80;
@@ -295,7 +272,6 @@ fn builder_rejects_artifact_block_network_and_durable_pop_attacks() {
         Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })
     ));
 }
-
 #[test]
 fn stateless_verifier_enforces_height_and_context_anchor() {
     let fixture = fixture();
@@ -307,14 +283,12 @@ fn stateless_verifier_enforces_height_and_context_anchor() {
         trusted_context_id: fixture.artifact.context_id(),
     };
     verify_finality_proof(&proof, &config).expect("anchored proof verifies");
-
     let wrong_height = FinalityProofVerificationConfig {
         expected_height: Some(2),
         ..config.clone()
     };
     assert!(verify_finality_proof(&proof, &wrong_height).is_err());
 }
-
 #[test]
 fn builder_rejects_cryptographically_invalid_durable_artifact() {
     let fixture = fixture();
@@ -322,7 +296,6 @@ fn builder_rejects_cryptographically_invalid_durable_artifact() {
     let mut artifact = fixture.artifact;
     artifact.commit_qc.aggregate_signature[0] ^= 0x80;
     state.artifact = Ok(Some(artifact));
-
     assert!(matches!(
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactRead { height: 1, .. })

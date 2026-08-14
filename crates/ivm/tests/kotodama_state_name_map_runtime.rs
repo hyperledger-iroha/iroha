@@ -1,13 +1,10 @@
 //! Regressions for durable `StateMap<Name, int>` runtime behavior.
-
-use std::{collections::HashMap, str::FromStr};
-
 use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::AccountId;
 use ivm::mock_wsv::{MockWorldStateView, WsvHost};
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use std::{collections::HashMap, str::FromStr};
 mod common;
-
 fn run_program(src: &str) -> IVM {
     let code = KotodamaCompiler::new()
         .compile_source(src)
@@ -19,7 +16,6 @@ fn run_program(src: &str) -> IVM {
     vm.run().expect("run program");
     vm
 }
-
 fn test_subject() -> AccountId {
     AccountId::new(
         PublicKey::from_str(
@@ -28,7 +24,6 @@ fn test_subject() -> AccountId {
         .expect("valid public key"),
     )
 }
-
 fn encoded_int_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
         i128::from(key),
@@ -36,7 +31,6 @@ fn encoded_int_state_path(name: &str, key: i64) -> String {
     .expect("encode canonical StateMap int key");
     format!("{name}/{}", hex::encode(key))
 }
-
 fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldStateView) {
     let code = KotodamaCompiler::new()
         .compile_source(src)
@@ -48,16 +42,13 @@ fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldSt
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run program");
-
     let wsv = {
         let host_any = vm.host_mut_any().expect("host available");
         let host = host_any.downcast_mut::<WsvHost>().expect("wsv host");
         host.wsv.clone()
     };
-
     (vm, wsv)
 }
-
 #[test]
 fn durable_name_map_roundtrip_read_after_write() {
     let src = r#"
@@ -69,11 +60,9 @@ fn durable_name_map_roundtrip_read_after_write() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_read_modify_write_roundtrip() {
     let src = r#"
@@ -87,11 +76,9 @@ fn durable_name_map_read_modify_write_roundtrip() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
-
 #[test]
 fn durable_name_map_if_branch_reassignment_roundtrip() {
     let src = r#"
@@ -107,11 +94,9 @@ fn durable_name_map_if_branch_reassignment_roundtrip() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_roundtrip_through_name_parameter() {
     let src = r#"
@@ -128,11 +113,9 @@ fn durable_name_map_roundtrip_through_name_parameter() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_roundtrip_through_helper() {
     let src = r#"
@@ -149,11 +132,9 @@ fn durable_name_map_roundtrip_through_helper() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_struct_value_roundtrip_through_helper() {
     let src = r#"
@@ -176,11 +157,9 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
-
 #[test]
 fn missing_mixed_aggregate_option_uses_complete_helper_fallback() {
     let src = r#"
@@ -219,11 +198,9 @@ fn missing_mixed_aggregate_option_uses_complete_helper_fallback() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn present_mixed_aggregate_option_ignores_fallback_value_without_field_corruption() {
     let src = r#"
@@ -269,11 +246,9 @@ fn present_mixed_aggregate_option_ignores_fallback_value_without_field_corruptio
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn mixed_aggregate_unwrap_or_remains_eager_on_the_present_arm() {
     let src = r#"
@@ -317,7 +292,6 @@ fn mixed_aggregate_unwrap_or_remains_eager_on_the_present_arm() {
             }
         }
     "#;
-
     let (vm, wsv) = run_program_with_wsv(src, MockWorldStateView::new());
     assert_eq!(common::decode_i64_register(&vm, 10), 7);
     let fallback_calls = wsv
@@ -325,7 +299,6 @@ fn mixed_aggregate_unwrap_or_remains_eager_on_the_present_arm() {
         .expect("eager fallback must persist its observable state mutation");
     assert_eq!(common::decode_int_state_value(&fallback_calls), 1);
 }
-
 #[test]
 fn mixed_aggregate_unwrap_or_evaluates_fallback_once_on_the_absent_arm() {
     let src = r#"
@@ -362,7 +335,6 @@ fn mixed_aggregate_unwrap_or_evaluates_fallback_once_on_the_absent_arm() {
             }
         }
     "#;
-
     let (vm, wsv) = run_program_with_wsv(src, MockWorldStateView::new());
     assert_eq!(common::decode_i64_register(&vm, 10), 11);
     let fallback_calls = wsv
@@ -370,7 +342,6 @@ fn mixed_aggregate_unwrap_or_evaluates_fallback_once_on_the_absent_arm() {
         .expect("selected fallback must persist its observable state mutation");
     assert_eq!(common::decode_int_state_value(&fallback_calls), 1);
 }
-
 #[test]
 fn missing_nested_mixed_aggregate_option_preserves_every_fallback_word() {
     let src = r#"
@@ -414,11 +385,9 @@ fn missing_nested_mixed_aggregate_option_preserves_every_fallback_word() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn aggregate_option_rejects_a_different_fallback_shape() {
     let src = r#"
@@ -435,7 +404,6 @@ fn aggregate_option_rejects_a_different_fallback_shape() {
             }
         }
     "#;
-
     let error = KotodamaCompiler::new()
         .compile_source(src)
         .expect_err("unwrap_or must reject a fallback with a different aggregate shape");
@@ -446,7 +414,6 @@ fn aggregate_option_rejects_a_different_fallback_shape() {
         "unexpected diagnostic: {error}"
     );
 }
-
 #[test]
 fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
     let src = r#"
@@ -467,11 +434,9 @@ fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_roundtrip_across_wsv_invocations() {
     let write_src = r#"
@@ -490,12 +455,10 @@ fn durable_name_map_roundtrip_across_wsv_invocations() {
             }
         }
     "#;
-
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_aggregate_get_or_preserves_persisted_bounded_lists() {
     let write_src = r#"
@@ -563,12 +526,10 @@ fn durable_aggregate_get_or_preserves_persisted_bounded_lists() {
             }
         }
     "#;
-
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn durable_aggregate_ensure_preserves_existing_record_words() {
     let src = r#"
@@ -592,11 +553,9 @@ fn durable_aggregate_ensure_preserves_existing_record_words() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
     let write_src = r#"
@@ -619,12 +578,10 @@ fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
             }
         }
     "#;
-
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_to_account_id_map_roundtrip() {
     let src = r#"
@@ -639,11 +596,9 @@ fn durable_name_to_account_id_map_roundtrip() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
     let write_src = r#"
@@ -666,12 +621,10 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
             }
         }
     "#;
-
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
     let src = r#"
@@ -690,11 +643,9 @@ fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn durable_name_map_key_survives_function_call() {
     let src = r#"
@@ -713,11 +664,9 @@ fn durable_name_map_key_survives_function_call() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_branch_value_drives_following_state_set() {
     let src = r#"
@@ -739,11 +688,9 @@ fn durable_name_map_branch_value_drives_following_state_set() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
-
 #[test]
 fn durable_name_map_branch_value_survives_following_addition() {
     let src = r#"
@@ -763,11 +710,9 @@ fn durable_name_map_branch_value_survives_following_addition() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
-
 #[test]
 fn durable_name_map_branch_value_survives_path_work() {
     let src = r#"
@@ -789,11 +734,9 @@ fn durable_name_map_branch_value_survives_path_work() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn durable_name_map_branch_value_survives_following_state_work() {
     let src = r#"
@@ -827,7 +770,6 @@ fn durable_name_map_branch_value_survives_following_state_work() {
             }
         }
     "#;
-
     let vm = run_program(src);
     assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }

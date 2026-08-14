@@ -1,13 +1,5 @@
 //! PoR challenge/proof tracking for the embedded storage node.
-
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
+use crate::store::StoredManifest;
 use ed25519_dalek::{Signature, VerifyingKey};
 use iroha_data_model::{
     metadata::Metadata,
@@ -32,10 +24,14 @@ use sorafs_manifest::{
         RepairPorFailureCauseV1, RepairReportV1, RepairTicketId,
     },
 };
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use thiserror::Error;
-
-use crate::store::StoredManifest;
-
 const SMALL_LEAF_MAX_LEN: u32 = 4 * 1024;
 const GIB: u64 = 1_073_741_824;
 const SAMPLE_TIER_EDGE: u16 = 1;
@@ -48,7 +44,6 @@ const DEFAULT_SAMPLE_MULTIPLIER: u16 = 1;
 const MAX_SAMPLE_MULTIPLIER: u16 = 4;
 const DEFAULT_TRACKER_ENTRY_LIMIT: usize =
     iroha_config::parameters::defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT_MAX;
-
 /// Domain separator for a failed PoR challenge's exactly-once repair source.
 pub const POR_REPAIR_SOURCE_ID_DOMAIN_V1: &[u8] = b"sorafs.por.repair-source.v1";
 /// Domain separator for one retained PoR-to-reputation delivery binding.
@@ -63,7 +58,6 @@ pub const POR_FINALIZED_REPLAY_ARCHIVE_HEAD_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for a signed absence result at one exact archive head.
 pub const POR_FINALIZED_REPLAY_ARCHIVE_ABSENCE_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.por.finalized-replay-archive.absence.v1";
-
 /// Derive the cross-peer repair source identity for one PoR challenge.
 #[must_use]
 pub fn por_repair_source_identity_v1(challenge_id: [u8; 32]) -> [u8; 32] {
@@ -72,7 +66,6 @@ pub fn por_repair_source_identity_v1(challenge_id: [u8; 32]) -> [u8; 32] {
     hasher.update(&challenge_id);
     *hasher.finalize().as_bytes()
 }
-
 /// Payload-free canonical material needed to enqueue a failed PoR repair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorFailedRepairIntentV1 {
@@ -89,7 +82,6 @@ pub struct PorFailedRepairIntentV1 {
     /// Final auditor decision timestamp.
     pub decided_at_unix: u64,
 }
-
 impl PorFailedRepairIntentV1 {
     fn validate(self) -> Result<(), PorRepairHandoffError> {
         if self.manifest_digest == [0; 32]
@@ -104,20 +96,17 @@ impl PorFailedRepairIntentV1 {
         }
         Ok(())
     }
-
     /// Return the deterministic exactly-once source identity.
     #[must_use]
     pub fn source_identity(self) -> [u8; 32] {
         por_repair_source_identity_v1(self.challenge_id)
     }
-
     /// Return the chain-authoritative repair task identity.
     #[must_use]
     pub fn repair_task_id(self) -> [u8; 32] {
         sorafs_repair_task_id_v1(self.source_identity())
     }
 }
-
 /// Build the canonical payload-free repair report for a failed PoR verdict.
 ///
 /// The caller supplies the runtime transaction authority; process-local
@@ -153,12 +142,10 @@ pub fn canonical_por_failure_repair_report_v1(
         .map_err(|error| PorRepairHandoffError(error.to_string()))?;
     Ok(report)
 }
-
 /// Payload-free failure returned by the native PoR repair handoff.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("PoR repair handoff failed: {0}")]
 pub struct PorRepairHandoffError(pub String);
-
 /// Idempotent native repair handoff used to drain the durable failed-verdict outbox.
 pub trait PorRepairHandoff: Send + Sync + std::fmt::Debug {
     /// Enqueue the canonical failed-PoR report exactly once and return its
@@ -168,7 +155,6 @@ pub trait PorRepairHandoff: Send + Sync + std::fmt::Debug {
         intent: &PorFailedRepairIntentV1,
     ) -> Result<[u8; 32], PorRepairHandoffError>;
 }
-
 /// Randomness bundle sourced for a PoR epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorRandomness {
@@ -185,7 +171,6 @@ pub struct PorRandomness {
     /// drand BLS signature covering the randomness.
     pub drand_signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
 }
-
 /// Provider VRF output/proof for a manifest/epoch pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManifestVrfBundle {
@@ -202,7 +187,6 @@ pub struct ManifestVrfBundle {
     /// Variant-tagged, fixed-size proof attesting to the VRF output.
     pub proof: iroha_crypto::vrf::VrfProof,
 }
-
 /// Lookup key for a provider/manifest VRF submission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ManifestVrfKey {
@@ -211,7 +195,6 @@ pub struct ManifestVrfKey {
     /// Manifest digest.
     pub manifest_digest: [u8; 32],
 }
-
 /// Planned PoR challenge alongside sampling metadata.
 #[derive(Debug, Clone)]
 pub struct PlannedChallenge {
@@ -220,7 +203,6 @@ pub struct PlannedChallenge {
     /// Number of duplicate sample indices emitted because unique leaves were exhausted.
     pub duplicate_samples: usize,
 }
-
 /// Errors returned when deriving PoR challenges.
 #[derive(Debug, Error)]
 pub enum PorChallengePlannerError {
@@ -265,20 +247,17 @@ pub enum PorChallengePlannerError {
     #[error("challenge validation failed: {0}")]
     ChallengeInvalid(#[from] sorafs_manifest::por::PorChallengeValidationError),
 }
-
 #[derive(Debug, Clone, Copy)]
 struct SamplePlan {
     tier: u16,
     small_target: usize,
     large_target: usize,
 }
-
 #[derive(Debug)]
 struct SampleSelection {
     indices: Vec<u64>,
     duplicate_count: usize,
 }
-
 /// Snapshot describing the backlog for a manifest/provider pair.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PorBacklogEntry {
@@ -293,14 +272,12 @@ pub struct PorBacklogEntry {
     /// Earliest response deadline recorded across pending challenges.
     pub oldest_response_deadline_unix: Option<u64>,
 }
-
 /// Sampling multiplier policy derived from governance metadata.
 #[derive(Debug, Clone)]
 pub struct PorSamplePolicy {
     default_multiplier: u16,
     overrides: HashMap<String, u16>,
 }
-
 impl Default for PorSamplePolicy {
     fn default() -> Self {
         Self {
@@ -309,7 +286,6 @@ impl Default for PorSamplePolicy {
         }
     }
 }
-
 impl PorSamplePolicy {
     /// Construct a sampling policy for `provider_id` using the supplied metadata.
     pub fn from_metadata(
@@ -319,7 +295,6 @@ impl PorSamplePolicy {
         let Some(raw_value) = metadata.get(SAMPLE_MULTIPLIER_METADATA_KEY) else {
             return Ok(Self::default());
         };
-
         let provider_hex = hex::encode(provider_id);
         let json_value = raw_value.try_into_any::<JsonValue>().map_err(|err| {
             PorChallengePlannerError::InvalidSampleMultiplier {
@@ -327,7 +302,6 @@ impl PorSamplePolicy {
                 reason: format!("invalid JSON payload: {err}"),
             }
         })?;
-
         parse_sample_policy(&json_value).map_err(|err| {
             PorChallengePlannerError::InvalidSampleMultiplier {
                 provider_hex,
@@ -335,7 +309,6 @@ impl PorSamplePolicy {
             }
         })
     }
-
     /// Return the multiplier associated with `profile_handle`, defaulting to the global value.
     #[must_use]
     pub fn multiplier_for(&self, profile_handle: &str) -> u16 {
@@ -345,11 +318,9 @@ impl PorSamplePolicy {
             .unwrap_or(self.default_multiplier)
     }
 }
-
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 struct SampleMultiplierError(String);
-
 fn parse_sample_policy(value: &JsonValue) -> Result<PorSamplePolicy, SampleMultiplierError> {
     match value {
         JsonValue::Number(_) | JsonValue::String(_) => {
@@ -380,7 +351,6 @@ fn parse_sample_policy(value: &JsonValue) -> Result<PorSamplePolicy, SampleMulti
         ))),
     }
 }
-
 fn parse_multiplier_value(value: &JsonValue, context: &str) -> Result<u16, SampleMultiplierError> {
     if let Some(raw) = value.as_u64() {
         return ensure_multiplier_range(raw, context);
@@ -404,7 +374,6 @@ fn parse_multiplier_value(value: &JsonValue, context: &str) -> Result<u16, Sampl
         describe_json_type(value)
     )))
 }
-
 fn ensure_multiplier_range(value: u64, context: &str) -> Result<u16, SampleMultiplierError> {
     if value == 0 || value > u64::from(MAX_SAMPLE_MULTIPLIER) {
         return Err(SampleMultiplierError(format!(
@@ -413,7 +382,6 @@ fn ensure_multiplier_range(value: u64, context: &str) -> Result<u16, SampleMulti
     }
     Ok(value as u16)
 }
-
 fn describe_json_type(value: &JsonValue) -> &'static str {
     match value {
         JsonValue::Null => "null",
@@ -424,7 +392,6 @@ fn describe_json_type(value: &JsonValue) -> &'static str {
         JsonValue::Object(_) => "object",
     }
 }
-
 fn determine_sample_plan(content_len: u64, multiplier: u16) -> SamplePlan {
     let (tier, base_small, base_large) = if content_len < 10 * GIB {
         (SAMPLE_TIER_EDGE, 64usize, 0usize)
@@ -433,7 +400,6 @@ fn determine_sample_plan(content_len: u64, multiplier: u16) -> SamplePlan {
     } else {
         (SAMPLE_TIER_ARCHIVAL, 0usize, 256usize)
     };
-
     let factor = usize::from(multiplier);
     SamplePlan {
         tier,
@@ -441,7 +407,6 @@ fn determine_sample_plan(content_len: u64, multiplier: u16) -> SamplePlan {
         large_target: base_large.saturating_mul(factor),
     }
 }
-
 fn draw_samples(
     rng: &mut ChaCha20Rng,
     target: usize,
@@ -462,7 +427,6 @@ fn draw_samples(
     if effective_pool.is_empty() {
         return;
     }
-
     let start_len = selected.len();
     let mut attempts = 0usize;
     while selected.len() - start_len < target {
@@ -481,7 +445,6 @@ fn draw_samples(
         }
     }
 }
-
 fn sample_leaf_indices(
     tree: &PorMerkleTree,
     seed: [u8; 32],
@@ -491,12 +454,10 @@ fn sample_leaf_indices(
     if total == 0 {
         return Err(PorChallengePlannerError::EmptyMerkleTree);
     }
-
     let mut all_indices = Vec::with_capacity(total);
     let mut small_indices = Vec::new();
     let mut large_indices = Vec::new();
     let mut flat_index = 0u64;
-
     for chunk in tree.chunks() {
         for segment in &chunk.segments {
             for leaf in &segment.leaves {
@@ -510,12 +471,10 @@ fn sample_leaf_indices(
             }
         }
     }
-
     let mut rng = ChaCha20Rng::from_seed(seed);
     let mut seen = HashSet::new();
     let mut selected = Vec::new();
     let mut duplicate_count = 0usize;
-
     let total_target = plan.small_target + plan.large_target;
     if total_target == 0 {
         return Ok(SampleSelection {
@@ -523,7 +482,6 @@ fn sample_leaf_indices(
             duplicate_count: 0,
         });
     }
-
     draw_samples(
         &mut rng,
         plan.small_target,
@@ -542,19 +500,15 @@ fn sample_leaf_indices(
         &mut selected,
         &mut duplicate_count,
     );
-
     if selected.is_empty() {
         return Err(PorChallengePlannerError::EmptyMerkleTree);
     }
-
     selected.sort_unstable();
-
     Ok(SampleSelection {
         indices: selected,
         duplicate_count,
     })
 }
-
 /// Construct a PoR challenge for the supplied manifest.
 pub fn build_por_challenge_for_manifest(
     manifest: &StoredManifest,
@@ -567,12 +521,10 @@ pub fn build_por_challenge_for_manifest(
     if randomness.drand_signature.iter().all(|byte| *byte == 0) {
         return Err(PorChallengePlannerError::InvalidDrandSignature);
     }
-
     let chunk_profile = manifest.chunk_profile_handle();
     if chunk_profile.is_empty() {
         return Err(PorChallengePlannerError::EmptyChunkProfile);
     }
-
     let multiplier = policy.multiplier_for(chunk_profile);
     let plan = determine_sample_plan(manifest.content_length(), multiplier);
     let manifest_digest = *manifest.manifest_digest();
@@ -593,7 +545,6 @@ pub fn build_por_challenge_for_manifest(
             });
         }
     };
-
     let seed = derive_challenge_seed(
         &randomness.drand_randomness,
         vrf_output.as_ref(),
@@ -604,7 +555,6 @@ pub fn build_por_challenge_for_manifest(
     let sample_count_usize = selection.indices.len();
     let sample_count = u16::try_from(sample_count_usize)
         .map_err(|_| PorChallengePlannerError::SampleCountOverflow(sample_count_usize))?;
-
     let challenge_id = derive_challenge_id(
         &seed,
         &manifest_digest,
@@ -615,7 +565,6 @@ pub fn build_por_challenge_for_manifest(
     let deadline_at = randomness
         .issued_at_unix
         .saturating_add(randomness.response_window_secs);
-
     let challenge = PorChallengeV1 {
         version: sorafs_manifest::por::POR_CHALLENGE_VERSION_V1,
         challenge_id,
@@ -636,15 +585,12 @@ pub fn build_por_challenge_for_manifest(
         issued_at: randomness.issued_at_unix,
         deadline_at,
     };
-
     challenge.validate()?;
-
     Ok(PlannedChallenge {
         challenge,
         duplicate_samples: selection.duplicate_count,
     })
 }
-
 /// Statistics extracted from an audit verdict.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PorVerdictStats {
@@ -653,7 +599,6 @@ pub struct PorVerdictStats {
     /// Number of failed samples recorded by the verdict.
     pub failed_samples: u64,
 }
-
 /// Runtime counters for challenge randomness and accepted-proof latency.
 ///
 /// The counters are process-local telemetry and deliberately do not participate
@@ -680,7 +625,6 @@ pub struct PorProtocolMetricsSnapshot {
     /// Maximum accepted proof latency in milliseconds.
     pub proof_latency_max_ms: u64,
 }
-
 #[derive(Debug, Default)]
 struct PorProtocolMetrics {
     challenges_total: AtomicU64,
@@ -693,7 +637,6 @@ struct PorProtocolMetrics {
     proof_latency_total_ms: AtomicU64,
     proof_latency_max_ms: AtomicU64,
 }
-
 impl PorProtocolMetrics {
     fn snapshot(&self) -> PorProtocolMetricsSnapshot {
         PorProtocolMetricsSnapshot {
@@ -709,14 +652,12 @@ impl PorProtocolMetrics {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeState {
     challenge: PorChallengeV1,
     proof_digest: Option<[u8; 32]>,
     proof_submitted_at: Option<u64>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct FinalizedChallengeStateV1 {
     state: ChallengeState,
@@ -727,7 +668,6 @@ struct FinalizedChallengeStateV1 {
     reputation_sequence: u64,
     reputation_terminal: PorTerminalOutcomeV1,
 }
-
 impl ChallengeState {
     fn to_status(&self) -> PorChallengeStatusV1 {
         PorChallengeStatusV1 {
@@ -753,7 +693,6 @@ impl ChallengeState {
         }
     }
 }
-
 impl FinalizedChallengeStateV1 {
     fn to_status(&self) -> PorChallengeStatusV1 {
         let mut status = self.state.to_status();
@@ -770,7 +709,6 @@ impl FinalizedChallengeStateV1 {
         }
         status
     }
-
     fn pending_repair_work(&self) -> Result<Option<PorPendingRepairWorkV1>, PorTrackerError> {
         let Some(repair_task_id) = self.repair_task_id else {
             return Ok(None);
@@ -800,7 +738,6 @@ impl FinalizedChallengeStateV1 {
         }))
     }
 }
-
 /// Pinned identity and verification policy for a finalized-PoR replay archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveBindingV1 {
@@ -813,7 +750,6 @@ pub struct PorFinalizedReplayArchiveBindingV1 {
     /// Ed25519 public key authenticating append receipts and readbacks.
     pub signing_public_key: [u8; 32],
 }
-
 impl PorFinalizedReplayArchiveBindingV1 {
     /// Construct and validate an exact deployment-owned archive binding.
     ///
@@ -836,7 +772,6 @@ impl PorFinalizedReplayArchiveBindingV1 {
         binding.verifying_key()?;
         Ok(binding)
     }
-
     fn verifying_key(self) -> Result<VerifyingKey, PorTrackerError> {
         if self.archive_id == [0; 32] || self.revision == 0 || self.policy_digest == [0; 32] {
             return Err(PorTrackerError::InvalidReplayArchiveBinding);
@@ -849,30 +784,25 @@ impl PorFinalizedReplayArchiveBindingV1 {
         Ok(key)
     }
 }
-
 /// Canonical source record persisted by the authenticated replay archive.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveRecordV1 {
     finalized: FinalizedChallengeStateV1,
 }
-
 impl PorFinalizedReplayArchiveRecordV1 {
     fn from_finalized(finalized: FinalizedChallengeStateV1) -> Self {
         Self { finalized }
     }
-
     /// Finalization-order sequence bound by this record.
     #[must_use]
     pub const fn reputation_sequence(&self) -> u64 {
         self.finalized.reputation_sequence
     }
-
     /// Challenge identity bound by this record.
     #[must_use]
     pub const fn challenge_id(&self) -> [u8; 32] {
         self.finalized.state.challenge.challenge_id
     }
-
     /// Return the exact retained PoR-to-reputation work.
     ///
     /// # Errors
@@ -881,7 +811,6 @@ impl PorFinalizedReplayArchiveRecordV1 {
     pub fn reputation_work(&self) -> Result<PorReputationTerminalWorkV1, PorTrackerError> {
         retained_reputation_work(&self.finalized)
     }
-
     /// Verify all retained challenge, verdict, repair, terminal, and digest invariants.
     ///
     /// # Errors
@@ -891,7 +820,6 @@ impl PorFinalizedReplayArchiveRecordV1 {
     pub fn validate(&self) -> Result<(), PorTrackerError> {
         validate_replay_archive_record(self)
     }
-
     /// Canonical domain-separated record digest.
     ///
     /// # Errors
@@ -909,7 +837,6 @@ impl PorFinalizedReplayArchiveRecordV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 /// HSM-authenticated receipt for one replay-archive append.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveReceiptV1 {
@@ -922,7 +849,6 @@ pub struct PorFinalizedReplayArchiveReceiptV1 {
     head_digest: [u8; 32],
     signature: [u8; 64],
 }
-
 impl PorFinalizedReplayArchiveReceiptV1 {
     /// Derive the exact digest an external archive signer must authenticate.
     ///
@@ -962,7 +888,6 @@ impl PorFinalizedReplayArchiveReceiptV1 {
         }
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Construct and verify an archive receipt from an external signature.
     ///
     /// # Errors
@@ -990,7 +915,6 @@ impl PorFinalizedReplayArchiveReceiptV1 {
             signature,
         })
     }
-
     /// Verify the canonical fields and HSM signature carried by this receipt.
     ///
     /// # Errors
@@ -1033,7 +957,6 @@ impl PorFinalizedReplayArchiveReceiptV1 {
         key.verify_strict(&self.head_digest, &Signature::from_bytes(&self.signature))
             .map_err(|_| PorTrackerError::InvalidReplayArchiveReceipt)
     }
-
     /// Verify that this receipt authenticates one exact canonical record.
     ///
     /// `expected_previous_head` is an outer option so callers can either enforce
@@ -1063,63 +986,53 @@ impl PorFinalizedReplayArchiveReceiptV1 {
         }
         self.validate()
     }
-
     /// Exact archive binding authenticated by this receipt.
     #[must_use]
     pub const fn binding(self) -> PorFinalizedReplayArchiveBindingV1 {
         self.binding
     }
-
     /// Finalization-order sequence authenticated by this receipt.
     #[must_use]
     pub const fn reputation_sequence(self) -> u64 {
         self.reputation_sequence
     }
-
     /// Challenge identity authenticated by this receipt.
     #[must_use]
     pub const fn challenge_id(self) -> [u8; 32] {
         self.challenge_id
     }
-
     /// Canonical record digest authenticated by this receipt.
     #[must_use]
     pub const fn record_digest(self) -> [u8; 32] {
         self.record_digest
     }
-
     /// Canonical retained-work digest authenticated by this receipt.
     #[must_use]
     pub const fn reputation_work_digest(self) -> [u8; 32] {
         self.reputation_work_digest
     }
-
     /// Exact predecessor head authenticated by this receipt.
     #[must_use]
     pub const fn previous_head_digest(self) -> Option<[u8; 32]> {
         self.previous_head_digest
     }
-
     /// Signed archive head digest.
     #[must_use]
     pub const fn head_digest(self) -> [u8; 32] {
         self.head_digest
     }
-
     /// Ed25519 signature authenticating the receipt head digest.
     #[must_use]
     pub const fn signature(self) -> [u8; 64] {
         self.signature
     }
 }
-
 /// Exact resource bounds for one authenticated replay-archive lookup proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorFinalizedReplayArchiveProofBoundsV1 {
     max_successor_receipts: usize,
     max_successor_proof_bytes: u64,
 }
-
 impl PorFinalizedReplayArchiveProofBoundsV1 {
     /// Construct non-zero count and canonical-byte bounds.
     ///
@@ -1140,19 +1053,16 @@ impl PorFinalizedReplayArchiveProofBoundsV1 {
             max_successor_proof_bytes,
         })
     }
-
     /// Maximum signed successor receipts accepted in one proof.
     #[must_use]
     pub const fn max_successor_receipts(self) -> usize {
         self.max_successor_receipts
     }
-
     /// Maximum canonical successor-proof bytes accepted in one proof.
     #[must_use]
     pub const fn max_successor_proof_bytes(self) -> u64 {
         self.max_successor_proof_bytes
     }
-
     /// Qualify an outer transport frame before decoding its successor receipts.
     ///
     /// Production adapters should call this with the authenticated or
@@ -1180,7 +1090,6 @@ impl PorFinalizedReplayArchiveProofBoundsV1 {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn production_default() -> Self {
         Self::try_new(
@@ -1190,7 +1099,6 @@ impl PorFinalizedReplayArchiveProofBoundsV1 {
         .expect("non-zero finalized PoR replay-archive proof defaults")
     }
 }
-
 /// Authenticated archive lookup result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorFinalizedReplayArchiveReadbackV1 {
@@ -1201,7 +1109,6 @@ pub struct PorFinalizedReplayArchiveReadbackV1 {
     /// Signed contiguous successors proving inclusion at the pinned head.
     pub successor_receipts: Vec<PorFinalizedReplayArchiveReceiptV1>,
 }
-
 impl PorFinalizedReplayArchiveReadbackV1 {
     /// Verify this record and its bounded contiguous inclusion path at one exact head.
     ///
@@ -1251,7 +1158,6 @@ impl PorFinalizedReplayArchiveReadbackV1 {
         Ok(())
     }
 }
-
 /// HSM-authenticated proof that one challenge is absent at an exact signed head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveAbsenceProofV1 {
@@ -1260,7 +1166,6 @@ pub struct PorFinalizedReplayArchiveAbsenceProofV1 {
     checkpoint_head: PorFinalizedReplayArchiveReceiptV1,
     signature: [u8; 64],
 }
-
 impl PorFinalizedReplayArchiveAbsenceProofV1 {
     /// Derive the exact digest an external archive signer must authenticate.
     ///
@@ -1292,7 +1197,6 @@ impl PorFinalizedReplayArchiveAbsenceProofV1 {
         hasher.update(&head_bytes);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Construct and verify a head-bound absence proof.
     ///
     /// # Errors
@@ -1316,31 +1220,26 @@ impl PorFinalizedReplayArchiveAbsenceProofV1 {
             signature,
         })
     }
-
     /// Exact archive binding authenticated by this proof.
     #[must_use]
     pub const fn binding(self) -> PorFinalizedReplayArchiveBindingV1 {
         self.binding
     }
-
     /// Challenge identity whose absence is authenticated.
     #[must_use]
     pub const fn challenge_id(self) -> [u8; 32] {
         self.challenge_id
     }
-
     /// Exact signed checkpoint head against which absence was proven.
     #[must_use]
     pub const fn checkpoint_head(self) -> PorFinalizedReplayArchiveReceiptV1 {
         self.checkpoint_head
     }
-
     /// Ed25519 signature authenticating this exact absence statement.
     #[must_use]
     pub const fn signature(self) -> [u8; 64] {
         self.signature
     }
-
     /// Verify this signed absence proof against one exact challenge and head.
     ///
     /// # Errors
@@ -1366,7 +1265,6 @@ impl PorFinalizedReplayArchiveAbsenceProofV1 {
             .map_err(|_| PorTrackerError::InvalidReplayArchiveAbsenceProof)
     }
 }
-
 /// Authenticated result of an exact checkpoint-bound archive lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PorFinalizedReplayArchiveLookupV1 {
@@ -1375,7 +1273,6 @@ pub enum PorFinalizedReplayArchiveLookupV1 {
     /// Absence was signed against the exact requested checkpoint head.
     Absent(Box<PorFinalizedReplayArchiveAbsenceProofV1>),
 }
-
 /// Payload-free external replay-archive failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PorFinalizedReplayArchiveExternalErrorV1 {
@@ -1386,7 +1283,6 @@ pub enum PorFinalizedReplayArchiveExternalErrorV1 {
     #[error("finalized PoR replay archive rejected the request")]
     Rejected,
 }
-
 /// Deployment-injected authenticated finalized-PoR replay archive.
 ///
 /// Append must be durable before success. Repeating the same record and
@@ -1397,30 +1293,25 @@ pub enum PorFinalizedReplayArchiveExternalErrorV1 {
 pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
     /// Return the stable credential-free production adapter handle.
     fn runtime_handle(&self) -> &str;
-
     /// Return the exact live adapter identity and verification binding.
     fn binding(
         &self,
     ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>;
-
     /// Prove the archive can authenticate its current monotonic head.
     ///
     /// This call must not mutate archive state. Adapters that cannot establish
     /// fresh authenticated read/write readiness must fail closed.
     fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1>;
-
     /// Return the current HSM-authenticated monotonic head.
     fn current_head(
         &self,
     ) -> Result<Option<PorFinalizedReplayArchiveReceiptV1>, PorFinalizedReplayArchiveExternalErrorV1>;
-
     /// Durably append one exact record after the supplied signed head.
     fn append(
         &self,
         record: &PorFinalizedReplayArchiveRecordV1,
         expected_previous_head: Option<[u8; 32]>,
     ) -> Result<PorFinalizedReplayArchiveReceiptV1, PorFinalizedReplayArchiveExternalErrorV1>;
-
     /// Return authenticated presence or absence for `challenge_id` at the
     /// caller's exact checkpoint head.
     ///
@@ -1439,7 +1330,6 @@ pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
         proof_bounds: PorFinalizedReplayArchiveProofBoundsV1,
     ) -> Result<PorFinalizedReplayArchiveLookupV1, PorFinalizedReplayArchiveExternalErrorV1>;
 }
-
 #[derive(Debug)]
 struct PorTrackerState {
     pending: HashMap<[u8; 32], ChallengeState>,
@@ -1452,7 +1342,6 @@ struct PorTrackerState {
     latest_status_removals: Vec<[u8; 32]>,
     entry_limit: usize,
 }
-
 impl Default for PorTrackerState {
     fn default() -> Self {
         Self {
@@ -1468,7 +1357,6 @@ impl Default for PorTrackerState {
         }
     }
 }
-
 /// Canonical durable snapshot of PoR challenge replay-protection state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PorTrackerCheckpointV1 {
@@ -1480,7 +1368,6 @@ pub(crate) struct PorTrackerCheckpointV1 {
     acknowledged_reputation_terminal: Option<PorReputationTerminalAckV1>,
     replay_archive_receipt: Option<PorFinalizedReplayArchiveReceiptV1>,
 }
-
 /// Bounded authoritative PoR status snapshot exported by the node checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorStatusAuthoritySnapshotV1 {
@@ -1489,7 +1376,6 @@ pub struct PorStatusAuthoritySnapshotV1 {
     /// Exact status history in strictly increasing challenge-id order.
     pub statuses: Vec<PorChallengeStatusV1>,
 }
-
 /// One node-authoritative PoR status record after a durable lifecycle operation.
 ///
 /// The update is emitted while the node's auxiliary-checkpoint transaction is
@@ -1505,7 +1391,6 @@ pub struct PorStatusAuthorityUpdateV1 {
     /// durable generation.
     pub removed_challenge_ids: Vec<[u8; 32]>,
 }
-
 /// Durable effect of a failed PoR lifecycle mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PorMutationDispositionV1 {
@@ -1518,7 +1403,6 @@ pub enum PorMutationDispositionV1 {
     /// Restoring the exact pre-call checkpoint failed.
     RollbackFailed,
 }
-
 impl PorMutationDispositionV1 {
     /// Whether a rebuildable Torii projection must be invalidated.
     #[must_use]
@@ -1526,7 +1410,6 @@ impl PorMutationDispositionV1 {
         matches!(self, Self::CommitUncertain | Self::RollbackFailed)
     }
 }
-
 /// Typed PoR mutation failure carrying its exact durable-state disposition.
 #[derive(Debug, Error)]
 #[error("{error}")]
@@ -1534,31 +1417,26 @@ pub struct PorMutationFailureV1 {
     error: PorTrackerError,
     disposition: PorMutationDispositionV1,
 }
-
 impl PorMutationFailureV1 {
     pub(crate) const fn new(error: PorTrackerError, disposition: PorMutationDispositionV1) -> Self {
         Self { error, disposition }
     }
-
     /// Construct a failure that did not mutate authoritative state.
     #[must_use]
     pub const fn no_mutation(error: PorTrackerError) -> Self {
         Self::new(error, PorMutationDispositionV1::NoMutation)
     }
-
     /// Return the durable effect of the failed call.
     #[must_use]
     pub const fn disposition(&self) -> PorMutationDispositionV1 {
         self.disposition
     }
-
     /// Recover the original tracker error for compatibility-only callers.
     #[must_use]
     pub fn into_tracker_error(self) -> PorTrackerError {
         self.error
     }
 }
-
 /// One failed-verdict repair intent retained until its durable handoff is acknowledged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorPendingRepairWorkV1 {
@@ -1567,19 +1445,16 @@ pub struct PorPendingRepairWorkV1 {
     /// Deterministic chain-authoritative repair task identity.
     pub repair_task_id: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PorChallengeRecordOutcomeV1 {
     Inserted,
     ExactReplay(PorChallengeStatusV1),
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PorProofRecordOutcomeV1 {
     Inserted,
     ExactReplay(PorChallengeStatusV1),
 }
-
 /// Outcome of durably acknowledging one failed-verdict repair handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PorRepairHandoffAckOutcomeV1 {
@@ -1588,7 +1463,6 @@ pub enum PorRepairHandoffAckOutcomeV1 {
     /// The exact acknowledgement was already retained.
     ExactReplay,
 }
-
 /// Result of reconciling one durable failed-verdict repair outbox entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PorRepairReconcileOutcomeV1 {
@@ -1602,7 +1476,6 @@ pub enum PorRepairReconcileOutcomeV1 {
         acknowledgement: PorRepairHandoffAckOutcomeV1,
     },
 }
-
 /// Failure while reconciling the durable failed-verdict repair outbox.
 #[derive(Debug, Error)]
 pub enum PorRepairReconcileErrorV1 {
@@ -1621,20 +1494,17 @@ pub enum PorRepairReconcileErrorV1 {
         actual: [u8; 32],
     },
 }
-
 #[cfg(test)]
 impl PorTrackerCheckpointV1 {
     pub(crate) fn has_no_finalized_challenges(&self) -> bool {
         self.finalized.is_empty()
     }
-
     pub(crate) const fn replay_archive_receipt(
         &self,
     ) -> Option<PorFinalizedReplayArchiveReceiptV1> {
         self.replay_archive_receipt
     }
 }
-
 /// One canonical, replay-stable PoR terminal awaiting reputation admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PorReputationTerminalWorkV1 {
@@ -1647,7 +1517,6 @@ pub struct PorReputationTerminalWorkV1 {
     /// Domain-separated digest binding the sequence, provider, and terminal.
     pub work_digest: [u8; 32],
 }
-
 impl PorReputationTerminalWorkV1 {
     fn try_new(
         sequence: u64,
@@ -1675,13 +1544,11 @@ impl PorReputationTerminalWorkV1 {
         })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PorReputationTerminalAckV1 {
     sequence: u64,
     work_digest: [u8; 32],
 }
-
 /// Outcome of advancing the durable PoR-to-reputation delivery cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PorReputationTerminalAckOutcomeV1 {
@@ -1690,7 +1557,6 @@ pub enum PorReputationTerminalAckOutcomeV1 {
     /// The exact terminal acknowledgement was already retained.
     ExactReplay,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PorVerdictTransitionV1 {
     pub(crate) stats: PorVerdictStats,
@@ -1699,14 +1565,12 @@ pub(crate) struct PorVerdictTransitionV1 {
     pub(crate) authority_status: PorChallengeStatusV1,
     pub(crate) newly_finalized: bool,
 }
-
 /// Tracks the lifecycle of PoR challenges, proofs, and verdicts.
 #[derive(Debug, Clone)]
 pub struct PorTracker {
     inner: Arc<RwLock<PorTrackerState>>,
     metrics: Arc<PorProtocolMetrics>,
 }
-
 impl Default for PorTracker {
     fn default() -> Self {
         Self {
@@ -1715,7 +1579,6 @@ impl Default for PorTracker {
         }
     }
 }
-
 impl PorTracker {
     /// Construct a tracker with a hard ceiling for pending and finalized entries.
     #[must_use]
@@ -1728,20 +1591,17 @@ impl PorTracker {
             metrics: Arc::new(PorProtocolMetrics::default()),
         }
     }
-
     fn next_status_generation(state: &PorTrackerState) -> Result<u64, PorTrackerError> {
         state
             .status_generation
             .checked_add(1)
             .ok_or(PorTrackerError::StatusGenerationExhausted)
     }
-
     fn validate_authority_status(status: &PorChallengeStatusV1) -> Result<(), PorTrackerError> {
         status
             .validate()
             .map_err(|error| PorTrackerError::InvalidAuthorityStatus(error.to_string()))
     }
-
     fn oldest_compacted_status_id(state: &PorTrackerState) -> Option<[u8; 32]> {
         state
             .compacted_statuses
@@ -1749,7 +1609,6 @@ impl PorTracker {
             .min_by_key(|status| (status.issued_at, status.challenge_id))
             .map(|status| status.challenge_id)
     }
-
     /// Register a new PoR challenge.
     pub(crate) fn record_challenge(
         &self,
@@ -1757,7 +1616,6 @@ impl PorTracker {
     ) -> Result<PorChallengeRecordOutcomeV1, PorTrackerError> {
         self.record_challenge_with_archive_option(challenge, None, None)
     }
-
     /// Register or replay a challenge with exact configured proof bounds.
     pub(crate) fn record_challenge_with_archive_and_bounds(
         &self,
@@ -1771,7 +1629,6 @@ impl PorTracker {
             Some(proof_bounds),
         )
     }
-
     fn record_challenge_with_archive_option(
         &self,
         challenge: &PorChallengeV1,
@@ -1932,7 +1789,6 @@ impl PorTracker {
         }
         Ok(PorChallengeRecordOutcomeV1::Inserted)
     }
-
     /// Register a PoR proof response authenticated by provider admission.
     pub(crate) fn record_proof(
         &self,
@@ -1941,7 +1797,6 @@ impl PorTracker {
     ) -> Result<PorProofRecordOutcomeV1, PorTrackerError> {
         self.record_proof_with_archive_option(proof, admitted_provider_key, None, None)
     }
-
     /// Register or exactly replay a PoR proof with authenticated archive lookup.
     pub(crate) fn record_proof_with_archive_and_bounds(
         &self,
@@ -1957,7 +1812,6 @@ impl PorTracker {
             Some(proof_bounds),
         )
     }
-
     fn record_proof_with_archive_option(
         &self,
         proof: &PorProofV1,
@@ -2091,13 +1945,11 @@ impl PorTracker {
         }
         Err(PorTrackerError::UnknownChallenge)
     }
-
     /// Return the current process-local PoR protocol telemetry snapshot.
     #[must_use]
     pub fn protocol_metrics(&self) -> PorProtocolMetricsSnapshot {
         self.metrics.snapshot()
     }
-
     /// Finalise a challenge using an audit verdict.
     #[cfg(test)]
     pub(crate) fn record_verdict(
@@ -2109,7 +1961,6 @@ impl PorTracker {
         self.record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)
             .map(|transition| transition.stats)
     }
-
     /// Finalise a challenge and retain deterministic repair work in the
     /// authoritative checkpoint for post-commit reconciliation.
     pub(crate) fn record_verdict_durable(
@@ -2126,7 +1977,6 @@ impl PorTracker {
             None,
         )
     }
-
     #[cfg(test)]
     fn record_verdict_with(
         &self,
@@ -2139,7 +1989,6 @@ impl PorTracker {
     ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
         self.record_verdict_durable(verdict, trusted_auditor_keys, auditor_threshold)
     }
-
     /// Finalise or replay a verdict against an authenticated compacted archive
     /// with exact configured proof bounds.
     ///
@@ -2162,7 +2011,6 @@ impl PorTracker {
             Some(proof_bounds),
         )
     }
-
     #[cfg(test)]
     fn record_verdict_with_archive_and_bounds(
         &self,
@@ -2183,7 +2031,6 @@ impl PorTracker {
             proof_bounds,
         )
     }
-
     fn record_verdict_with_archive_option(
         &self,
         verdict: &AuditVerdictV1,
@@ -2342,7 +2189,6 @@ impl PorTracker {
             newly_finalized: true,
         })
     }
-
     /// Export pending and finalized challenge state in deterministic order.
     pub(crate) fn checkpoint(&self) -> PorTrackerCheckpointV1 {
         let tracker = self.inner.read().expect("por tracker poisoned");
@@ -2366,7 +2212,6 @@ impl PorTracker {
             replay_archive_receipt: tracker.replay_archive_receipt,
         }
     }
-
     /// Export the complete bounded status history owned by this tracker.
     pub(crate) fn status_authority_snapshot(
         &self,
@@ -2420,7 +2265,6 @@ impl PorTracker {
             statuses,
         })
     }
-
     /// Return one exact status and generation without materializing history.
     pub(crate) fn status_authority_update(
         &self,
@@ -2432,7 +2276,6 @@ impl PorTracker {
                 "PoR status generation is zero".to_owned(),
             ));
         }
-
         let pending = tracker
             .pending
             .get(&challenge_id)
@@ -2474,7 +2317,6 @@ impl PorTracker {
             removed_challenge_ids: tracker.latest_status_removals.clone(),
         })
     }
-
     /// Build a same-generation no-op projection update for an exact replay.
     ///
     /// A replay may name a status still retained locally or a terminal whose
@@ -2534,7 +2376,6 @@ impl PorTracker {
             removed_challenge_ids: Vec::new(),
         })
     }
-
     /// Return the oldest failed-verdict repair intent not yet acknowledged.
     pub(crate) fn next_pending_repair_work(
         &self,
@@ -2550,7 +2391,6 @@ impl PorTracker {
             .first()
             .map_or(Ok(None), |state| state.pending_repair_work())
     }
-
     /// Acknowledge the exact retained failed-verdict repair handoff.
     pub(crate) fn acknowledge_repair_handoff(
         &self,
@@ -2571,7 +2411,6 @@ impl PorTracker {
         finalized.repair_handoff_acknowledged = true;
         Ok(PorRepairHandoffAckOutcomeV1::Advanced)
     }
-
     /// Return the exact next retained PoR terminal awaiting reputation admission.
     ///
     /// Work is exposed strictly in finalization order. The same item is
@@ -2599,7 +2438,6 @@ impl PorTracker {
         };
         retained_reputation_work(finalized).map(Some)
     }
-
     /// Return the number of retained terminals not yet acknowledged.
     #[must_use]
     pub fn pending_reputation_terminal_count(&self) -> u64 {
@@ -2611,7 +2449,6 @@ impl PorTracker {
             .last_reputation_sequence
             .saturating_sub(acknowledged)
     }
-
     /// Return history keys whose live lifecycle or delivery work is not yet archived.
     pub(crate) fn protected_history_keys(&self) -> HashSet<([u8; 32], [u8; 32])> {
         let tracker = self.inner.read().expect("por tracker poisoned");
@@ -2627,7 +2464,6 @@ impl PorTracker {
             }))
             .collect()
     }
-
     /// Advance the delivery cursor for the exact next retained terminal.
     ///
     /// Skipped, foreign, stale, or digest-substituted acknowledgements fail
@@ -2681,7 +2517,6 @@ impl PorTracker {
         });
         Ok(PorReputationTerminalAckOutcomeV1::Advanced)
     }
-
     /// Reconcile a restored local archive head with an authenticated live prefix.
     ///
     /// A live-ahead head is accepted only when every newly archived record is
@@ -2724,7 +2559,6 @@ impl PorTracker {
                 return Err(PorTrackerError::ReplayArchiveBindingMismatch);
             }
         }
-
         let reconciliation = match (restored_head, current_head) {
             (Some(_), None) => return Err(PorTrackerError::ReplayArchiveHeadRollback),
             (None, None) => None,
@@ -2755,7 +2589,6 @@ impl PorTracker {
                 }
                 let advance_count = usize::try_from(advance_count)
                     .map_err(|_| PorTrackerError::ReplayArchiveProofLimitExceeded)?;
-
                 let tracker = self.inner.read().expect("por tracker poisoned");
                 let acknowledged = tracker
                     .acknowledged_reputation_terminal
@@ -2768,7 +2601,6 @@ impl PorTracker {
                 {
                     return Err(PorTrackerError::ReplayArchiveHeadRollback);
                 }
-
                 let mut by_sequence = BTreeMap::new();
                 for (challenge_id, finalized) in &tracker.finalized {
                     if finalized.reputation_sequence > restored_sequence
@@ -2810,7 +2642,6 @@ impl PorTracker {
                     local_prefix.push(local);
                 }
                 drop(tracker);
-
                 let first = local_prefix
                     .first()
                     .ok_or(PorTrackerError::ReplayArchiveHeadRollback)?;
@@ -2857,7 +2688,6 @@ impl PorTracker {
                 ))
             }
         };
-
         replay_archive
             .check_readiness()
             .map_err(PorTrackerError::ReplayArchiveExternal)?;
@@ -2881,7 +2711,6 @@ impl PorTracker {
         {
             return Err(PorTrackerError::ReplayArchiveBindingMismatch);
         }
-
         let Some((current, local_prefix, acknowledged, last_reputation_sequence)) = reconciliation
         else {
             return Ok(false);
@@ -2920,7 +2749,6 @@ impl PorTracker {
         tracker.replay_archive_receipt = Some(current);
         Ok(true)
     }
-
     /// Archive and compact a bounded acknowledged finalized prefix.
     ///
     /// Every record is durably appended and its HSM-authenticated receipt is
@@ -3047,7 +2875,6 @@ impl PorTracker {
         }
         result
     }
-
     /// Restore a validated deterministic tracker checkpoint.
     pub(crate) fn restore_checkpoint(
         &self,
@@ -3339,7 +3166,6 @@ impl PorTracker {
         tracker.latest_status_removals.clear();
         Ok(())
     }
-
     /// Return whether a challenge remains pending in the tracker.
     #[cfg(test)]
     fn contains_challenge(&self, challenge_id: &[u8; 32]) -> bool {
@@ -3349,7 +3175,6 @@ impl PorTracker {
             .pending
             .contains_key(challenge_id)
     }
-
     /// Return the proof digest recorded for a pending challenge.
     #[cfg(test)]
     fn proof_digest(&self, challenge_id: &[u8; 32]) -> Option<[u8; 32]> {
@@ -3360,25 +3185,21 @@ impl PorTracker {
             .get(challenge_id)
             .and_then(|state| state.proof_digest)
     }
-
     /// Return backlog entries for all manifest/provider pairs tracked by the node.
     #[must_use]
     pub fn backlog_entries(&self) -> Vec<PorBacklogEntry> {
         self.collect_backlog(|_| true)
     }
-
     /// Return backlog entries for the supplied manifest digest.
     #[must_use]
     pub fn backlog_for_manifest(&self, manifest_digest: &[u8; 32]) -> Vec<PorBacklogEntry> {
         self.collect_backlog(|state| state.challenge.manifest_digest == *manifest_digest)
     }
-
     fn collect_backlog<F>(&self, predicate: F) -> Vec<PorBacklogEntry>
     where
         F: Fn(&ChallengeState) -> bool,
     {
         use std::collections::hash_map::Entry;
-
         let tracker = self.inner.read().expect("por tracker poisoned");
         let mut grouped: HashMap<([u8; 32], [u8; 32]), PorBacklogEntry> = HashMap::new();
         for state in tracker.pending.values() {
@@ -3414,7 +3235,6 @@ impl PorTracker {
         grouped.into_values().collect()
     }
 }
-
 fn validate_replay_archive_record(
     record: &PorFinalizedReplayArchiveRecordV1,
 ) -> Result<(), PorTrackerError> {
@@ -3468,7 +3288,6 @@ fn validate_replay_archive_record(
     record.record_digest()?;
     Ok(())
 }
-
 fn retained_reputation_work(
     finalized: &FinalizedChallengeStateV1,
 ) -> Result<PorReputationTerminalWorkV1, PorTrackerError> {
@@ -3478,13 +3297,11 @@ fn retained_reputation_work(
         finalized.reputation_terminal,
     )
 }
-
 fn checked_seconds_to_millis(value: u64, field: &'static str) -> Result<u64, PorTrackerError> {
     value
         .checked_mul(1_000)
         .ok_or(PorTrackerError::ReputationTimestampOverflow { field })
 }
-
 fn por_reputation_terminal_from_retained_v1(
     state: &ChallengeState,
     verdict: &AuditVerdictV1,
@@ -3568,7 +3385,6 @@ fn por_reputation_terminal_from_retained_v1(
         status,
     })
 }
-
 fn validate_verdict_transition(
     state: &ChallengeState,
     verdict: &AuditVerdictV1,
@@ -3618,7 +3434,6 @@ fn validate_verdict_transition(
             submitted_at,
         });
     }
-
     let samples = u64::from(state.challenge.sample_count);
     Ok(match verdict.outcome {
         AuditOutcomeV1::Success | AuditOutcomeV1::Repaired => PorVerdictStats {
@@ -3631,11 +3446,9 @@ fn validate_verdict_transition(
         },
     })
 }
-
 fn ensure_match<T: Eq>(left: T, right: T, err: PorTrackerError) -> Result<(), PorTrackerError> {
     if left == right { Ok(()) } else { Err(err) }
 }
-
 fn validate_proof_against_challenge(
     proof: &PorProofV1,
     state: &ChallengeState,
@@ -3675,7 +3488,6 @@ fn validate_proof_against_challenge(
     }
     Ok(())
 }
-
 /// Errors returned by [`PorTracker`].
 #[derive(Debug, Error)]
 pub enum PorTrackerError {
@@ -3901,24 +3713,20 @@ pub enum PorTrackerError {
     #[error("finalized PoR replay-archive compaction limit must be non-zero")]
     InvalidReplayArchiveCompactionLimit,
 }
-
 #[cfg(test)]
 /// Utilities used only in tests to build attested POR inputs.
 pub mod test_support {
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use sorafs_manifest::{
         por::{AUDIT_VERDICT_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1},
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
-
-    use super::*;
-
     fn signing_key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic Ed25519 test key")
     }
-
     fn sign_payload(signature: &mut AdvertSignature, key_pair: &KeyPair, payload: &[u8]) {
         let (algorithm, public_key) = key_pair.public_key().to_bytes();
         assert_eq!(algorithm, Algorithm::Ed25519);
@@ -3928,7 +3736,6 @@ pub mod test_support {
             .payload()
             .to_vec();
     }
-
     /// Deterministic PoR challenge used across unit tests.
     pub fn sample_challenge() -> PorChallengeV1 {
         let manifest_digest = [2; 32];
@@ -3966,7 +3773,6 @@ pub mod test_support {
             deadline_at: 1_700_000_600,
         }
     }
-
     /// Deterministic PoR proof matching [`sample_challenge`].
     pub fn sample_proof(challenge: &PorChallengeV1) -> PorProofV1 {
         let mut proof = PorProofV1 {
@@ -4001,7 +3807,6 @@ pub mod test_support {
         resign_sample_proof(&mut proof);
         proof
     }
-
     /// Re-sign a mutated proof with the deterministic admitted provider key.
     pub fn resign_sample_proof(proof: &mut PorProofV1) {
         let key_pair = signing_key(0x11);
@@ -4010,7 +3815,6 @@ pub mod test_support {
             .expect("encode proof signature payload");
         sign_payload(&mut proof.signature, &key_pair, &payload);
     }
-
     /// Deterministic verdict helper stitched to [`sample_challenge`].
     pub fn sample_verdict(challenge: &PorChallengeV1, digest: [u8; 32]) -> AuditVerdictV1 {
         let mut verdict = AuditVerdictV1 {
@@ -4032,7 +3836,6 @@ pub mod test_support {
         resign_sample_verdict(&mut verdict);
         verdict
     }
-
     /// Re-sign a mutated verdict with the deterministic trusted auditor key.
     pub fn resign_sample_verdict(verdict: &mut AuditVerdictV1) {
         let key_pair = signing_key(0x13);
@@ -4041,17 +3844,14 @@ pub mod test_support {
             .expect("encode verdict signature payload");
         sign_payload(&mut verdict.auditor_signatures[0], &key_pair, &payload);
     }
-
     /// Admitted provider key for [`sample_proof`].
     pub fn sample_provider_key() -> Vec<u8> {
         signing_key(0x11).public_key().to_bytes().1.to_vec()
     }
-
     /// Trusted auditor set for [`sample_verdict`].
     pub fn sample_auditor_keys() -> Vec<Vec<u8>> {
         vec![signing_key(0x13).public_key().to_bytes().1.to_vec()]
     }
-
     /// Build one canonical record and authenticated non-empty head for startup tests.
     pub fn sample_replay_archive_record_and_head(
         seed: u8,
@@ -4102,7 +3902,6 @@ pub mod test_support {
         .expect("authenticate replay-archive test head");
         (binding, record, receipt)
     }
-
     /// Build one authenticated non-empty replay-archive head for startup tests.
     pub fn sample_replay_archive_head(
         seed: u8,
@@ -4114,9 +3913,16 @@ pub mod test_support {
         (binding, receipt)
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::por::test_support::{
+        resign_sample_proof, resign_sample_verdict, sample_auditor_keys, sample_challenge,
+        sample_proof, sample_provider_key, sample_verdict,
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    use iroha_data_model::{metadata::Metadata, name::Name};
+    use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     use std::{
         collections::BTreeMap,
         convert::TryFrom,
@@ -4126,16 +3932,6 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-
-    use super::*;
-    use crate::por::test_support::{
-        resign_sample_proof, resign_sample_verdict, sample_auditor_keys, sample_challenge,
-        sample_proof, sample_provider_key, sample_verdict,
-    };
-    use ed25519_dalek::{Signer, SigningKey};
-    use iroha_data_model::{metadata::Metadata, name::Name};
-    use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
-
     #[derive(Debug)]
     struct MemoryReplayArchive {
         runtime_handle: String,
@@ -4143,14 +3939,12 @@ mod tests {
         signing_key: SigningKey,
         state: Mutex<MemoryReplayArchiveState>,
     }
-
     #[derive(Debug, Default)]
     struct MemoryReplayArchiveState {
         records: BTreeMap<[u8; 32], PorFinalizedReplayArchiveReadbackV1>,
         latest_head: Option<[u8; 32]>,
         append_calls: u32,
     }
-
     impl MemoryReplayArchive {
         fn new(seed: u8) -> Self {
             let signing_key = SigningKey::from_bytes(&[seed; 32]);
@@ -4168,35 +3962,29 @@ mod tests {
                 state: Mutex::new(MemoryReplayArchiveState::default()),
             }
         }
-
         fn append_calls(&self) -> u32 {
             self.state.lock().expect("archive state").append_calls
         }
-
         fn retained_records(&self) -> usize {
             self.state.lock().expect("archive state").records.len()
         }
     }
-
     impl PorFinalizedReplayArchiveV1 for MemoryReplayArchive {
         fn runtime_handle(&self) -> &str {
             &self.runtime_handle
         }
-
         fn binding(
             &self,
         ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
         {
             Ok(self.binding)
         }
-
         fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
             self.binding
                 .verifying_key()
                 .map(|_| ())
                 .map_err(|_| PorFinalizedReplayArchiveExternalErrorV1::Rejected)
         }
-
         fn current_head(
             &self,
         ) -> Result<
@@ -4214,7 +4002,6 @@ mod tests {
                 .map(|readback| Some(readback.receipt))
                 .ok_or(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
         }
-
         fn append(
             &self,
             record: &PorFinalizedReplayArchiveRecordV1,
@@ -4259,7 +4046,6 @@ mod tests {
             );
             Ok(receipt)
         }
-
         fn lookup(
             &self,
             challenge_id: [u8; 32],
@@ -4318,13 +4104,11 @@ mod tests {
             Ok(PorFinalizedReplayArchiveLookupV1::Found(Box::new(readback)))
         }
     }
-
     #[derive(Debug)]
     struct BindingDriftReplayArchive<'a> {
         inner: &'a MemoryReplayArchive,
         binding_calls: AtomicUsize,
     }
-
     impl<'a> BindingDriftReplayArchive<'a> {
         fn new(inner: &'a MemoryReplayArchive) -> Self {
             Self {
@@ -4332,19 +4116,16 @@ mod tests {
                 binding_calls: AtomicUsize::new(0),
             }
         }
-
         fn substituted_binding(&self) -> PorFinalizedReplayArchiveBindingV1 {
             let mut binding = self.inner.binding;
             binding.policy_digest[0] ^= 1;
             binding
         }
     }
-
     impl PorFinalizedReplayArchiveV1 for BindingDriftReplayArchive<'_> {
         fn runtime_handle(&self) -> &str {
             self.inner.runtime_handle()
         }
-
         fn binding(
             &self,
         ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
@@ -4355,11 +4136,9 @@ mod tests {
                 Ok(self.substituted_binding())
             }
         }
-
         fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
             self.inner.check_readiness()
         }
-
         fn current_head(
             &self,
         ) -> Result<
@@ -4368,7 +4147,6 @@ mod tests {
         > {
             self.inner.current_head()
         }
-
         fn append(
             &self,
             record: &PorFinalizedReplayArchiveRecordV1,
@@ -4377,7 +4155,6 @@ mod tests {
         {
             self.inner.append(record, expected_previous_head)
         }
-
         fn lookup(
             &self,
             challenge_id: [u8; 32],
@@ -4389,28 +4166,23 @@ mod tests {
                 .lookup(challenge_id, expected_checkpoint_head, proof_bounds)
         }
     }
-
     #[derive(Debug)]
     struct StaleHeadReplayArchive<'a> {
         inner: &'a MemoryReplayArchive,
     }
-
     impl PorFinalizedReplayArchiveV1 for StaleHeadReplayArchive<'_> {
         fn runtime_handle(&self) -> &str {
             self.inner.runtime_handle()
         }
-
         fn binding(
             &self,
         ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
         {
             self.inner.binding()
         }
-
         fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
             self.inner.check_readiness()
         }
-
         fn current_head(
             &self,
         ) -> Result<
@@ -4419,7 +4191,6 @@ mod tests {
         > {
             Ok(None)
         }
-
         fn append(
             &self,
             record: &PorFinalizedReplayArchiveRecordV1,
@@ -4428,7 +4199,6 @@ mod tests {
         {
             self.inner.append(record, expected_previous_head)
         }
-
         fn lookup(
             &self,
             challenge_id: [u8; 32],
@@ -4440,7 +4210,6 @@ mod tests {
                 .lookup(challenge_id, expected_checkpoint_head, proof_bounds)
         }
     }
-
     fn next_challenge(base: &PorChallengeV1, delta: u64) -> PorChallengeV1 {
         let mut challenge = base.clone();
         challenge.epoch_id = challenge.epoch_id.saturating_add(delta);
@@ -4462,7 +4231,6 @@ mod tests {
         );
         challenge
     }
-
     fn build_mock_tree(small_count: usize, large_count: usize) -> PorMerkleTree {
         let leaf_count = small_count
             .checked_add(large_count)
@@ -4478,25 +4246,21 @@ mod tests {
         }];
         PorMerkleTree::try_from_payload(&payload, &chunks).expect("canonical test PoR tree")
     }
-
     #[test]
     fn determine_sample_plan_matches_spec_tiers() {
         let edge = determine_sample_plan(5 * GIB, 1);
         assert_eq!(edge.tier, SAMPLE_TIER_EDGE);
         assert_eq!(edge.small_target, 64);
         assert_eq!(edge.large_target, 0);
-
         let standard = determine_sample_plan(50 * GIB, 1);
         assert_eq!(standard.tier, SAMPLE_TIER_STANDARD);
         assert_eq!(standard.small_target, 96);
         assert_eq!(standard.large_target, 32);
-
         let archival = determine_sample_plan(200 * GIB, 1);
         assert_eq!(archival.tier, SAMPLE_TIER_ARCHIVAL);
         assert_eq!(archival.small_target, 0);
         assert_eq!(archival.large_target, 256);
     }
-
     #[test]
     fn determine_sample_plan_applies_multiplier() {
         let plan = determine_sample_plan(50 * GIB, 3);
@@ -4504,14 +4268,12 @@ mod tests {
         assert_eq!(plan.small_target, 288);
         assert_eq!(plan.large_target, 96);
     }
-
     #[test]
     fn sample_policy_defaults_without_metadata() {
         let metadata = Metadata::default();
         let policy = PorSamplePolicy::from_metadata([0u8; 32], &metadata).expect("default policy");
         assert_eq!(policy.multiplier_for("sorafs.sf1@1.0.0"), 1);
     }
-
     #[test]
     fn sample_policy_parses_numeric_overrides() {
         let mut metadata = Metadata::default();
@@ -4519,14 +4281,12 @@ mod tests {
             Name::from_str(SAMPLE_MULTIPLIER_METADATA_KEY).expect("valid metadata key"),
             r#"{"default":2,"sorafs.sf1@1.0.0":3,"sorafs.sf2@1.0.0":"4"}"#,
         );
-
         let policy =
             PorSamplePolicy::from_metadata([0x11; 32], &metadata).expect("policy overrides");
         assert_eq!(policy.multiplier_for("sorafs.sf1@1.0.0"), 3);
         assert_eq!(policy.multiplier_for("sorafs.sf2@1.0.0"), 4);
         assert_eq!(policy.multiplier_for("sorafs.sf3@1.0.0"), 2);
     }
-
     #[test]
     fn sample_policy_rejects_out_of_range_multiplier() {
         let mut metadata = Metadata::default();
@@ -4534,7 +4294,6 @@ mod tests {
             Name::from_str(SAMPLE_MULTIPLIER_METADATA_KEY).expect("valid metadata key"),
             0u64,
         );
-
         let err = PorSamplePolicy::from_metadata([0xAA; 32], &metadata).expect_err("should fail");
         match err {
             PorChallengePlannerError::InvalidSampleMultiplier { reason, .. } => {
@@ -4546,11 +4305,9 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn sample_leaf_indices_respects_targets() {
         let seed = [0xAB; 32];
-
         let edge_tree = build_mock_tree(128, 0);
         let edge_plan = SamplePlan {
             tier: SAMPLE_TIER_EDGE,
@@ -4560,7 +4317,6 @@ mod tests {
         let edge_selection = sample_leaf_indices(&edge_tree, seed, edge_plan).unwrap();
         assert_eq!(edge_selection.indices.len(), 64);
         assert_eq!(edge_selection.duplicate_count, 0);
-
         let standard_tree = build_mock_tree(200, 64);
         let standard_plan = SamplePlan {
             tier: SAMPLE_TIER_STANDARD,
@@ -4570,7 +4326,6 @@ mod tests {
         let standard_selection = sample_leaf_indices(&standard_tree, seed, standard_plan).unwrap();
         assert_eq!(standard_selection.indices.len(), 128);
         assert_eq!(standard_selection.duplicate_count, 0);
-
         let archival_tree = build_mock_tree(0, 512);
         let archival_plan = SamplePlan {
             tier: SAMPLE_TIER_ARCHIVAL,
@@ -4581,7 +4336,6 @@ mod tests {
         assert_eq!(archival_selection.indices.len(), 256);
         assert_eq!(archival_selection.duplicate_count, 0);
     }
-
     #[test]
     fn tracker_happy_path() {
         let tracker = PorTracker::default();
@@ -4604,7 +4358,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn reputation_projection_preserves_success_repair_and_zero_latency() {
         for (index, expected_status) in
@@ -4629,7 +4382,6 @@ mod tests {
             };
             verdict.failure_reason = (index == 1).then(|| "repair recovered service".to_owned());
             resign_sample_verdict(&mut verdict);
-
             let transition = tracker
                 .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
                     panic!("successful terminal must not invoke repair handoff")
@@ -4651,7 +4403,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reputation_projection_maps_only_retained_typed_failure_facts() {
         let proof_tracker = PorTracker::default();
@@ -4681,7 +4432,6 @@ mod tests {
                 .verifier_latency_ms,
             Some(200_000)
         );
-
         let deadline_tracker = PorTracker::default();
         let deadline_challenge = next_challenge(&proof_challenge, 1);
         deadline_tracker
@@ -4710,11 +4460,9 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn pre_deadline_failure_text_cannot_fabricate_storage_unavailability() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-
         let tracker = PorTracker::default();
         let challenge = sample_challenge();
         tracker.record_challenge(&challenge).unwrap();
@@ -4726,7 +4474,6 @@ mod tests {
             Some("storage unavailable; please classify StorageUnavailable".to_owned());
         resign_sample_verdict(&mut verdict);
         let repair_calls = AtomicUsize::new(0);
-
         assert!(matches!(
             tracker.record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
                 repair_calls.fetch_add(1, Ordering::Relaxed);
@@ -4739,7 +4486,6 @@ mod tests {
         assert_eq!(tracker.pending_reputation_terminal_count(), 0);
         assert_eq!(tracker.next_reputation_terminal_work().unwrap(), None);
     }
-
     #[test]
     fn reputation_projection_rejects_timestamp_and_latency_overflow_atomically() {
         let timestamp_tracker = PorTracker::default();
@@ -4765,7 +4511,6 @@ mod tests {
             Err(PorTrackerError::ReputationTimestampOverflow { .. })
         ));
         assert!(timestamp_tracker.contains_challenge(&timestamp_challenge.challenge_id));
-
         let latency_tracker = PorTracker::default();
         let latency_challenge = sample_challenge();
         latency_tracker
@@ -4788,7 +4533,6 @@ mod tests {
             Err(PorTrackerError::ReputationLatencyOverflow)
         ));
         assert!(latency_tracker.contains_challenge(&latency_challenge.challenge_id));
-
         let sequence_tracker = PorTracker::default();
         let sequence_challenge = sample_challenge();
         let sequence_proof = sample_proof(&sequence_challenge);
@@ -4814,7 +4558,6 @@ mod tests {
         ));
         assert!(sequence_tracker.contains_challenge(&sequence_challenge.challenge_id));
     }
-
     #[test]
     fn tracker_reports_vrf_seed_and_proof_latency_metrics_without_replay_inflation() {
         let tracker = PorTracker::default();
@@ -4831,7 +4574,6 @@ mod tests {
             tracker.record_proof(&proof, &sample_provider_key()),
             Ok(PorProofRecordOutcomeV1::ExactReplay(_))
         ));
-
         let mut forced = next_challenge(&challenge, 1);
         forced.forced = true;
         forced.vrf_output = None;
@@ -4852,7 +4594,6 @@ mod tests {
         tracker
             .record_challenge(&forced)
             .expect("record forced challenge");
-
         let mut invalid_seed = next_challenge(&forced, 1);
         invalid_seed.seed[0] ^= 1;
         assert!(matches!(
@@ -4861,7 +4602,6 @@ mod tests {
                 PorChallengeValidationError::SeedMismatch
             ))
         ));
-
         assert_eq!(
             tracker.protocol_metrics(),
             PorProtocolMetricsSnapshot {
@@ -4877,7 +4617,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn tracker_accepts_exact_finalized_replay_and_rejects_conflict() {
         let tracker = PorTracker::default();
@@ -4891,7 +4630,6 @@ mod tests {
         tracker
             .record_verdict(&verdict, &sample_auditor_keys(), 1)
             .unwrap();
-
         tracker
             .record_challenge(&challenge)
             .expect("exact finalized replay is idempotent");
@@ -4903,7 +4641,6 @@ mod tests {
         ));
         assert!(tracker.backlog_entries().is_empty());
     }
-
     #[test]
     fn reputation_work_is_ordered_deduplicated_and_strictly_acknowledged() {
         let tracker = PorTracker::default();
@@ -4920,7 +4657,6 @@ mod tests {
             })
             .unwrap()
             .reputation_work;
-
         let replay = tracker
             .record_verdict_with(&first_verdict, &sample_auditor_keys(), 1, |_| {
                 panic!("exact replay must not invoke repair handoff")
@@ -4929,7 +4665,6 @@ mod tests {
         assert!(!replay.newly_finalized);
         assert_eq!(replay.reputation_work, first);
         assert_eq!(tracker.pending_reputation_terminal_count(), 1);
-
         let second_challenge = next_challenge(&first_challenge, 1);
         let second_proof = sample_proof(&second_challenge);
         let second_verdict = sample_verdict(&second_challenge, second_proof.proof_digest());
@@ -4949,7 +4684,6 @@ mod tests {
             tracker.next_reputation_terminal_work().unwrap(),
             Some(first)
         );
-
         assert!(matches!(
             tracker.acknowledge_reputation_terminal(second.sequence, second.work_digest),
             Err(PorTrackerError::SkippedReputationAcknowledgement {
@@ -4999,7 +4733,6 @@ mod tests {
         assert_eq!(tracker.pending_reputation_terminal_count(), 0);
         assert_eq!(tracker.next_reputation_terminal_work().unwrap(), None);
     }
-
     include!("por/tests/reputation_archive.rs");
     include!("por/tests/tracker_failure.rs");
 }

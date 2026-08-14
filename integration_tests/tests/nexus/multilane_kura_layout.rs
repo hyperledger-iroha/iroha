@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multilane storage layout smoke test: verifies that a multi-lane config
 //! provisions per-lane Kura segments with deterministic names.
-
 use eyre::Result;
 use iroha_config::parameters::actual::Root as Config;
 use iroha_config_base::toml::TomlSource;
@@ -13,7 +12,6 @@ use iroha_core::{
 use std::{path::Path, sync::Arc};
 use tempfile::tempdir;
 use toml::Table;
-
 fn multilane_profile(store_dir: &Path) -> String {
     format!(
         r#"
@@ -94,7 +92,6 @@ instruction = "governance"
         store_dir.display()
     )
 }
-
 #[test]
 fn kura_prepares_multilane_storage_layout() -> Result<()> {
     let tmp = tempdir()?;
@@ -111,7 +108,6 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
         2,
         "expected two lanes in the catalog"
     );
-
     let lane_config = config.nexus.lane_config.clone();
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config.kura,
@@ -132,10 +128,8 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
     state.prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)?;
     state.restore_kura_lane_segments_before_startup_replay()?;
     state.set_nexus_from_config(config.nexus.clone())?;
-
     let blocks_root = tmp.path().join("blocks");
     let merge_root = tmp.path().join("merge_ledger");
-
     let core_blocks = blocks_root.join("lane_000_core");
     let gov_blocks = blocks_root.join("lane_001_governance");
     assert!(
@@ -148,7 +142,6 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
         "governance lane blocks directory should exist: {}",
         gov_blocks.display()
     );
-
     let core_merge = merge_root.join("lane_000_core_merge.log");
     let gov_merge = merge_root.join("lane_001_governance_merge.log");
     assert!(
@@ -161,6 +154,5 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
         "governance lane merge log should exist: {}",
         gov_merge.display()
     );
-
     Ok(())
 }

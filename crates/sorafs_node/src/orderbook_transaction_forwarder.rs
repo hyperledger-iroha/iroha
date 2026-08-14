@@ -7,13 +7,10 @@
 //! after those bytes are durable. Finalized-ledger reconcilers retain sole
 //! responsibility for deciding whether an operation committed, remained
 //! absent, or conflicted with a newer policy/book revision.
-
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    sync::{Arc, Mutex},
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
-
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -33,13 +30,12 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::orderbook::{
     decode_settlement_receipt_v1, verify_settlement_receipt_signature_v1,
 };
-use thiserror::Error;
-
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, Mutex},
 };
-
+use thiserror::Error;
 /// Durable orderbook-transaction checkpoint schema version.
 pub const ORDERBOOK_TRANSACTION_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical orderbook-transaction checkpoint file.
@@ -64,7 +60,6 @@ const TRANSACTION_ELEMENT_AMPLIFICATION_LIMIT: usize = 8;
 const TRANSACTION_ALLOCATION_AMPLIFICATION_LIMIT: usize = 20;
 const TRANSACTION_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 512 * 1024;
 const TRANSACTION_MAX_NESTING_DEPTH: usize = 128;
-
 /// Bounded persistence and retry policy for native orderbook operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderbookTransactionForwarderPolicyV1 {
@@ -81,7 +76,6 @@ pub struct OrderbookTransactionForwarderPolicyV1 {
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
 }
-
 impl OrderbookTransactionForwarderPolicyV1 {
     /// Validate all first-release resource bounds.
     pub fn validate(self) -> Result<(), OrderbookTransactionForwarderError> {
@@ -98,7 +92,6 @@ impl OrderbookTransactionForwarderPolicyV1 {
         Ok(())
     }
 }
-
 /// Finalized governance/book snapshot used to admit one forwarding operation.
 ///
 /// Callers must obtain the policy record and book revision from the same
@@ -114,7 +107,6 @@ pub struct OrderbookTransactionContextV1 {
     /// Finalized block anchor shared by the policy and status query.
     pub finalized_cursor: OrderbookFinalizedCursorV1,
 }
-
 impl OrderbookTransactionContextV1 {
     fn validate(&self) -> Result<(), OrderbookTransactionForwarderError> {
         validate_finalized_cursor(self.finalized_cursor)?;
@@ -133,7 +125,6 @@ impl OrderbookTransactionContextV1 {
         Ok(())
     }
 }
-
 /// Native orderbook instruction kind retained by the forwarder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderbookTransactionKindV1 {
@@ -144,7 +135,6 @@ pub enum OrderbookTransactionKindV1 {
     /// Record one canonical provider-signed settlement receipt.
     SettlementReceipt,
 }
-
 /// Validated native orderbook operation retained for isolated external signing.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum OrderbookOperationV1 {
@@ -155,7 +145,6 @@ pub enum OrderbookOperationV1 {
     /// Record one canonical provider-signed settlement receipt.
     SettlementReceipt(RecordSorafsOrderbookSettlementReceipt),
 }
-
 impl OrderbookOperationV1 {
     /// Return the native orderbook instruction kind.
     #[must_use]
@@ -166,7 +155,6 @@ impl OrderbookOperationV1 {
             Self::SettlementReceipt(_) => OrderbookTransactionKindV1::SettlementReceipt,
         }
     }
-
     /// Return the policy digest embedded in the native instruction.
     #[must_use]
     pub fn policy_digest(&self) -> [u8; 32] {
@@ -176,7 +164,6 @@ impl OrderbookOperationV1 {
             Self::SettlementReceipt(instruction) => *instruction.policy_digest(),
         }
     }
-
     /// Return the expected authoritative book revision for CAS operations.
     #[must_use]
     pub fn expected_book_revision(&self) -> Option<u64> {
@@ -187,7 +174,6 @@ impl OrderbookOperationV1 {
         }
     }
 }
-
 impl From<OrderbookOperationV1> for InstructionBox {
     fn from(operation: OrderbookOperationV1) -> Self {
         match operation {
@@ -197,7 +183,6 @@ impl From<OrderbookOperationV1> for InstructionBox {
         }
     }
 }
-
 /// Exact signer work item returned after a durable claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookTransactionSigningRequestV1 {
@@ -210,7 +195,6 @@ pub struct OrderbookTransactionSigningRequestV1 {
     /// Exact validated native operation.
     pub operation: OrderbookOperationV1,
 }
-
 /// Fail-closed result for a retained operation against current finalized policy/book state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderbookFinalizedContextValidationV1 {
@@ -223,7 +207,6 @@ pub enum OrderbookFinalizedContextValidationV1 {
     /// The supplied finalized policy record is malformed or internally inconsistent.
     InvalidFinalizedContext,
 }
-
 /// Validate the payload-free pending snapshot exported by the durable forwarder.
 ///
 /// This owns delivery-state and exact signed-byte digest validation so workers
@@ -273,7 +256,6 @@ pub fn validate_orderbook_pending_delivery_v1(
     }
     Ok(())
 }
-
 /// Validate that exported pending and signing snapshots retain one canonical operation.
 ///
 /// Stable identity digests and operation identifiers are recomputed with the
@@ -311,7 +293,6 @@ pub fn validate_orderbook_reconciliation_material_v1(
     }
     Ok(())
 }
-
 /// Validate retained material against one coherent finalized policy/book snapshot.
 ///
 /// Governed matcher authority selection and revision CAS remain private
@@ -360,7 +341,6 @@ pub fn validate_orderbook_finalized_context_v1(
         Err(_) => OrderbookFinalizedContextValidationV1::InvalidDurableState,
     }
 }
-
 /// Durable enqueue result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderbookTransactionEnqueueResultV1 {
@@ -375,7 +355,6 @@ pub enum OrderbookTransactionEnqueueResultV1 {
         operation_id: [u8; 32],
     },
 }
-
 impl OrderbookTransactionEnqueueResultV1 {
     /// Return the stable semantic operation identity.
     #[must_use]
@@ -385,7 +364,6 @@ impl OrderbookTransactionEnqueueResultV1 {
         }
     }
 }
-
 /// Runtime-visible crash state for one orderbook transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderbookTransactionDeliveryStateV1 {
@@ -400,7 +378,6 @@ pub enum OrderbookTransactionDeliveryStateV1 {
     /// The exact transaction is known pending or applied.
     Submitted,
 }
-
 impl From<StoredDeliveryStateV1> for OrderbookTransactionDeliveryStateV1 {
     fn from(value: StoredDeliveryStateV1) -> Self {
         match value {
@@ -412,7 +389,6 @@ impl From<StoredDeliveryStateV1> for OrderbookTransactionDeliveryStateV1 {
         }
     }
 }
-
 /// Exact pending delivery returned to a bounded worker scan.
 #[derive(Debug, Clone)]
 pub struct OrderbookTransactionPendingV1 {
@@ -445,7 +421,6 @@ pub struct OrderbookTransactionPendingV1 {
     /// Exact canonical signed transaction bytes, absent before signing.
     pub signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 /// Payload-free terminal reason retained for operator reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderbookTransactionDeadLetterReasonV1 {
@@ -456,7 +431,6 @@ pub enum OrderbookTransactionDeadLetterReasonV1 {
     /// Bounded retries were exhausted after finalized absence.
     RetryExhausted,
 }
-
 /// Payload-free terminal orderbook delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookTransactionDeadLetterV1 {
@@ -481,7 +455,6 @@ pub struct OrderbookTransactionDeadLetterV1 {
     /// Finalized hash paired with the observed height.
     pub observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
@@ -490,7 +463,6 @@ enum StoredOrderbookIdentityScopeV1 {
     MaintenanceRevision,
     SettlementReceipt,
 }
-
 impl StoredOrderbookIdentityScopeV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -500,14 +472,12 @@ impl StoredOrderbookIdentityScopeV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterReasonV1 {
     FinalizedConflict,
     TransactionRejected,
     RetryExhausted,
 }
-
 impl From<StoredDeadLetterReasonV1> for OrderbookTransactionDeadLetterReasonV1 {
     fn from(value: StoredDeadLetterReasonV1) -> Self {
         match value {
@@ -517,7 +487,6 @@ impl From<StoredDeadLetterReasonV1> for OrderbookTransactionDeadLetterReasonV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPendingOrderbookTransactionV1 {
     sequence: u64,
@@ -535,7 +504,6 @@ struct StoredPendingOrderbookTransactionV1 {
     baseline_finalized_block_hash: [u8; 32],
     signed_transaction_bytes: Option<Vec<u8>>,
 }
-
 impl StoredPendingOrderbookTransactionV1 {
     fn snapshot(&self) -> OrderbookTransactionPendingV1 {
         OrderbookTransactionPendingV1 {
@@ -559,51 +527,39 @@ impl StoredPendingOrderbookTransactionV1 {
         }
     }
 }
-
 impl DeliveryRecord for StoredPendingOrderbookTransactionV1 {
     type Transaction = Vec<u8>;
-
     fn delivery_state(&self) -> StoredDeliveryStateV1 {
         self.state
     }
-
     fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
         self.state = state;
     }
-
     fn attempts(&self) -> u32 {
         self.attempts
     }
-
     fn set_attempts(&mut self, attempts: u32) {
         self.attempts = attempts;
     }
-
     fn baseline_finalized_height(&self) -> u64 {
         self.baseline_finalized_height
     }
-
     fn set_baseline_finalized_height(&mut self, height: u64) {
         self.baseline_finalized_height = height;
     }
-
     fn baseline_finalized_block_hash(&self) -> [u8; 32] {
         self.baseline_finalized_block_hash
     }
-
     fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
         self.baseline_finalized_block_hash = block_hash;
     }
-
     fn signed_transaction(&self) -> Option<&Self::Transaction> {
         self.signed_transaction_bytes.as_ref()
     }
-
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
         self.signed_transaction_bytes = transaction;
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedOrderbookTransactionV1 {
     operation_id: [u8; 32],
@@ -613,7 +569,6 @@ struct StoredCompletedOrderbookTransactionV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadOrderbookTransactionV1 {
     operation_id: [u8; 32],
@@ -629,7 +584,6 @@ struct StoredDeadOrderbookTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct OrderbookTransactionForwarderCheckpointV1 {
     version: u8,
@@ -638,7 +592,6 @@ struct OrderbookTransactionForwarderCheckpointV1 {
     completed: Vec<StoredCompletedOrderbookTransactionV1>,
     dead_letters: Vec<StoredDeadOrderbookTransactionV1>,
 }
-
 impl Default for OrderbookTransactionForwarderCheckpointV1 {
     fn default() -> Self {
         Self {
@@ -650,14 +603,12 @@ impl Default for OrderbookTransactionForwarderCheckpointV1 {
         }
     }
 }
-
 #[derive(Debug)]
 struct DurableState {
     checkpoint: OrderbookTransactionForwarderCheckpointV1,
     fingerprint: Option<[u8; 32]>,
     durability_failure: bool,
 }
-
 /// Durable bounded native orderbook transaction forwarder.
 #[derive(Debug, Clone)]
 pub struct OrderbookTransactionForwarder {
@@ -665,7 +616,6 @@ pub struct OrderbookTransactionForwarder {
     state: Arc<Mutex<DurableState>>,
     store: Option<Arc<AtomicCheckpointStore>>,
 }
-
 impl OrderbookTransactionForwarder {
     /// Construct a non-persistent forwarder for focused composition tests.
     #[cfg(test)]
@@ -683,7 +633,6 @@ impl OrderbookTransactionForwarder {
             store: None,
         })
     }
-
     /// Open or create a durable forwarder below `state_dir`.
     pub fn open(
         state_dir: &Path,
@@ -721,7 +670,6 @@ impl OrderbookTransactionForwarder {
         }
         Ok(forwarder)
     }
-
     /// Validate and durably accept one unsigned matcher/maintenance operation.
     ///
     /// Settlement receipts require [`Self::enqueue_unsigned_operation_with_authority`]
@@ -743,7 +691,6 @@ impl OrderbookTransactionForwarder {
         )?;
         self.enqueue_prepared(prepared, None, context.finalized_cursor)
     }
-
     /// Validate and durably accept one unsigned operation for an explicit signer.
     ///
     /// Match and maintenance still require the active governed matcher.
@@ -767,7 +714,6 @@ impl OrderbookTransactionForwarder {
         )?;
         self.enqueue_prepared(prepared, None, context.finalized_cursor)
     }
-
     /// Validate and durably accept one exact canonical signed transaction.
     ///
     /// Match and maintenance signatures must use the exact governed matcher.
@@ -792,7 +738,6 @@ impl OrderbookTransactionForwarder {
             context.finalized_cursor,
         )
     }
-
     fn enqueue_prepared(
         &self,
         prepared: PreparedOrderbookOperation,
@@ -862,7 +807,6 @@ impl OrderbookTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(OrderbookTransactionEnqueueResultV1::Inserted { operation_id })
     }
-
     /// Return pending entries in stable sequence order.
     pub fn pending(
         &self,
@@ -870,7 +814,6 @@ impl OrderbookTransactionForwarder {
     ) -> Result<Vec<OrderbookTransactionPendingV1>, OrderbookTransactionForwarderError> {
         self.pending_after(None, limit)
     }
-
     /// Return a circular page after an immutable sequence cursor.
     ///
     /// Newer entries are returned first and the scan then wraps to the oldest
@@ -898,7 +841,6 @@ impl OrderbookTransactionForwarder {
             .map(StoredPendingOrderbookTransactionV1::snapshot)
             .collect())
     }
-
     /// Return exact semantic material for finalized-ledger reconciliation.
     ///
     /// This accessor is non-mutating in every crash state. A reconciler can
@@ -922,7 +864,6 @@ impl OrderbookTransactionForwarder {
             operation: entry.operation.clone(),
         })
     }
-
     /// Return payload-free dead letters in stable operation order.
     pub fn dead_letters(
         &self,
@@ -954,7 +895,6 @@ impl OrderbookTransactionForwarder {
             })
             .collect())
     }
-
     /// Atomically claim a ready operation for isolated external signing.
     ///
     /// The attempt is consumed before the request is exposed. A crash resets
@@ -994,7 +934,6 @@ impl OrderbookTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(request)
     }
-
     /// Persist exact signed bytes for a claimed authority/operation.
     pub fn store_signed_transaction(
         &self,
@@ -1026,7 +965,6 @@ impl OrderbookTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(digest)
     }
-
     /// Release a signer claim after a failure known to precede submission.
     pub fn release_signing_claim(
         &self,
@@ -1047,7 +985,6 @@ impl OrderbookTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Mark exact bytes ambiguous before exposing them to a submitter.
     pub fn begin_submission(
         &self,
@@ -1060,7 +997,6 @@ impl OrderbookTransactionForwarder {
         self.commit_candidate(&mut state, candidate)?;
         Ok(bytes)
     }
-
     /// Record that the exact transaction is known pending or applied.
     pub fn mark_submitted(
         &self,
@@ -1070,7 +1006,6 @@ impl OrderbookTransactionForwarder {
             durable::mark_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Record a failure proven to have happened before queue submission.
     pub fn mark_not_submitted(
         &self,
@@ -1080,7 +1015,6 @@ impl OrderbookTransactionForwarder {
             durable::mark_not_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Retry the same exact bytes only after finalized absence is proven.
     pub fn mark_finalized_absent(
         &self,
@@ -1105,7 +1039,6 @@ impl OrderbookTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Reconcile exact finalized success using the retained transaction digest.
     pub fn mark_finalized(
         &self,
@@ -1131,7 +1064,6 @@ impl OrderbookTransactionForwarder {
         }
         self.commit_finalized_operation(&mut state, candidate, position, finalized_cursor)
     }
-
     /// Reconcile exact semantic success committed through another ingress.
     ///
     /// The caller must first compare `operation_for_reconciliation` with a
@@ -1148,7 +1080,6 @@ impl OrderbookTransactionForwarder {
         let position = pending_position(&candidate, operation_id)?;
         self.commit_finalized_operation(&mut state, candidate, position, finalized_cursor)
     }
-
     fn commit_finalized_operation(
         &self,
         state: &mut DurableState,
@@ -1182,7 +1113,6 @@ impl OrderbookTransactionForwarder {
             .sort_by_key(|completed| completed.operation_id);
         self.commit_candidate(state, candidate)
     }
-
     /// Atomically dead-letter an operation that conflicts with finalized state.
     pub fn mark_finalized_conflict(
         &self,
@@ -1200,7 +1130,6 @@ impl OrderbookTransactionForwarder {
         )?;
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Clear a terminally rejected envelope for bounded replacement signing.
     pub fn mark_transaction_rejected(
         &self,
@@ -1238,7 +1167,6 @@ impl OrderbookTransactionForwarder {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     fn mutate_entry(
         &self,
         operation_id: [u8; 32],
@@ -1251,7 +1179,6 @@ impl OrderbookTransactionForwarder {
         mutate(find_pending_mut(&mut candidate, operation_id)?)?;
         self.commit_candidate(&mut state, candidate)
     }
-
     fn move_to_dead_letter(
         &self,
         checkpoint: &mut OrderbookTransactionForwarderCheckpointV1,
@@ -1285,7 +1212,6 @@ impl OrderbookTransactionForwarder {
             .sort_by_key(|dead| dead.operation_id);
         Ok(())
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, DurableState>, OrderbookTransactionForwarderError> {
@@ -1298,7 +1224,6 @@ impl OrderbookTransactionForwarder {
         }
         Ok(state)
     }
-
     fn commit_candidate(
         &self,
         state: &mut DurableState,
@@ -1322,7 +1247,6 @@ impl OrderbookTransactionForwarder {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct PreparedOrderbookOperation {
     identity_scope: StoredOrderbookIdentityScopeV1,
@@ -1333,7 +1257,6 @@ struct PreparedOrderbookOperation {
     governed_policy: OrderbookAdmissionPolicyV1,
     operation: OrderbookOperationV1,
 }
-
 impl PreparedOrderbookOperation {
     fn from_unsigned(
         operation: OrderbookOperationV1,
@@ -1353,7 +1276,6 @@ impl PreparedOrderbookOperation {
             max_transaction_bytes,
         )
     }
-
     fn new(
         network_id: NetworkId,
         authority: AccountId,
@@ -1382,7 +1304,6 @@ impl PreparedOrderbookOperation {
             operation,
         })
     }
-
     fn new_bounded(
         network_id: NetworkId,
         authority: AccountId,
@@ -1417,7 +1338,6 @@ impl PreparedOrderbookOperation {
         }
         Ok(prepared)
     }
-
     fn decode_signed_transaction(
         bytes: &[u8],
         context: &OrderbookTransactionContextV1,
@@ -1480,7 +1400,6 @@ impl PreparedOrderbookOperation {
         )
     }
 }
-
 fn required_governed_authority(
     policy: &OrderbookAdmissionPolicyV1,
     kind: OrderbookTransactionKindV1,
@@ -1492,7 +1411,6 @@ fn required_governed_authority(
         OrderbookTransactionKindV1::SettlementReceipt => None,
     }
 }
-
 fn validate_operation(
     operation: &OrderbookOperationV1,
     authority: &AccountId,
@@ -1542,7 +1460,6 @@ fn validate_operation(
     }
     Ok(())
 }
-
 fn validate_reconciliation_operation_shape(
     operation: &OrderbookOperationV1,
 ) -> Result<(), OrderbookTransactionForwarderError> {
@@ -1580,7 +1497,6 @@ fn validate_reconciliation_operation_shape(
     }
     Ok(())
 }
-
 fn operation_identity(
     operation: &OrderbookOperationV1,
 ) -> Result<(StoredOrderbookIdentityScopeV1, [u8; 32]), OrderbookTransactionForwarderError> {
@@ -1609,7 +1525,6 @@ fn operation_identity(
         }
     }
 }
-
 fn revision_identity_digest(policy_digest: [u8; 32], expected_book_revision: u64) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(REVISION_IDENTITY_DOMAIN_V1);
@@ -1617,7 +1532,6 @@ fn revision_identity_digest(policy_digest: [u8; 32], expected_book_revision: u64
     hasher.update(&expected_book_revision.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn semantic_digest(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -1645,7 +1559,6 @@ fn semantic_digest(
     hasher.update(&operation);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn operation_id(prepared: &PreparedOrderbookOperation) -> [u8; 32] {
     operation_id_from_parts(
         prepared.identity_scope,
@@ -1653,7 +1566,6 @@ fn operation_id(prepared: &PreparedOrderbookOperation) -> [u8; 32] {
         prepared.semantic_digest,
     )
 }
-
 fn operation_id_from_parts(
     identity_scope: StoredOrderbookIdentityScopeV1,
     identity_digest: [u8; 32],
@@ -1666,11 +1578,9 @@ fn operation_id_from_parts(
     hasher.update(&semantic_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn transaction_digest(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
-
 fn validate_orderbook_delivery(
     entry: &StoredPendingOrderbookTransactionV1,
     max_attempts: u32,
@@ -1690,7 +1600,6 @@ fn validate_orderbook_delivery(
     };
     has_baseline && state_is_valid && entry.attempts <= max_attempts
 }
-
 fn recover_interrupted_signing(entry: &mut StoredPendingOrderbookTransactionV1) -> bool {
     if entry.state != StoredDeliveryStateV1::Signing {
         return false;
@@ -1698,7 +1607,6 @@ fn recover_interrupted_signing(entry: &mut StoredPendingOrderbookTransactionV1) 
     entry.state = StoredDeliveryStateV1::Ready;
     true
 }
-
 fn claim_for_signing(
     entry: &mut StoredPendingOrderbookTransactionV1,
     max_attempts: u32,
@@ -1720,7 +1628,6 @@ fn claim_for_signing(
     entry.state = StoredDeliveryStateV1::Signing;
     Ok(())
 }
-
 fn store_signed_transaction(
     entry: &mut StoredPendingOrderbookTransactionV1,
     signed_transaction_bytes: Vec<u8>,
@@ -1735,7 +1642,6 @@ fn store_signed_transaction(
     entry.state = StoredDeliveryStateV1::Signed;
     Ok(())
 }
-
 fn release_signing_claim(
     entry: &mut StoredPendingOrderbookTransactionV1,
 ) -> Result<(), DeliveryTransitionError> {
@@ -1748,7 +1654,6 @@ fn release_signing_claim(
     entry.state = StoredDeliveryStateV1::Ready;
     Ok(())
 }
-
 fn entry_baseline_cursor(
     entry: &StoredPendingOrderbookTransactionV1,
 ) -> Result<OrderbookFinalizedCursorV1, OrderbookTransactionForwarderError> {
@@ -1759,7 +1664,6 @@ fn entry_baseline_cursor(
     validate_finalized_cursor(cursor)?;
     Ok(cursor)
 }
-
 fn context_for_stored_entry(
     entry: &StoredPendingOrderbookTransactionV1,
 ) -> Result<OrderbookTransactionContextV1, OrderbookTransactionForwarderError> {
@@ -1782,7 +1686,6 @@ fn context_for_stored_entry(
         },
     })
 }
-
 fn find_pending_mut(
     checkpoint: &mut OrderbookTransactionForwarderCheckpointV1,
     operation_id: [u8; 32],
@@ -1793,7 +1696,6 @@ fn find_pending_mut(
         .find(|entry| entry.operation_id == operation_id)
         .ok_or(OrderbookTransactionForwarderError::UnknownOperation)
 }
-
 fn pending_position(
     checkpoint: &OrderbookTransactionForwarderCheckpointV1,
     operation_id: [u8; 32],
@@ -1804,7 +1706,6 @@ fn pending_position(
         .position(|entry| entry.operation_id == operation_id)
         .ok_or(OrderbookTransactionForwarderError::UnknownOperation)
 }
-
 fn validate_checkpoint(
     checkpoint: &OrderbookTransactionForwarderCheckpointV1,
     policy: OrderbookTransactionForwarderPolicyV1,
@@ -1950,7 +1851,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn decode_checkpoint(
     bytes: &[u8],
     policy: OrderbookTransactionForwarderPolicyV1,
@@ -1975,20 +1875,17 @@ fn decode_checkpoint(
     validate_checkpoint(&checkpoint, policy)?;
     Ok(checkpoint)
 }
-
 fn validate_finalized_cursor(
     cursor: OrderbookFinalizedCursorV1,
 ) -> Result<(), OrderbookTransactionForwarderError> {
     durable::validate_finalized_cursor(finalized_cursor(cursor)).map_err(Into::into)
 }
-
 const fn finalized_cursor(cursor: OrderbookFinalizedCursorV1) -> FinalizedCursorV1 {
     FinalizedCursorV1 {
         height: cursor.height,
         block_hash: cursor.block_hash,
     }
 }
-
 fn checkpoint_decode_limits(
     encoded_bytes: usize,
 ) -> Result<norito::DecodeLimits, OrderbookTransactionForwarderError> {
@@ -2001,7 +1898,6 @@ fn checkpoint_decode_limits(
         CHECKPOINT_MAX_NESTING_DEPTH,
     )
 }
-
 fn transaction_decode_limits(
     encoded_bytes: usize,
     max_transaction_bytes: usize,
@@ -2015,7 +1911,6 @@ fn transaction_decode_limits(
         TRANSACTION_MAX_NESTING_DEPTH,
     )
 }
-
 fn decode_limits(
     encoded_bytes: usize,
     max_bytes: usize,
@@ -2042,7 +1937,6 @@ fn decode_limits(
         max_depth,
     ))
 }
-
 /// Durable native orderbook transaction forwarding error.
 #[derive(Debug, Error)]
 pub enum OrderbookTransactionForwarderError {
@@ -2134,7 +2028,6 @@ pub enum OrderbookTransactionForwarderError {
     #[error("orderbook transaction runtime lock is poisoned")]
     RuntimePoisoned,
 }
-
 impl From<DeliveryTransitionError> for OrderbookTransactionForwarderError {
     fn from(error: DeliveryTransitionError) -> Self {
         match error {
@@ -2144,7 +2037,6 @@ impl From<DeliveryTransitionError> for OrderbookTransactionForwarderError {
         }
     }
 }
-
 impl From<CheckpointStoreError> for OrderbookTransactionForwarderError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -2157,11 +2049,9 @@ impl From<CheckpointStoreError> for OrderbookTransactionForwarderError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc, thread, time::Duration};
-
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -2179,10 +2069,8 @@ mod tests {
         },
         provider_advert::SignatureAlgorithm,
     };
+    use std::{fs, sync::Arc, thread, time::Duration};
     use tempfile::TempDir;
-
-    use super::*;
-
     fn policy() -> OrderbookTransactionForwarderPolicyV1 {
         OrderbookTransactionForwarderPolicyV1 {
             max_pending: 8,
@@ -2193,28 +2081,23 @@ mod tests {
             checkpoint_max_bytes: 4 * 1024 * 1024,
         }
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
     }
-
     fn cursor(height: u64, hash_byte: u8) -> OrderbookFinalizedCursorV1 {
         OrderbookFinalizedCursorV1 {
             height,
             block_hash: [hash_byte; 32],
         }
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; 32]),
         ))
     }
-
     fn test_network_id() -> NetworkId {
         network_id(0xA1)
     }
-
     fn context(
         matcher: &KeyPair,
         settlement: &KeyPair,
@@ -2253,7 +2136,6 @@ mod tests {
             finalized_cursor,
         }
     }
-
     fn match_operation(context: &OrderbookTransactionContextV1) -> OrderbookOperationV1 {
         OrderbookOperationV1::Match(MatchSorafsOrderbook::new(
             context.policy_record.policy_digest,
@@ -2261,7 +2143,6 @@ mod tests {
             8,
         ))
     }
-
     fn maintain_operation(context: &OrderbookTransactionContextV1) -> OrderbookOperationV1 {
         OrderbookOperationV1::Maintain(MaintainSorafsOrderbook::new(
             context.policy_record.policy_digest,
@@ -2269,7 +2150,6 @@ mod tests {
             16,
         ))
     }
-
     fn settlement_operation(
         context: &OrderbookTransactionContextV1,
         receipt_id: [u8; 32],
@@ -2299,7 +2179,6 @@ mod tests {
             context.policy_record.policy_digest,
         ))
     }
-
     fn signed_bytes(
         signer: &KeyPair,
         authority: AccountId,
@@ -2314,7 +2193,6 @@ mod tests {
             creation_time_ms,
         )
     }
-
     fn signed_bytes_on_network(
         network_id: NetworkId,
         signer: &KeyPair,
@@ -2332,7 +2210,6 @@ mod tests {
         let transaction = builder.try_sign(signer.private_key()).unwrap();
         norito::to_bytes(&transaction).unwrap()
     }
-
     fn signed_operation(
         signer: &KeyPair,
         operation: OrderbookOperationV1,
@@ -2345,7 +2222,6 @@ mod tests {
             creation_time_ms,
         )
     }
-
     #[test]
     fn unsigned_operations_bind_matcher_and_require_explicit_receipt_relayer() {
         let matcher = key(1);
@@ -2354,7 +2230,6 @@ mod tests {
         let relayer_id = AccountId::new(relayer.public_key().clone());
         let context = context(&matcher, &settlement, 7, cursor(10, 0xA1));
         let forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
-
         let match_id = forwarder
             .enqueue_unsigned_operation(match_operation(&context), &context)
             .unwrap()
@@ -2376,7 +2251,6 @@ mod tests {
             )
             .unwrap()
             .operation_id();
-
         assert_eq!(
             forwarder
                 .operation_for_reconciliation(match_id)
@@ -2398,7 +2272,6 @@ mod tests {
                 .authority,
             relayer_id
         );
-
         let stale = OrderbookOperationV1::Match(MatchSorafsOrderbook::new(
             context.policy_record.policy_digest,
             6,
@@ -2415,7 +2288,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::PolicyDigestMismatch)
         ));
     }
-
     #[test]
     fn settlement_receipt_exceeding_governed_byte_bound_is_rejected_before_enqueue() {
         let matcher = key(0x21);
@@ -2428,7 +2300,6 @@ mod tests {
             .digest()
             .expect("policy digest");
         let operation = settlement_operation(&context, [0x62; 32]);
-
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
                 .expect("forwarder")
@@ -2440,7 +2311,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation)
         ));
     }
-
     #[test]
     fn signed_transactions_require_exact_governed_authority_and_single_native_instruction() {
         let matcher = key(3);
@@ -2455,7 +2325,6 @@ mod tests {
             .unwrap()
             .operation_id();
         assert_eq!(forwarder.begin_submission(operation_id).unwrap(), valid);
-
         let receipt_operation = settlement_operation(&context, [0x63; 32]);
         let relayed_receipt = signed_operation(&attacker, receipt_operation.clone(), 2);
         let receipt_forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
@@ -2475,7 +2344,6 @@ mod tests {
             OrderbookTransactionEnqueueResultV1::Existing { operation_id }
                 if operation_id == relayed_id
         ));
-
         let wrong_authority = signed_operation(&attacker, operation.clone(), 4);
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
@@ -2483,7 +2351,6 @@ mod tests {
                 .enqueue_signed_transaction(&wrong_authority, &context),
             Err(OrderbookTransactionForwarderError::GovernedAuthorityMismatch)
         ));
-
         let wrong_network = signed_bytes_on_network(
             network_id(0xF1),
             &matcher,
@@ -2497,7 +2364,6 @@ mod tests {
                 .enqueue_signed_transaction(&wrong_network, &context),
             Err(OrderbookTransactionForwarderError::NetworkIdMismatch)
         ));
-
         let multiple = signed_bytes(
             &matcher,
             AccountId::new(matcher.public_key().clone()),
@@ -2513,7 +2379,6 @@ mod tests {
                 .enqueue_signed_transaction(&multiple, &context),
             Err(OrderbookTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let wrong_instruction = signed_bytes(
             &matcher,
             AccountId::new(matcher.public_key().clone()),
@@ -2526,7 +2391,6 @@ mod tests {
                 .enqueue_signed_transaction(&wrong_instruction, &context),
             Err(OrderbookTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let mut malformed = signed_operation(&matcher, operation, 8);
         malformed.push(0);
         assert!(matches!(
@@ -2536,7 +2400,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::InvalidSignedTransaction)
         ));
     }
-
     #[test]
     fn signer_output_cannot_substitute_authority_or_cas_instruction() {
         let matcher = key(21);
@@ -2549,7 +2412,6 @@ mod tests {
             .unwrap()
             .operation_id();
         let request = forwarder.claim_for_signing(operation_id).unwrap();
-
         let wrong_authority = signed_operation(&attacker, request.operation.clone(), 10);
         assert!(matches!(
             forwarder.store_signed_transaction(operation_id, &wrong_authority),
@@ -2568,7 +2430,6 @@ mod tests {
             forwarder.store_signed_transaction(operation_id, &substituted),
             Err(OrderbookTransactionForwarderError::InvalidSignedTransaction)
         ));
-
         let exact = signed_operation(&matcher, request.operation, 12);
         assert_eq!(
             forwarder
@@ -2578,7 +2439,6 @@ mod tests {
         );
         assert_eq!(forwarder.begin_submission(operation_id).unwrap(), exact);
     }
-
     #[test]
     fn revision_and_receipt_identities_are_idempotent_and_conflict_safe() {
         let matcher = key(6);
@@ -2605,7 +2465,6 @@ mod tests {
             forwarder.enqueue_unsigned_operation(conflicting, &context),
             Err(OrderbookTransactionForwarderError::IdentityConflict)
         ));
-
         let receipt_forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
         let relayer = AccountId::new(key(0x31).public_key().clone());
         let first = settlement_operation(&context, [0x71; 32]);
@@ -2632,7 +2491,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::IdentityConflict)
         ));
     }
-
     #[test]
     fn circular_scan_is_fair_and_bounded() {
         let matcher = key(8);
@@ -2664,7 +2522,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::InvalidScanLimit)
         ));
     }
-
     #[test]
     fn signing_crash_recovers_ready_but_ambiguous_bytes_remain_exact() {
         let matcher = key(10);
@@ -2686,7 +2543,6 @@ mod tests {
         assert_eq!(pending[0].state, OrderbookTransactionDeliveryStateV1::Ready);
         assert_eq!(pending[0].attempts, 1);
         drop(recovered);
-
         let second = TempDir::new().unwrap();
         let (ambiguous_id, exact) = {
             let forwarder = OrderbookTransactionForwarder::open(second.path(), policy()).unwrap();
@@ -2714,7 +2570,6 @@ mod tests {
             Some(exact.as_slice())
         );
     }
-
     #[test]
     fn signer_attempt_exhaustion_deadletters_even_after_crash_recovery() {
         let matcher = key(26);
@@ -2732,7 +2587,6 @@ mod tests {
             forwarder.claim_for_signing(operation_id).unwrap();
             operation_id
         };
-
         let recovered = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
         let pending = recovered.pending(8).unwrap();
         assert_eq!(pending.len(), 1);
@@ -2751,7 +2605,6 @@ mod tests {
             OrderbookTransactionDeadLetterReasonV1::RetryExhausted
         );
     }
-
     #[test]
     fn finalized_absence_retries_exact_bytes_then_deadletters_atomically() {
         let matcher = key(12);
@@ -2789,7 +2642,6 @@ mod tests {
         );
         assert_eq!(dead[0].transaction_digest, Some(transaction_digest(&exact)));
     }
-
     #[test]
     fn exact_and_cross_peer_semantic_finalization_retain_tombstones() {
         let matcher = key(14);
@@ -2816,7 +2668,6 @@ mod tests {
                 operation_id: replay_id
             } if replay_id == operation_id
         ));
-
         let second_context = context(&matcher, &settlement, 18, cursor(52, 0xAB));
         let semantic_id = forwarder
             .enqueue_unsigned_operation(maintain_operation(&second_context), &second_context)
@@ -2834,7 +2685,6 @@ mod tests {
             } if replay_id == semantic_id
         ));
     }
-
     #[test]
     fn corrupt_truncated_and_oversized_checkpoints_fail_closed() {
         let matcher = key(16);
@@ -2856,7 +2706,6 @@ mod tests {
             OrderbookTransactionForwarder::open(temp.path(), policy()),
             Err(OrderbookTransactionForwarderError::InvalidCheckpoint)
         ));
-
         let oversized = TempDir::new().unwrap();
         fs::create_dir_all(oversized.path()).unwrap();
         let mut restrictive = policy();
@@ -2873,7 +2722,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::CheckpointTooLarge)
         ));
     }
-
     #[test]
     fn stale_checkpoint_writer_loses_without_publishing_candidate_state() {
         let matcher = key(24);
@@ -2883,7 +2731,6 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let first = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
         let stale = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
-
         first
             .enqueue_unsigned_operation(match_operation(&first_context), &first_context)
             .unwrap();
@@ -2892,7 +2739,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::StaleCheckpoint)
         ));
         assert!(stale.pending(8).unwrap().is_empty());
-
         drop(first);
         drop(stale);
         let recovered = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
@@ -2903,7 +2749,6 @@ mod tests {
             Some(first_context.book_revision)
         );
     }
-
     #[test]
     fn poisoned_runtime_lock_fails_closed_without_state_mutation() {
         let forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
@@ -2919,7 +2764,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::RuntimePoisoned)
         ));
     }
-
     #[test]
     fn policy_rotation_and_invalid_receipt_fail_before_persistence() {
         let matcher = key(18);
@@ -2929,7 +2773,6 @@ mod tests {
         rotated.policy_record.policy.matcher_authority =
             AccountId::new(key(20).public_key().clone());
         rotated.policy_record.policy_digest = rotated.policy_record.policy.digest().unwrap();
-
         let bytes = signed_operation(&matcher, match_operation(&context), 50);
         let forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
         assert!(matches!(
@@ -2937,7 +2780,6 @@ mod tests {
             Err(OrderbookTransactionForwarderError::PolicyDigestMismatch)
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
-
         let mut invalid = settlement_operation(&context, [0x81; 32]);
         if let OrderbookOperationV1::SettlementReceipt(instruction) = &invalid {
             let policy_digest = *instruction.policy_digest();

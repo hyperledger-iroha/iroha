@@ -8,33 +8,27 @@
 //! separate durable body-store boundary before validation or voting. The
 //! reducer sees only the resulting body-availability token; READY/DELIVER
 //! state and collector selection do not exist here.
-
-use std::path::Path;
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2 as wire;
 use iroha_primitives::erasure::rs16;
+use std::path::Path;
 use thiserror::Error;
-
 /// Canonical encoded payload and the manifest committing to every chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EncodedV2Payload {
     manifest: wire::PayloadManifest,
     chunks: Vec<Vec<u8>>,
 }
-
 impl EncodedV2Payload {
     /// Borrow the canonical manifest.
     pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
         &self.manifest
     }
-
     /// Consume the encoded payload.
     pub(crate) fn into_parts(self) -> (wire::PayloadManifest, Vec<Vec<u8>>) {
         (self.manifest, self.chunks)
     }
 }
-
 /// Result of admitting one authenticated chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChunkAdmission {
@@ -43,14 +37,12 @@ pub(crate) enum ChunkAdmission {
     /// The exact chunk is already present in this bounded session.
     Duplicate,
 }
-
 /// Bounded in-memory reconstruction session for one immutable manifest.
 #[derive(Debug)]
 pub(crate) struct V2ChunkSession {
     manifest: wire::PayloadManifest,
     chunks: Vec<Option<Vec<u8>>>,
 }
-
 impl V2ChunkSession {
     /// Open an empty bounded session for the exact validated manifest.
     ///
@@ -69,12 +61,10 @@ impl V2ChunkSession {
             chunks: vec![None; chunk_count],
         })
     }
-
     /// Borrow the immutable manifest.
     pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
         &self.manifest
     }
-
     /// Buffer one structurally authenticated chunk.
     ///
     /// The caller is still responsible for verifying its sender signature.
@@ -89,7 +79,6 @@ impl V2ChunkSession {
         }
         self.admit_bytes(chunk.index, &chunk.bytes)
     }
-
     /// Buffer already-authenticated bytes at an exact manifest index.
     pub(crate) fn admit_bytes(
         &mut self,
@@ -109,11 +98,9 @@ impl V2ChunkSession {
                 Err(V2ChunkError::ConflictingChunk)
             };
         }
-
         *slot = Some(bytes.to_vec());
         Ok(ChunkAdmission::Buffered)
     }
-
     /// Reconstruct and verify the canonical payload once enough chunks exist.
     ///
     /// RS16 reconstruction needs any `data_shards` chunks per stripe. Missing
@@ -130,7 +117,6 @@ impl V2ChunkSession {
         }
         Ok(Some(payload))
     }
-
     fn validate_chunk(&self, index: usize, bytes: &[u8]) -> Result<(), V2ChunkError> {
         let expected_hash = self
             .manifest
@@ -147,7 +133,6 @@ impl V2ChunkSession {
         }
         Ok(())
     }
-
     fn reconstruct_rs16(&self) -> Result<Option<Vec<u8>>, V2ChunkError> {
         let data_shards = usize::from(self.manifest.layout.data_shards);
         let parity_shards = usize::from(self.manifest.layout.parity_shards);
@@ -166,7 +151,6 @@ impl V2ChunkSession {
         let payload_size = usize::try_from(self.manifest.payload_size_bytes)
             .map_err(|_| V2ChunkError::PayloadTooLarge)?;
         let mut payload = Vec::with_capacity(payload_size);
-
         for stripe in self.chunks.chunks_exact(stripe_width) {
             if stripe.iter().filter(|chunk| chunk.is_some()).count() < data_shards {
                 return Ok(None);
@@ -204,7 +188,6 @@ impl V2ChunkSession {
         Ok(Some(payload))
     }
 }
-
 /// Encode exact canonical payload bytes using the height-frozen DA layout.
 pub(crate) fn encode_payload(
     context: &wire::HeightContext,
@@ -227,7 +210,6 @@ pub(crate) fn encode_payload(
     let manifest = wire::PayloadManifest::derive(context, round, subject, payload_len, &chunks)?;
     Ok(EncodedV2Payload { manifest, chunks })
 }
-
 /// Deterministic chunk encoding, buffering, or reconstruction failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2ChunkError {
@@ -262,20 +244,16 @@ pub(crate) enum V2ChunkError {
     #[error("Sumeragi v2 RS16 reconstruction failed")]
     ReconstructionFailed,
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
-
-    use super::*;
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x92; Hash::LENGTH]),
         ))
     }
-
     fn context() -> wire::HeightContext {
         let mut roster = (1_u8..=4)
             .map(|seed| {
@@ -313,7 +291,6 @@ mod tests {
             leader_seed: [0x55; 32],
         }
     }
-
     fn parent_qc(roster: &[wire::ValidatorPower]) -> wire::QuorumCertificate {
         let parent_context = wire::HeightContext {
             network_id: test_network_id(),
@@ -368,7 +345,6 @@ mod tests {
             aggregate_signature: vec![0xA5; 48],
         }
     }
-
     fn encode_fixture(payload: &[u8]) -> (wire::HeightContext, EncodedV2Payload) {
         let context = context();
         let subject = wire::BlockSubject {
@@ -387,7 +363,6 @@ mod tests {
         let encoded = encode_payload(&context, round, subject, payload).expect("encode payload");
         (context, encoded)
     }
-
     #[test]
     fn rs16_zero_data_or_parity_shards_are_rejected() {
         let payload = b"invalid RS16 layout";
@@ -416,7 +391,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn rs16_reconstructs_directly_from_complete_data_stripes() {
         let payload = b"RS16 data-only fast path spanning deterministic stripes";
@@ -426,7 +400,6 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
             .expect("open session");
-
         for (index, chunk) in encoded.chunks.iter().enumerate() {
             if index % width < data_shards {
                 session
@@ -434,7 +407,6 @@ mod tests {
                     .expect("buffer data shard");
             }
         }
-
         assert_eq!(
             session.reconstruct().expect("reconstruct from data shards"),
             Some(payload.to_vec())
@@ -447,7 +419,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rs16_recovers_missing_data_from_parity() {
         let payload = b"RS16 parity recovery spanning deterministic stripes";
@@ -456,7 +427,6 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let mut session = V2ChunkSession::open(root.path(), &context, encoded.manifest.clone())
             .expect("open session");
-
         for (index, chunk) in encoded.chunks.iter().enumerate() {
             let within = index % width;
             if within != 0 && within != width - 1 {
@@ -465,13 +435,11 @@ mod tests {
                     .expect("buffer recovery shard");
             }
         }
-
         assert_eq!(
             session.reconstruct().expect("recover missing data shard"),
             Some(payload.to_vec())
         );
     }
-
     #[test]
     fn rs16_recovers_missing_data_from_any_quorum_per_stripe() {
         let payload = b"RS16 payload spanning more than one deterministic stripe";
@@ -500,7 +468,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn corruption_duplicates_and_insufficient_shards_are_rejected_or_pending() {
         let payload = b"adversarial chunk payload";
@@ -528,7 +495,6 @@ mod tests {
         );
         assert_eq!(session.reconstruct().expect("pending reconstruction"), None);
     }
-
     #[test]
     fn partial_chunks_are_volatile_and_create_no_files() {
         let payload = b"volatile bounded chunk acquisition";
@@ -548,7 +514,6 @@ mod tests {
         );
         assert!(!acquisition_root.exists());
         drop(session);
-
         let restarted = V2ChunkSession::open(&acquisition_root, &context, encoded.manifest)
             .expect("restart with an empty volatile session");
         assert!(restarted.chunks.iter().all(Option::is_none));
@@ -558,7 +523,6 @@ mod tests {
         );
         assert!(!acquisition_root.exists());
     }
-
     #[test]
     fn encoding_is_deterministic_and_subject_bound() {
         let payload = b"same payload";
@@ -571,7 +535,6 @@ mod tests {
         )
         .expect("repeat encoding");
         assert_eq!(first, second);
-
         let mut wrong = first.manifest.subject;
         wrong.payload_hash = Hash::new(b"another payload");
         assert!(matches!(

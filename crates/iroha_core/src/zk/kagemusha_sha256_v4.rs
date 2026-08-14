@@ -4,7 +4,10 @@
 //! synthesis has established the virtual-to-physical cell map, five Table16
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
-
+use super::kagemusha_sha256_table16_v4::{
+    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
+    TABLE16_SPREAD_TABLE_ROWS, Table16Chip, Table16Config, canonical_padding_suffix,
+};
 use ff::PrimeField;
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
@@ -17,21 +20,13 @@ use halo2_base::{
     virtual_region::copy_constraints::SharedCopyConstraintManager,
 };
 use sha2::{Digest as _, Sha256};
-
-use super::kagemusha_sha256_table16_v4::{
-    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
-    TABLE16_SPREAD_TABLE_ROWS, Table16Chip, Table16Config, canonical_padding_suffix,
-};
-
 /// Independent Table16 lanes fixed by the V4 circuit identity.
 pub(crate) const KAGEMUSHA_SHA256_LANES_V4: usize = 5;
-
 // Table16 uses about 2,267 rows per compression block. Keep a small explicit
 // margin for layout evolution, plus per-job IV and digest regions.
 const SHA256_ROWS_PER_BLOCK_V4: usize = 2_304;
 const SHA256_ROWS_PER_JOB_V4: usize = 64;
 const SHA256_TABLE_ROWS_V4: usize = TABLE16_SPREAD_TABLE_ROWS;
-
 /// One Boolean cell produced or checked by the SHA-byte provenance API.
 ///
 /// The assigned cell is deliberately private: callers can only obtain this
@@ -41,7 +36,6 @@ const SHA256_TABLE_ROWS_V4: usize = TABLE16_SPREAD_TABLE_ROWS;
 pub(super) struct KagemushaSha256BitV4<F: ScalarField> {
     assigned: AssignedValue<F>,
 }
-
 impl<F: BigPrimeField> KagemushaSha256BitV4<F> {
     /// Decompose one assigned integer into little-endian Boolean cells.
     pub(super) fn decompose(
@@ -55,23 +49,19 @@ impl<F: BigPrimeField> KagemushaSha256BitV4<F> {
             .map(|assigned| Self { assigned })
             .collect()
     }
-
     /// Require this bit to be the constant zero.
     pub(super) fn assert_zero(self, ctx: &mut Context<F>, gate: &GateChip<F>) {
         gate.assert_is_const(ctx, &self.assigned, &F::ZERO);
     }
-
     fn assigned(self) -> AssignedValue<F> {
         self.assigned
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 enum KagemushaSha256ByteSourceV4<F: ScalarField> {
     Constant(u8),
     Constrained(AssignedValue<F>),
 }
-
 /// A SHA-256 message byte carrying its circuit provenance.
 ///
 /// Constants remain Table16 constants. Dynamic bytes can only be constructed
@@ -84,7 +74,6 @@ enum KagemushaSha256ByteSourceV4<F: ScalarField> {
 pub(super) struct KagemushaSha256ByteV4<F: ScalarField> {
     source: KagemushaSha256ByteSourceV4<F>,
 }
-
 impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
     /// Construct a literal message byte.
     pub(super) const fn constant(byte: u8) -> Self {
@@ -92,7 +81,6 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
             source: KagemushaSha256ByteSourceV4::Constant(byte),
         }
     }
-
     /// Compose one little-endian byte from eight Boolean-proven cells.
     pub(super) fn from_bits_le(
         ctx: &mut Context<F>,
@@ -109,7 +97,6 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
             source: KagemushaSha256ByteSourceV4::Constrained(assigned),
         }
     }
-
     /// Decompose one constrained byte back into Boolean-proven cells.
     pub(super) fn decompose_bits_le(
         self,
@@ -129,7 +116,6 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
             }
         }
     }
-
     /// Return the underlying assigned cell when this is a dynamic byte.
     pub(super) fn assigned(self) -> Option<AssignedValue<F>> {
         match self.source {
@@ -137,7 +123,6 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
             KagemushaSha256ByteSourceV4::Constrained(assigned) => Some(assigned),
         }
     }
-
     /// Range-check one assigned source exactly once and retain that proof for
     /// the SHA queue.
     pub(super) fn range_checked(
@@ -150,7 +135,6 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
             source: KagemushaSha256ByteSourceV4::Constrained(assigned),
         }
     }
-
     /// Return this proven byte as a linear-combination input.
     pub(super) fn quantum_cell(self) -> QuantumCell<F> {
         match self.source {
@@ -160,14 +144,12 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
             KagemushaSha256ByteSourceV4::Constrained(assigned) => QuantumCell::Existing(assigned),
         }
     }
-
     /// Read one valid typed byte in focused preimage-parity tests.
     #[cfg(test)]
     pub(super) fn test_value(self) -> u8 {
         self.value(0)
             .expect("typed SHA-256 test message contains canonical bytes")
     }
-
     fn value(self, index: usize) -> Result<u8, String> {
         match self.source {
             KagemushaSha256ByteSourceV4::Constant(byte) => Ok(byte),
@@ -184,13 +166,11 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct KagemushaSha256JobV4<F: ScalarField> {
     message: Vec<KagemushaSha256ByteV4<F>>,
     output_words: [AssignedValue<F>; DIGEST_SIZE],
 }
-
 /// Explicit, circuit-owned SHA jobs. There is deliberately no global or
 /// thread-local queue: witness stripping clones this exact job shape.
 #[derive(Clone, Debug)]
@@ -210,7 +190,6 @@ pub(crate) struct KagemushaSha256JobsV4<F: ScalarField> {
     #[cfg(test)]
     skip_iv_reset_at_job: Option<usize>,
 }
-
 impl<F: ScalarField> Default for KagemushaSha256JobsV4<F> {
     fn default() -> Self {
         Self {
@@ -231,7 +210,6 @@ impl<F: ScalarField> Default for KagemushaSha256JobsV4<F> {
         }
     }
 }
-
 impl<F> KagemushaSha256JobsV4<F>
 where
     F: BigPrimeField + PrimeField + From<u64>,
@@ -252,7 +230,6 @@ where
             .collect::<Vec<_>>();
         self.digest_constrained(ctx, &constrained)
     }
-
     /// Queue bytes whose constant or Boolean-decomposition provenance already
     /// proves they are canonical bytes.
     pub(super) fn digest_constrained(
@@ -296,7 +273,6 @@ where
         });
         Ok(output_words)
     }
-
     /// Preserve job count, lengths, and virtual cells while hiding all raw
     /// Table16 witnesses during key generation.
     pub(crate) fn unknown(&self) -> Self {
@@ -304,7 +280,6 @@ where
         clone.use_unknown = true;
         clone
     }
-
     pub(crate) fn compression_blocks(&self) -> Result<usize, String> {
         self.jobs.iter().try_fold(0_usize, |total, job| {
             let suffix = canonical_padding_suffix(job.message.len())
@@ -320,7 +295,6 @@ where
                 .ok_or_else(|| "Kagemusha SHA-256 block count overflow".to_owned())
         })
     }
-
     /// Return the exact queued-job, compression-block, and per-lane row
     /// geometry used by the authenticated composite-circuit capacity check.
     pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
@@ -338,7 +312,6 @@ where
             .max(SHA256_TABLE_ROWS_V4);
         Ok((self.jobs.len(), blocks, required))
     }
-
     /// Conservative per-lane capacity bound for authenticated usable rows.
     pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
         let (_, blocks, required) = self.capacity_profile()?;
@@ -350,48 +323,40 @@ where
         }
         Ok(())
     }
-
     #[cfg(test)]
     pub(crate) fn with_padding_xor(mut self, padded_offset: usize, xor: u8) -> Self {
         self.padding_xor = Some((padded_offset, xor));
         self
     }
-
     #[cfg(test)]
     fn with_source_xor(mut self, job: usize, byte: usize, xor: u8) -> Self {
         self.source_xor = Some((job, byte, xor));
         self
     }
-
     #[cfg(test)]
     fn with_output_word_xor(mut self, job: usize, word: usize, xor: u32) -> Self {
         self.output_word_xor = Some((job, word, xor));
         self
     }
-
     #[cfg(test)]
     fn with_swapped_block_endian(mut self, global_block: usize) -> Self {
         self.swap_block_endian = Some(global_block);
         self
     }
-
     #[cfg(test)]
     fn with_broken_chain(mut self, global_block: usize) -> Self {
         self.break_chain_at_block = Some(global_block);
         self
     }
-
     #[cfg(test)]
     fn with_skipped_iv_reset(mut self, job: usize) -> Self {
         self.skip_iv_reset_at_job = Some(job);
         self
     }
-
     #[cfg(test)]
     fn shape(&self) -> Vec<usize> {
         self.jobs.iter().map(|job| job.message.len()).collect()
     }
-
     /// Realize all jobs after Base synthesis populated the physical cell map.
     ///
     /// Blocks are routed globally in job/block order across lanes 0..4.
@@ -415,7 +380,6 @@ where
         let mut global_block_index = 0_usize;
         #[cfg(test)]
         let mut previous_job_state = None;
-
         for (job_index, job) in self.jobs.iter().enumerate() {
             let suffix = canonical_padding_suffix(job.message.len()).ok_or(Error::Synthesis)?;
             let padded_len = job
@@ -427,7 +391,6 @@ where
             padded
                 .try_reserve_exact(padded_len)
                 .map_err(|_| Error::Synthesis)?;
-
             for (byte_index, byte) in job.message.iter().copied().enumerate() {
                 #[cfg(not(test))]
                 let _ = byte_index;
@@ -486,7 +449,6 @@ where
                 }
             }
             padded.extend(suffix.into_iter().map(PaddedByte::Constant));
-
             #[cfg(test)]
             if let Some(target_block) = self.swap_block_endian {
                 let job_blocks = padded.len() / BLOCK_BYTE_SIZE;
@@ -496,7 +458,6 @@ where
                     padded.swap(local + 1, local + 2);
                 }
             }
-
             #[cfg(test)]
             if job_index == 0 {
                 if let Some((offset, xor)) = self.padding_xor {
@@ -507,7 +468,6 @@ where
                     }
                 }
             }
-
             let mut blocks = padded.chunks_exact(BLOCK_BYTE_SIZE);
             let first = blocks.next().ok_or(Error::Synthesis)?;
             if !blocks.remainder().is_empty() {
@@ -535,7 +495,6 @@ where
             state = chips[first_lane].compress(layouter, &state, first_words)?;
             let mut final_lane = first_lane;
             global_block_index += 1;
-
             for block in blocks {
                 let lane = global_block_index % KAGEMUSHA_SHA256_LANES_V4;
                 let block: [PaddedByte<F>; BLOCK_BYTE_SIZE] =
@@ -549,7 +508,6 @@ where
                 final_lane = lane;
                 global_block_index += 1;
             }
-
             let digest = chips[final_lane].digest(layouter, &state)?;
             #[cfg(test)]
             {
@@ -590,13 +548,11 @@ where
         Ok(())
     }
 }
-
 /// Five Table16 lanes sharing one spread table and one fixed constant column.
 #[derive(Clone, Debug)]
 pub(crate) struct KagemushaSha256ConfigV4 {
     lanes: [Table16Config; KAGEMUSHA_SHA256_LANES_V4],
 }
-
 impl KagemushaSha256ConfigV4 {
     pub(crate) fn configure<F>(meta: &mut ConstraintSystem<F>) -> Self
     where
@@ -607,9 +563,9 @@ impl KagemushaSha256ConfigV4 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use halo2_base::gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder};
     use halo2_proofs::{
         circuit::{Layouter, V1},
@@ -617,24 +573,18 @@ mod tests {
         halo2curves::pasta::Fp,
         plonk::{Circuit, ConstraintSystem, Error},
     };
-
-    use super::*;
-
     const TEST_K: u32 = 17;
     const TEST_UNUSABLE_ROWS: usize = 9;
-
     #[derive(Clone, Debug)]
     struct QueueConfig<F: ScalarField> {
         base: BaseConfig<F>,
         sha: KagemushaSha256ConfigV4,
     }
-
     #[derive(Clone)]
     struct QueueCircuit<F: BigPrimeField + PrimeField + From<u64>> {
         builder: BaseCircuitBuilder<F>,
         jobs: KagemushaSha256JobsV4<F>,
     }
-
     impl<F> Circuit<F> for QueueCircuit<F>
     where
         F: BigPrimeField + PrimeField + From<u64>,
@@ -642,18 +592,15 @@ mod tests {
         type Config = QueueConfig<F>;
         type FloorPlanner = V1;
         type Params = BaseCircuitParams;
-
         fn params(&self) -> Self::Params {
             self.builder.config_params.clone()
         }
-
         fn without_witnesses(&self) -> Self {
             Self {
                 builder: self.builder.deep_clone().unknown(true),
                 jobs: self.jobs.unknown(),
             }
         }
-
         fn configure_with_params(
             meta: &mut ConstraintSystem<F>,
             params: Self::Params,
@@ -666,11 +613,9 @@ mod tests {
                 sha: KagemushaSha256ConfigV4::configure(meta),
             }
         }
-
         fn configure(_: &mut ConstraintSystem<F>) -> Self::Config {
             unreachable!("queue test uses parameterized Base config")
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -689,7 +634,6 @@ mod tests {
             )
         }
     }
-
     #[derive(Clone, Copy)]
     enum Mutation {
         None,
@@ -700,7 +644,6 @@ mod tests {
         Chain,
         IvReset,
     }
-
     fn queue_circuit(mutation: Mutation) -> QueueCircuit<Fp> {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
             .use_k(TEST_K as usize)
@@ -742,7 +685,6 @@ mod tests {
         builder.calculate_params(Some(TEST_UNUSABLE_ROWS));
         QueueCircuit { builder, jobs }
     }
-
     fn single_job_queue_circuit(
         mut builder: BaseCircuitBuilder<Fp>,
         calculate_params: bool,
@@ -759,14 +701,12 @@ mod tests {
         }
         QueueCircuit { builder, jobs }
     }
-
     fn verify(mutation: Mutation) -> Result<(), Vec<halo2_proofs::dev::VerifyFailure>> {
         let circuit = queue_circuit(mutation);
         MockProver::run(TEST_K, &circuit, vec![])
             .expect("five-lane queue synthesis")
             .verify()
     }
-
     fn typed_queue_circuit(source_xor: bool) -> QueueCircuit<Fp> {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
             .use_k(TEST_K as usize)
@@ -794,7 +734,6 @@ mod tests {
         builder.calculate_params(Some(TEST_UNUSABLE_ROWS));
         QueueCircuit { builder, jobs }
     }
-
     fn queued_observation(typed: bool) -> (Vec<u8>, [u64; DIGEST_SIZE], usize) {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
             .use_k(TEST_K as usize)
@@ -840,7 +779,6 @@ mod tests {
             .sum();
         (preimage, output_words, lookup_rows)
     }
-
     #[test]
     fn five_lane_round_robin_cross_lane_chaining_and_job_iv_reset_are_valid() {
         let circuit = queue_circuit(Mutation::None);
@@ -854,17 +792,14 @@ mod tests {
         );
         assert_eq!(verify(Mutation::None), Ok(()));
     }
-
     #[test]
     fn padding_tamper_is_rejected() {
         assert!(verify(Mutation::Padding).is_err());
     }
-
     #[test]
     fn source_copy_tamper_is_rejected() {
         assert!(verify(Mutation::Source).is_err());
     }
-
     #[test]
     fn constrained_byte_path_matches_generic_preimage_and_removes_range8_lookups() {
         let generic = queued_observation(false);
@@ -877,13 +812,11 @@ mod tests {
             constrained.2, 0,
             "Boolean decomposition and literal bytes need no range lookup"
         );
-
         let circuit = typed_queue_circuit(false);
         MockProver::run(TEST_K, &circuit, vec![])
             .expect("typed SHA-256 queue synthesis")
             .assert_satisfied();
     }
-
     #[test]
     fn constrained_dynamic_byte_copy_tamper_is_rejected() {
         let circuit = typed_queue_circuit(true);
@@ -894,27 +827,22 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn digest_output_copy_tamper_is_rejected() {
         assert!(verify(Mutation::Output).is_err());
     }
-
     #[test]
     fn block_endian_tamper_is_rejected() {
         assert!(verify(Mutation::Endian).is_err());
     }
-
     #[test]
     fn cross_lane_chain_break_is_rejected() {
         assert!(verify(Mutation::Chain).is_err());
     }
-
     #[test]
     fn per_job_iv_reset_skip_is_rejected() {
         assert!(verify(Mutation::IvReset).is_err());
     }
-
     #[test]
     fn non_byte_base_source_is_rejected_before_queueing() {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
@@ -929,7 +857,6 @@ mod tests {
         );
         assert!(jobs.jobs.is_empty());
     }
-
     #[test]
     fn k16_capacity_uses_only_the_loaded_spread_table_rows() {
         let jobs = KagemushaSha256JobsV4::<Fp>::default();
@@ -940,7 +867,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn witnessless_clone_preserves_exact_keygen_job_shape() {
         let circuit = queue_circuit(Mutation::None);
@@ -963,7 +889,6 @@ mod tests {
         assert_eq!(actual.lookup_bits, expected.lookup_bits);
         assert_eq!(actual.num_instance_columns, expected.num_instance_columns);
     }
-
     #[test]
     fn witness_only_prover_shape_populates_direct_sha_physical_map() {
         let keygen = single_job_queue_circuit(
@@ -975,7 +900,6 @@ mod tests {
         MockProver::run(TEST_K, &keygen, vec![])
             .expect("keygen-style SHA queue synthesis")
             .assert_satisfied();
-
         let prover = single_job_queue_circuit(
             BaseCircuitBuilder::prover(
                 keygen.builder.config_params.clone(),

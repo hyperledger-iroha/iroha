@@ -2,7 +2,6 @@ impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceDagPublisherBindingSi
     fn handle(&self) -> &'static str {
         GOVERNANCE_DAG_PUBLISHER_HANDLE
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -13,15 +12,12 @@ impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceDagPublisherBindingSi
             ),
         )
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         GOVERNANCE_DAG_PUBLISHER_PEER_ID.as_bytes()
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.public_key_bytes()
     }
-
     fn sign(
         &self,
         _purpose: sorafs_node::GovernanceDagSigningPurposeV1,

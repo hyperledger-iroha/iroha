@@ -1,14 +1,3 @@
-use std::{
-    collections::HashSet,
-    env,
-    fs::{self, File},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    str::FromStr,
-    thread,
-    time::Duration,
-};
-
 use color_eyre::{
     Result,
     eyre::{Context, eyre},
@@ -19,11 +8,19 @@ use iroha_test_network::{
     NetworkBuilder, NetworkPeer, init_instruction_registry, submit_ensure_domain,
 };
 use norito::json::{JsonDeserialize, JsonSerialize};
+use std::{
+    collections::HashSet,
+    env,
+    fs::{self, File},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+    thread,
+    time::Duration,
+};
 use url::Url;
-
 const DEFAULT_CONFIG_RELATIVE: &str = "examples/ios/NoritoDemoXcode/Configs/SampleAccounts.json";
 const DEFAULT_TELEMETRY_PROFILE: &str = "full";
-
 #[derive(Debug, JsonDeserialize)]
 struct AccountConfig {
     name: Option<String>,
@@ -35,7 +32,6 @@ struct AccountConfig {
     asset_name: String,
     initial_balance: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct AccountState {
     account_id: String,
@@ -45,7 +41,6 @@ struct AccountState {
     asset_id: String,
     initial_balance: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct StateOutput {
     torii_url: String,
@@ -54,7 +49,6 @@ struct StateOutput {
     stdout_log: Option<String>,
     accounts: Vec<AccountState>,
 }
-
 #[derive(Debug)]
 struct Args {
     config: PathBuf,
@@ -62,14 +56,12 @@ struct Args {
     telemetry_profile: String,
     exit_after_ready: bool,
 }
-
 impl Args {
     fn parse() -> Result<Self> {
         let mut config: Option<PathBuf> = None;
         let mut state_path: Option<PathBuf> = None;
         let mut telemetry_profile: Option<String> = None;
         let mut exit_after_ready = false;
-
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -103,11 +95,9 @@ impl Args {
                 }
             }
         }
-
         let config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_RELATIVE));
         let telemetry_profile =
             telemetry_profile.unwrap_or_else(|| DEFAULT_TELEMETRY_PROFILE.to_string());
-
         Ok(Self {
             config,
             state_path,
@@ -116,14 +106,12 @@ impl Args {
         })
     }
 }
-
 fn print_usage() {
     eprintln!(
         "Usage: cargo run -p iroha_test_network --example ios_demo -- [options]\n\
 Options:\n  --config PATH             Path to SampleAccounts.json (default: {DEFAULT_CONFIG_RELATIVE})\n  --state PATH              Write readiness JSON to this file\n  --telemetry-profile NAME  Override telemetry profile (default: {DEFAULT_TELEMETRY_PROFILE})\n  --exit-after-ready        Exit after provisioning instead of waiting for Ctrl+C\n  --help                    Show this message"
     );
 }
-
 fn ensure_absolute(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -132,7 +120,6 @@ fn ensure_absolute(path: &Path) -> Result<PathBuf> {
         Ok(cwd.join(path))
     }
 }
-
 fn load_config(path: &Path) -> Result<Vec<AccountConfig>> {
     let data = fs::read_to_string(path)
         .wrap_err_with(|| eyre!("Failed to read accounts config from {}", path.display()))?;
@@ -147,18 +134,15 @@ fn load_config(path: &Path) -> Result<Vec<AccountConfig>> {
     }
     Ok(accounts)
 }
-
 fn parse_quantity(value: &str, context: &str) -> Result<Quantity> {
     Quantity::from_str(value)
         .wrap_err_with(|| eyre!("Failed to parse asset quantity `{value}` for {context}"))
 }
-
 fn account_id_from_parts(public_key: &str) -> Result<AccountId> {
     let parsed_key = PublicKey::from_str(public_key)
         .wrap_err_with(|| eyre!("Failed to parse public key `{public_key}`"))?;
     Ok(AccountId::new(parsed_key))
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
@@ -166,7 +150,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn find_existing_domains(client: &Client) -> Result<HashSet<DomainId>> {
     let domains = client
         .query(FindDomains::new())
@@ -177,7 +160,6 @@ fn find_existing_domains(client: &Client) -> Result<HashSet<DomainId>> {
         .map(|domain| domain.id().clone())
         .collect())
 }
-
 fn find_existing_asset_defs(client: &Client) -> Result<HashSet<AssetDefinitionId>> {
     let definitions = client
         .query(FindAssetsDefinitions::new())
@@ -188,7 +170,6 @@ fn find_existing_asset_defs(client: &Client) -> Result<HashSet<AssetDefinitionId
         .map(|definition| definition.id().clone())
         .collect())
 }
-
 fn find_existing_accounts(client: &Client) -> Result<HashSet<AccountId>> {
     let accounts = client
         .query(FindAccounts::new())
@@ -199,7 +180,6 @@ fn find_existing_accounts(client: &Client) -> Result<HashSet<AccountId>> {
         .map(|account| account.id().clone())
         .collect())
 }
-
 fn derive_metrics_url(torii_url: &str) -> Result<String> {
     let mut url =
         Url::parse(torii_url).wrap_err_with(|| eyre!("Invalid Torii URL `{torii_url}`"))?;
@@ -218,7 +198,6 @@ fn derive_metrics_url(torii_url: &str) -> Result<String> {
     url.set_path(&path);
     Ok(url.to_string())
 }
-
 fn wait_for_peer_log(peer: &NetworkPeer) -> Option<String> {
     for _ in 0..40 {
         if let Some(path) = peer.latest_stdout_log_path() {
@@ -228,23 +207,17 @@ fn wait_for_peer_log(peer: &NetworkPeer) -> Option<String> {
     }
     None
 }
-
 fn main() -> Result<()> {
     color_eyre::install()?;
-
     let args = Args::parse()?;
     let config_path = ensure_absolute(&args.config)?;
     let state_path = match &args.state_path {
         Some(path) => Some(ensure_absolute(path)?),
         None => None,
     };
-
     let accounts_cfg = load_config(&config_path)?;
-
     init_instruction_registry();
-
     let telemetry_profile = args.telemetry_profile.clone();
-
     let (network, rt) = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -256,7 +229,6 @@ fn main() -> Result<()> {
         })
         .start_blocking()
         .wrap_err("Failed to start test network")?;
-
     let peer = network
         .peers()
         .first()
@@ -264,14 +236,11 @@ fn main() -> Result<()> {
     let torii_url = peer.torii_url();
     let metrics_url = derive_metrics_url(&torii_url)?;
     let stdout_log = wait_for_peer_log(peer);
-
     let client = network.client();
     let mut known_domains = find_existing_domains(&client)?;
     let mut known_asset_defs = find_existing_asset_defs(&client)?;
     let mut known_accounts = find_existing_accounts(&client)?;
-
     let mut state_accounts = Vec::new();
-
     for entry in accounts_cfg {
         let AccountConfig {
             name,
@@ -282,18 +251,15 @@ fn main() -> Result<()> {
             asset_name,
             initial_balance,
         } = entry;
-
         let asset_def_id: AssetDefinitionId = asset_id
             .parse()
             .wrap_err_with(|| eyre!("Failed to parse asset id `{asset_id}`"))?;
         let domain_id = DomainId::parse_fully_qualified(&domain)
             .wrap_err_with(|| eyre!("Failed to parse domain `{domain}`"))?;
-
         if known_domains.insert(domain_id.clone()) {
             submit_ensure_domain(&client, Domain::new(domain_id.clone()))
                 .wrap_err_with(|| eyre!("Failed to ensure domain `{domain_id}`"))?;
         }
-
         if known_asset_defs.insert(asset_def_id.clone()) {
             let definition = AssetDefinition::numeric(
                 asset_def_id.clone(),
@@ -308,9 +274,7 @@ fn main() -> Result<()> {
                 )
                 .wrap_err_with(|| eyre!("Failed to register asset definition `{asset_def_id}`"))?;
         }
-
         let account_id = account_id_from_parts(&public_key)?;
-
         if known_accounts.insert(account_id.clone()) {
             let mut account_builder = Account::new(account_id.clone());
             if let Some(alias) = &name {
@@ -326,7 +290,6 @@ fn main() -> Result<()> {
                 )
                 .wrap_err_with(|| eyre!("Failed to register account `{account_id}`"))?;
         }
-
         let amount = parse_quantity(&initial_balance, &account_id.to_string())?;
         let asset_instance = AssetId::new(asset_def_id.clone(), account_id.clone());
         client
@@ -341,7 +304,6 @@ fn main() -> Result<()> {
                     asset_instance
                 )
             })?;
-
         state_accounts.push(AccountState {
             account_id: account_id.to_string(),
             public_key: public_key.clone(),
@@ -350,14 +312,12 @@ fn main() -> Result<()> {
             initial_balance: initial_balance.clone(),
         });
     }
-
     let state = StateOutput {
         torii_url: torii_url.clone(),
         metrics_url: metrics_url.clone(),
         stdout_log,
         accounts: state_accounts,
     };
-
     if let Some(path) = state_path.as_ref() {
         ensure_parent_dir(path)?;
         let mut file = File::create(path)
@@ -365,7 +325,6 @@ fn main() -> Result<()> {
         norito::json::to_writer_pretty(&mut file, &state)?;
         file.write_all(b"\n")?;
     }
-
     {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
@@ -373,12 +332,10 @@ fn main() -> Result<()> {
         handle.write_all(b"\n")?;
         handle.flush()?;
     }
-
     if args.exit_after_ready {
         rt.block_on(network.shutdown());
         return Ok(());
     }
-
     println!("[ios-demo] Torii ready at {torii_url}. Press Ctrl+C to stop the demo network.");
     rt.block_on(async {
         tokio::signal::ctrl_c()
@@ -388,6 +345,5 @@ fn main() -> Result<()> {
     println!("[ios-demo] Shutting down...");
     rt.block_on(network.shutdown());
     println!("[ios-demo] Done.");
-
     Ok(())
 }

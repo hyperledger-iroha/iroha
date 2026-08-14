@@ -1,10 +1,4 @@
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
+use crate::workspace_root;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
 use norito::{
     core::to_bytes,
@@ -18,23 +12,24 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use time::OffsetDateTime;
-
-use crate::workspace_root;
-
 const DEFAULT_OUTPUT_SUBDIR: &str = "artifacts/nsc";
 const DEFAULT_OUTPUT_BASENAME: &str = "rans_tables";
 const DEFAULT_PRECISION_BITS: u8 = 12;
 pub const MIN_BUNDLE_WIDTH: u8 = 2;
 pub const MAX_BUNDLE_WIDTH: u8 = 4;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputFormat {
     Json,
     Toml,
     Csv,
 }
-
 impl OutputFormat {
     fn from_str(input: &str) -> Result<Self, Box<dyn Error>> {
         match input.to_ascii_lowercase().as_str() {
@@ -45,7 +40,6 @@ impl OutputFormat {
         }
     }
 }
-
 #[derive(Clone)]
 pub struct RansTablesOptions {
     pub seed: u64,
@@ -55,7 +49,6 @@ pub struct RansTablesOptions {
     pub signing_key: Option<PathBuf>,
     pub verify_paths: Vec<PathBuf>,
 }
-
 impl Default for RansTablesOptions {
     fn default() -> Self {
         Self {
@@ -68,7 +61,6 @@ impl Default for RansTablesOptions {
         }
     }
 }
-
 impl RansTablesOptions {
     pub fn add_format(&mut self, value: &str) -> Result<(), Box<dyn Error>> {
         for item in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -76,7 +68,6 @@ impl RansTablesOptions {
         }
         Ok(())
     }
-
     pub fn finalize_formats(&mut self) {
         if self.formats.is_empty() && self.verify_paths.is_empty() {
             self.formats.push(OutputFormat::Json);
@@ -89,7 +80,6 @@ impl RansTablesOptions {
         });
         self.formats.dedup();
     }
-
     pub fn default_output_path(&self, format: OutputFormat) -> PathBuf {
         let base = self.output_base.clone();
         let ext = match format {
@@ -104,27 +94,22 @@ impl RansTablesOptions {
         }
     }
 }
-
 pub fn execute_rans_tables(options: RansTablesOptions) -> Result<(), Box<dyn Error>> {
     for path in &options.verify_paths {
         verify_artifact(path)?;
     }
-
     if options.formats.is_empty() {
         return Ok(());
     }
-
     let mut payload = build_payload(options.seed, options.bundle_width)?;
     let checksum = compute_checksum(&payload.body)?;
     payload.checksum_sha256 = checksum;
-
     let signature = if let Some(path) = options.signing_key.as_ref() {
         Some(sign_payload(&payload, path)?)
     } else {
         None
     };
     let signed = SignedRansTablesV1 { payload, signature };
-
     for format in &options.formats {
         let path = options.default_output_path(*format);
         write_artifact(&signed, *format, &path)?;
@@ -135,10 +120,8 @@ pub fn execute_rans_tables(options: RansTablesOptions) -> Result<(), Box<dyn Err
                 .display()
         );
     }
-
     Ok(())
 }
-
 pub fn verify_tables(paths: &[PathBuf]) -> Result<(), Box<dyn Error>> {
     if paths.is_empty() {
         return Ok(());
@@ -148,7 +131,6 @@ pub fn verify_tables(paths: &[PathBuf]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn build_payload(seed: u64, bundle_width: u8) -> Result<RansTablesV1, Box<dyn Error>> {
     let body = generate_body(seed, bundle_width)?;
     let generated_at = OffsetDateTime::now_utc()
@@ -169,7 +151,6 @@ fn build_payload(seed: u64, bundle_width: u8) -> Result<RansTablesV1, Box<dyn Er
         body,
     })
 }
-
 fn generate_body(seed: u64, bundle_width: u8) -> Result<RansTablesBodyV1, Box<dyn Error>> {
     let normalized_width = clamp_bundle_width(bundle_width);
     let group_size = 1usize << normalized_width;
@@ -187,7 +168,6 @@ fn generate_body(seed: u64, bundle_width: u8) -> Result<RansTablesBodyV1, Box<dy
         groups,
     })
 }
-
 fn generate_group(group_size: usize, seed: u64) -> Result<RansGroupTableV1, Box<dyn Error>> {
     if group_size == 0 {
         return Err("group_size must be non-zero".into());
@@ -213,7 +193,6 @@ fn generate_group(group_size: usize, seed: u64) -> Result<RansGroupTableV1, Box<
         running = running.checked_add(freq).ok_or("frequency overflow")?;
         cumulative.push(running);
     }
-
     Ok(RansGroupTableV1 {
         width_bits,
         group_size: group_size as u16,
@@ -222,11 +201,9 @@ fn generate_group(group_size: usize, seed: u64) -> Result<RansGroupTableV1, Box<
         cumulative,
     })
 }
-
 fn clamp_bundle_width(width: u8) -> u8 {
     width.clamp(MIN_BUNDLE_WIDTH, MAX_BUNDLE_WIDTH)
 }
-
 fn derive_marginal_group(base: &RansGroupTableV1, target_width: u8) -> RansGroupTableV1 {
     let base_width = (usize::from(base.group_size).trailing_zeros()) as u8;
     assert!(
@@ -252,7 +229,6 @@ fn derive_marginal_group(base: &RansGroupTableV1, target_width: u8) -> RansGroup
         cumulative,
     }
 }
-
 fn width_bits_from_group_size(group_size: usize) -> Result<u8, Box<dyn Error>> {
     if group_size == 0 {
         return Err("group_size must be non-zero".into());
@@ -262,7 +238,6 @@ fn width_bits_from_group_size(group_size: usize) -> Result<u8, Box<dyn Error>> {
     }
     Ok(group_size.trailing_zeros() as u8)
 }
-
 fn normalize_frequencies(frequencies: &mut [u32], target_sum: u32) {
     if frequencies.is_empty() {
         return;
@@ -270,7 +245,6 @@ fn normalize_frequencies(frequencies: &mut [u32], target_sum: u32) {
     let mut sum: i64 = frequencies.iter().map(|&v| v as i64).sum();
     let target = target_sum as i64;
     let mut index = 0usize;
-
     while sum < target {
         frequencies[index % frequencies.len()] += 1;
         sum += 1;
@@ -293,13 +267,11 @@ fn normalize_frequencies(frequencies: &mut [u32], target_sum: u32) {
         normalize_frequencies(frequencies, target_sum);
     }
 }
-
 fn compute_checksum(body: &RansTablesBodyV1) -> Result<[u8; 32], Box<dyn Error>> {
     let bytes = to_bytes(body)?;
     let digest = Sha256::digest(bytes);
     Ok(digest.into())
 }
-
 fn sign_payload(
     payload: &RansTablesV1,
     key_path: &Path,
@@ -311,7 +283,6 @@ fn sign_payload(
         .collect::<String>();
     let private_key = PrivateKey::from_hex(Algorithm::Ed25519, &cleaned)?;
     let key_pair: KeyPair = private_key.clone().into();
-
     let signature = SignatureOf::try_new(key_pair.private_key(), payload)
         .map_err(|err| format!("failed to sign RANS table payload: {err}"))?;
     let signature_raw: Signature = signature.clone().into();
@@ -319,7 +290,6 @@ fn sign_payload(
         .payload()
         .try_into()
         .map_err(|_| "expected 64-byte Ed25519 signature payload")?;
-
     let (alg, public_bytes) = key_pair
         .public_key()
         .try_to_bytes()
@@ -330,14 +300,12 @@ fn sign_payload(
     let public_key = public_bytes
         .try_into()
         .map_err(|_| "expected 32-byte Ed25519 public key payload")?;
-
     Ok(RansTablesSignatureV1 {
         algorithm: SignatureAlgorithm::Ed25519,
         public_key,
         signature: signature_bytes,
     })
 }
-
 fn signed_tables_to_value(signed: &SignedRansTablesV1) -> NoritoValue {
     let mut map = NoritoMap::new();
     map.insert("payload".to_string(), payload_to_value(&signed.payload));
@@ -351,7 +319,6 @@ fn signed_tables_to_value(signed: &SignedRansTablesV1) -> NoritoValue {
     );
     NoritoValue::Object(map)
 }
-
 fn payload_to_value(payload: &RansTablesV1) -> NoritoValue {
     let mut map = NoritoMap::new();
     map.insert(
@@ -373,7 +340,6 @@ fn payload_to_value(payload: &RansTablesV1) -> NoritoValue {
     map.insert("body".to_string(), body_to_value(&payload.body));
     NoritoValue::Object(map)
 }
-
 fn body_to_value(body: &RansTablesBodyV1) -> NoritoValue {
     let mut map = NoritoMap::new();
     map.insert(
@@ -388,7 +354,6 @@ fn body_to_value(body: &RansTablesBodyV1) -> NoritoValue {
     map.insert("groups".to_string(), NoritoValue::Array(groups));
     NoritoValue::Object(map)
 }
-
 fn group_to_value(group: &RansGroupTableV1) -> NoritoValue {
     let mut map = NoritoMap::new();
     map.insert(
@@ -417,7 +382,6 @@ fn group_to_value(group: &RansGroupTableV1) -> NoritoValue {
     map.insert("cumulative".to_string(), NoritoValue::Array(cumulative));
     NoritoValue::Object(map)
 }
-
 fn signature_to_value(signature: &RansTablesSignatureV1) -> NoritoValue {
     let mut map = NoritoMap::new();
     map.insert(
@@ -436,7 +400,6 @@ fn signature_to_value(signature: &RansTablesSignatureV1) -> NoritoValue {
     );
     NoritoValue::Object(map)
 }
-
 fn signed_tables_from_value(value: &NoritoValue) -> Result<SignedRansTablesV1, Box<dyn Error>> {
     let map = value
         .as_object()
@@ -452,7 +415,6 @@ fn signed_tables_from_value(value: &NoritoValue) -> Result<SignedRansTablesV1, B
     };
     Ok(SignedRansTablesV1 { payload, signature })
 }
-
 fn payload_from_value(value: &NoritoValue) -> Result<RansTablesV1, Box<dyn Error>> {
     let map = value
         .as_object()
@@ -488,7 +450,6 @@ fn payload_from_value(value: &NoritoValue) -> Result<RansTablesV1, Box<dyn Error
         body,
     })
 }
-
 fn body_from_value(value: &NoritoValue) -> Result<RansTablesBodyV1, Box<dyn Error>> {
     let map = value
         .as_object()
@@ -516,7 +477,6 @@ fn body_from_value(value: &NoritoValue) -> Result<RansTablesBodyV1, Box<dyn Erro
         groups,
     })
 }
-
 fn group_from_value(value: &NoritoValue) -> Result<RansGroupTableV1, Box<dyn Error>> {
     let map = value
         .as_object()
@@ -579,7 +539,6 @@ fn group_from_value(value: &NoritoValue) -> Result<RansGroupTableV1, Box<dyn Err
         cumulative,
     })
 }
-
 fn signature_from_value(value: &NoritoValue) -> Result<RansTablesSignatureV1, Box<dyn Error>> {
     let map = value
         .as_object()
@@ -610,7 +569,6 @@ fn signature_from_value(value: &NoritoValue) -> Result<RansTablesSignatureV1, Bo
         signature,
     })
 }
-
 fn decode_hex_array<const N: usize>(text: &str, label: &str) -> Result<[u8; N], Box<dyn Error>> {
     let bytes = hex::decode(text)?;
     let array: [u8; N] = bytes
@@ -619,7 +577,6 @@ fn decode_hex_array<const N: usize>(text: &str, label: &str) -> Result<[u8; N], 
         .map_err(|_| format!("{label} must contain {N} bytes (hex)"))?;
     Ok(array)
 }
-
 fn serde_value_to_norito(value: &serde_json::Value) -> Result<NoritoValue, Box<dyn Error>> {
     Ok(match value {
         serde_json::Value::Null => NoritoValue::Null,
@@ -652,7 +609,6 @@ fn serde_value_to_norito(value: &serde_json::Value) -> Result<NoritoValue, Box<d
         }
     })
 }
-
 fn write_artifact(
     signed: &SignedRansTablesV1,
     format: OutputFormat,
@@ -661,7 +617,6 @@ fn write_artifact(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-
     match format {
         OutputFormat::Json => {
             let json_value = signed_tables_to_value(signed);
@@ -695,10 +650,8 @@ fn write_artifact(
             fs::write(path, rows)?;
         }
     }
-
     Ok(())
 }
-
 fn verify_artifact(path: &Path) -> Result<(), Box<dyn Error>> {
     let contents = fs::read_to_string(path)?;
     let format = match path
@@ -726,7 +679,6 @@ fn verify_artifact(path: &Path) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 fn verify_payload(signed: &SignedRansTablesV1) -> Result<(), Box<dyn Error>> {
     let expected_checksum = compute_checksum(&signed.payload.body)?;
     if expected_checksum != signed.payload.checksum_sha256 {
@@ -738,7 +690,6 @@ fn verify_payload(signed: &SignedRansTablesV1) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn verify_signature(
     payload: &RansTablesV1,
     signature: &RansTablesSignatureV1,
@@ -758,7 +709,6 @@ fn verify_signature(
         .verify(&public_key, payload)
         .map_err(|_| "signature verification failed".into())
 }
-
 fn parse_signed(
     contents: &str,
     format: OutputFormat,
@@ -777,7 +727,6 @@ fn parse_signed(
         OutputFormat::Csv => Err("cannot parse CSV artefact into SignedRansTablesV1".into()),
     }
 }
-
 fn norito_value_to_serde(value: &NoritoValue) -> serde_json::Value {
     match value {
         NoritoValue::Null => serde_json::Value::Null,
@@ -809,7 +758,6 @@ fn norito_value_to_serde(value: &NoritoValue) -> serde_json::Value {
         }
     }
 }
-
 fn strip_nulls(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Null => {}
@@ -835,7 +783,6 @@ fn strip_nulls(value: &mut serde_json::Value) {
         }
     }
 }
-
 fn current_commit() -> Result<String, Box<dyn Error>> {
     let output = std::process::Command::new("git")
         .arg("rev-parse")
@@ -849,22 +796,17 @@ fn current_commit() -> Result<String, Box<dyn Error>> {
         Err("git rev-parse HEAD failed".into())
     }
 }
-
 fn default_output_base() -> PathBuf {
     let mut base = workspace_root();
     base.push(DEFAULT_OUTPUT_SUBDIR);
     base.push(DEFAULT_OUTPUT_BASENAME);
     base
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write};
-
-    use tempfile::{NamedTempFile, TempDir};
-
     use super::*;
-
+    use std::{fs, io::Write};
+    use tempfile::{NamedTempFile, TempDir};
     fn sample_payload(seed: u64) -> RansTablesV1 {
         let body = generate_body(seed, MAX_BUNDLE_WIDTH).expect("generate deterministic body");
         let checksum = compute_checksum(&body).expect("compute checksum");
@@ -876,14 +818,12 @@ mod tests {
             body,
         }
     }
-
     fn sample_signed(seed: u64) -> SignedRansTablesV1 {
         SignedRansTablesV1 {
             payload: sample_payload(seed),
             signature: None,
         }
     }
-
     fn write_ed25519_key(seed: [u8; 32]) -> NamedTempFile {
         let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
             .expect("generate checked RANS table fixture keypair");
@@ -893,14 +833,12 @@ mod tests {
         writeln!(file, "{}", hex::encode(secret_bytes)).expect("write private key");
         file
     }
-
     #[test]
     fn deterministic_generation() {
         let first = generate_body(42, MAX_BUNDLE_WIDTH).expect("body");
         let second = generate_body(42, MAX_BUNDLE_WIDTH).expect("body");
         assert_eq!(first, second);
     }
-
     #[test]
     fn width_bits_cover_all_bundle_sizes() {
         for width in MIN_BUNDLE_WIDTH..=MAX_BUNDLE_WIDTH {
@@ -917,7 +855,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn group_from_value_rejects_missing_width_bits() {
         let mut map = NoritoMap::new();
@@ -942,7 +879,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn marginal_groups_match_base_distribution() {
         let body = generate_body(7, MAX_BUNDLE_WIDTH).expect("body");
@@ -956,7 +892,6 @@ mod tests {
         assert_eq!(usize::from(width2.group_size), 1 << 2);
         assert_eq!(usize::from(width3.group_size), 1 << 3);
         assert_eq!(usize::from(width4.group_size), 1 << 4);
-
         for (chunk, freq2) in width4.frequencies.chunks(4).zip(width2.frequencies.iter()) {
             let sum: u32 = chunk.iter().map(|&value| u32::from(value)).sum();
             assert_eq!(sum, u32::from(*freq2));
@@ -966,7 +901,6 @@ mod tests {
             assert_eq!(sum, u32::from(*freq3));
         }
     }
-
     #[test]
     fn frequencies_normalized() {
         let group = generate_group(8, 7).expect("group");
@@ -974,13 +908,11 @@ mod tests {
         assert_eq!(total, 1u32 << DEFAULT_PRECISION_BITS);
         assert!(group.frequencies.iter().all(|&f| f > 0));
     }
-
     #[test]
     fn verify_payload_accepts_generated_body() {
         let signed = sample_signed(99);
         verify_payload(&signed).expect("payload verification");
     }
-
     #[test]
     fn verify_payload_detects_tampering() {
         let mut signed = sample_signed(11);
@@ -995,19 +927,16 @@ mod tests {
         }
         assert!(verify_payload(&signed).is_err());
     }
-
     #[test]
     fn verify_signature_roundtrip() {
         let payload = sample_payload(7);
         let key_file = write_ed25519_key([0x11; 32]);
         let signature = sign_payload(&payload, key_file.path()).expect("sign payload");
         verify_signature(&payload, &signature).expect("signature verification succeeds");
-
         let mut tampered = signature;
         tampered.signature[0] ^= 0xFF;
         assert!(verify_signature(&payload, &tampered).is_err());
     }
-
     #[test]
     fn verify_signature_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -1019,12 +948,10 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let payload = sample_payload(8);
         let key_file = write_ed25519_key([0x12; 32]);
         let signature = sign_payload(&payload, key_file.path()).expect("sign payload");
         verify_signature(&payload, &signature).expect("valid signature verifies");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -1040,7 +967,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn write_and_parse_artifacts() {
         let payload = sample_payload(1234);
@@ -1050,7 +976,6 @@ mod tests {
             payload: payload.clone(),
             signature: Some(signature),
         };
-
         let temp_dir = TempDir::new().expect("temp dir");
         let json_path = temp_dir.path().join("tables.json");
         let toml_path = temp_dir.path().join("tables.toml");
@@ -1058,18 +983,14 @@ mod tests {
         write_artifact(&signed, OutputFormat::Json, &json_path).expect("write json");
         write_artifact(&signed, OutputFormat::Toml, &toml_path).expect("write toml");
         write_artifact(&signed, OutputFormat::Csv, &csv_path).expect("write csv");
-
         let json_text = fs::read_to_string(&json_path).expect("read json");
         let parsed_json = parse_signed(&json_text, OutputFormat::Json).expect("parse json");
         assert_eq!(parsed_json, signed);
-
         let toml_text = fs::read_to_string(&toml_path).expect("read toml");
         let parsed_toml = parse_signed(&toml_text, OutputFormat::Toml).expect("parse toml");
         assert_eq!(parsed_toml, signed);
-
         verify_artifact(&json_path).expect("verify json artefact");
         verify_artifact(&toml_path).expect("verify toml artefact");
-
         let csv_text = fs::read_to_string(&csv_path).expect("read csv");
         let mut lines = csv_text.lines();
         assert_eq!(
@@ -1085,7 +1006,6 @@ mod tests {
             .map(|g| g.frequencies.len())
             .sum();
         assert_eq!(row_count, expected_rows);
-
         let mut tampered = signed.clone();
         tampered.payload.body.groups[0].frequencies[0] ^= 1;
         let tampered_path = temp_dir.path().join("tampered.json");

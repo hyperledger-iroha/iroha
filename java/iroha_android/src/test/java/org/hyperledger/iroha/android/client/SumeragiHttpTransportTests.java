@@ -6,6 +6,7 @@ package org.hyperledger.iroha.android.client;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +17,7 @@ import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.junit.Test;
@@ -35,6 +37,10 @@ public final class SumeragiHttpTransportTests {
     assertArrayEquals(new byte[0], executor.last.body());
     assertEquals(List.of("application/json"), executor.last.headers().get("Accept"));
     assertEquals(
+        org.hyperledger.iroha.android.client.transport.RequestReplayPolicy.ONE_SHOT,
+        executor.last.replayPolicy());
+    assertTrue(executor.last.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
+    assertEquals(
         Long.valueOf(SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
         executor.last.maximumResponseBytes());
   }
@@ -49,6 +55,10 @@ public final class SumeragiHttpTransportTests {
     assertEquals("https://torii.example/api/v1/sumeragi/diagnostics", executor.last.uri().toString());
     assertEquals("GET", executor.last.method());
     assertEquals(List.of("application/json"), executor.last.headers().get("Accept"));
+    assertEquals(
+        org.hyperledger.iroha.android.client.transport.RequestReplayPolicy.ONE_SHOT,
+        executor.last.replayPolicy());
+    assertTrue(executor.last.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE));
     assertEquals(
         Long.valueOf(SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
         executor.last.maximumResponseBytes());
@@ -74,7 +84,7 @@ public final class SumeragiHttpTransportTests {
                 .join(),
         "diagnostics endpoint must reject a status-shaped payload");
     for (final Map<String, List<String>> headers :
-        List.of(
+        List.<Map<String, List<String>>>of(
             Collections.emptyMap(),
             Map.of("Content-Type", List.of("application/json; charset=utf-8")),
             Map.of("Content-Type", List.of("application/json", "application/json")))) {
@@ -138,10 +148,52 @@ public final class SumeragiHttpTransportTests {
     assertEquals(0, executor.requests);
   }
 
+  @Test
+  public void operatorReadsRejectMissingAndFallbackAuthenticationBeforeDispatch() {
+    final OneResponseExecutor executor =
+        new OneResponseExecutor(jsonResponse(statusJson().getBytes(StandardCharsets.UTF_8)));
+    final HttpClientTransport missing =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build());
+    assertThrows(IllegalStateException.class, missing::getSumeragiStatus);
+    assertEquals(0, executor.requests);
+
+    final HttpClientTransport fallback =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .setOperatorSigningContext(operatorContext())
+                .putDefaultHeader("Authorization", "Bearer retired")
+                .build());
+    assertThrows(IllegalArgumentException.class, fallback::getSumeragiStatus);
+    assertEquals(0, executor.requests);
+  }
+
   private static HttpClientTransport transport(final HttpTransportExecutor executor) {
     return HttpClientTransport.withExecutor(
         executor,
-        ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://torii.example/api"))
+            .setOperatorSigningContext(operatorContext())
+            .build());
+  }
+
+  private static OperatorSigningContext operatorContext() {
+    final byte[] network = new byte[NetworkId.BYTE_LENGTH];
+    java.util.Arrays.fill(network, (byte) 0x5a);
+    network[network.length - 1] |= 1;
+    return new OperatorSigningContext(
+        NetworkId.fromBytes(network),
+        "ed0120" + "66".repeat(32),
+        message -> {
+          final byte[] signature = new byte[64];
+          java.util.Arrays.fill(signature, (byte) 0x55);
+          return signature;
+        });
   }
 
   private static TransportResponse jsonResponse(final byte[] body) {

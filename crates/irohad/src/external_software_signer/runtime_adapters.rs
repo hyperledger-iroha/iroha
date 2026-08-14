@@ -1,10 +1,4 @@
 //! Purpose-separated adapters for detached SoraFS runtime signing roles.
-
-use std::{fmt, sync::Arc};
-
-use iroha_crypto::Algorithm;
-use sorafs_node::pop_credentials::PopIssuerSigner as _;
-
 use super::{
     adapter::ExternalSoftwareSignerAdapterErrorV1,
     protocol::{
@@ -14,17 +8,17 @@ use super::{
     typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
     unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
 };
-
+use iroha_crypto::Algorithm;
+use sorafs_node::pop_credentials::PopIssuerSigner as _;
+use std::{fmt, sync::Arc};
 const DETACHED_OPERATION_ID_DOMAIN_V1: &[u8] = b"iroha.external-signer.detached-operation.v1";
 const DETACHED_MESSAGE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.detached-message.v1";
 const REDACTED_SIGNER_FAILURE_V1: &str = "external software signer unavailable";
-
 #[derive(Clone)]
 struct DetachedSignerClientV1 {
     client: SoftwareSignerClientV1,
     binding: SoftwareSignerPublicBindingV1,
 }
-
 impl fmt::Debug for DetachedSignerClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -34,7 +28,6 @@ impl fmt::Debug for DetachedSignerClientV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl DetachedSignerClientV1 {
     fn try_new(
         client: SoftwareSignerClientV1,
@@ -56,11 +49,9 @@ impl DetachedSignerClientV1 {
         }
         Ok(Self { client, binding })
     }
-
     fn binding(&self) -> &SoftwareSignerPublicBindingV1 {
         &self.binding
     }
-
     fn qualify_live(&self) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         let provenance = self.client.qualify().map_err(map_client_error)?;
         if provenance.binding != self.binding || provenance.revoked {
@@ -68,7 +59,6 @@ impl DetachedSignerClientV1 {
         }
         Ok(())
     }
-
     fn sign(
         &self,
         purpose: SoftwareSignerPurposeV1,
@@ -106,7 +96,6 @@ impl DetachedSignerClientV1 {
         self.qualify_live()?;
         Ok(receipt.signature)
     }
-
     fn ed25519_public_key(&self) -> Result<[u8; 32], ExternalSoftwareSignerAdapterErrorV1> {
         let (algorithm, bytes) = self
             .binding
@@ -120,7 +109,6 @@ impl DetachedSignerClientV1 {
             .try_into()
             .map_err(|_| ExternalSoftwareSignerAdapterErrorV1::BindingMismatch)
     }
-
     fn public_key_bytes(&self) -> Result<Vec<u8>, ExternalSoftwareSignerAdapterErrorV1> {
         self.binding
             .public_key
@@ -128,7 +116,6 @@ impl DetachedSignerClientV1 {
             .map(|(_, bytes)| bytes.to_vec())
             .map_err(|_| ExternalSoftwareSignerAdapterErrorV1::BindingMismatch)
     }
-
     fn sign_ed25519(
         &self,
         purpose: SoftwareSignerPurposeV1,
@@ -139,14 +126,12 @@ impl DetachedSignerClientV1 {
             .map_err(|_| ExternalSoftwareSignerAdapterErrorV1::Refused)
     }
 }
-
 /// External software signer for the embedded Governance DAG publisher.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerGovernanceDagAdapterV1 {
     signer: DetachedSignerClientV1,
     publisher_peer_id: Vec<u8>,
 }
-
 impl ExternalSoftwareSignerGovernanceDagAdapterV1 {
     /// Construct an exact Governance DAG signer binding.
     pub fn try_new(
@@ -173,19 +158,16 @@ impl ExternalSoftwareSignerGovernanceDagAdapterV1 {
             publisher_peer_id,
         })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
 }
-
 impl sorafs_node::GovernanceDagRuntimeSigner for ExternalSoftwareSignerGovernanceDagAdapterV1 {
     fn handle(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -199,17 +181,14 @@ impl sorafs_node::GovernanceDagRuntimeSigner for ExternalSoftwareSignerGovernanc
             ),
         )
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         &self.publisher_peer_id
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.signer
             .ed25519_public_key()
             .expect("constructor pins one canonical Ed25519 public key")
     }
-
     fn sign(
         &self,
         purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -274,14 +253,12 @@ impl sorafs_node::GovernanceDagRuntimeSigner for ExternalSoftwareSignerGovernanc
             .map_err(|_| REDACTED_SIGNER_FAILURE_V1.to_owned())
     }
 }
-
 /// External software signer for gateway-side PoTR receipts.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPotrGatewayAdapterV1 {
     signer: DetachedSignerClientV1,
     signer_id: [u8; 32],
 }
-
 impl ExternalSoftwareSignerPotrGatewayAdapterV1 {
     /// Construct one exact gateway signer.
     pub fn try_new(
@@ -300,23 +277,19 @@ impl ExternalSoftwareSignerPotrGatewayAdapterV1 {
         signer.ed25519_public_key()?;
         Ok(Self { signer, signer_id })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
 }
-
 impl iroha_torii::sorafs::PotrGatewaySignerV1 for ExternalSoftwareSignerPotrGatewayAdapterV1 {
     fn handle(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn signer_id(&self) -> [u8; 32] {
         self.signer_id
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -331,18 +304,15 @@ impl iroha_torii::sorafs::PotrGatewaySignerV1 for ExternalSoftwareSignerPotrGate
             ),
         )
     }
-
     fn public_key(&self) -> Result<[u8; 32], iroha_torii::sorafs::PotrSignerServiceError> {
         self.signer.ed25519_public_key().map_err(map_potr_error)
     }
-
     fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, iroha_torii::sorafs::PotrSignerServiceError> {
         self.signer
             .sign(SoftwareSignerPurposeV1::PotrGatewayReceipt, payload)
             .map_err(map_potr_error)
     }
 }
-
 /// External software signer for provider-side PoTR receipts.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPotrProviderAdapterV1 {
@@ -350,7 +320,6 @@ pub struct ExternalSoftwareSignerPotrProviderAdapterV1 {
     signer_id: [u8; 32],
     provider_id: [u8; 32],
 }
-
 impl ExternalSoftwareSignerPotrProviderAdapterV1 {
     /// Construct one exact provider signer.
     pub fn try_new(
@@ -379,23 +348,19 @@ impl ExternalSoftwareSignerPotrProviderAdapterV1 {
             provider_id,
         })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
 }
-
 impl iroha_torii::sorafs::PotrProviderSignerV1 for ExternalSoftwareSignerPotrProviderAdapterV1 {
     fn handle(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn signer_id(&self) -> [u8; 32] {
         self.signer_id
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -410,30 +375,25 @@ impl iroha_torii::sorafs::PotrProviderSignerV1 for ExternalSoftwareSignerPotrPro
             ),
         )
     }
-
     fn provider_id(&self) -> Result<[u8; 32], iroha_torii::sorafs::PotrSignerServiceError> {
         self.signer.qualify_live().map_err(map_potr_error)?;
         Ok(self.provider_id)
     }
-
     fn public_key(&self) -> Result<Vec<u8>, iroha_torii::sorafs::PotrSignerServiceError> {
         self.signer.public_key_bytes().map_err(map_potr_error)
     }
-
     fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, iroha_torii::sorafs::PotrSignerServiceError> {
         self.signer
             .sign(SoftwareSignerPurposeV1::PotrProviderReceipt, payload)
             .map_err(map_potr_error)
     }
 }
-
 /// External software signer for governed billing-statement digests.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerBillingStatementAdapterV1 {
     signer: DetachedSignerClientV1,
     signer_id: String,
 }
-
 impl ExternalSoftwareSignerBillingStatementAdapterV1 {
     /// Construct one exact billing statement signer.
     pub fn try_new(
@@ -460,21 +420,18 @@ impl ExternalSoftwareSignerBillingStatementAdapterV1 {
         signer.ed25519_public_key()?;
         Ok(Self { signer, signer_id })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
 }
-
 impl sorafs_node::hedging_billing_service::HedgingBillingRuntimeProviderV1
     for ExternalSoftwareSignerBillingStatementAdapterV1
 {
     fn handle(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -492,7 +449,6 @@ impl sorafs_node::hedging_billing_service::HedgingBillingRuntimeProviderV1
         )
     }
 }
-
 impl sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner
     for ExternalSoftwareSignerBillingStatementAdapterV1
 {
@@ -514,13 +470,11 @@ impl sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner
             },
         )
     }
-
     fn check_readiness(
         &self,
     ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError> {
         self.signer.qualify_live().map_err(map_billing_error)
     }
-
     fn sign_digest(
         &self,
         digest: [u8; 32],
@@ -537,13 +491,11 @@ impl sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner
             .map_err(map_billing_error)
     }
 }
-
 /// External software signer for all four evidence-viewer signing purposes.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerEvidenceViewerAdapterV1 {
     signer: DetachedSignerClientV1,
 }
-
 impl ExternalSoftwareSignerEvidenceViewerAdapterV1 {
     /// Construct one exact evidence-viewer signer.
     pub fn try_new(
@@ -556,21 +508,18 @@ impl ExternalSoftwareSignerEvidenceViewerAdapterV1 {
         signer.ed25519_public_key()?;
         Ok(Self { signer })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
 }
-
 impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
     for ExternalSoftwareSignerEvidenceViewerAdapterV1
 {
     fn handle(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -588,7 +537,6 @@ impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
         )
     }
 }
-
 impl sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1
     for ExternalSoftwareSignerEvidenceViewerAdapterV1
 {
@@ -597,7 +545,6 @@ impl sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1
             .ed25519_public_key()
             .expect("constructor pins one canonical Ed25519 public key")
     }
-
     fn sign(
         &self,
         purpose: sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1,
@@ -622,13 +569,11 @@ impl sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1
             .map_err(map_evidence_error)
     }
 }
-
 /// External software signer for canonical stream-token bodies.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerStreamTokenAdapterV1 {
     signer: DetachedSignerClientV1,
 }
-
 impl ExternalSoftwareSignerStreamTokenAdapterV1 {
     /// Construct one exact stream-token signer.
     pub fn try_new(
@@ -641,25 +586,21 @@ impl ExternalSoftwareSignerStreamTokenAdapterV1 {
         signer.ed25519_public_key()?;
         Ok(Self { signer })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
 }
-
 impl iroha_torii::sorafs::StreamTokenRuntimeSigner for ExternalSoftwareSignerStreamTokenAdapterV1 {
     fn handle(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.signer
             .ed25519_public_key()
             .expect("constructor pins one canonical Ed25519 public key")
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -674,7 +615,6 @@ impl iroha_torii::sorafs::StreamTokenRuntimeSigner for ExternalSoftwareSignerStr
             ),
         )
     }
-
     fn sign(
         &self,
         signing_payload: &[u8],
@@ -684,13 +624,11 @@ impl iroha_torii::sorafs::StreamTokenRuntimeSigner for ExternalSoftwareSignerStr
             .map_err(map_stream_error)
     }
 }
-
 /// External software signer for PoP credential/root/revocation digests.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPopIssuerAdapterV1 {
     signer: DetachedSignerClientV1,
 }
-
 impl ExternalSoftwareSignerPopIssuerAdapterV1 {
     /// Construct one exact PoP issuer signer.
     pub fn try_new(
@@ -709,13 +647,11 @@ impl ExternalSoftwareSignerPopIssuerAdapterV1 {
         signer.ed25519_public_key()?;
         Ok(Self { signer })
     }
-
     /// Exact public software-signer binding.
     #[must_use]
     pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
         self.signer.binding()
     }
-
     fn issuer_id(&self) -> &str {
         match &self.signer.binding.purpose_binding {
             SoftwareSignerPurposeBindingV1::PopCredentials { issuer_id } => issuer_id,
@@ -723,18 +659,15 @@ impl ExternalSoftwareSignerPopIssuerAdapterV1 {
         }
     }
 }
-
 impl sorafs_node::pop_credentials::PopIssuerSigner for ExternalSoftwareSignerPopIssuerAdapterV1 {
     fn key_id(&self) -> &str {
         &self.signer.binding.handle
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.signer
             .ed25519_public_key()
             .expect("constructor pins one canonical Ed25519 public key")
     }
-
     fn sign_digest(
         &self,
         purpose: sorafs_node::pop_credentials::PopIssuerSigningPurposeV1,
@@ -761,13 +694,11 @@ impl sorafs_node::pop_credentials::PopIssuerSigner for ExternalSoftwareSignerPop
             .map_err(|_| REDACTED_SIGNER_FAILURE_V1.to_owned())
     }
 }
-
 /// PoP registry decorator that replaces only the issuer signer.
 pub struct ExternalSoftwareSignerPopRegistryV1 {
     base: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
     issuer_signer: Arc<ExternalSoftwareSignerPopIssuerAdapterV1>,
 }
-
 impl fmt::Debug for ExternalSoftwareSignerPopRegistryV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -777,7 +708,6 @@ impl fmt::Debug for ExternalSoftwareSignerPopRegistryV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ExternalSoftwareSignerPopRegistryV1 {
     /// Compose an existing coherent PoP registry with one isolated signer.
     pub fn try_new(
@@ -799,7 +729,6 @@ impl ExternalSoftwareSignerPopRegistryV1 {
             issuer_signer,
         })
     }
-
     fn qualified_base(
         &self,
     ) -> Result<
@@ -818,14 +747,12 @@ impl ExternalSoftwareSignerPopRegistryV1 {
         Ok(qualification)
     }
 }
-
 impl iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1
     for ExternalSoftwareSignerPopRegistryV1
 {
     fn handle(&self) -> &str {
         self.base.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -840,7 +767,6 @@ impl iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1
         }
         Ok(first)
     }
-
     fn resolve(
         &self,
         bindings: &iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1,
@@ -871,7 +797,6 @@ impl iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1
         Ok(providers)
     }
 }
-
 fn map_client_error(
     error: ExternalSoftwareSignerClientErrorV1,
 ) -> ExternalSoftwareSignerAdapterErrorV1 {
@@ -891,7 +816,6 @@ fn map_client_error(
         }
     }
 }
-
 fn map_potr_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> iroha_torii::sorafs::PotrSignerServiceError {
@@ -902,7 +826,6 @@ fn map_potr_error(
         _ => iroha_torii::sorafs::PotrSignerServiceError::Refused,
     }
 }
-
 fn map_billing_readiness_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> sorafs_node::hedging_billing_service::HedgingBillingRuntimeProviderReadinessErrorV1 {
@@ -913,7 +836,6 @@ fn map_billing_readiness_error(
             HedgingBillingRuntimeProviderReadinessErrorV1::Rejected,
     }
 }
-
 fn map_billing_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> sorafs_node::hedging_billing_service::HedgingBillingExternalError {
@@ -924,7 +846,6 @@ fn map_billing_error(
         _ => sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected,
     }
 }
-
 fn map_evidence_readiness_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1 {
@@ -935,7 +856,6 @@ fn map_evidence_readiness_error(
         _ => sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1::Rejected,
     }
 }
-
 fn map_evidence_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1 {
@@ -946,7 +866,6 @@ fn map_evidence_error(
         _ => sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected,
     }
 }
-
 fn map_stream_probe_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1 {
@@ -957,7 +876,6 @@ fn map_stream_probe_error(
         _ => iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked,
     }
 }
-
 fn map_stream_error(
     error: ExternalSoftwareSignerAdapterErrorV1,
 ) -> iroha_torii::sorafs::StreamTokenSigningError {

@@ -1,5 +1,4 @@
 // Reputation route-catalog assertions kept separate to respect the source-file budget.
-
 #[test]
 fn reputation_surface_is_committed_projection_read_only() {
     let routes = [

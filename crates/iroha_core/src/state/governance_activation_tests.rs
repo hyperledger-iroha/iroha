@@ -10,7 +10,6 @@ fn governance_stage_decisions_are_equal_and_mutually_exclusive() {
         required: 2,
         quorum_bps: 6_667,
     };
-
     assert!(record.record_decision(
         first.clone(),
         iroha_data_model::isi::governance::ParliamentDecision::Approve,
@@ -22,14 +21,12 @@ fn governance_stage_decisions_are_equal_and_mutually_exclusive() {
     assert!(!record.approvers.contains(&first));
     assert!(record.rejections.contains(&first));
     assert_eq!(record.rejections.len(), 1);
-
     assert!(record.record_decision(
         second,
         iroha_data_model::isi::governance::ParliamentDecision::Reject,
     ));
     assert!(u32::try_from(record.rejections.len()).unwrap_or(u32::MAX) >= record.required);
 }
-
 #[test]
 fn governance_stage_rejection_quorum_requires_positive_threshold() {
     let mut approvals = GovernanceStageApprovals::default();
@@ -44,10 +41,8 @@ fn governance_stage_rejection_quorum_requires_positive_threshold() {
             quorum_bps: 0,
         },
     );
-
     assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 1));
     assert!(!approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
-
     let rejecter = governance_stage_account(b"stage-rejection-quorum");
     let stage = approvals
         .stages
@@ -55,10 +50,8 @@ fn governance_stage_rejection_quorum_requires_positive_threshold() {
         .expect("stage present");
     stage.required = 1;
     stage.rejections.insert(rejecter);
-
     assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
 }
-
 fn fee_sponsor_activation_lease(
     program_id: FeeSponsorProgramId,
     revision: u64,
@@ -104,7 +97,6 @@ fn fee_sponsor_activation_lease(
         },
     )
 }
-
 fn insert_fee_sponsor_activation_lease(
     world: &mut WorldTransaction<'_, '_>,
     record: VerifiedFeeSponsorVaultAllocation,
@@ -122,7 +114,6 @@ fn insert_fee_sponsor_activation_lease(
         norito::to_bytes(&json).expect("verified allocation state"),
     );
 }
-
 #[test]
 fn fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease() {
     let sponsor = governance_stage_account(b"fee-sponsor-never-drains");
@@ -143,12 +134,10 @@ fn fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease() {
             .expect("verified allocation state"),
     );
     let world = world.block();
-
     let error = fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 2)
         .expect_err("u64::MAX lease must not admit a successor revision");
     assert!(error.contains("never drains"));
 }
-
 #[test]
 fn fee_sponsor_safe_activation_height_preserves_later_request() {
     let sponsor = governance_stage_account(b"fee-sponsor-later-activation");
@@ -168,7 +157,6 @@ fn fee_sponsor_safe_activation_height_preserves_later_request() {
             .expect("verified allocation state"),
     );
     let world = world.block();
-
     assert_eq!(
         fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 9)
             .expect("finite lease drains"),
@@ -180,13 +168,11 @@ fn fee_sponsor_safe_activation_height_preserves_later_request() {
         6
     );
 }
-
 #[test]
 fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
     use iroha_data_model::nexus::{
         FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramRevisionKey,
     };
-
     let sponsor = governance_stage_account(b"fee-sponsor-activation");
     let program_id = FeeSponsorProgramId::new(sponsor, "scheduled".parse().expect("program name"));
     let revision = FeeSponsorProgramRevision {
@@ -202,7 +188,6 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
         revision: 1,
         activate_at_height: 2,
     });
-
     let state = State::new(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -223,7 +208,6 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
         transaction.apply();
     }
     first_block.commit().expect("commit scheduled program");
-
     let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let second_block = state.block(second_header);
     let activated = second_block
@@ -236,13 +220,11 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
     assert_eq!(activated.scheduled_activation, None);
     assert_eq!(activated.lifecycle, FeeSponsorProgramLifecycle::Active);
 }
-
 #[test]
 fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
     use iroha_data_model::nexus::{
         FeeSponsorEligibility, FeeSponsorProgramActivation, FeeSponsorProgramRevisionKey,
     };
-
     let sponsor = governance_stage_account(b"fee-sponsor-drain-activation");
     let program_id = FeeSponsorProgramId::new(sponsor, "drain".parse().expect("program name"));
     let revision = |revision| FeeSponsorProgramRevision {
@@ -260,7 +242,6 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
         revision: 2,
         activate_at_height: 2,
     });
-
     let state = State::new(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -287,7 +268,6 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
         transaction.apply();
     }
     first_block.commit().expect("commit scheduled program");
-
     let second_header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let second_block = state.block(second_header);
     let deferred = second_block
@@ -304,13 +284,11 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
         })
     );
     second_block.commit().expect("commit deferred activation");
-
     let third_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
     state
         .block(third_header)
         .commit()
         .expect("commit final lease height");
-
     let fourth_header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
     let fourth_block = state.block(fourth_header);
     let activated = fourth_block
@@ -322,7 +300,6 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
     assert_eq!(activated.staged_revision, None);
     assert_eq!(activated.scheduled_activation, None);
 }
-
 fn governance_stage_account(seed: &[u8]) -> iroha_data_model::account::AccountId {
     iroha_data_model::account::AccountId::new(
         iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), iroha_crypto::Algorithm::Ed25519)

@@ -1,9 +1,7 @@
 //! Helpers for NPoS-specific genesis validation.
-
 use color_eyre::eyre::{Result, eyre};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_genesis::RawGenesisTransaction;
-
 /// Check that the provided genesis manifest carries `sumeragi_npos_parameters`.
 ///
 /// # Errors
@@ -19,7 +17,6 @@ pub fn ensure_npos_parameters(manifest: &RawGenesisTransaction) -> Result<()> {
         ))
     }
 }
-
 /// Determine whether `sumeragi_npos_parameters` is present in the manifest.
 pub fn has_npos_parameters(manifest: &RawGenesisTransaction) -> Result<bool> {
     let params = manifest.effective_parameters()?;
@@ -30,11 +27,9 @@ pub fn has_npos_parameters(manifest: &RawGenesisTransaction) -> Result<bool> {
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .is_some())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
-
+    use super::*;
     use iroha_data_model::{
         isi::Grant,
         parameter::{
@@ -45,10 +40,8 @@ mod tests {
     };
     use iroha_genesis::{GenesisBuilder, RawGenesisTransaction};
     use iroha_test_samples::ALICE_ID;
+    use std::{fs, path::PathBuf};
     use tempfile::NamedTempFile;
-
-    use super::*;
-
     fn manifest_with_params(
         params: Parameter,
         consensus_mode: SumeragiConsensusMode,
@@ -60,7 +53,6 @@ mod tests {
             .build_raw()
             .with_consensus_mode(consensus_mode)
     }
-
     #[test]
     fn detects_present_npos_parameters() {
         let manifest = roundtrip_manifest(&manifest_with_params(
@@ -70,7 +62,6 @@ mod tests {
         assert!(has_npos_parameters(&manifest).expect("valid manifest"));
         assert!(ensure_npos_parameters(&manifest).is_ok());
     }
-
     #[test]
     fn rejects_manifest_without_npos_parameters() {
         let manifest = roundtrip_manifest(&manifest_with_params(
@@ -84,7 +75,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn ignores_unrelated_set_parameter() {
         let mut builder =
@@ -101,7 +91,6 @@ mod tests {
         );
         assert!(!has_npos_parameters(&manifest).expect("valid manifest"));
     }
-
     fn roundtrip_manifest(manifest: &RawGenesisTransaction) -> RawGenesisTransaction {
         let tmp = NamedTempFile::new().expect("create temp file");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize manifest");

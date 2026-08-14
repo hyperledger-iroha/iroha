@@ -5,12 +5,6 @@
 //! committed-identity indexes for consensus validation. Committed block bodies in
 //! Kura are the recovery source of truth; [`crate::state::State`] hydrates this
 //! projection from those DA commitment bundles during access or rewind.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Bound::{Excluded, Unbounded},
-};
-
 use iroha_data_model::{
     da::commitment::{
         DaCommitmentBundle, DaCommitmentKey, DaCommitmentLocation, DaCommitmentRecord,
@@ -20,8 +14,11 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Unbounded},
+};
 use tracing::warn;
-
 /// Simple index over DA commitments.
 #[derive(Clone, Debug, Default)]
 pub struct DaCommitmentStore {
@@ -33,14 +30,12 @@ pub struct DaCommitmentStore {
     committed_by_manifest: BTreeMap<ManifestDigest, DaCommitmentWithLocation>,
     committed_by_ticket: BTreeMap<StorageTicketId, DaCommitmentWithLocation>,
 }
-
 impl DaCommitmentStore {
     /// Build a store from existing records, preserving canonical deterministic order.
     #[must_use]
     pub fn from_bundle(bundle: &[DaCommitmentRecord]) -> Self {
         Self::from_bundle_at_height(bundle, 0)
     }
-
     /// Build a store from a bundle observed at the given block height.
     #[must_use]
     pub fn from_bundle_at_height(bundle: &[DaCommitmentRecord], block_height: u64) -> Self {
@@ -49,12 +44,10 @@ impl DaCommitmentStore {
         store.insert_bundle(block_height, bundle);
         store
     }
-
     /// Insert an entire bundle captured at `block_height`.
     pub fn insert_bundle(&mut self, block_height: u64, bundle: DaCommitmentBundle) {
         self.insert_bundle_with_query_filter(block_height, bundle, |_| true);
     }
-
     /// Insert an entire bundle while filtering which records remain query-visible.
     ///
     /// Every record is still retained in committed-identity indexes and the stored block
@@ -74,7 +67,6 @@ impl DaCommitmentStore {
             |record| query_visible(record),
         );
     }
-
     /// Insert an entire bundle while independently filtering committed identities
     /// and query visibility.
     ///
@@ -106,19 +98,16 @@ impl DaCommitmentStore {
                 let _ = self.insert_with_query_visibility(record, location, query_visible(record));
             }
         }
-
         if !bundle.commitments.is_empty() {
             self.by_block.insert(block_height, bundle);
         }
     }
-
     /// Insert a commitment if none of its committed identities have been seen before.
     ///
     /// Returns `true` if the record was inserted into the index.
     pub fn insert(&mut self, record: &DaCommitmentRecord, location: DaCommitmentLocation) -> bool {
         self.insert_with_query_visibility(record, location, true)
     }
-
     fn insert_with_query_visibility(
         &mut self,
         record: &DaCommitmentRecord,
@@ -136,7 +125,6 @@ impl DaCommitmentStore {
         {
             return false;
         }
-
         let with_location = DaCommitmentWithLocation {
             commitment: record.clone(),
             location,
@@ -159,13 +147,11 @@ impl DaCommitmentStore {
         );
         true
     }
-
     /// Lookup by manifest hash.
     #[must_use]
     pub fn get_by_manifest(&self, digest: &ManifestDigest) -> Option<&DaCommitmentWithLocation> {
         self.by_manifest.get(digest)
     }
-
     /// Lookup by storage ticket.
     #[must_use]
     pub fn get_by_storage_ticket(
@@ -174,7 +160,6 @@ impl DaCommitmentStore {
     ) -> Option<&DaCommitmentWithLocation> {
         self.by_ticket.get(ticket)
     }
-
     /// Lookup by `(lane_id, epoch, sequence)`.
     #[must_use]
     pub fn get_by_lane_epoch_sequence(
@@ -185,13 +170,11 @@ impl DaCommitmentStore {
     ) -> Option<&DaCommitmentWithLocation> {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
-
     /// Lookup any committed record by `(lane_id, epoch, sequence)`, including retired lanes.
     #[must_use]
     pub fn get_committed_by_key(&self, key: &DaCommitmentKey) -> Option<&DaCommitmentWithLocation> {
         self.committed_by_key.get(key)
     }
-
     /// Lookup any committed record by manifest hash, including retired lanes.
     #[must_use]
     pub fn get_committed_by_manifest(
@@ -200,7 +183,6 @@ impl DaCommitmentStore {
     ) -> Option<&DaCommitmentWithLocation> {
         self.committed_by_manifest.get(digest)
     }
-
     /// Lookup any committed record by storage ticket, including retired lanes.
     #[must_use]
     pub fn get_committed_by_storage_ticket(
@@ -209,7 +191,6 @@ impl DaCommitmentStore {
     ) -> Option<&DaCommitmentWithLocation> {
         self.committed_by_ticket.get(ticket)
     }
-
     /// Return whether a record collides with any committed commitment identity.
     #[must_use]
     pub fn contains_record_identity(&self, record: &DaCommitmentRecord) -> bool {
@@ -222,12 +203,10 @@ impl DaCommitmentStore {
                 .get_committed_by_storage_ticket(&record.storage_ticket)
                 .is_some()
     }
-
     /// Return all commitments ordered by `(lane_id, epoch, sequence)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &DaCommitmentWithLocation> {
         self.by_lane_epoch.values()
     }
-
     /// Return commitments ordered by `(lane_id, epoch, sequence)` strictly after `cursor`.
     ///
     /// The ordered map seeks directly to the cursor in logarithmic time. Callers
@@ -244,33 +223,28 @@ impl DaCommitmentStore {
             .range((lower_bound, Unbounded))
             .map(|(_, record)| record)
     }
-
     /// Return whether the active query index contains `key`.
     #[must_use]
     pub fn contains_query_key(&self, key: DaCommitmentKey) -> bool {
         self.by_lane_epoch
             .contains_key(&(key.lane_id.as_u32(), key.epoch, key.sequence))
     }
-
     /// Number of currently queryable commitment records.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_lane_epoch.len()
     }
-
     /// Retrieve the stored bundle for a given block height.
     #[must_use]
     pub fn bundle_at(&self, block_height: u64) -> Option<&DaCommitmentBundle> {
         self.by_block.get(&block_height)
     }
-
     /// Iterate over stored bundles keyed by their originating block height.
     ///
     /// Bundles are ordered by block height.
     pub fn bundles(&self) -> impl Iterator<Item = (&u64, &DaCommitmentBundle)> {
         self.by_block.iter()
     }
-
     /// Drop query indexes belonging to retired lanes.
     ///
     /// Stored block bundles remain byte-for-byte committed bundle snapshots so
@@ -289,9 +263,9 @@ impl DaCommitmentStore {
             .retain(|(lane, _, _), _| !retired.contains(&LaneId::new(*lane)));
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -300,9 +274,6 @@ mod tests {
         },
         nexus::LaneId,
     };
-
-    use super::*;
-
     fn sample_record(id: u32, epoch: u64, seq: u64) -> DaCommitmentRecord {
         let id_u8 = u8::try_from(id).expect("lane id fits in u8 for test");
         let epoch_u8 = u8::try_from(epoch).unwrap_or(u8::MAX);
@@ -330,7 +301,6 @@ mod tests {
                 .expect("checked core DA commitment-store acknowledgement signature fixture"),
         )
     }
-
     #[test]
     fn inserts_and_deduplicates() {
         let mut store = DaCommitmentStore::default();
@@ -342,24 +312,20 @@ mod tests {
         let mut dup = record.clone();
         dup.storage_ticket = StorageTicketId::new([0x44; 32]);
         dup.manifest_hash = ManifestDigest::new([0x55; 32]);
-
         assert!(store.insert(&record, loc));
         assert!(!store.insert(&dup, loc));
-
         assert_eq!(store.all_sorted().count(), 1);
         assert_eq!(store.len(), 1);
         let stored = store.get_by_manifest(&record.manifest_hash).unwrap();
         assert_eq!(stored.commitment, record);
         assert_eq!(stored.location.block_height, 7);
     }
-
     #[test]
     fn orders_by_lane_epoch_sequence() {
         let mut store = DaCommitmentStore::default();
         let a = sample_record(2, 1, 5);
         let b = sample_record(1, 1, 1);
         let c = sample_record(1, 2, 0);
-
         let base_loc = DaCommitmentLocation {
             block_height: 3,
             index_in_bundle: 0,
@@ -385,7 +351,6 @@ mod tests {
                 ..base_loc
             },
         );
-
         let ordered: Vec<_> = store
             .all_sorted()
             .map(|rec| {
@@ -398,7 +363,6 @@ mod tests {
             })
             .collect();
         assert_eq!(ordered, vec![(1, 1, 1, 0), (1, 2, 0, 1), (2, 1, 5, 2)]);
-
         assert_eq!(
             store
                 .get_by_lane_epoch_sequence(1, 2, 0)
@@ -406,7 +370,6 @@ mod tests {
             Some(c.manifest_hash)
         );
     }
-
     #[test]
     fn seeks_strictly_after_query_key() {
         let mut store = DaCommitmentStore::default();
@@ -424,7 +387,6 @@ mod tests {
                 },
             ));
         }
-
         let cursor = DaCommitmentKey::from_record(&records[1]);
         assert!(store.contains_query_key(cursor));
         let remaining = store
@@ -438,7 +400,6 @@ mod tests {
             sequence: 9,
         }));
     }
-
     #[test]
     fn builds_from_bundle() {
         let records = vec![sample_record(3, 4, 5), sample_record(2, 1, 0)];
@@ -449,7 +410,6 @@ mod tests {
         assert_eq!(fetched.location.block_height, 11);
         assert_eq!(fetched.location.index_in_bundle, 0);
     }
-
     #[test]
     fn da_bundle_location_index_rejects_unrepresentable_indexes() {
         assert_eq!(crate::da::da_bundle_location_index(0), Some(0));
@@ -462,7 +422,6 @@ mod tests {
             assert_eq!(crate::da::da_bundle_location_index(index), None);
         }
     }
-
     #[test]
     fn prunes_retired_lanes() {
         let mut store = DaCommitmentStore::default();
@@ -477,10 +436,8 @@ mod tests {
             1,
             DaCommitmentBundle::new(vec![record_b.clone(), record_a.clone()]),
         );
-
         let retired = BTreeSet::from([LaneId::new(1)]);
         store.prune_lanes(&retired);
-
         assert_eq!(store.len(), 1);
         let kept = store
             .get_by_lane_epoch_sequence(0, 1, 1)
@@ -521,21 +478,17 @@ mod tests {
         duplicate_key.manifest_hash = ManifestDigest::new([0xC0; 32]);
         duplicate_key.storage_ticket = StorageTicketId::new([0xC1; 32]);
         assert!(store.contains_record_identity(&duplicate_key));
-
         let mut duplicate_manifest = sample_record(2, 2, 0);
         duplicate_manifest.manifest_hash = record_b.manifest_hash;
         duplicate_manifest.storage_ticket = StorageTicketId::new([0xC2; 32]);
         assert!(store.contains_record_identity(&duplicate_manifest));
-
         let mut duplicate_ticket = sample_record(2, 2, 1);
         duplicate_ticket.manifest_hash = ManifestDigest::new([0xC3; 32]);
         duplicate_ticket.storage_ticket = record_b.storage_ticket;
         assert!(store.contains_record_identity(&duplicate_ticket));
-
         let bundle = store.bundle_at(1).expect("committed bundle retained");
         assert_eq!(bundle.commitments.as_slice(), &[record_a, record_b]);
     }
-
     #[test]
     fn insert_bundle_with_query_filter_keeps_bundle_and_committed_identities() {
         let mut store = DaCommitmentStore::default();
@@ -546,7 +499,6 @@ mod tests {
             DaCommitmentBundle::new(vec![visible.clone(), hidden.clone()]),
             |record| record.lane_id == visible.lane_id,
         );
-
         let bundle = store.bundle_at(7).expect("stored committed bundle");
         assert_eq!(
             bundle.commitments.as_slice(),
@@ -598,7 +550,6 @@ mod tests {
             "hidden storage-ticket identity must still be reserved"
         );
     }
-
     #[test]
     fn insert_bundle_with_visibility_filter_hides_old_incarnation_identities() {
         let mut store = DaCommitmentStore::default();
@@ -610,7 +561,6 @@ mod tests {
             |record| record.lane_id == visible.lane_id,
             |_| true,
         );
-
         let bundle = store.bundle_at(7).expect("stored committed bundle");
         assert_eq!(
             bundle.commitments.as_slice(),
@@ -647,7 +597,6 @@ mod tests {
             !store.contains_record_identity(&old_incarnation),
             "old-incarnation manifest and storage ticket must not reserve fresh identities"
         );
-
         assert!(store.insert(
             &old_incarnation,
             DaCommitmentLocation {
@@ -666,7 +615,6 @@ mod tests {
             "fresh lane incarnation can reuse the same commitment identity"
         );
     }
-
     #[test]
     fn insert_bundle_filters_stale_duplicates_from_indexes_but_preserves_bundle() {
         let mut store = DaCommitmentStore::default();
@@ -675,13 +623,11 @@ mod tests {
         stale_duplicate.manifest_hash = ManifestDigest::new([0x55; 32]);
         stale_duplicate.storage_ticket = StorageTicketId::new([0x66; 32]);
         let later = sample_record(2, 1, 0);
-
         store.insert_bundle(7, DaCommitmentBundle::new(vec![first.clone()]));
         store.insert_bundle(
             8,
             DaCommitmentBundle::new(vec![stale_duplicate.clone(), later.clone()]),
         );
-
         assert!(
             store
                 .get_by_manifest(&stale_duplicate.manifest_hash)
@@ -693,7 +639,6 @@ mod tests {
             .expect("later record indexed");
         assert_eq!(fetched.location.block_height, 8);
         assert_eq!(fetched.location.index_in_bundle, 1);
-
         let bundle = store.bundle_at(8).expect("committed block bundle retained");
         assert_eq!(
             bundle.commitments.as_slice(),
@@ -704,7 +649,6 @@ mod tests {
             fetched.commitment
         );
     }
-
     #[test]
     fn insert_bundle_filters_identity_collisions_from_indexes_but_preserves_bundle() {
         let mut store = DaCommitmentStore::default();
@@ -714,7 +658,6 @@ mod tests {
         let mut duplicate_ticket = sample_record(3, 1, 0);
         duplicate_ticket.storage_ticket = first.storage_ticket;
         let later = sample_record(4, 1, 0);
-
         store.insert_bundle(7, DaCommitmentBundle::new(vec![first.clone()]));
         store.insert_bundle(
             8,
@@ -724,7 +667,6 @@ mod tests {
                 later.clone(),
             ]),
         );
-
         assert!(
             store.get_by_lane_epoch_sequence(2, 1, 0).is_none(),
             "duplicate-manifest record must not become queryable by lane"
@@ -738,7 +680,6 @@ mod tests {
             .expect("later record indexed");
         assert_eq!(fetched.location.block_height, 8);
         assert_eq!(fetched.location.index_in_bundle, 2);
-
         let bundle = store.bundle_at(8).expect("committed block bundle retained");
         assert_eq!(
             bundle.commitments.as_slice(),
@@ -749,7 +690,6 @@ mod tests {
             fetched.commitment
         );
     }
-
     #[test]
     fn insert_bundle_preserves_all_duplicate_bundle() {
         let mut store = DaCommitmentStore::default();
@@ -757,10 +697,8 @@ mod tests {
         let mut duplicate_key = first.clone();
         duplicate_key.manifest_hash = ManifestDigest::new([0x77; 32]);
         duplicate_key.storage_ticket = StorageTicketId::new([0x78; 32]);
-
         store.insert_bundle(7, DaCommitmentBundle::new(vec![first.clone()]));
         store.insert_bundle(8, DaCommitmentBundle::new(vec![duplicate_key.clone()]));
-
         assert!(
             store
                 .get_by_manifest(&duplicate_key.manifest_hash)
@@ -772,14 +710,12 @@ mod tests {
             .expect("duplicate-only committed block bundle retained");
         assert_eq!(bundle.commitments.as_slice(), &[duplicate_key]);
     }
-
     #[test]
     fn duplicate_manifest_is_rejected_from_indexes() {
         let mut store = DaCommitmentStore::default();
         let first = sample_record(1, 1, 1);
         let mut duplicate_manifest = sample_record(2, 2, 0);
         duplicate_manifest.manifest_hash = first.manifest_hash;
-
         assert!(store.insert(
             &first,
             DaCommitmentLocation {
@@ -794,7 +730,6 @@ mod tests {
                 index_in_bundle: 0,
             }
         ));
-
         let manifest_lookup = store
             .get_by_manifest(&first.manifest_hash)
             .expect("manifest lookup retained");
@@ -804,14 +739,12 @@ mod tests {
             "duplicate-manifest record must not be indexed by lane"
         );
     }
-
     #[test]
     fn duplicate_ticket_is_rejected_from_indexes() {
         let mut store = DaCommitmentStore::default();
         let first = sample_record(1, 1, 1);
         let mut duplicate_ticket = sample_record(2, 2, 0);
         duplicate_ticket.storage_ticket = first.storage_ticket;
-
         assert!(store.insert(
             &first,
             DaCommitmentLocation {
@@ -826,7 +759,6 @@ mod tests {
                 index_in_bundle: 0,
             }
         ));
-
         let ticket_lookup = store
             .get_by_storage_ticket(&first.storage_ticket)
             .expect("ticket lookup retained");
@@ -836,7 +768,6 @@ mod tests {
             "duplicate-ticket record must not be indexed by lane"
         );
     }
-
     #[test]
     fn contains_record_identity_detects_key_manifest_and_ticket_collisions() {
         let mut store = DaCommitmentStore::default();
@@ -848,34 +779,28 @@ mod tests {
                 index_in_bundle: 0,
             }
         ));
-
         let mut duplicate_key = first.clone();
         duplicate_key.manifest_hash = ManifestDigest::new([0x90; 32]);
         duplicate_key.storage_ticket = StorageTicketId::new([0x91; 32]);
         assert!(store.contains_record_identity(&duplicate_key));
-
         let mut duplicate_manifest = sample_record(2, 2, 0);
         duplicate_manifest.manifest_hash = first.manifest_hash;
         duplicate_manifest.storage_ticket = StorageTicketId::new([0x92; 32]);
         assert!(store.contains_record_identity(&duplicate_manifest));
-
         let mut duplicate_ticket = sample_record(3, 3, 0);
         duplicate_ticket.manifest_hash = ManifestDigest::new([0x93; 32]);
         duplicate_ticket.storage_ticket = first.storage_ticket;
         assert!(store.contains_record_identity(&duplicate_ticket));
-
         let mut fresh = sample_record(4, 4, 0);
         fresh.manifest_hash = ManifestDigest::new([0x94; 32]);
         fresh.storage_ticket = StorageTicketId::new([0x95; 32]);
         assert!(!store.contains_record_identity(&fresh));
     }
-
     #[test]
     fn stores_bundles_per_block() {
         let mut store = DaCommitmentStore::default();
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1, 1)]);
         store.insert_bundle(5, bundle.clone());
-
         let stored_bundle = store.bundle_at(5).expect("bundle present");
         assert_eq!(stored_bundle.commitments.len(), 1);
         assert_eq!(

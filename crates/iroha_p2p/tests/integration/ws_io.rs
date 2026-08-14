@@ -1,5 +1,4 @@
 //! Bounded server-side `WebSocket` byte stream used by P2P integration tests.
-
 use bytes::Bytes;
 use futures::{Sink as _, Stream as _};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
@@ -7,9 +6,7 @@ use tokio_tungstenite::{
     WebSocketStream, accept_async_with_config,
     tungstenite::{Message, protocol::WebSocketConfig},
 };
-
 const CHUNK_BYTES: usize = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
-
 fn websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()
         .read_buffer_size(CHUNK_BYTES)
@@ -18,7 +15,6 @@ fn websocket_config() -> WebSocketConfig {
         .max_message_size(Some(CHUNK_BYTES))
         .max_frame_size(Some(CHUNK_BYTES))
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShutdownState {
     Open,
@@ -26,14 +22,12 @@ enum ShutdownState {
     Closing,
     Closed,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadState {
     Open,
     FlushingCloseAcknowledgement,
     Eof,
 }
-
 /// Stateful adapter that preserves stream semantics across bounded `Binary` messages.
 pub(super) struct WsByteStream<S> {
     inner: WebSocketStream<S>,
@@ -42,7 +36,6 @@ pub(super) struct WsByteStream<S> {
     write_buffer: Vec<u8>,
     shutdown: ShutdownState,
 }
-
 impl<S> WsByteStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -56,7 +49,6 @@ where
             shutdown: ShutdownState::Open,
         }
     }
-
     fn poll_send_buffered(
         &mut self,
         cx: &mut core::task::Context<'_>,
@@ -64,7 +56,6 @@ where
         if self.write_buffer.is_empty() {
             return core::task::Poll::Ready(Ok(()));
         }
-
         let mut sink = core::pin::Pin::new(&mut self.inner);
         futures::ready!(sink.as_mut().poll_ready(cx))
             .map_err(|err| std::io::Error::other(format!("ws ready error: {err}")))?;
@@ -75,7 +66,6 @@ where
             .map_err(|err| std::io::Error::other(format!("ws send error: {err}")))?;
         core::task::Poll::Ready(Ok(()))
     }
-
     fn poll_flush_buffered(
         &mut self,
         cx: &mut core::task::Context<'_>,
@@ -85,7 +75,6 @@ where
             .map_err(|err| std::io::Error::other(format!("ws flush error: {err}")))?;
         core::task::Poll::Ready(Ok(()))
     }
-
     fn poll_flush_close_acknowledgement(
         &mut self,
         cx: &mut core::task::Context<'_>,
@@ -97,7 +86,6 @@ where
         core::task::Poll::Ready(Ok(()))
     }
 }
-
 impl<S> AsyncRead for WsByteStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -122,7 +110,6 @@ where
             }
             ReadState::Open => {}
         }
-
         match futures::ready!(core::pin::Pin::new(&mut self.inner).poll_next(cx)) {
             Some(Ok(Message::Binary(frame))) if frame.is_empty() => {
                 // Empty messages carry no stream bytes and are not EOF. Yield
@@ -160,7 +147,6 @@ where
         }
     }
 }
-
 impl<S> AsyncWrite for WsByteStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -185,7 +171,6 @@ where
         self.write_buffer.extend_from_slice(&data[..accepted]);
         core::task::Poll::Ready(Ok(accepted))
     }
-
     fn poll_flush(
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
@@ -202,7 +187,6 @@ where
             ShutdownState::Closed => core::task::Poll::Ready(Ok(())),
         }
     }
-
     fn poll_shutdown(
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
@@ -227,7 +211,6 @@ where
         core::task::Poll::Ready(Ok(()))
     }
 }
-
 /// Accept a `WebSocket` with production-equivalent allocation bounds and split
 /// it into byte-oriented halves suitable for `NetworkHandle::accept_stream`.
 ///
@@ -245,20 +228,16 @@ where
         .map_err(|err| std::io::Error::other(format!("ws accept error: {err}")))?;
     Ok(tokio::io::split(WsByteStream::new(websocket)))
 }
-
 #[cfg(test)]
 mod tests {
+    use super::WsByteStream;
     use core::{
         pin::Pin,
         task::{Context, Poll},
     };
-
     use futures::{SinkExt as _, StreamExt as _, task::noop_waker_ref};
     use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
     use tokio_tungstenite::{WebSocketStream, client_async};
-
-    use super::WsByteStream;
-
     async fn websocket_pair(
         capacity: usize,
     ) -> (
@@ -281,7 +260,6 @@ mod tests {
             client.await.expect("client handshake task"),
         )
     }
-
     #[tokio::test]
     async fn empty_binary_message_is_not_stream_eof() {
         let (mut server, mut client) = websocket_pair(4_096).await;
@@ -297,7 +275,6 @@ mod tests {
             ))
             .await
             .expect("send payload");
-
         let mut received = [0_u8; 7];
         server
             .read_exact(&mut received)
@@ -305,21 +282,18 @@ mod tests {
             .expect("read after empty binary message");
         assert_eq!(&received, b"payload");
     }
-
     #[tokio::test]
     async fn zero_capacity_read_is_immediately_ready() {
         let (mut server, _client) = websocket_pair(4_096).await;
         let mut empty = [];
         let mut read_buffer = ReadBuf::new(&mut empty);
         let mut cx = Context::from_waker(noop_waker_ref());
-
         assert!(matches!(
             Pin::new(&mut server).poll_read(&mut cx, &mut read_buffer),
             Poll::Ready(Ok(()))
         ));
         assert!(read_buffer.filled().is_empty());
     }
-
     #[tokio::test]
     async fn peer_close_is_acknowledged_before_sticky_eof() {
         let (mut server, mut client) = websocket_pair(4_096).await;
@@ -327,14 +301,12 @@ mod tests {
             .send(tokio_tungstenite::tungstenite::Message::Close(None))
             .await
             .expect("send close frame");
-
         let mut byte = [0_u8; 1];
         let first_read =
             tokio::time::timeout(std::time::Duration::from_secs(1), server.read(&mut byte))
                 .await
                 .expect("server should flush the close acknowledgement");
         assert_eq!(first_read.expect("read peer close"), 0);
-
         let acknowledgement =
             tokio::time::timeout(std::time::Duration::from_secs(1), client.next())
                 .await
@@ -342,7 +314,6 @@ mod tests {
                 .expect("close acknowledgement message")
                 .expect("valid close acknowledgement");
         assert!(acknowledgement.is_close());
-
         let mut cx = Context::from_waker(noop_waker_ref());
         let mut read_buffer = ReadBuf::new(&mut byte);
         assert!(matches!(
@@ -351,7 +322,6 @@ mod tests {
         ));
         assert!(read_buffer.filled().is_empty());
     }
-
     #[tokio::test]
     async fn pending_flush_retains_the_buffered_payload() {
         let (mut server, mut client) = websocket_pair(64).await;
@@ -360,7 +330,6 @@ mod tests {
             .write_all(&payload)
             .await
             .expect("buffer websocket payload");
-
         {
             let mut cx = Context::from_waker(noop_waker_ref());
             assert!(matches!(
@@ -368,7 +337,6 @@ mod tests {
                 Poll::Pending
             ));
         }
-
         let receiver = tokio::spawn(async move {
             client
                 .next()
@@ -380,7 +348,6 @@ mod tests {
         let message = receiver.await.expect("receiver task");
         assert_eq!(message.into_data().as_ref(), payload.as_slice());
     }
-
     #[tokio::test]
     async fn cancelled_shutdown_rejects_subsequent_writes() {
         let (mut server, _client) = websocket_pair(64).await;
@@ -388,7 +355,6 @@ mod tests {
             .write_all(&[0x5A; 1_024])
             .await
             .expect("buffer websocket payload");
-
         let mut cx = Context::from_waker(noop_waker_ref());
         assert!(matches!(
             Pin::new(&mut server).poll_shutdown(&mut cx),

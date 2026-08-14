@@ -2883,7 +2883,7 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         formal_dir=formal_dir,
     )
     assert any(
-        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns"
+        "cursor advance must preserve Completion/Runtime/Ingress and decrement only after Ingress"
         in error
         for error in errors
     ), errors
@@ -2916,8 +2916,8 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         formal_dir=formal_dir,
     )
     assert any(
-        "ordinary lifecycle completion service must delegate to the fixed "
-        "finite fair-policy scan" in error
+        "typed completion service must delegate to the fixed finite fair-policy scan"
+        in error
         and "exact reviewed token digest" not in error
         for error in errors
     ), errors
@@ -3058,6 +3058,14 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
         "lifecycle_digest_key",
     ),
     (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "begin_fetch",
+            "owner.matches_body_coordinates(round, subject)",
+            "false",
+            "ordinary Fetch admission must reject coordinates already owned by recovered Decision Fetch",
+            "begin_fetch",
+        ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
             "adopt_effect_ownership",

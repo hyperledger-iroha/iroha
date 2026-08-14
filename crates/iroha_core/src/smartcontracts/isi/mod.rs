@@ -60,7 +60,11 @@ pub mod tx;
 /// Native SoraNet VPN lease escrow instruction handlers.
 pub mod vpn;
 pub mod world;
-
+use super::Execute;
+use crate::{
+    smartcontracts::triggers::set::SetReadOnly,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 use eyre::Result;
 pub use iroha_data_model::Registrable;
 use iroha_data_model::{
@@ -69,16 +73,8 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
-
-use super::Execute;
-use crate::{
-    smartcontracts::triggers::set::SetReadOnly,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
-
 type InstructionHandler =
     fn(&InstructionBox, &AccountId, &mut StateTransaction<'_, '_>) -> Option<Result<(), Error>>;
-
 fn dispatch_instruction<T: Execute + Clone + 'static>(
     instruction: &InstructionBox,
     authority: &AccountId,
@@ -89,21 +85,17 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
         .downcast_ref::<T>()
         .map(|isi| isi.clone().execute(authority, state_transaction))
 }
-
 macro_rules! define_instruction_handlers {
     ($(dispatch_instruction::<$instruction:ty $(,)?>),* $(,)?) => {
         const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
             $(dispatch_instruction::<$instruction>),*
         ];
-
         #[cfg(test)]
         trait NativeInstructionRegistered {}
-
         $(
             #[cfg(test)]
             impl NativeInstructionRegistered for $instruction {}
         )*
-
         /// Return the concrete type registered by the native dispatcher for `instruction`.
         ///
         /// Validation-fee admission uses this matcher as its deny-by-default boundary: adding a
@@ -119,14 +111,12 @@ macro_rules! define_instruction_handlers {
             )*
             None
         }
-
         #[cfg(test)]
         fn registered_native_instruction_type_names() -> Vec<&'static str> {
             vec![$(core::any::type_name::<$instruction>()),*]
         }
     };
 }
-
 define_instruction_handlers! {
     dispatch_instruction::<RegisterPeerWithPop>,
     dispatch_instruction::<RegisterBox>,
@@ -557,21 +547,18 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
 }
-
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     iroha_logger::debug!(isi=%instruction, "Executing");
-
     if let Some(result) = INSTRUCTION_HANDLERS
         .iter()
         .find_map(|handler| handler(instruction, authority, state_transaction))
     {
         return result;
     }
-
     // Custom instructions are expected to be handled by a custom executor
     if instruction
         .as_any()
@@ -582,27 +569,20 @@ pub(crate) fn execute_borrowed_instruction(
             "Custom instructions require an executor upgrade",
         ));
     }
-
     // If we reach here, the instruction type is unknown or unregistered
     Err(Error::from("Unknown instruction type"))
 }
-
 #[cfg(test)]
 mod registry_dispatch_tests {
-    use std::collections::BTreeSet;
-
     use super::*;
-
+    use std::collections::BTreeSet;
     fn has_dispatch_handler(type_name: &str) -> bool {
         registered_native_instruction_type_names().contains(&type_name)
     }
-
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
-
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;
-
         assert_native_registration::<privacy::RegisterPrivacyProtocolActivationV1>();
         assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>();
         assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>();
@@ -632,7 +612,6 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
     }
-
     #[test]
     fn default_instruction_registry_entries_have_core_dispatch_handlers() {
         let registry = iroha_data_model::isi::registry::default();
@@ -642,13 +621,11 @@ mod registry_dispatch_tests {
             .filter(|name| *name != custom_instruction)
             .filter(|name| !has_dispatch_handler(name))
             .collect::<BTreeSet<_>>();
-
         assert!(
             missing.is_empty(),
             "default registry entries missing core dispatch handlers: {missing:?}"
         );
     }
-
     #[test]
     fn custom_instruction_is_only_default_registry_entry_without_core_dispatch_handler() {
         let registry = iroha_data_model::isi::registry::default();
@@ -657,18 +634,15 @@ mod registry_dispatch_tests {
             .filter(|name| !has_dispatch_handler(name))
             .collect::<BTreeSet<_>>();
         let expected = BTreeSet::from([std::any::type_name::<CustomInstruction>()]);
-
         assert_eq!(
             missing, expected,
             "only CustomInstruction should require a custom executor"
         );
     }
-
     #[test]
     fn custom_instruction_stays_custom_executor_only() {
         let registry = iroha_data_model::isi::registry::default();
         let custom_instruction = std::any::type_name::<CustomInstruction>();
-
         assert!(
             registry.contains(custom_instruction),
             "custom instructions must remain decodable for custom executors"
@@ -678,7 +652,6 @@ mod registry_dispatch_tests {
             "custom instructions must not be executable by the default core dispatcher"
         );
     }
-
     #[test]
     fn direct_grouped_variants_stay_out_of_default_registry_even_with_handlers() {
         let registry = iroha_data_model::isi::registry::default();
@@ -701,7 +674,6 @@ mod registry_dispatch_tests {
             std::any::type_name::<iroha_data_model::isi::settlement::DvpIsi>(),
             std::any::type_name::<iroha_data_model::isi::settlement::PvpIsi>(),
         ];
-
         for name in direct_variants {
             assert!(
                 has_dispatch_handler(name),
@@ -713,7 +685,6 @@ mod registry_dispatch_tests {
             );
         }
     }
-
     #[test]
     fn removed_direct_stable_wire_ids_do_not_alias_boxed_dispatch_entries() {
         let registry = iroha_data_model::isi::registry::default();
@@ -724,7 +695,6 @@ mod registry_dispatch_tests {
             iroha_data_model::isi::settlement::DvpIsi::WIRE_ID,
             iroha_data_model::isi::settlement::PvpIsi::WIRE_ID,
         ];
-
         for wire_id in removed_wire_ids {
             assert!(
                 !registry.contains(wire_id),
@@ -732,7 +702,6 @@ mod registry_dispatch_tests {
             );
         }
     }
-
     #[test]
     fn retired_sns_mutations_have_no_native_dispatch_handler() {
         let registry = iroha_data_model::isi::registry::default();
@@ -752,7 +721,6 @@ mod registry_dispatch_tests {
             "iroha.sns.name.freeze",
             "iroha.sns.name.unfreeze",
         ];
-
         for type_name in removed_type_names {
             assert!(!has_dispatch_handler(type_name));
             assert!(!registry.contains(type_name));
@@ -762,7 +730,6 @@ mod registry_dispatch_tests {
         }
     }
 }
-
 impl Execute for InstructionBox {
     fn execute(
         self,
@@ -772,7 +739,6 @@ impl Execute for InstructionBox {
         execute_borrowed_instruction(&self, authority, state_transaction)
     }
 }
-
 impl Execute for iroha_data_model::isi::InvalidInstruction {
     fn execute(
         self,
@@ -787,7 +753,6 @@ impl Execute for iroha_data_model::isi::InvalidInstruction {
         )))
     }
 }
-
 impl Execute for RegisterBox {
     #[iroha_logger::log(name = "register", skip_all, fields(id))]
     fn execute(
@@ -806,7 +771,6 @@ impl Execute for RegisterBox {
         }
     }
 }
-
 impl Execute for UnregisterBox {
     #[iroha_logger::log(name = "unregister", skip_all, fields(id))]
     fn execute(
@@ -825,7 +789,6 @@ impl Execute for UnregisterBox {
         }
     }
 }
-
 impl Execute for MintBox {
     #[iroha_logger::log(name = "Mint", skip_all, fields(destination))]
     fn execute(
@@ -839,7 +802,6 @@ impl Execute for MintBox {
         }
     }
 }
-
 impl Execute for BurnBox {
     #[iroha_logger::log(name = "burn", skip_all, fields(destination))]
     fn execute(
@@ -853,7 +815,6 @@ impl Execute for BurnBox {
         }
     }
 }
-
 impl Execute for TransferBox {
     #[iroha_logger::log(name = "transfer", skip_all, fields(from, to))]
     fn execute(
@@ -869,7 +830,6 @@ impl Execute for TransferBox {
         }
     }
 }
-
 impl Execute for SetKeyValueBox {
     fn execute(
         self,
@@ -885,7 +845,6 @@ impl Execute for SetKeyValueBox {
         }
     }
 }
-
 impl Execute for RemoveKeyValueBox {
     fn execute(
         self,
@@ -901,7 +860,6 @@ impl Execute for RemoveKeyValueBox {
         }
     }
 }
-
 impl Execute for iroha_data_model::isi::rwa::RwaInstructionBox {
     fn execute(
         self,
@@ -924,7 +882,6 @@ impl Execute for iroha_data_model::isi::rwa::RwaInstructionBox {
         }
     }
 }
-
 impl Execute for GrantBox {
     #[iroha_logger::log(name = "grant", skip_all, fields(object))]
     fn execute(
@@ -939,7 +896,6 @@ impl Execute for GrantBox {
         }
     }
 }
-
 impl Execute for RevokeBox {
     #[iroha_logger::log(name = "revoke", skip_all, fields(object))]
     fn execute(
@@ -954,16 +910,20 @@ impl Execute for RevokeBox {
         }
     }
 }
-
 pub mod prelude {
     //! Re-export important traits and types for glob import `(::*)`
     pub use super::*;
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, sync::Arc};
-
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        tx::AcceptedTransaction,
+    };
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -983,17 +943,8 @@ mod tests {
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,
     };
+    use std::{num::NonZeroU32, sync::Arc};
     use tokio::test;
-
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-        tx::AcceptedTransaction,
-    };
-
     fn axt_test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
         let mut payload = Vec::new();
         payload.extend_from_slice(domain);
@@ -1002,16 +953,13 @@ mod tests {
         }
         iroha_crypto::Hash::new(payload)
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("ISI module fixture key generation should succeed")
     }
-
     #[test]
     async fn checked_keypair_helper_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     fn minimal_contract_artifact() -> (
         Vec<u8>,
         iroha_data_model::smart_contract::manifest::ContractManifest,
@@ -1057,7 +1005,6 @@ mod tests {
         let verified = ivm::verify_contract_artifact(&artifact).expect("valid test contract");
         (artifact, verified.manifest)
     }
-
     fn axt_lane_relay_proof_blob_for(
         envelope: &LaneRelayEnvelope,
         proof_seed: &[u8],
@@ -1151,7 +1098,6 @@ mod tests {
             expiry_slot: Some(expiry_slot),
         }
     }
-
     fn axt_effect_proof_blob_for(
         envelope: &LaneRelayEnvelope,
         proof_seed: &[u8],
@@ -1250,7 +1196,6 @@ mod tests {
             expiry_slot: Some(expiry_slot),
         }
     }
-
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
@@ -1287,7 +1232,6 @@ mod tests {
         state_block.commit().unwrap();
         Ok(state)
     }
-
     fn configure_lane_relay_catalogs(
         state_transaction: &mut StateTransaction<'_, '_>,
         dsid: DataSpaceId,
@@ -1325,7 +1269,6 @@ mod tests {
             .lane_incarnation_activation_heights
             .insert(lane_id, 0);
     }
-
     fn sample_lane_relay_envelope(
         block_header: iroha_data_model::block::BlockHeader,
         lane_id: LaneId,
@@ -1360,7 +1303,6 @@ mod tests {
             verified_at_height,
         }))
     }
-
     fn relay_state_key_for_test(envelope: &LaneRelayEnvelope) -> StatePath {
         envelope
             .relay_ref()
@@ -1368,7 +1310,6 @@ mod tests {
             .parse()
             .expect("relay state key")
     }
-
     fn lane_relay_envelope_with_proof_payload(
         envelope: LaneRelayEnvelope,
         proof_blob: &ProofBlob,
@@ -1379,7 +1320,6 @@ mod tests {
             verified_at_height,
         }))
     }
-
     fn verified_lane_relay_record_for_test(
         envelope: LaneRelayEnvelope,
         proof_blob: &ProofBlob,
@@ -1410,7 +1350,6 @@ mod tests {
             binding,
         )
     }
-
     #[test]
     async fn register_verified_lane_relay_instruction_box_is_registered() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1420,7 +1359,6 @@ mod tests {
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
-
         let settlement_commitment = LaneBlockCommitment {
             block_height: block_header.height().get(),
             lane_id: LaneId::new(3),
@@ -1459,18 +1397,15 @@ mod tests {
                 proof_blob,
                 effect_proof_blob: None,
             });
-
         let is_registered = INSTRUCTION_HANDLERS
             .iter()
             .any(|handler| handler(&instruction, &ALICE_ID, &mut state_transaction).is_some());
-
         assert!(
             is_registered,
             "RegisterVerifiedLaneRelay must be wired into INSTRUCTION_HANDLERS"
         );
         Ok(())
     }
-
     #[test]
     async fn default_executor_rejects_invalid_instruction_placeholders() -> Result<()> {
         let state = State::new(
@@ -1486,10 +1421,8 @@ mod tests {
             [0xAB; 32],
             "malformed boxed payload",
         ));
-
         let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
             .expect_err("invalid instruction placeholders must fail execution");
-
         assert!(matches!(
             err,
             InstructionExecutionError::Conversion(message)
@@ -1499,7 +1432,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn default_executor_rejects_custom_instruction_without_custom_executor() -> Result<()> {
         let state = State::new(
@@ -1511,10 +1443,8 @@ mod tests {
         let mut state_block = state.block(valid_block.as_ref().header().clone());
         let mut state_transaction = state_block.transaction();
         let instruction = InstructionBox::from(CustomInstruction::new("requires custom executor"));
-
         let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
             .expect_err("custom instructions must not execute through the default dispatcher");
-
         assert!(matches!(
             err,
             InstructionExecutionError::Conversion(message)
@@ -1522,7 +1452,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn default_executor_rejects_opaque_instruction_even_with_registered_wire_id() -> Result<()>
     {
@@ -1541,10 +1470,8 @@ mod tests {
         let opaque = iroha_data_model::isi::OpaqueInstruction::from_framed(Log::WIRE_ID, &framed)
             .expect("opaque payload");
         let instruction = InstructionBox::from(opaque);
-
         let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
             .expect_err("opaque instructions must not execute through the default dispatcher");
-
         assert!(matches!(
             err,
             InstructionExecutionError::Conversion(message)
@@ -1552,7 +1479,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_when_nexus_disabled() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1563,7 +1489,6 @@ mod tests {
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
         state_transaction.nexus.enabled = false;
-
         let manifest_root = [0x42; 32];
         let envelope = sample_lane_relay_envelope(
             block_header,
@@ -1587,7 +1512,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("disabled nexus must reject verified lane relay registration");
@@ -1598,7 +1522,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_unknown_lane_id() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1610,7 +1533,6 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let dsid = DataSpaceId::new(10);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, LaneId::new(3));
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             LaneId::new(4),
@@ -1633,7 +1555,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("unknown lane id must be rejected");
@@ -1645,7 +1566,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_stale_geometry_lane_id() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1688,7 +1608,6 @@ mod tests {
                 .all(|lane| lane.id != stale_lane),
             "test must keep the stale lane out of the authoritative catalog"
         );
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             stale_lane,
@@ -1711,7 +1630,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("stale derived geometry must not register verified relay state");
@@ -1723,7 +1641,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_lane_dataspace_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1737,7 +1654,6 @@ mod tests {
         let envelope_dsid = DataSpaceId::new(11);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, lane_dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -1760,7 +1676,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("lane dataspace mismatch must be rejected");
@@ -1772,7 +1687,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_unknown_dataspace_id() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1794,7 +1708,6 @@ mod tests {
         .expect("unrelated dataspace catalog");
         state_transaction.nexus.dataspace_catalog = unrelated_catalog.clone();
         state_transaction.world.dataspace_catalog = unrelated_catalog;
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -1817,7 +1730,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("unknown dataspace id must be rejected");
@@ -1829,7 +1741,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_empty_proof_payload() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1842,7 +1753,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let proof_blob = ProofBlob {
             payload: Vec::new(),
             expiry_slot: Some(state_transaction.block_height() + 10),
@@ -1859,7 +1769,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("empty proof payload must be rejected");
@@ -1871,7 +1780,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_malformed_proof_envelope() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1884,7 +1792,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let proof_blob = ProofBlob {
             payload: vec![0xFF, 0x00, 0xFE],
             expiry_slot: Some(state_transaction.block_height() + 10),
@@ -1901,7 +1808,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("malformed proof envelope must be rejected");
@@ -1913,7 +1819,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_proof_manifest_root_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1926,7 +1831,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -1952,7 +1856,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("proof manifest root mismatch must be rejected");
@@ -1964,7 +1867,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_proof_dataspace_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -1977,7 +1879,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2003,7 +1904,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("proof dataspace mismatch must be rejected");
@@ -2015,7 +1915,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_stale_fastpq_height() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2028,7 +1927,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2051,7 +1949,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("stale proof material height must be rejected");
@@ -2063,7 +1960,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_zero_like_fastpq_digest() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2076,7 +1972,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2098,7 +1993,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("zero-like FastPQ digest must be rejected");
@@ -2110,7 +2004,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_envelope_block_height_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2123,7 +2016,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2147,7 +2039,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("envelope block height mismatch must be rejected");
@@ -2160,7 +2051,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_settlement_lane_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2173,7 +2063,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2197,7 +2086,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("settlement lane mismatch must be rejected");
@@ -2210,7 +2098,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_settlement_dataspace_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2223,7 +2110,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2247,7 +2133,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("settlement dataspace mismatch must be rejected");
@@ -2260,7 +2145,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_settlement_hash_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2273,7 +2157,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2299,7 +2182,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("settlement hash mismatch must be rejected");
@@ -2312,7 +2194,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_settlement_totals_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2325,7 +2206,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2359,7 +2239,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("settlement totals mismatch must be rejected");
@@ -2372,7 +2251,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_mismatched_fastpq_digest() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2385,7 +2263,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let manifest_root = [0x42; 32];
         let expiry_slot = block_header.height().get() + 10;
         let envelope = sample_lane_relay_envelope(
@@ -2405,7 +2282,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("mismatched proof digest must be rejected");
@@ -2417,7 +2293,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_mismatched_claim_digest() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2430,7 +2305,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let manifest_root = [0x42; 32];
         let expiry_slot = block_header.height().get() + 10;
         let envelope = sample_lane_relay_envelope(
@@ -2461,7 +2335,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("mismatched claim digest must be rejected");
@@ -2473,7 +2346,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_future_fastpq_height() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2486,7 +2358,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let manifest_root = [0x42; 32];
         let expiry_slot = block_header.height().get() + 10;
         let envelope = sample_lane_relay_envelope(
@@ -2510,7 +2381,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("future proof height must be rejected");
@@ -2522,7 +2392,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_missing_manifest_root() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2535,7 +2404,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope_with_manifest = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2558,7 +2426,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("missing manifest root must be rejected");
@@ -2570,7 +2437,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_zero_manifest_root() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2583,7 +2449,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2606,7 +2471,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("zero manifest root must be rejected");
@@ -2618,7 +2482,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_expired_proof_blob() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2631,7 +2494,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2654,7 +2516,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("expired proof must be rejected");
@@ -2666,7 +2527,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_missing_fastpq_binding() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2679,7 +2539,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2705,7 +2564,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("missing fastpq binding must be rejected");
@@ -2717,7 +2575,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_source_dsid_mismatch() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2730,7 +2587,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2760,7 +2616,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("source dataspace mismatch must be rejected");
@@ -2772,7 +2627,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_wrong_effect_type() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2785,7 +2639,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2815,7 +2668,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("wrong effect type must be rejected");
@@ -2827,7 +2679,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_business_effect_smuggled_in_lane_proof()
     -> Result<()> {
@@ -2841,7 +2692,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2881,7 +2731,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("lane proof must not smuggle a business-effect binding");
@@ -2901,7 +2750,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_unanchored_business_effect_proof() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -2914,7 +2762,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -2943,7 +2790,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: Some(effect_proof_blob),
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("unanchored business-effect proof must be rejected");
@@ -2967,7 +2813,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_effect_proof_before_proof_verification()
     -> Result<()> {
@@ -2981,7 +2826,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -3001,7 +2845,6 @@ mod tests {
             }),
             proof_blob,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("disabled effect proof must be rejected before proof verification");
@@ -3014,7 +2857,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_missing_final_qc_before_state_write() -> Result<()>
     {
@@ -3028,7 +2870,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -3052,7 +2893,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("a structurally valid proof without a final QC must not write relay state");
@@ -3073,7 +2913,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_malformed_existing_state() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3086,7 +2925,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -3113,7 +2951,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("malformed existing state must be rejected");
@@ -3125,7 +2962,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn register_verified_lane_relay_rejects_conflicting_existing_state() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3138,7 +2974,6 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
         configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
-
         let envelope = sample_lane_relay_envelope(
             block_header,
             lane_id,
@@ -3172,7 +3007,6 @@ mod tests {
             proof_blob,
             effect_proof_blob: None,
         };
-
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("conflicting existing state must be rejected");
@@ -3183,7 +3017,6 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     async fn nft() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3208,7 +3041,6 @@ mod tests {
         assert_eq!(value, Some(vec![1_u32, 2_u32, 3_u32,].into()));
         Ok(())
     }
-
     #[test]
     async fn account_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3230,17 +3062,14 @@ mod tests {
         assert_eq!(bytes, Some(vec![1_u32, 2_u32, 3_u32,].into()));
         Ok(())
     }
-
     #[test]
     async fn account_metadata_limit() -> Result<()> {
-        use std::str::FromStr as _;
-
         use iroha_data_model::{
             parameter::{CustomParameter, CustomParameterId},
             prelude::Parameter,
         };
         use iroha_primitives::json::Json;
-
+        use std::str::FromStr as _;
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3249,7 +3078,6 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-
         // Set a very small metadata size limit via custom parameter
         let param_id = CustomParameterId::from_str("max_metadata_value_bytes")?;
         let small_limit = 16_u64;
@@ -3258,30 +3086,25 @@ mod tests {
             Json::new(small_limit),
         )));
         set_param.execute(&account_id, &mut state_transaction)?;
-
         // Attempt to set a metadata value exceeding the limit
         let key = "TooBig".parse::<Name>()?;
         let big = Json::new("X".repeat(32)); // 32 > 16
         let res = SetKeyValue::account(account_id.clone(), key.clone(), big)
             .execute(&account_id, &mut state_transaction);
         assert!(matches!(res, Err(Error::InvalidParameter(_))));
-
         // Now lower the value and ensure it succeeds
         let ok = Json::new("Y".repeat(8));
         SetKeyValue::account(account_id.clone(), key.clone(), ok)
             .execute(&account_id, &mut state_transaction)?;
-
         state_transaction.apply();
         state_block.commit().unwrap();
         Ok(())
     }
-
     #[test]
     async fn register_contract_manifest_is_queryable_with_runtime_authority() -> Result<()> {
         use iroha_data_model::{
             isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
         };
-
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3289,7 +3112,6 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
-
         let alice = ALICE_ID.clone();
         let token =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
@@ -3300,32 +3122,25 @@ mod tests {
         smart_contract_code::RegisterSmartContractBytes { code_hash: h, code }
             .execute(&alice, &mut stx)?;
         let manifest = manifest.signed(&ALICE_KEYPAIR);
-
         smart_contract_code::RegisterSmartContractCode {
             manifest: manifest.clone(),
         }
         .execute(&alice, &mut stx)?;
-
         stx.apply();
         state_block.commit().unwrap();
-
         // Verify it is stored
         let got = state.view().world().contract_manifests().get(&h).cloned();
         assert_eq!(got, Some(manifest.clone()));
-
         // Verify query returns it
         let q = prelude::FindContractManifestByCodeHash { code_hash: h };
         let out = <_ as crate::smartcontracts::ValidSingularQuery>::execute(&q, &state.view())?;
         assert_eq!(out, manifest);
-
         Ok(())
     }
-
     #[test]
     async fn register_contract_manifest_requires_provenance() -> Result<()> {
         use iroha_crypto::Hash;
         use iroha_data_model::{isi::smart_contract_code, permission, prelude as dm};
-
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3333,18 +3148,15 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
-
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
         let (_, mut manifest) = minimal_contract_artifact();
         manifest.code_hash = Some(h);
         manifest.provenance = None;
-
         let token =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
         let perm: permission::Permission = token.into();
         dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
-
         let err = smart_contract_code::RegisterSmartContractCode { manifest }
             .execute(&alice, &mut stx)
             .expect_err("missing provenance must fail");
@@ -3356,12 +3168,10 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     async fn register_contract_manifest_rejects_wrong_signer() -> Result<()> {
         use iroha_crypto::Hash;
         use iroha_data_model::{isi::smart_contract_code, permission, prelude as dm};
-
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3369,18 +3179,15 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
-
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
         let (_, mut manifest) = minimal_contract_artifact();
         manifest.code_hash = Some(h);
         let manifest = manifest.signed(&checked_keypair());
-
         let token =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
         let perm: permission::Permission = token.into();
         dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
-
         let err = smart_contract_code::RegisterSmartContractCode { manifest }
             .execute(&alice, &mut stx)
             .expect_err("wrong signer must fail");
@@ -3395,7 +3202,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     async fn burning_trigger_to_zero_removes_it() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3407,7 +3213,6 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let trigger_id = "will_be_removed".parse::<TriggerId>()?;
-
         // Register the trigger with Exactly(1) repeats
         let register_trigger = Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -3422,14 +3227,11 @@ mod tests {
             .expect("trigger action fixture satisfies validation invariants"),
         ));
         register_trigger.execute(&account_id, &mut state_transaction)?;
-
         // Burn 1 repeat to reach zero; the trigger should be removed immediately
         Burn::trigger_repetitions(1, trigger_id.clone())
             .execute(&account_id, &mut state_transaction)?;
-
         state_transaction.apply();
         state_block.commit().unwrap();
-
         // Verify trigger is no longer active
         let active = state
             .view()
@@ -3438,10 +3240,8 @@ mod tests {
             .inspect_by_id(&trigger_id, |_| ())
             .is_some();
         assert!(!active, "trigger should be removed at zero repeats");
-
         Ok(())
     }
-
     #[test]
     async fn registering_zero_repeat_trigger_is_rejected() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3453,7 +3253,6 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let trigger_id = "no_effect".parse::<TriggerId>()?;
-
         // Attempt to register a trigger with Exactly(0) repeats
         let register_trigger = Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -3476,10 +3275,8 @@ mod tests {
                 InvalidParameterError::SmartContract(message)
             ) if message == "trigger repeat count must be greater than zero"
         ));
-
         state_transaction.apply();
         state_block.commit().unwrap();
-
         // Rejection must leave trigger state unchanged.
         let active = state
             .view()
@@ -3488,10 +3285,8 @@ mod tests {
             .inspect_by_id(&trigger_id, |_| ())
             .is_some();
         assert!(!active, "a rejected zero-repeat trigger must not be stored");
-
         Ok(())
     }
-
     #[test]
     async fn register_box_trigger_executes() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3502,7 +3297,6 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let trigger_id = "boxed_trigger".parse::<TriggerId>()?;
-
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -3517,10 +3311,8 @@ mod tests {
         );
         RegisterBox::Trigger(Register::trigger(trigger))
             .execute(&ALICE_ID, &mut state_transaction)?;
-
         state_transaction.apply();
         state_block.commit().unwrap();
-
         let registered = state
             .view()
             .world
@@ -3528,10 +3320,8 @@ mod tests {
             .inspect_by_id(&trigger_id, |_| ())
             .is_some();
         assert!(registered, "trigger should be registered via RegisterBox");
-
         Ok(())
     }
-
     #[test]
     async fn asset_definition_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3565,7 +3355,6 @@ mod tests {
         assert_eq!(value, Some(vec![1_u32, 2_u32, 3_u32,].into()));
         Ok(())
     }
-
     #[test]
     async fn instruction_box_handles_asset_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3583,23 +3372,19 @@ mod tests {
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
         Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;
-
         let key = "note".parse::<Name>()?;
         let value = Json::from(norito::json!("demo"));
         InstructionBox::from(SetAssetKeyValue::new(asset_id.clone(), key.clone(), value))
             .execute(&account_id, &mut state_transaction)?;
         InstructionBox::from(RemoveAssetKeyValue::new(asset_id.clone(), key))
             .execute(&account_id, &mut state_transaction)?;
-
         state_transaction.apply();
         state_block.commit().unwrap();
-
         let view = state.view();
         let metadata = view.world.asset_metadata().get(&asset_id);
         assert!(metadata.is_none(), "asset metadata should be cleared");
         Ok(())
     }
-
     #[test]
     async fn domain_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3626,7 +3411,6 @@ mod tests {
         assert_eq!(bytes, Some(vec![1_u32, 2_u32, 3_u32,].into()));
         Ok(())
     }
-
     #[test]
     async fn executing_unregistered_trigger_should_return_error() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3638,20 +3422,16 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let trigger_id = "test_trigger_id".parse()?;
-
         assert!(matches!(
             ExecuteTrigger::new(trigger_id)
                 .execute(&account_id, &mut state_transaction)
                 .expect_err("Error expected"),
             Error::Find(_)
         ));
-
         state_transaction.apply();
         state_block.commit().unwrap();
-
         Ok(())
     }
-
     #[test]
     async fn unauthorized_trigger_execution_should_return_error() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3664,11 +3444,9 @@ mod tests {
         let account_id = ALICE_ID.clone();
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
-
         // register fake account
         let register_account = Register::account(Account::new(fake_account_id.clone()));
         register_account.execute(&account_id, &mut state_transaction)?;
-
         // register the trigger
         let register_trigger = Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -3682,12 +3460,9 @@ mod tests {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         ));
-
         register_trigger.execute(&account_id, &mut state_transaction)?;
-
         // execute with the valid account
         ExecuteTrigger::new(trigger_id.clone()).execute(&account_id, &mut state_transaction)?;
-
         // execute with the fake account
         assert!(matches!(
             ExecuteTrigger::new(trigger_id)
@@ -3695,17 +3470,13 @@ mod tests {
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)
         ));
-
         state_transaction.apply();
         state_block.commit().unwrap();
-
         Ok(())
     }
-
     #[test]
     async fn time_trigger_with_single_execution_is_not_mintable() -> Result<()> {
         use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
-
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3715,13 +3486,11 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let trigger_id = "single_time".parse::<TriggerId>()?;
-
         // Schedule with no period (single execution) is not mintable; repeats must be Exactly(1)
         let filter = TimeEventFilter::new(ExecutionTime::Schedule(Schedule {
             start_ms: 0,
             period_ms: None,
         }));
-
         let bad = Register::trigger(Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -3737,12 +3506,10 @@ mod tests {
                 .expect_err("expected error"),
             Error::Math(_)
         ));
-
         state_transaction.apply();
         state_block.commit().unwrap();
         Ok(())
     }
-
     #[test]
     async fn not_allowed_to_register_genesis_domain_but_genesis_account_can_be_linked() -> Result<()>
     {
@@ -3771,10 +3538,8 @@ mod tests {
         );
         state_transaction.apply();
         state_block.commit().unwrap();
-
         Ok(())
     }
-
     #[test]
     async fn transaction_signed_by_genesis_account_is_statelessly_accepted() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
@@ -3784,7 +3549,6 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-
         let tx = TransactionBuilder::new(
             state.network_id,
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),

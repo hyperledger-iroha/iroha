@@ -5,9 +5,7 @@
 //! second content-ownership database: approved manifests and completed
 //! replication orders remain the sole authority, while adverts only supply
 //! current peer connectivity metadata.
-
-use std::collections::{BTreeMap, BTreeSet};
-
+use crate::{SharedAppState, sorafs::ProviderAdvertCache};
 use axum::{
     body::Body,
     extract::{Path, RawQuery, State},
@@ -26,17 +24,14 @@ use iroha_logger::{debug, warn};
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
 use sorafs_manifest::{AdvertEndpoint, EndpointKind, ProviderAdvertV1, TransportProtocol};
+pub(crate) use sorafs_orchestrator::routing_authority::RoutingAuthorityCache;
 use sorafs_orchestrator::routing_authority::{
     FinalizedStateIdentityV1, RoutingAuthorityError, RoutingAuthoritySource,
     build_routing_authority_projection,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use time::{Month, OffsetDateTime, Weekday};
 use url::{Host as UrlHost, Url};
-
-use crate::{SharedAppState, sorafs::ProviderAdvertCache};
-
-pub(crate) use sorafs_orchestrator::routing_authority::RoutingAuthorityCache;
-
 const JSON_RESULT_LIMIT: usize = 100;
 const NDJSON_RESULT_LIMIT: usize = 1_024;
 const MAX_PATH_IDENTIFIER_BYTES: usize = 256;
@@ -51,15 +46,12 @@ const MAX_ENDPOINT_BYTES: usize = 512;
 const POSITIVE_CACHE_TTL_SECS: u64 = 300;
 const NEGATIVE_CACHE_TTL_SECS: u64 = 15;
 const STALE_CACHE_TTL_SECS: u64 = 86_400;
-
 const CONTENT_TYPE_JSON: &str = "application/json";
 const CONTENT_TYPE_NDJSON: &str = "application/x-ndjson";
-
 const PROTOCOL_TORII_HTTP_RANGE: &str = "transport-sorafs-http-range";
 const PROTOCOL_QUIC_STREAM: &str = "transport-sorafs-quic-stream";
 const PROTOCOL_SORANET_RELAY: &str = "transport-sorafs-soranet-relay";
 const PROTOCOL_VENDOR: &str = "transport-sorafs-vendor";
-
 /// Serve `GET /routing/v1/providers/{cid}`.
 pub(crate) async fn handle_get_routing_providers(
     State(state): State<SharedAppState>,
@@ -97,7 +89,6 @@ pub(crate) async fn handle_get_routing_providers(
     let mut cache_guard = cache.write().await;
     cache_guard.prune_stale(now);
     let cache_guard = tokio::sync::RwLockWriteGuard::downgrade(cache_guard);
-
     let provider_ids = authority
         .providers_for_content(&content_cid)
         .cloned()
@@ -107,7 +98,6 @@ pub(crate) async fn handle_get_routing_providers(
         Err(error) => return routing_error_response(error),
     };
     drop(cache_guard);
-
     debug!(
         route = "providers",
         representation = representation.label(),
@@ -116,7 +106,6 @@ pub(crate) async fn handle_get_routing_providers(
     );
     routing_success_response("Providers", peers, representation, now)
 }
-
 /// Serve `GET /routing/v1/peers/{peer_id}`.
 pub(crate) async fn handle_get_routing_peers(
     State(state): State<SharedAppState>,
@@ -154,7 +143,6 @@ pub(crate) async fn handle_get_routing_peers(
     let mut cache_guard = cache.write().await;
     cache_guard.prune_stale(now);
     let cache_guard = tokio::sync::RwLockWriteGuard::downgrade(cache_guard);
-
     let mut peers =
         match resolve_authorized_peers(authority.all_providers(), &cache_guard, now, &filters) {
             Ok(value) => value,
@@ -162,7 +150,6 @@ pub(crate) async fn handle_get_routing_peers(
         };
     peers.retain(|peer| peer.id == canonical_peer_id);
     drop(cache_guard);
-
     debug!(
         route = "peers",
         representation = representation.label(),
@@ -171,17 +158,14 @@ pub(crate) async fn handle_get_routing_peers(
     );
     routing_success_response("Peers", peers, representation, now)
 }
-
 struct CommittedRoutingAuthoritySource<'state> {
     state_view: StateView<'state>,
 }
-
 impl<'state> CommittedRoutingAuthoritySource<'state> {
     fn new(state_view: StateView<'state>) -> Self {
         Self { state_view }
     }
 }
-
 impl RoutingAuthoritySource for CommittedRoutingAuthoritySource<'_> {
     fn finalized_identity(&self) -> Result<FinalizedStateIdentityV1, RoutingAuthorityError> {
         let height = u64::try_from(self.state_view.height())
@@ -192,7 +176,6 @@ impl RoutingAuthoritySource for CommittedRoutingAuthoritySource<'_> {
             .map(|hash| *hash.as_ref());
         FinalizedStateIdentityV1::new(height, block_hash)
     }
-
     fn build_projection(
         &self,
         identity: FinalizedStateIdentityV1,
@@ -207,7 +190,6 @@ impl RoutingAuthoritySource for CommittedRoutingAuthoritySource<'_> {
         )
     }
 }
-
 const fn map_authority_error(error: RoutingAuthorityError) -> RoutingError {
     match error {
         RoutingAuthorityError::CapacityExceeded => RoutingError::AuthorityCapacityExceeded,
@@ -217,13 +199,11 @@ const fn map_authority_error(error: RoutingAuthorityError) -> RoutingError {
         | RoutingAuthorityError::Corrupt => RoutingError::AuthorityCorrupt,
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Representation {
     Json,
     Ndjson,
 }
-
 impl Representation {
     const fn label(self) -> &'static str {
         match self {
@@ -231,7 +211,6 @@ impl Representation {
             Self::Ndjson => "ndjson",
         }
     }
-
     const fn result_limit(self) -> usize {
         match self {
             Self::Json => JSON_RESULT_LIMIT,
@@ -239,13 +218,11 @@ impl Representation {
         }
     }
 }
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RoutingFilters {
     addrs: Option<AddressFilters>,
     protocols: Option<BTreeSet<String>>,
 }
-
 impl RoutingFilters {
     fn parse(raw_query: Option<&str>) -> Result<Self, RoutingError> {
         let Some(raw_query) = raw_query.filter(|query| !query.is_empty()) else {
@@ -254,7 +231,6 @@ impl RoutingFilters {
         if raw_query.len() > MAX_RAW_QUERY_BYTES {
             return Err(RoutingError::QueryTooLarge);
         }
-
         let mut addrs = None;
         let mut protocols = None;
         let mut pairs = 0usize;
@@ -281,7 +257,6 @@ impl RoutingFilters {
         }
         Ok(Self { addrs, protocols })
     }
-
     fn apply(&self, mut peer: RoutingPeer) -> Option<RoutingPeer> {
         if let Some(filters) = &self.addrs {
             if peer.addrs.is_empty() {
@@ -295,7 +270,6 @@ impl RoutingFilters {
                 }
             }
         }
-
         if let Some(filters) = &self.protocols {
             let matches = if peer.protocols.is_empty() {
                 filters.contains("unknown")
@@ -311,13 +285,11 @@ impl RoutingFilters {
         Some(peer)
     }
 }
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct AddressFilters {
     positive: BTreeSet<String>,
     negative: BTreeSet<String>,
 }
-
 impl AddressFilters {
     fn parse(value: &str) -> Result<Self, RoutingError> {
         if value.is_empty() {
@@ -355,7 +327,6 @@ impl AddressFilters {
         }
         Ok(result)
     }
-
     fn matches(&self, address: &str) -> bool {
         let components = multiaddr_protocol_components(address);
         if self
@@ -373,13 +344,11 @@ impl AddressFilters {
                 .any(|filter| components.contains(filter.as_str()))
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 enum FilterKind {
     Address,
     Protocol,
 }
-
 fn parse_protocol_filters(value: &str) -> Result<BTreeSet<String>, RoutingError> {
     if value.is_empty() {
         return Err(RoutingError::EmptyFilter);
@@ -405,7 +374,6 @@ fn parse_protocol_filters(value: &str) -> Result<BTreeSet<String>, RoutingError>
     }
     Ok(result)
 }
-
 fn canonical_filter_term(term: &str, kind: FilterKind) -> Result<String, RoutingError> {
     if term.is_empty() || term.len() > MAX_FILTER_TERM_BYTES || !term.is_ascii() {
         return Err(RoutingError::InvalidFilter);
@@ -435,7 +403,6 @@ fn canonical_filter_term(term: &str, kind: FilterKind) -> Result<String, Routing
     }
     Ok(canonical)
 }
-
 fn multiaddr_protocol_components(address: &str) -> BTreeSet<&str> {
     let mut result = BTreeSet::new();
     let mut components = address.split('/').filter(|component| !component.is_empty());
@@ -450,7 +417,6 @@ fn multiaddr_protocol_components(address: &str) -> BTreeSet<&str> {
     }
     result
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RoutingPeer {
     provider_id: [u8; 32],
@@ -460,7 +426,6 @@ struct RoutingPeer {
     issued_at: u64,
     expires_at: u64,
 }
-
 impl RoutingPeer {
     fn from_advert(advert: &ProviderAdvertV1, now: u64) -> Result<Option<Self>, RoutingError> {
         if now >= advert.expires_at {
@@ -479,7 +444,6 @@ impl RoutingPeer {
             .try_into()
             .map_err(|_| RoutingError::AdvertCorrupt)?;
         let id = peer_id_from_ed25519_key(public_key);
-
         let mut addrs = BTreeSet::new();
         for endpoint in &advert.body.endpoints {
             if let Some(address) = endpoint_multiaddr(endpoint) {
@@ -496,7 +460,6 @@ impl RoutingPeer {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-
         Ok(Some(Self {
             provider_id: advert.body.provider_id,
             id,
@@ -506,7 +469,6 @@ impl RoutingPeer {
             expires_at: advert.expires_at,
         }))
     }
-
     fn into_json(self) -> Value {
         let mut map = Map::new();
         map.insert("Schema".into(), Value::String("peer".to_owned()));
@@ -522,7 +484,6 @@ impl RoutingPeer {
         Value::Object(map)
     }
 }
-
 fn resolve_authorized_peers(
     provider_ids: &BTreeSet<[u8; 32]>,
     cache: &ProviderAdvertCache,
@@ -539,7 +500,6 @@ fn resolve_authorized_peers(
         filters,
     )
 }
-
 fn resolve_advert_peers<'a, I>(
     adverts: I,
     now: u64,
@@ -570,7 +530,6 @@ where
         .filter_map(|peer| filters.apply(peer))
         .collect())
 }
-
 fn endpoint_multiaddr(endpoint: &AdvertEndpoint) -> Option<String> {
     let raw = endpoint.host_pattern.as_str();
     if raw.is_empty()
@@ -633,7 +592,6 @@ fn endpoint_multiaddr(endpoint: &AdvertEndpoint) -> Option<String> {
     };
     Some(format!("{host}{suffix}"))
 }
-
 const fn transport_protocol_name(protocol: TransportProtocol) -> &'static str {
     match protocol {
         TransportProtocol::ToriiHttpRange => PROTOCOL_TORII_HTTP_RANGE,
@@ -642,7 +600,6 @@ const fn transport_protocol_name(protocol: TransportProtocol) -> &'static str {
         TransportProtocol::VendorReserved => PROTOCOL_VENDOR,
     }
 }
-
 fn routing_success_response(
     wrapper: &'static str,
     mut peers: Vec<RoutingPeer>,
@@ -663,7 +620,6 @@ fn routing_success_response(
     } else {
         NEGATIVE_CACHE_TTL_SECS
     };
-
     let (content_type, body) = match representation {
         Representation::Json => {
             let mut map = Map::new();
@@ -686,7 +642,6 @@ fn routing_success_response(
             (CONTENT_TYPE_NDJSON, body)
         }
     };
-
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::OK;
     response
@@ -713,7 +668,6 @@ fn routing_success_response(
     }
     response
 }
-
 fn routing_error_response(error: RoutingError) -> Response {
     let status = error.status();
     warn!(
@@ -749,7 +703,6 @@ fn routing_error_response(error: RoutingError) -> Response {
     );
     response
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoutingError {
     IdentifierTooLarge,
@@ -773,7 +726,6 @@ enum RoutingError {
     AdvertCorrupt,
     PeerIdentityEquivocation,
 }
-
 impl RoutingError {
     const fn status(self) -> StatusCode {
         match self {
@@ -799,7 +751,6 @@ impl RoutingError {
             | Self::PeerIdentityEquivocation => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
-
     const fn reason_label(self) -> &'static str {
         match self {
             Self::IdentifierTooLarge => "identifier_too_large",
@@ -824,7 +775,6 @@ impl RoutingError {
             Self::PeerIdentityEquivocation => "peer_identity_equivocation",
         }
     }
-
     const fn message(self) -> &'static str {
         match self {
             Self::IdentifierTooLarge => "path identifier exceeds the first-release size limit",
@@ -850,13 +800,11 @@ impl RoutingError {
         }
     }
 }
-
 fn negotiate_representation(headers: &HeaderMap) -> Result<Representation, RoutingError> {
     let values = headers.get_all(ACCEPT);
     let mut saw_header = false;
     let mut total_bytes = 0usize;
     let mut ranges = Vec::new();
-
     for value in values.iter() {
         saw_header = true;
         let value = value.to_str().map_err(|_| RoutingError::InvalidAccept)?;
@@ -890,7 +838,6 @@ fn negotiate_representation(headers: &HeaderMap) -> Result<Representation, Routi
     }
     Err(RoutingError::NotAcceptable)
 }
-
 fn accept_quality_for(ranges: &[(String, u16)], target: &str) -> (u16, u8) {
     let mut selected = (0u16, 0u8);
     let mut matched = false;
@@ -917,7 +864,6 @@ fn accept_quality_for(ranges: &[(String, u16)], target: &str) -> (u16, u8) {
     }
     selected
 }
-
 fn parse_accept_range(raw: &str) -> Result<(String, u16), RoutingError> {
     let mut parts = raw.split(';');
     let media_type = parts
@@ -950,7 +896,6 @@ fn parse_accept_range(raw: &str) -> Result<(String, u16), RoutingError> {
     }
     Ok((media_type, quality))
 }
-
 fn parse_quality(value: &str) -> Result<u16, RoutingError> {
     if value == "0" || value == "0." {
         return Ok(0);
@@ -979,7 +924,6 @@ fn parse_quality(value: &str) -> Result<u16, RoutingError> {
         _ => Err(RoutingError::InvalidAccept),
     }
 }
-
 fn parse_content_cid(value: &str) -> Result<ManifestRootCid, RoutingError> {
     if value.len() > MAX_PATH_IDENTIFIER_BYTES {
         return Err(RoutingError::IdentifierTooLarge);
@@ -1014,7 +958,6 @@ fn parse_content_cid(value: &str) -> Result<ManifestRootCid, RoutingError> {
     };
     ManifestRootCid::try_from_slice(&bytes).map_err(|_| RoutingError::InvalidContentCid)
 }
-
 fn peer_id_from_ed25519_key(public_key: [u8; 32]) -> String {
     // libp2p public-key protobuf: field 1 (Ed25519 enum), field 2 (32 bytes).
     let mut multihash = Vec::with_capacity(38);
@@ -1022,7 +965,6 @@ fn peer_id_from_ed25519_key(public_key: [u8; 32]) -> String {
     multihash.extend_from_slice(&public_key);
     canonical_peer_id_from_multihash(&multihash)
 }
-
 fn parse_peer_id(value: &str) -> Result<String, RoutingError> {
     if value.is_empty() || value.len() > MAX_PATH_IDENTIFIER_BYTES {
         return Err(if value.len() > MAX_PATH_IDENTIFIER_BYTES {
@@ -1053,14 +995,12 @@ fn parse_peer_id(value: &str) -> Result<String, RoutingError> {
     validate_peer_multihash(&multihash)?;
     Ok(canonical_peer_id_from_multihash(&multihash))
 }
-
 fn peer_multihash_from_cid(cid: &[u8]) -> Result<Vec<u8>, RoutingError> {
     if cid.len() < 3 || cid[0] != 1 || cid[1] != 0x72 {
         return Err(RoutingError::InvalidPeerId);
     }
     Ok(cid[2..].to_vec())
 }
-
 fn validate_peer_multihash(multihash: &[u8]) -> Result<(), RoutingError> {
     let (code, code_len) = decode_uvarint(multihash).ok_or(RoutingError::InvalidPeerId)?;
     let (digest_len, len_len) =
@@ -1081,14 +1021,12 @@ fn validate_peer_multihash(multihash: &[u8]) -> Result<(), RoutingError> {
     }
     Ok(())
 }
-
 fn canonical_peer_id_from_multihash(multihash: &[u8]) -> String {
     let mut cid = Vec::with_capacity(multihash.len() + 2);
     cid.extend_from_slice(&[1, 0x72]);
     cid.extend_from_slice(multihash);
     format!("b{}", encode_base32_lower(&cid))
 }
-
 fn decode_uvarint(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut value = 0u64;
     for (index, byte) in bytes.iter().copied().take(10).enumerate() {
@@ -1107,7 +1045,6 @@ fn decode_uvarint(bytes: &[u8]) -> Option<(u64, usize)> {
     }
     None
 }
-
 fn encode_uvarint(mut value: u64) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
@@ -1123,7 +1060,6 @@ fn encode_uvarint(mut value: u64) -> Vec<u8> {
     }
     out
 }
-
 fn encode_base32_lower(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     let mut out = String::with_capacity(bytes.len().saturating_mul(8).div_ceil(5));
@@ -1144,7 +1080,6 @@ fn encode_base32_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn decode_base32_lower(value: &str) -> Option<Vec<u8>> {
     if value.is_empty() || !value.is_ascii() {
         return None;
@@ -1170,7 +1105,6 @@ fn decode_base32_lower(value: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
-
 fn encode_base58btc(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     if bytes.is_empty() {
@@ -1198,7 +1132,6 @@ fn encode_base58btc(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn decode_base58btc(value: &str) -> Option<Vec<u8>> {
     if value.is_empty() || !value.is_ascii() {
         return None;
@@ -1223,7 +1156,6 @@ fn decode_base58btc(value: &str) -> Option<Vec<u8>> {
     out.extend(bytes.into_iter().skip(skip));
     Some(out)
 }
-
 fn base58_digit(byte: u8) -> Option<u8> {
     const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     ALPHABET
@@ -1231,7 +1163,6 @@ fn base58_digit(byte: u8) -> Option<u8> {
         .position(|candidate| *candidate == byte)
         .and_then(|index| u8::try_from(index).ok())
 }
-
 fn encode_base36_lower(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     if bytes.is_empty() {
@@ -1259,7 +1190,6 @@ fn encode_base36_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn decode_base36_lower(value: &str) -> Option<Vec<u8>> {
     if value.is_empty() || !value.is_ascii() {
         return None;
@@ -1288,7 +1218,6 @@ fn decode_base36_lower(value: &str) -> Option<Vec<u8>> {
     out.extend(bytes.into_iter().skip(skip));
     Some(out)
 }
-
 fn http_date(timestamp: u64) -> String {
     let datetime = i64::try_from(timestamp)
         .ok()
@@ -1326,15 +1255,12 @@ fn http_date(timestamp: u64) -> String {
         datetime.second()
     )
 }
-
 fn unix_now_secs() -> u64 {
     u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use super::*;
     use axum::http::header;
     use http_body_util::BodyExt as _;
     use sorafs_manifest::{
@@ -1342,15 +1268,11 @@ mod tests {
         ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
         SignatureAlgorithm, StreamBudgetV1, TransportHintV1,
     };
-
-    use super::*;
-
+    use std::sync::Arc;
     const NOW: u64 = 1_700_000_100;
-
     fn sample_cid(seed: u8) -> ManifestRootCid {
         ManifestRootCid::from_blake3_digest([seed.max(1); 32]).expect("canonical root CID")
     }
-
     fn sample_advert(
         provider_id: [u8; 32],
         key_seed: u8,
@@ -1453,7 +1375,6 @@ mod tests {
             .expect("test advert body must validate");
         advert
     }
-
     fn sample_peer(seed: u8) -> RoutingPeer {
         RoutingPeer {
             provider_id: [seed.max(1); 32],
@@ -1467,7 +1388,6 @@ mod tests {
             expires_at: NOW.saturating_add(600),
         }
     }
-
     #[test]
     fn content_cid_accepts_canonical_multibases_and_rejects_identity_or_alias_encodings() {
         let cid = sample_cid(0xA5);
@@ -1479,7 +1399,6 @@ mod tests {
         ] {
             assert_eq!(parse_content_cid(&encoded), Ok(cid));
         }
-
         let uppercase = format!("B{}", encode_base32_lower(bytes).to_ascii_uppercase());
         assert_eq!(
             parse_content_cid(&uppercase),
@@ -1500,18 +1419,15 @@ mod tests {
             Err(RoutingError::InvalidContentCid)
         );
     }
-
     #[test]
     fn non_ascii_content_cid_returns_client_error_and_follow_up_still_parses() {
         let error = parse_content_cid("é").expect_err("non-ASCII CID must be rejected");
         let response = routing_error_response(error);
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
         let cid = sample_cid(0xA6);
         let encoded = format!("b{}", encode_base32_lower(cid.as_bytes()));
         assert_eq!(parse_content_cid(&encoded), Ok(cid));
     }
-
     #[test]
     fn base_encodings_round_trip_leading_zeroes_and_reject_noncanonical_tail_bits() {
         for bytes in [
@@ -1550,7 +1466,6 @@ mod tests {
             "non-zero pad bits must fail"
         );
     }
-
     #[test]
     fn peer_id_parser_normalizes_all_official_encodings() {
         let canonical = peer_id_from_ed25519_key([0xA5; 32]);
@@ -1562,7 +1477,6 @@ mod tests {
         let base36 = format!("k{}", encode_base36_lower(&cid));
         assert_eq!(parse_peer_id(&base36), Ok(canonical));
     }
-
     #[test]
     fn peer_id_parser_rejects_malformed_noncanonical_and_oversized_inputs() {
         for invalid in ["", "b", "kZZ", "0OIl", "znot-a-peer"] {
@@ -1586,7 +1500,6 @@ mod tests {
             "overlong varint must fail"
         );
     }
-
     #[test]
     fn query_parser_rejects_duplicate_unknown_oversized_and_case_bypass_parameters() {
         for (query, expected) in [
@@ -1619,7 +1532,6 @@ mod tests {
             Err(RoutingError::QueryTooLarge)
         );
     }
-
     #[test]
     fn address_filters_apply_positive_negative_unknown_and_case_insensitive_semantics() {
         let filters = RoutingFilters::parse(Some("filter-addrs=TCP,!IP6")).unwrap();
@@ -1633,7 +1545,6 @@ mod tests {
         };
         let filtered = filters.apply(peer).expect("one TCP address survives");
         assert_eq!(filtered.addrs, vec!["/dns/example.test/tcp/443/tls/http"]);
-
         let unknown = RoutingPeer {
             addrs: Vec::new(),
             ..sample_peer(2)
@@ -1643,14 +1554,12 @@ mod tests {
         assert!(unknown_filter.apply(unknown).is_some());
         assert!(unknown_filter.apply(sample_peer(3)).is_none());
     }
-
     #[test]
     fn address_filter_never_confuses_a_host_value_for_a_protocol() {
         let filters = AddressFilters::parse("tcp").unwrap();
         assert!(!filters.matches("/dns/tcp/udp/443/quic-v1"));
         assert!(filters.matches("/dns/example.test/tcp/443/tls/http"));
     }
-
     #[test]
     fn protocol_filters_preserve_full_protocol_set_and_handle_unknown() {
         let filters =
@@ -1658,7 +1567,6 @@ mod tests {
         let peer = sample_peer(4);
         let expected = peer.protocols.clone();
         assert_eq!(filters.apply(peer).unwrap().protocols, expected);
-
         let unknown = RoutingPeer {
             protocols: Vec::new(),
             ..sample_peer(5)
@@ -1667,12 +1575,10 @@ mod tests {
         let unknown_filter = RoutingFilters::parse(Some("filter-protocols=unknown")).unwrap();
         assert!(unknown_filter.apply(unknown).is_some());
     }
-
     #[test]
     fn accept_negotiation_defaults_to_json_and_honors_quality_without_q_zero_bypass() {
         let headers = HeaderMap::new();
         assert_eq!(negotiate_representation(&headers), Ok(Representation::Json));
-
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_NDJSON));
         assert_eq!(
@@ -1704,7 +1610,6 @@ mod tests {
             Err(RoutingError::InvalidAccept)
         );
     }
-
     #[test]
     fn expired_adverts_and_unassigned_or_missing_adverts_never_publish_routes() {
         let provider = [0x71; 32];
@@ -1726,7 +1631,6 @@ mod tests {
             Err(RoutingError::AdvertCorrupt)
         );
     }
-
     #[test]
     fn peer_key_reuse_is_rejected_as_equivocation() {
         let first = sample_advert([0x81; 32], 9, false);
@@ -1740,7 +1644,6 @@ mod tests {
             Err(RoutingError::PeerIdentityEquivocation)
         );
     }
-
     #[test]
     fn peer_results_are_deterministic_across_advert_iteration_order() {
         let first = sample_advert([0x91; 32], 3, true);
@@ -1764,7 +1667,6 @@ mod tests {
                 && peer.protocols.windows(2).all(|pair| pair[0] < pair[1])
         }));
     }
-
     #[test]
     fn endpoint_projection_is_canonical_and_unsafe_endpoints_become_unknown() {
         let endpoint = |kind, host_pattern: &str| AdvertEndpoint {
@@ -1791,7 +1693,6 @@ mod tests {
             assert!(endpoint_multiaddr(&endpoint(EndpointKind::Torii, invalid)).is_none());
         }
     }
-
     #[tokio::test]
     async fn response_negotiation_emits_bounded_json_and_ndjson_with_cache_headers() {
         let peers = (1..=105).map(sample_peer).collect::<Vec<_>>();
@@ -1816,7 +1717,6 @@ mod tests {
                 .map(Vec::len),
             Some(JSON_RESULT_LIMIT)
         );
-
         let response = routing_success_response(
             "Peers",
             vec![sample_peer(1), sample_peer(2)],
@@ -1835,7 +1735,6 @@ mod tests {
             assert_eq!(value.get("Schema").and_then(Value::as_str), Some("peer"));
         }
     }
-
     #[tokio::test]
     async fn empty_results_use_short_negative_cache_ttl_and_spec_error_shape() {
         let response = routing_success_response("Providers", Vec::new(), Representation::Json, NOW);
@@ -1845,7 +1744,6 @@ mod tests {
                 .unwrap()
                 .contains("max-age=15")
         );
-
         let response = routing_error_response(RoutingError::InvalidContentCid);
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -1853,13 +1751,11 @@ mod tests {
         assert_eq!(value.get("Code").and_then(Value::as_u64), Some(422));
         assert!(value.get("Message").and_then(Value::as_str).is_some());
     }
-
     #[test]
     fn http_date_uses_imf_fixdate() {
         assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
         assert_eq!(http_date(784_111_777), "Sun, 06 Nov 1994 08:49:37 GMT");
     }
-
     #[test]
     fn advert_endpoint_and_response_bounds_fail_closed() {
         let mut advert = sample_advert([0xA1; 32], 1, false);
@@ -1875,7 +1771,6 @@ mod tests {
             Err(RoutingError::AdvertCapacityExceeded)
         );
     }
-
     #[test]
     fn empty_cache_is_deny_all_for_authorized_provider_ids() {
         let cache = ProviderAdvertCache::new(
@@ -1893,7 +1788,6 @@ mod tests {
             .is_empty()
         );
     }
-
     #[test]
     fn error_responses_never_reflect_attacker_controlled_identifiers() {
         let response = routing_error_response(RoutingError::InvalidPeerId);

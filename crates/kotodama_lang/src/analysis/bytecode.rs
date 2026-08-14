@@ -1,15 +1,12 @@
-use std::{collections::HashSet, error::Error, fmt};
-
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{VMError, encoding, instruction::wide, metadata::ProgramMetadata, syscalls};
-
+use std::{collections::HashSet, error::Error, fmt};
 /// Result of analysing a Kotodama bytecode artifact.
 #[derive(Debug)]
 pub struct BytecodeAnalysis {
     pub metadata: ProgramMetadata,
     pub findings: Vec<AnalysisFinding>,
 }
-
 /// Result of executing the bytecode fuzz harness.
 #[derive(Debug, Default)]
 pub struct BytecodeFuzzReport {
@@ -17,14 +14,12 @@ pub struct BytecodeFuzzReport {
     pub runs: usize,
     pub failures: usize,
 }
-
 #[derive(Debug)]
 pub enum BytecodeAnalysisError {
     Metadata(VMError),
     Decode(VMError),
     Vm(VMError),
 }
-
 impl fmt::Display for BytecodeAnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -36,7 +31,6 @@ impl fmt::Display for BytecodeAnalysisError {
         }
     }
 }
-
 impl Error for BytecodeAnalysisError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -46,7 +40,6 @@ impl Error for BytecodeAnalysisError {
         }
     }
 }
-
 /// Run static bytecode inspection to surface risky patterns.
 pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalysisError> {
     let parsed = ProgramMetadata::parse(bytes).map_err(BytecodeAnalysisError::Metadata)?;
@@ -55,10 +48,8 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
         return Err(BytecodeAnalysisError::Decode(VMError::DecodeError));
     }
     let mut findings = Vec::new();
-
     let mut arithmetic_seen: HashSet<u32> = HashSet::new();
     let mut last_store_pc: Option<u64> = None;
-
     for (idx, chunk) in code.chunks_exact(4).enumerate() {
         let word = u32::from_le_bytes(chunk.try_into().unwrap());
         let pc = (idx as u64).saturating_mul(4);
@@ -122,13 +113,11 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
             last_store_pc = None;
         }
     }
-
     Ok(BytecodeAnalysis {
         metadata: parsed.metadata,
         findings,
     })
 }
-
 fn is_numeric_arithmetic_syscall(number: u32) -> bool {
     matches!(
         number,
@@ -155,7 +144,6 @@ fn is_numeric_arithmetic_syscall(number: u32) -> bool {
             | syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND
     )
 }
-
 /// Execute the bytecode within a runtime harness when available.
 ///
 /// The standalone `kotodama_lang` crate does not bundle an IVM runtime, so this
@@ -174,7 +162,6 @@ pub fn run_bytecode_fuzz(
     ));
     Ok(report)
 }
-
 fn opcode_name(opcode: u8) -> &'static str {
     match opcode {
         wide::arithmetic::MUL => "MUL",
@@ -193,17 +180,14 @@ fn opcode_name(opcode: u8) -> &'static str {
         },
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::SimpleRng;
     use super::*;
     use crate::compiler::Compiler as KotodamaCompiler;
     use norito::json as norito_json_mod;
-
     const DEPLOYABLE_FUZZ_FIXTURE: &str =
         "seiyaku BytecodeAnalysis { view fn fuzz_seed() -> int { return 0; } }";
-
     fn build_metadata_payload(
         meta: &ProgramMetadata,
         iteration: usize,
@@ -237,7 +221,6 @@ mod tests {
         );
         norito_json_mod::to_vec(&norito_json_mod::Value::Object(object)).unwrap_or_default()
     }
-
     #[test]
     fn analyze_detects_arithmetic_instruction() {
         let code = KotodamaCompiler::new()
@@ -254,7 +237,6 @@ mod tests {
             "expected arithmetic finding, got {analysis:?}"
         );
     }
-
     #[test]
     fn fuzz_reports_disabled_runtime() {
         let code = KotodamaCompiler::new()
@@ -271,7 +253,6 @@ mod tests {
             "expected disabled runtime finding"
         );
     }
-
     #[test]
     fn fuzz_fixture_is_a_deployable_v1_view_contract() {
         let (_code, manifest) = KotodamaCompiler::new()
@@ -285,7 +266,6 @@ mod tests {
             iroha_data_model::smart_contract::manifest::EntryPointKind::View
         );
     }
-
     #[test]
     fn metadata_payload_contains_expected_fields() {
         let meta = ProgramMetadata {

@@ -20,11 +20,8 @@
 //! - `version` currently must be 1.
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
-
-use std::{cell::Cell, collections::HashSet, sync::OnceLock};
-
 use crate::{SyscallPolicy, error::VMError};
-
+use std::{cell::Cell, collections::HashSet, sync::OnceLock};
 /// Known pointer-ABI types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PointerType {
@@ -63,7 +60,6 @@ pub enum PointerType {
     #[cfg(test)]
     TestOnly = 0x0FFE,
 }
-
 impl PointerType {
     pub fn from_u16(v: u16) -> Option<Self> {
         match v {
@@ -90,7 +86,6 @@ impl PointerType {
             _ => None,
         }
     }
-
     /// Return all known pointer types in numeric ID order.
     pub const fn all() -> &'static [Self] {
         &[
@@ -117,20 +112,17 @@ impl PointerType {
         ]
     }
 }
-
 /// Validated view of a TLV envelope.
 pub struct Tlv<'a> {
     pub type_id: PointerType,
     pub version: u8,
     pub payload: &'a [u8],
 }
-
 impl<'a> Tlv<'a> {
     pub fn type_id_raw(&self) -> u16 {
         self.type_id as u16
     }
 }
-
 impl<'a> core::fmt::Debug for Tlv<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Tlv")
@@ -140,20 +132,17 @@ impl<'a> core::fmt::Debug for Tlv<'a> {
             .finish()
     }
 }
-
 /// Validate a TLV envelope provided as a raw byte slice and return a view over
 /// its payload. The slice must contain the full header, payload, and hash.
 pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     if bytes.len() < 7 + iroha_crypto::Hash::LENGTH {
         return Err(VMError::NoritoInvalid);
     }
-
     let type_id = u16::from_be_bytes([bytes[0], bytes[1]]);
     let version = bytes[2];
     if version != 1 {
         return Err(VMError::NoritoInvalid);
     }
-
     let len = u32::from_be_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]) as usize;
     let total = 7usize
         .checked_add(len)
@@ -162,7 +151,6 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     if bytes.len() != total {
         return Err(VMError::NoritoInvalid);
     }
-
     let payload = &bytes[7..7 + len];
     let hash_bytes = &bytes[7 + len..total];
     let mut expected_hash = [0u8; iroha_crypto::Hash::LENGTH];
@@ -171,18 +159,14 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     if expected_hash != computed {
         return Err(VMError::NoritoInvalid);
     }
-
     let tlv_type = PointerType::from_u16(type_id).ok_or(VMError::NoritoInvalid)?;
-
     Ok(Tlv {
         type_id: tlv_type,
         version,
         payload,
     })
 }
-
 // Memory-region validation lives in the VM crate, which owns the `Memory` type.
-
 /// Return the set of pointer types allowed for a given syscall ABI policy.
 fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
@@ -211,26 +195,21 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
     let SyscallPolicy::AbiV1 = policy;
     v1
 }
-
 /// Expose the policy allowlist for callers that need to diff surfaces.
 pub fn policy_pointer_types(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     allowed_types_for_policy(policy)
 }
-
 /// Check whether a pointer-ABI `type_id` is allowed for the given ABI policy.
 pub fn is_type_allowed_for_policy(policy: SyscallPolicy, ty: PointerType) -> bool {
     allowed_types_for_policy(policy).contains(&ty)
 }
-
 thread_local! {
     static ENFORCED_POLICY: Cell<Option<(SyscallPolicy, u8)>> = const { Cell::new(None) };
 }
-
 /// Guard that enforces a pointer-ABI policy for the current thread during its lifetime.
 pub struct PointerPolicyGuard {
     previous: Option<(SyscallPolicy, u8)>,
 }
-
 impl PointerPolicyGuard {
     /// Install a guard that enforces `policy` and annotates violations with `abi_version`.
     pub fn install(policy: SyscallPolicy, abi_version: u8) -> Self {
@@ -239,18 +218,15 @@ impl PointerPolicyGuard {
         Self { previous }
     }
 }
-
 impl Drop for PointerPolicyGuard {
     fn drop(&mut self) {
         ENFORCED_POLICY.with(|cell| cell.set(self.previous));
     }
 }
-
 /// Return the currently enforced pointer-ABI policy for this thread.
 pub fn current_policy() -> Option<(SyscallPolicy, u8)> {
     ENFORCED_POLICY.with(|cell| cell.get())
 }
-
 /// Render a markdown table of pointer types and their policy allowlists.
 ///
 /// The format is suitable to be embedded between doc markers in
@@ -290,7 +266,6 @@ pub fn render_pointer_types_markdown_table() -> String {
         (PointerType::Decimal as u16, PointerType::Decimal),
     ];
     all.sort_by_key(|(id, _)| *id);
-
     let mut out = String::new();
     out.push_str("| ID | Name | ABI v1 |\n");
     out.push_str("|---|---|---|\n");
@@ -307,14 +282,12 @@ pub fn render_pointer_types_markdown_table() -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
         PointerPolicyGuard, PointerType, SyscallPolicy, VMError, current_policy,
         is_type_allowed_for_policy, validate_tlv_bytes,
     };
-
     #[test]
     fn pointer_policy_guard_sets_and_restores() {
         assert!(current_policy().is_none());
@@ -324,7 +297,6 @@ mod tests {
         }
         assert!(current_policy().is_none());
     }
-
     #[test]
     fn pointer_policy_guard_restores_previous() {
         let _first = PointerPolicyGuard::install(SyscallPolicy::AbiV1, 1);
@@ -335,7 +307,6 @@ mod tests {
         }
         assert_eq!(current_policy(), Some((SyscallPolicy::AbiV1, 1)));
     }
-
     #[test]
     fn exact_numeric_pointer_ids_match_the_v1_contract() {
         assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));
@@ -350,7 +321,6 @@ mod tests {
             assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
         }
     }
-
     #[test]
     fn envelope_rejects_truncation_and_trailing_bytes() {
         let payload = b"canonical";
@@ -361,14 +331,12 @@ mod tests {
         envelope.extend_from_slice(payload);
         envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
         assert!(validate_tlv_bytes(&envelope).is_ok());
-
         let mut truncated = envelope.clone();
         truncated.pop();
         assert!(matches!(
             validate_tlv_bytes(&truncated),
             Err(VMError::NoritoInvalid)
         ));
-
         let mut trailing = envelope;
         trailing.push(0);
         assert!(matches!(
@@ -376,7 +344,6 @@ mod tests {
             Err(VMError::NoritoInvalid)
         ));
     }
-
     #[test]
     fn envelope_rejects_unassigned_numeric_pointer_id() {
         let payload = b"canonical";
@@ -386,7 +353,6 @@ mod tests {
         envelope.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         envelope.extend_from_slice(payload);
         envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
-
         assert!(matches!(
             validate_tlv_bytes(&envelope),
             Err(VMError::NoritoInvalid)

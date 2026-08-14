@@ -147,7 +147,7 @@ pqcrypto-mldsa = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-norito = { workspace = true, features = ["compression"] }
+norito = { workspace = true, default-features = false, features = ["compression"] }
 num-bigint = "0.4.6"
 lazy_static = "1.5.0"
 tempfile = "3.23.0"

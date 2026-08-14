@@ -1,7 +1,5 @@
 //! Grouped Iroha Core integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../admission_batching.rs"]
 mod admission_batching;
 #[path = "../adversarial_block_rejections.rs"]

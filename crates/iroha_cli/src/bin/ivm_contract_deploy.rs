@@ -11,15 +11,6 @@
     clippy::redundant_closure_for_method_calls,
     clippy::too_many_lines
 )]
-
-use std::{
-    fs,
-    io::Read as _,
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
-
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -51,12 +42,17 @@ use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
+use std::{
+    fs,
+    io::Read as _,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 use url::Url;
 use zeroize::Zeroizing;
-
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
 const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 16 * 1024;
-
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long)]
@@ -98,7 +94,6 @@ struct Args {
     #[arg(long, default_value_t = false)]
     skip_register_bytes: bool,
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,
 )]
@@ -115,17 +110,14 @@ struct ContractDeploymentStateSnapshot {
     ledger_time_ms: String,
     chain_discriminant: String,
 }
-
 struct ValidatedContractDeploymentState {
     snapshot: ContractDeploymentStateSnapshot,
     deploy_nonce: u64,
     dataspace_id: DataSpaceId,
     previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
 }
-
 #[cfg(test)]
 use iroha::data_model::transaction::Executable;
-
 fn default_alias_cache_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
         Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -138,15 +130,12 @@ fn default_alias_cache_policy() -> AliasCachePolicy {
         Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
-
 fn default_anonymity_policy() -> AnonymityPolicy {
     AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
 }
-
 fn default_rollout_phase() -> SorafsRolloutPhase {
     SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
 }
-
 #[allow(clippy::too_many_arguments)]
 fn make_client(
     torii_url: &str,
@@ -184,7 +173,6 @@ fn make_client(
     };
     Ok(Client::new(config))
 }
-
 fn insert_string_metadata(
     metadata: &mut Metadata,
     key: &str,
@@ -193,7 +181,6 @@ fn insert_string_metadata(
     metadata.insert(Name::from_str(key)?, Json::new(value.into()));
     Ok(())
 }
-
 fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) -> Result<()> {
     let mut accounts = Vec::new();
     for (index, raw) in approvers.iter().enumerate() {
@@ -211,7 +198,6 @@ fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) 
     }
     Ok(())
 }
-
 fn deployment_transaction_metadata(
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     gov_manifest_approvers: &[String],
@@ -230,7 +216,6 @@ fn deployment_transaction_metadata(
     insert_gov_manifest_approvers(&mut metadata, gov_manifest_approvers)?;
     Ok(metadata)
 }
-
 fn canonical_decimal_u64(raw: &str, field: &str) -> Result<u64> {
     let parsed = raw
         .parse::<u64>()
@@ -242,7 +227,6 @@ fn canonical_decimal_u64(raw: &str, field: &str) -> Result<u64> {
     }
     Ok(parsed)
 }
-
 fn read_contract_deployment_state(
     client: &Client,
     authority: &AccountId,
@@ -270,7 +254,6 @@ fn read_contract_deployment_state(
             "contract deployment-state response does not bind the exact authority and alias"
         ));
     }
-
     let deploy_nonce = canonical_decimal_u64(&snapshot.deploy_nonce, "deploy_nonce")?;
     if deploy_nonce == u64::MAX {
         return Err(eyre!("contract deployment nonce is exhausted"));
@@ -313,7 +296,6 @@ fn read_contract_deployment_state(
             "deployment-state observed block hash is not canonical"
         ));
     }
-
     let previous_contract_address = snapshot
         .previous_contract_address
         .as_deref()
@@ -335,7 +317,6 @@ fn read_contract_deployment_state(
             "deployment-state previous contract address is non-canonical or in another dataspace"
         ));
     }
-
     Ok(ValidatedContractDeploymentState {
         snapshot,
         deploy_nonce,
@@ -343,11 +324,9 @@ fn read_contract_deployment_state(
         previous_contract_address,
     })
 }
-
 #[cfg(unix)]
 fn validate_private_key_file_metadata(metadata: &fs::Metadata, path: &Path) -> Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
     if metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.permissions().mode() & 0o777 != 0o600
         || metadata.nlink() != 1
@@ -359,7 +338,6 @@ fn validate_private_key_file_metadata(metadata: &fs::Metadata, path: &Path) -> R
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_private_key_file_metadata(_metadata: &fs::Metadata, path: &Path) -> Result<()> {
     Err(eyre!(
@@ -367,7 +345,6 @@ fn validate_private_key_file_metadata(_metadata: &fs::Metadata, path: &Path) -> 
         path.display()
     ))
 }
-
 fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
     let before = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect private-key file {}", path.display()))?;
@@ -384,7 +361,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
         ));
     }
     validate_private_key_file_metadata(&before, path)?;
-
     #[cfg(unix)]
     let mut file = {
         let descriptor = rustix::fs::open(
@@ -400,7 +376,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
         .read(true)
         .open(path)
         .wrap_err_with(|| format!("open private-key file {}", path.display()))?;
-
     let opened = file
         .metadata()
         .wrap_err_with(|| format!("inspect opened private-key file {}", path.display()))?;
@@ -414,7 +389,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         if opened.dev() != before.dev() || opened.ino() != before.ino() {
             return Err(eyre!(
                 "private-key file {} changed during secure open",
@@ -422,7 +396,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
             ));
         }
     }
-
     let maximum_read = MAX_PRIVATE_KEY_FILE_BYTES
         .checked_add(1)
         .expect("bounded private-key file size");
@@ -440,7 +413,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         if after.dev() != opened.dev()
             || after.ino() != opened.ino()
             || after.len() != opened.len()
@@ -459,7 +431,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
             path.display()
         ));
     }
-
     let raw = raw.strip_suffix(b"\n").unwrap_or(raw.as_slice());
     let literal = std::str::from_utf8(raw)
         .map_err(|_| eyre!("private-key file {} must be UTF-8", path.display()))?;
@@ -473,13 +444,11 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
         .parse()
         .wrap_err_with(|| format!("parse private-key file {}", path.display()))
 }
-
 struct NativeUploadTransactionPlan {
     chunk_count: u32,
     pre_stage: Vec<(String, String, SignedTransaction)>,
     finalize: (String, String, SignedTransaction),
 }
-
 struct TransactionSigningContext<'a> {
     network_id: NetworkId,
     authority: &'a AccountId,
@@ -488,7 +457,6 @@ struct TransactionSigningContext<'a> {
     fee_payment: &'a FeePaymentIntent,
     metadata: &'a Metadata,
 }
-
 impl TransactionSigningContext<'_> {
     fn sign(
         &self,
@@ -509,7 +477,6 @@ impl TransactionSigningContext<'_> {
             .wrap_err("failed to sign instruction transaction")
     }
 }
-
 fn native_upload_report(
     plan: &NativeUploadTransactionPlan,
     skip_register_bytes: bool,
@@ -523,7 +490,6 @@ fn native_upload_report(
             .collect::<Vec<_>>()
     };
     let register_bytes_tx_hash = (!skip_register_bytes).then(|| plan.finalize.2.hash().to_string());
-
     norito::json!({
         "register_bytes_tx_strategy": ("native_chunks"),
         "register_bytes_chunk_size": (u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES)
@@ -533,7 +499,6 @@ fn native_upload_report(
         "register_bytes_tx_hash": (register_bytes_tx_hash),
     })
 }
-
 fn deployment_transaction_sequence(
     skip_register_bytes: bool,
     register_plans: Vec<(String, String, SignedTransaction)>,
@@ -557,7 +522,6 @@ fn deployment_transaction_sequence(
     ));
     planned
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_commit_deployment_transaction(
     signing: &TransactionSigningContext<'_>,
@@ -576,7 +540,6 @@ fn build_commit_deployment_transaction(
         expected_previous_contract_address,
     })])
 }
-
 fn build_native_upload_transaction_plan(
     signing: &TransactionSigningContext<'_>,
     code_hash: Hash,
@@ -597,7 +560,6 @@ fn build_native_upload_transaction_plan(
     let chunk_count = u32::try_from(chunk_count_usize)
         .wrap_err("contract upload chunk count does not fit u32")?;
     let mut pre_stage = Vec::with_capacity(chunk_count_usize.saturating_sub(1));
-
     for (index, chunk) in code.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
         let chunk_index =
             u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
@@ -640,57 +602,45 @@ fn build_native_upload_transaction_plan(
             tx,
         ));
     }
-
     Err(eyre!("contract upload plan did not contain a final chunk"))
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
     use super::*;
-
+    use std::num::NonZeroU64;
     fn test_network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("canonical test network id")
     }
-
     fn checked_ivm_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked IVM contract deploy fixture key")
     }
-
     fn test_fee_payment() -> FeePaymentIntent {
         FeePaymentIntent::authority(
             Vec::new(),
             Some(NonZeroU64::new(1_000_000).expect("nonzero test gas limit")),
         )
     }
-
     fn private_key_file_fixture(contents: &str) -> Result<tempfile::NamedTempFile> {
         use std::io::Write as _;
-
         let mut file = tempfile::NamedTempFile::new()?;
         file.write_all(contents.as_bytes())?;
         file.flush()?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))?;
         }
         Ok(file)
     }
-
     #[test]
     fn private_key_file_accepts_one_exact_literal_with_terminal_newline() -> Result<()> {
         let expected = checked_ivm_contract_deploy_ed25519_key_fixture();
         let exposed = iroha_crypto::ExposedPrivateKey(expected.private_key().clone()).to_string();
         let file = private_key_file_fixture(&format!("{exposed}\n"))?;
-
         let actual = read_private_key_file(file.path())?;
-
         assert_eq!(
             KeyPair::from(actual).public_key(),
             expected.public_key(),
@@ -698,34 +648,26 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn private_key_file_rejects_surrounding_whitespace_without_echoing_secret() -> Result<()> {
         let secret = "secret-material-that-must-not-appear-in-errors";
         let file = private_key_file_fixture(&format!(" {secret}\n"))?;
-
         let error = read_private_key_file(file.path()).expect_err("whitespace must be rejected");
         let message = error.to_string();
-
         assert!(message.contains("one exact private-key literal"));
         assert!(!message.contains(secret));
         Ok(())
     }
-
     #[cfg(unix)]
     #[test]
     fn private_key_file_rejects_non_mode_0600_permissions() -> Result<()> {
         use std::os::unix::fs::PermissionsExt as _;
-
         let file = private_key_file_fixture("not-inspected-after-mode-check\n")?;
         fs::set_permissions(file.path(), fs::Permissions::from_mode(0o400))?;
-
         let error = read_private_key_file(file.path()).expect_err("mode 0400 must fail");
-
         assert!(error.to_string().contains("mode-0600"));
         Ok(())
     }
-
     #[test]
     fn clap_surface_does_not_accept_inline_private_keys() {
         let parsed = Args::try_parse_from([
@@ -747,13 +689,11 @@ mod tests {
             "--fee-payment-json",
             "fee.json",
         ]);
-
         assert!(
             parsed.is_err(),
             "inline private keys must not be a CLI option"
         );
     }
-
     #[test]
     fn ivm_contract_deploy_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -761,10 +701,8 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("IVM contract deploy fixture key advertises a valid algorithm");
-
         assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
     }
-
     #[test]
     fn deployment_state_decimal_fields_must_be_canonical() -> Result<()> {
         assert_eq!(canonical_decimal_u64("17", "fixture")?, 17);
@@ -776,7 +714,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn deployment_state_snapshot_rejects_unknown_fields() {
         let payload = br#"{
@@ -792,15 +729,12 @@ mod tests {
             "chain_discriminant":"369",
             "retired_hint":"must-fail"
         }"#;
-
         let result = norito::json::from_slice::<ContractDeploymentStateSnapshot>(payload);
-
         assert!(
             result.is_err(),
             "deployment-state DTO must reject unknown compatibility fields"
         );
     }
-
     #[test]
     fn clap_surface_rejects_independent_deployment_cas_inputs() {
         for retired in [
@@ -830,14 +764,12 @@ mod tests {
                 "fee.json",
             ];
             arguments.extend(retired);
-
             assert!(
                 Args::try_parse_from(arguments).is_err(),
                 "deployment CAS state must come only from the authenticated snapshot"
             );
         }
     }
-
     #[test]
     fn transaction_signing_context_checked_helper_verifies() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -852,15 +784,12 @@ mod tests {
             fee_payment: &fee_payment,
             metadata: &metadata,
         };
-
         let tx = signing.sign(Vec::<InstructionBox>::new())?;
-
         tx.verify_signature()
             .wrap_err("verify IVM deploy instruction helper signature")?;
         assert_eq!(tx.authority(), &authority);
         Ok(())
     }
-
     #[test]
     fn final_deployment_transaction_is_one_native_atomic_commit() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -892,7 +821,6 @@ mod tests {
             contract_alias.clone(),
             None,
         )?;
-
         let Executable::Instructions(instructions) = transaction.instructions() else {
             panic!("native contract deployment commit must use instructions");
         };
@@ -916,7 +844,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn one_chunk_contract_registration_uses_upload_and_finalize() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -934,7 +861,6 @@ mod tests {
             ivm::contract_code_hash(&code),
             &code,
         )?;
-
         assert_eq!(plan.chunk_count, 1);
         assert!(plan.pre_stage.is_empty());
         assert_eq!(plan.finalize.1, "register-bytes-finalize");
@@ -967,7 +893,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn native_upload_plan_rejects_empty_artifact() {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -988,10 +913,8 @@ mod tests {
             Ok(_) => panic!("an empty artifact cannot form a native upload"),
             Err(error) => error,
         };
-
         assert!(error.to_string().contains("must not be empty"));
     }
-
     #[test]
     fn native_upload_plan_rejects_noncanonical_code_hash() {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1013,10 +936,8 @@ mod tests {
             Ok(_) => panic!("a mismatched code hash cannot form a native upload"),
             Err(error) => error,
         };
-
         assert!(error.to_string().contains("canonical artifact hash"));
     }
-
     #[test]
     fn exact_chunk_boundary_uses_one_final_transaction() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1034,7 +955,6 @@ mod tests {
             ivm::contract_code_hash(&code),
             &code,
         )?;
-
         assert_eq!(plan.chunk_count, 1);
         assert!(plan.pre_stage.is_empty());
         let Executable::Instructions(instructions) = plan.finalize.2.instructions() else {
@@ -1048,7 +968,6 @@ mod tests {
         assert_eq!(upload.total_size, u64::try_from(code.len())?);
         Ok(())
     }
-
     #[test]
     fn multi_mib_upload_plan_is_bounded_ordered_and_stable() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1086,7 +1005,6 @@ mod tests {
             Some("register-bytes-chunk-0001-of-0049")
         );
         assert_eq!(plan.finalize.1, "register-bytes-finalize");
-
         let transactions = plan
             .pre_stage
             .iter()
@@ -1136,7 +1054,6 @@ mod tests {
         assert_eq!(rebuilt, code);
         Ok(())
     }
-
     #[test]
     fn native_upload_json_reports_exact_hash_roles_and_skip_semantics() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1154,7 +1071,6 @@ mod tests {
             ivm::contract_code_hash(&code),
             &code,
         )?;
-
         let report = native_upload_report(&plan, false);
         let fields = report.as_object().expect("upload report is an object");
         assert_eq!(fields.len(), 5);
@@ -1190,7 +1106,6 @@ mod tests {
                 .map(String::as_str)
                 .collect::<Vec<_>>()
         );
-
         let skipped = native_upload_report(&plan, true);
         let skipped = skipped.as_object().expect("skipped report is an object");
         assert_eq!(skipped.len(), 5);
@@ -1208,7 +1123,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn skip_registration_omits_all_uploads_and_emit_order_is_stable() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1269,7 +1183,6 @@ mod tests {
             assert_eq!(*byte_len, encoded.len());
             assert_eq!(fs::read(path)?, encoded);
         }
-
         let skipped = deployment_transaction_sequence(
             true,
             sequence.into_iter().take(2).collect(),
@@ -1285,7 +1198,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn every_real_deployment_transaction_carries_identical_governance_metadata() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1344,7 +1256,6 @@ mod tests {
             "metadata_test::universal".parse()?,
             None,
         )?);
-
         for transaction in &transactions {
             assert_eq!(transaction.metadata(), &metadata);
             assert_eq!(transaction.fee_payment_intent(), &fee_payment);
@@ -1363,7 +1274,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn deployment_metadata_rejects_blank_governance_approvers() {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -1375,13 +1285,11 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive test address");
-
         let error = deployment_transaction_metadata(&contract_address, &["  ".to_owned()])
             .expect_err("blank governance approver must fail before signing");
         assert!(error.to_string().contains("must not be blank"));
     }
 }
-
 fn quote_and_resign_transaction(
     client: &Client,
     draft: &SignedTransaction,
@@ -1402,7 +1310,6 @@ fn quote_and_resign_transaction(
         .wrap_err("failed to sign exact quoted contract-deployment payload")?;
     Ok((transaction, quote))
 }
-
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
     fs::create_dir_all(out_dir)
         .wrap_err_with(|| format!("create output directory {}", out_dir.display()))?;
@@ -1411,10 +1318,8 @@ fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathB
     fs::write(&path, &bytes).wrap_err_with(|| format!("write {}", path.display()))?;
     Ok((path, bytes.len()))
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
-
     let fee_payment_bytes = fs::read(&args.fee_payment_json)
         .wrap_err_with(|| format!("read {}", args.fee_payment_json.display()))?;
     let fee_payment: FeePaymentIntent = norito::json::from_slice(&fee_payment_bytes)
@@ -1422,7 +1327,6 @@ fn main() -> Result<()> {
     fee_payment
         .validate()
         .wrap_err("invalid fee payment intent")?;
-
     let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
         .address
@@ -1442,7 +1346,6 @@ fn main() -> Result<()> {
         args.transaction_ttl_ms,
         args.torii_request_timeout_ms,
     )?;
-
     let contract_alias: ContractAlias = args
         .contract_alias
         .parse()
@@ -1467,7 +1370,6 @@ fn main() -> Result<()> {
     )
     .map_err(|err| eyre!(err.to_string()))
     .wrap_err("failed to derive contract address")?;
-
     let code =
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
     let verified = ivm::verify_contract_artifact(&code)
@@ -1533,7 +1435,6 @@ fn main() -> Result<()> {
     let (register_manifest_tx, register_manifest_quote) =
         quote_and_resign_transaction(&client, &register_manifest_tx, &fee_payment)?;
     fee_quotes.push(register_manifest_quote);
-
     let commit_deployment_tx = build_commit_deployment_transaction(
         &signing,
         deploy_nonce,
@@ -1546,7 +1447,6 @@ fn main() -> Result<()> {
         quote_and_resign_transaction(&client, &commit_deployment_tx, &fee_payment)?;
     let commit_deployment_fee_payment = commit_deployment_quote.intent.clone();
     fee_quotes.push(commit_deployment_quote);
-
     let register_manifest_tx_hash = register_manifest_tx.hash();
     let commit_deployment_tx_hash = commit_deployment_tx.hash();
     let planned_txs = deployment_transaction_sequence(
@@ -1571,7 +1471,6 @@ fn main() -> Result<()> {
             client.submit_transaction_blocking(tx)?;
         }
     }
-
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let payload_digest_hex = hex::encode(blake3::hash(&code).as_bytes());
     let operation_status = if args.emit_only {

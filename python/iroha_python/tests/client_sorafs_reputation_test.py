@@ -539,7 +539,9 @@ def test_sorafs_reputation_auth_honors_client_chain_discriminant() -> None:
     )
 
     assert result == snapshot_payload()
-    assert session.calls[0]["headers"]["X-Iroha-Account"] == testnet_account
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == AccountAddress.parse_encoded(
+        testnet_account, expected_discriminant=0x0171
+    ).canonical_hex()
 
 
 def base64_witness() -> str:
@@ -565,12 +567,17 @@ def test_sorafs_reputation_witness_auth_is_exact_and_stream_is_single_attempt() 
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=9)
     witness = base64_witness()
+    account = AccountAddress.from_account(
+        domain="reputation", public_key=bytes([0x36]) * 32
+    )
+    account_i105 = account.to_i105(0x02F1)
     headers = {
         "X-Iroha-Witness": witness,
-        "X-Iroha-Account": "reputation-reader@sora",
+        "X-Iroha-Account": account_i105,
     }
 
     assert client.get_sorafs_reputation_latest(headers=headers) is None
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == account.canonical_hex()
     iterator = client.stream_sorafs_reputation_events(
         headers={"X-Iroha-Witness": witness},
         with_metadata=True,

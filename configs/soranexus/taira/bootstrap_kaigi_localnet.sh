@@ -38,19 +38,63 @@ need_cmd() {
   fi
 }
 
-torii_json_get() {
+torii_operator_json_get() {
   local url="$1"
-  curl -sf -H 'Accept: application/json' "$url" | python3 -c '
+  PYTHONPATH="$ROOT_DIR/python/iroha_python/src:$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "$url" "$LOCALNET_DIR/client.toml" "$LOCALNET_DIR/peer0.toml" <<'PY'
+import json
+from pathlib import Path
 import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+from urllib.parse import urlsplit
 
-payload = sys.stdin.buffer.read()
-for marker in (b"{\"", b"["):
-    index = payload.find(marker)
-    if index >= 0:
-        sys.stdout.buffer.write(payload[index:])
-        raise SystemExit(0)
-sys.stdout.buffer.write(payload)
-'
+from iroha_python import OperatorSigningContext, ToriiClient
+from iso_operator_auth import load_operator_signing_context
+
+url, client_path, peer_path = sys.argv[1:]
+with open(client_path, "rb") as source:
+    client_config = tomllib.load(source)
+with open(peer_path, "rb") as source:
+    peer_config = tomllib.load(source)
+
+private_key = peer_config.get("private_key")
+if not private_key:
+    private_key_file = peer_config.get("private_key_file")
+    if not private_key_file:
+        raise SystemExit("peer0 config has no root operator private key source")
+    key_path = Path(private_key_file)
+    if not key_path.is_absolute():
+        key_path = Path(peer_path).resolve().parent / key_path
+    private_key = key_path.read_text(encoding="utf-8").strip()
+
+network_id = client_config.get("network_id")
+if not network_id:
+    raise SystemExit("localnet client config has no exact network_id")
+parsed = urlsplit(url)
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit("Kaigi diagnostic URL must be absolute HTTP(S)")
+if parsed.query or parsed.fragment:
+    raise SystemExit("Kaigi bootstrap diagnostics do not accept query or fragment components")
+
+loaded_context = load_operator_signing_context(network_id, private_key)
+context = OperatorSigningContext(loaded_context.network_id, loaded_context.key_pair)
+client = ToriiClient(
+    f"{parsed.scheme}://{parsed.netloc}",
+    operator_signing_context=context,
+)
+operations = {
+    "/v1/kaigi/relays": client.list_kaigi_relays,
+    "/v1/kaigi/relays/health": client.get_kaigi_relays_health,
+}
+try:
+    operation = operations[parsed.path]
+except KeyError as error:
+    raise SystemExit(f"unsupported Kaigi diagnostic path: {parsed.path}") from error
+json.dump(operation(), sys.stdout, separators=(",", ":"))
+PY
 }
 
 discover_peer_configs() {
@@ -1099,7 +1143,7 @@ done
 
 echo "waiting for Kaigi relay metadata"
 for _ in {1..60}; do
-  relay_json="$(torii_json_get 'http://127.0.0.1:29080/v1/kaigi/relays' || true)"
+  relay_json="$(torii_operator_json_get 'http://127.0.0.1:29080/v1/kaigi/relays' || true)"
   if [[ -n "$relay_json" ]] && [[ "$(jq -r '.total // 0' <<<"$relay_json")" -ge "${#PEER_PUBLIC_KEYS[@]}" ]]; then
     break
   fi
@@ -1107,7 +1151,7 @@ for _ in {1..60}; do
 done
 
 echo "kaigi relays:"
-torii_json_get "http://127.0.0.1:29080/v1/kaigi/relays" | jq .
+torii_operator_json_get "http://127.0.0.1:29080/v1/kaigi/relays" | jq .
 
 echo "kaigi health snapshot:"
-torii_json_get "http://127.0.0.1:29080/v1/kaigi/relays/health" | jq .
+torii_operator_json_get "http://127.0.0.1:29080/v1/kaigi/relays/health" | jq .
