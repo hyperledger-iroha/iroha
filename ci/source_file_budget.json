@@ -70,7 +70,7 @@
     "crates/iroha_core/src/sumeragi/mod.rs": 9463,
     "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs": 5131,
     "crates/iroha_core/src/sumeragi/status.rs": 6701,
-    "crates/iroha_core/src/sumeragi/v2.rs": 20425,
+    "crates/iroha_core/src/sumeragi/v2.rs": 20427,
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": 5332,
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": 8762,
     "crates/iroha_core/src/sumeragi/v2_core/tests.rs": 7316,
